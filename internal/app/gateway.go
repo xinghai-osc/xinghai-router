@@ -371,7 +371,7 @@ func (s *Service) streamResponse(w http.ResponseWriter, resp *http.Response) {
 }
 func (s *Service) logRequest(r *http.Request, key keyContext, channelID, model string, status, prompt, completion, total int, d time.Duration, errorCode string) {
 	id, _ := randomID()
-	_, _ = s.db.Exec(r.Context(), `insert into request_logs(id,request_id,user_id,api_key_id,channel_id,model,status_code,prompt_tokens,completion_tokens,total_tokens,duration_ms,error_code) values($1,$2,$3,$4,nullif($5,'')::uuid,$6,$7,$8,$9,$10,$11,nullif($12,''))`, id, requestID(r.Context()), key.userID, key.keyID, channelID, model, status, prompt, completion, total, d.Milliseconds(), errorCode)
+	_, _ = s.db.Exec(r.Context(), `insert into request_logs(id,request_id,user_id,api_key_id,channel_id,group_id,model,status_code,prompt_tokens,completion_tokens,total_tokens,duration_ms,error_code) values($1,$2,$3,$4,nullif($5,'')::uuid,nullif($6,'')::uuid,$7,$8,$9,$10,$11,$12,nullif($13,''))`, id, requestID(r.Context()), key.userID, key.keyID, channelID, key.groupID, model, status, prompt, completion, total, d.Milliseconds(), errorCode)
 	_, _ = s.db.Exec(r.Context(), `update api_keys set last_used_at=now() where id=$1`, key.keyID)
 }
 func usage(body []byte) (int, int, int) {

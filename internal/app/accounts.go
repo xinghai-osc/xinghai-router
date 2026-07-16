@@ -69,6 +69,7 @@ func (s *Service) register(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not create account")
 		return
 	}
+	s.auditActor(r, id, "account.registered", "user", id, nil)
 	s.createSession(w, r, id, http.StatusCreated)
 }
 
@@ -87,11 +88,14 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "invalid_credentials", "invalid email or password")
 		return
 	}
+	s.auditActor(r, userID, "account.logged_in", "user", userID, nil)
 	s.createSession(w, r, userID, http.StatusOK)
 }
 
 func (s *Service) logout(w http.ResponseWriter, r *http.Request) {
+	account := accountFromContext(r)
 	_, _ = s.db.Exec(r.Context(), `delete from user_sessions where token_hash=$1`, hashSecret(bearer(r)))
+	s.auditActor(r, account.userID, "account.logged_out", "user", account.userID, nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 

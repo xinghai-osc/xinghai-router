@@ -1,21 +1,24 @@
 <script setup lang="ts">
-import { computed, h, onMounted, reactive, ref } from 'vue'
+import { computed, h, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { Activity, Bot, Check, ChevronRight, CircleAlert, Copy, KeyRound, Layers3, LayoutDashboard, LogOut, Moon, Plus, RadioTower, RefreshCw, Search, Sparkles, Sun, TerminalSquare, UserRound, Users, WalletCards, ReceiptText, Tags } from 'lucide-vue-next'
 import { api, clearToken, getToken, setToken } from '~/src/api'
-import type { Account, ApiKey, CatalogGroup, CatalogModel, Channel, Group, LedgerEntry, Pricing, RequestLog, UsageRecord, User } from '~/src/api'
+import type { Account, ActivityLog, ApiKey, CatalogGroup, CatalogModel, Channel, Group, LedgerEntry, Pricing, UsageRecord, User } from '~/src/api'
 
-type View = 'overview' | 'users' | 'groups' | 'keys' | 'channels' | 'logs' | 'account' | 'profile' | 'wallet' | 'usage' | 'ledger' | 'pricing' | 'audit'
+type View = 'overview' | 'users' | 'groups' | 'keys' | 'channels' | 'logs' | 'account' | 'profile' | 'wallet' | 'usage' | 'usage-overview' | 'ledger' | 'pricing' | 'audit'
 const props = withDefaults(defineProps<{ activeView?: View }>(), { activeView: 'overview' })
 const route = useRoute()
 const router = useRouter()
-const views: View[] = ['overview', 'users', 'groups', 'keys', 'channels', 'logs', 'account', 'profile', 'wallet', 'usage', 'ledger', 'pricing', 'audit']
+const views: View[] = ['overview', 'users', 'groups', 'keys', 'channels', 'logs', 'account', 'profile', 'wallet', 'usage', 'usage-overview', 'ledger', 'pricing', 'audit']
 const view = computed<View>(() => {
-  if (views.includes(route.query.view as View)) return route.query.view as View
-  if (props.activeView && views.includes(props.activeView)) return props.activeView
-  return views.includes(route.params.view as View) ? route.params.view as View : 'overview'
+  const selected = views.includes(route.query.view as View) ? route.query.view as View : props.activeView && views.includes(props.activeView) ? props.activeView : views.includes(route.params.view as View) ? route.params.view as View : 'overview'
+  return selected === 'logs' || selected === 'audit' || selected === 'usage-overview' ? 'usage' : selected
 })
 const authenticated = ref(false)
 const error = ref('')
+const errorAlert = ref<HTMLElement | null>(null)
+const errorHovered = ref(false)
+const errorSelected = ref(false)
+let errorTimer: ReturnType<typeof setTimeout> | undefined
 const busy = ref(false)
 const users = ref<User[]>([])
 const groups = ref<Group[]>([])
@@ -23,7 +26,7 @@ const ownGroups = ref<string[]>([])
 const keys = ref<ApiKey[]>([])
 const accountKeys = ref<ApiKey[]>([])
 const channels = ref<Channel[]>([])
-const logs = ref<RequestLog[]>([])
+const activityLogs = ref<ActivityLog[]>([])
 const account = ref<Account | null>(null)
 const usageRecords = ref<UsageRecord[]>([])
 const ledger = ref<LedgerEntry[]>([])
@@ -32,12 +35,14 @@ const catalog = ref<CatalogModel[]>([])
 const catalogGroups = ref<CatalogGroup[]>([])
 const catalogGroup = ref('all')
 const catalogSearch = ref('')
-const auditLogs = ref<Record<string, unknown>[]>([])
+const activityModels = ref<string[]>([])
+const activityFilters = reactive({ user_id: '', model: '', group_id: '', start: '', end: '', type: '' })
 const createdKey = ref('')
 const showKey = ref(false)
 const showAccountKey = ref(false)
 const showChannel = ref(false)
 const selectedUser = ref<User | null>(null)
+const originalUser = ref<User | null>(null)
 const selectedPermissions = ref<string[]>([])
 const selectedGroups = ref<string[]>([])
 const userPassword = ref('')
@@ -49,13 +54,13 @@ const channelForm = reactive({ name: '', provider: 'openai', base_url: 'https://
 const groupForm = reactive({ name: '', multiplier: 1 })
 const groupImportText = ref('')
 
-const generalNav = [['overview', '概览', LayoutDashboard], ['account', 'API 密钥', KeyRound], ['usage', '用量日志', Activity]] as const
+const generalNav = [['overview', '概览', LayoutDashboard], ['account', 'API 密钥', KeyRound], ['usage-overview', '用量概览', Activity], ['usage', '使用日志', TerminalSquare]] as const
 const billingNav = [['wallet', '钱包', WalletCards], ['ledger', '余额流水', ReceiptText]] as const
 const personalNav = [['profile', '个人资料', UserRound]] as const
 const managementNavItems = [
-  ['users', '用户', Users, 'users.read'], ['groups', '分组', Layers3, 'system.manage'], ['keys', 'API 密钥', KeyRound, 'keys.manage'], ['channels', '渠道', RadioTower, 'channels.read'], ['logs', '请求日志', TerminalSquare, 'logs.read'],
+  ['users', '用户', Users, 'users.read'], ['groups', '分组', Layers3, 'system.manage'], ['keys', 'API 密钥', KeyRound, 'keys.manage'], ['channels', '渠道', RadioTower, 'channels.read'],
 ] as const
-const adminExtraNav = [['pricing', '模型定价', Tags, 'pricing.read'], ['audit', '操作审计', ReceiptText, 'audit.read']] as const
+const adminExtraNav = [['pricing', '模型定价', Tags, 'pricing.read']] as const
 const permissions = ['users.read', 'users.manage', 'keys.manage', 'channels.read', 'channels.manage', 'logs.read', 'pricing.read', 'pricing.manage', 'audit.read', 'wallets.manage', 'routes.manage', 'quotas.manage', 'system.manage']
 const pricingForm = reactive({ model: '', input_per_million: 0, cached_input_per_million: 0, output_per_million: 0, multiplier: 1 })
 const loginMode = ref<'token' | 'login' | 'register'>('token')
@@ -65,8 +70,6 @@ const isLanding = computed(() => route.path === '/')
 const isAuthPage = computed(() => route.path === '/auth')
 const isMarketplacePage = computed(() => route.path === '/models')
 const activeChannels = computed(() => channels.value.filter((channel) => channel.enabled).length)
-const successRate = computed(() => logs.value.length ? Math.round(logs.value.filter((log) => log.status_code < 400).length / logs.value.length * 100) : 100)
-const totalTokens = computed(() => logs.value.reduce((sum, log) => sum + (log.total_tokens ?? 0), 0))
 const isAdmin = computed(() => account.value?.role === 'admin')
 const can = (permission: string) => isAdmin.value || Boolean(account.value?.permissions.includes(permission))
 const managementNav = computed(() => [...managementNavItems, ...adminExtraNav].filter((item) => can(item[3])))
@@ -115,6 +118,71 @@ const actualMultiplier = (item: CatalogModel) => Number(item.multiplier ?? 1) * 
 const Empty = (props: { text: string }) => h('div', { class: 'empty' }, props.text)
 Empty.props = { text: { type: String, required: true } }
 
+function clearErrorTimer() {
+  if (errorTimer) window.clearTimeout(errorTimer)
+  errorTimer = undefined
+}
+
+function scheduleErrorDismissal() {
+  clearErrorTimer()
+  if (!error.value || errorHovered.value || errorSelected.value) return
+  errorTimer = window.setTimeout(() => { error.value = '' }, 5000)
+}
+
+function updateErrorSelection() {
+  const selection = window.getSelection()
+  const anchor = selection?.anchorNode
+  const focus = selection?.focusNode
+  errorSelected.value = Boolean(selection?.toString() && anchor && focus && errorAlert.value?.contains(anchor) && errorAlert.value?.contains(focus))
+  scheduleErrorDismissal()
+}
+
+function lockError() {
+  errorHovered.value = true
+  clearErrorTimer()
+}
+
+function releaseError() {
+  errorHovered.value = false
+  updateErrorSelection()
+  if (!errorSelected.value) error.value = ''
+}
+
+async function copyError() {
+  if (!error.value) return
+  if (navigator.clipboard) {
+    await navigator.clipboard.writeText(error.value)
+    return
+  }
+  const textarea = document.createElement('textarea')
+  textarea.value = error.value
+  textarea.style.position = 'fixed'
+  textarea.style.opacity = '0'
+  document.body.append(textarea)
+  textarea.select()
+  document.execCommand('copy')
+  textarea.remove()
+}
+
+watch(error, () => {
+  errorSelected.value = false
+  scheduleErrorDismissal()
+})
+
+const activityTypeLabel: Record<ActivityLog['type'], string> = { request: '模型请求', login: '登录', register: '注册', logout: '退出', topup: '充值', operation: '操作' }
+const actionLabel = (item: ActivityLog) => ({ 'account.logged_in': '账户登录', 'account.registered': '账户注册', 'account.logged_out': '退出登录', 'wallet.adjusted': '余额调整' }[item.action] ?? item.action)
+const activityDetail = (item: ActivityLog) => item.type === 'request' ? `${item.prompt_tokens} / ${item.completion_tokens} tokens · ${Number(item.cost).toFixed(6)}` : JSON.stringify(item.details)
+
+async function loadActivity(filters = false) {
+  const query = new URLSearchParams()
+  if (filters) Object.entries(activityFilters).forEach(([key, value]) => { if (value) query.set(key, key === 'start' || key === 'end' ? new Date(value).toISOString() : value) })
+  const value = await api<{ data: ActivityLog[] }>(`/activity-logs${query.size ? `?${query}` : ''}`)
+  activityLogs.value = value.data
+  if (!filters) activityModels.value = [...new Set(value.data.map((item) => item.model).filter(Boolean))].sort()
+}
+async function filterActivity() { await action(() => loadActivity(true)) }
+async function resetActivityFilters() { Object.assign(activityFilters, { user_id: '', model: '', group_id: '', start: '', end: '', type: '' }); await action(() => loadActivity()) }
+
 async function load() {
   busy.value = true; error.value = ''
   try {
@@ -127,14 +195,13 @@ async function load() {
       api<{ data: string[]; groups: Group[] }>('/account/groups').catch(() => ({ data: [], groups: [] })),
     ])
     accountKeys.value = ownKeys.data; usageRecords.value = ownUsage.data; ledger.value = ownLedger.data; ownGroups.value = ownGroupValue.data
+    await loadActivity()
     if (!can('users.read')) groups.value = ownGroupValue.groups
     const requests: Promise<void>[] = []
     if (can('users.read')) requests.push(Promise.all([api<{ data: User[] }>('/admin/users'), api<{ data: Group[] }>('/admin/groups')]).then(([userValue, groupValue]) => { users.value = userValue.data; groups.value = groupValue.data }))
     if (can('keys.manage')) requests.push(api<{ data: ApiKey[] }>('/admin/keys').then((value) => { keys.value = value.data }))
     if (can('channels.read')) requests.push(api<{ data: Channel[] }>('/admin/channels').then((value) => { channels.value = value.data }))
-    if (can('logs.read')) requests.push(api<{ data: RequestLog[] }>('/admin/request-logs').then((value) => { logs.value = value.data }))
     if (can('pricing.read')) requests.push(api<{ data: Pricing[] }>('/admin/pricing').then((value) => { pricing.value = value.data }))
-    if (can('audit.read')) requests.push(api<{ data: Record<string, unknown>[] }>('/admin/audit-logs').then((value) => { auditLogs.value = value.data }))
     await Promise.all(requests)
   } catch (cause) { error.value = cause instanceof Error ? cause.message : '加载失败' } finally { busy.value = false }
 }
@@ -153,8 +220,23 @@ async function revokeKey(key: ApiKey) { if (!confirm(`吊销 ${key.key_prefix} �
 async function action(work: () => Promise<void>) { busy.value = true; error.value = ''; try { await work() } catch (cause) { error.value = cause instanceof Error ? cause.message : '操作失败' } finally { busy.value = false } }
 async function copyKey() { await navigator.clipboard.writeText(createdKey.value) }
 async function savePricing() { await action(async () => { await api('/admin/pricing', { method: 'POST', body: JSON.stringify(pricingForm) }); Object.assign(pricingForm, { model: '', input_per_million: 0, cached_input_per_million: 0, output_per_million: 0, multiplier: 1 }); await load() }) }
-function manageUser(user: User) { selectedUser.value = { ...user }; selectedPermissions.value = [...user.permissions]; selectedGroups.value = [...(user.groups ?? [])]; userPassword.value = ''; userBalance.value = Number(user.balance ?? 0); userBalanceNote.value = '' }
-async function saveUserAccess() { if (!selectedUser.value) return; await action(async () => { await api(`/admin/users/${selectedUser.value?.id}`, { method: 'PUT', body: JSON.stringify({ ...selectedUser.value, permissions: selectedPermissions.value, groups: selectedGroups.value, password: userPassword.value, balance: userBalance.value, note: userBalanceNote.value }) }); selectedUser.value = null; await load() }) }
+function manageUser(user: User) { originalUser.value = user; selectedUser.value = { ...user }; selectedPermissions.value = [...user.permissions]; selectedGroups.value = [...(user.groups ?? [])]; userPassword.value = ''; userBalance.value = Number(user.balance ?? 0); userBalanceNote.value = '' }
+async function saveUserAccess() {
+  if (!selectedUser.value || !originalUser.value) return
+  const current = selectedUser.value
+  const original = originalUser.value
+  const update: Record<string, unknown> = {}
+  if (current.name !== original.name) update.name = current.name
+  if (current.email !== original.email) update.email = current.email
+  if (current.role !== original.role) update.role = current.role
+  if (current.enabled !== original.enabled) update.enabled = current.enabled
+  if (userPassword.value) update.password = userPassword.value
+  if (Number(userBalance.value) !== Number(original.balance ?? 0)) { update.balance = userBalance.value; update.note = userBalanceNote.value }
+  if ([...selectedPermissions.value].sort().join('\n') !== [...original.permissions].sort().join('\n')) update.permissions = selectedPermissions.value
+  if ([...selectedGroups.value].sort().join('\n') !== [...(original.groups ?? [])].sort().join('\n')) update.groups = selectedGroups.value
+  if (!Object.keys(update).length) { selectedUser.value = null; originalUser.value = null; return }
+  await action(async () => { await api(`/admin/users/${current.id}`, { method: 'PUT', body: JSON.stringify(update) }); selectedUser.value = null; originalUser.value = null; await load() })
+}
 function openAuth() { router.push('/auth') }
 function openConsoleOrAuth() { router.push(authenticated.value ? '/console/overview' : '/auth') }
 function closeAuth() { router.push('/') }
@@ -166,6 +248,7 @@ function setTheme(nextTheme: 'light' | 'dark') {
 }
 function toggleTheme() { setTheme(theme.value === 'dark' ? 'light' : 'dark') }
 onMounted(async () => {
+  document.addEventListener('selectionchange', updateErrorSelection)
   const savedTheme = localStorage.getItem('xinghai-router-theme')
   setTheme(savedTheme === 'dark' || savedTheme === 'light' ? savedTheme : window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
   authenticated.value = Boolean(getToken())
@@ -178,9 +261,19 @@ onMounted(async () => {
     await router.replace('/auth')
   }
 })
+
+onBeforeUnmount(() => {
+  clearErrorTimer()
+  document.removeEventListener('selectionchange', updateErrorSelection)
+})
 </script>
 
 <template>
+  <Transition name="error-alert">
+    <div v-if="error" ref="errorAlert" class="error-alert" role="alert" tabindex="0" title="单击复制报错" @mouseenter="lockError" @mouseleave="releaseError" @click="copyError" @keydown.enter.prevent="copyError" @keydown.space.prevent="copyError">
+      <CircleAlert :size="17" /><span>{{ error }}</span><Copy :size="14" aria-hidden="true" />
+    </div>
+  </Transition>
   <main v-if="isLanding" class="landing-shell">
     <nav class="landing-nav">
       <a class="landing-logo" href="/"><span class="brand-mark small"><Bot :size="19" /></span><span>Xinghai</span><i>Router</i></a>
@@ -199,7 +292,6 @@ onMounted(async () => {
     <nav class="marketplace-nav"><a class="landing-logo" href="/"><span class="brand-mark small"><Bot :size="19" /></span><span>Xinghai</span><i>Router</i></a><div><button class="theme-toggle" :aria-label="theme === 'dark' ? '切换为浅色模式' : '切换为深色模式'" @click="toggleTheme"><Sun v-if="theme === 'dark'" :size="16" /><Moon v-else :size="16" /></button><button class="button ghost" @click="openConsoleOrAuth">{{ authenticated ? '进入控制台' : '登录' }} <ChevronRight :size="15" /></button></div></nav>
     <section class="marketplace-page-content">
       <section class="marketplace-hero"><div><span class="marketplace-kicker"><Sparkles :size="13" /> MODEL CATALOG</span><h1>找到适合你的模型</h1><p>汇集当前已配置渠道的全部可用模型，价格按每百万 Token 展示。</p></div><div class="marketplace-count"><strong>{{ catalog.length }}</strong><span>个模型可用</span></div></section>
-      <p v-if="error" class="error banner"><CircleAlert :size="16" />{{ error }}</p>
       <section class="marketplace-tools"><div class="marketplace-search"><Search :size="16" /><input v-model="catalogSearch" aria-label="搜索模型" placeholder="搜索模型名称" /></div><div class="group-filters"><button :class="{ active: catalogGroup === 'all' }" @click="catalogGroup = 'all'">全部分组</button><button v-for="group in catalogGroups" :key="group.id" :class="{ active: catalogGroup === group.id }" @click="catalogGroup = group.id">{{ group.name }} <small>{{ Number(group.multiplier).toFixed(2) }}x</small></button></div></section>
       <div class="model-market-grid"><article v-for="item in filteredCatalog" :key="item.model" class="model-market-card"><div class="model-card-heading"><span class="model-avatar">{{ item.model.slice(0, 1).toUpperCase() }}</span><div><h3>{{ item.model }}</h3><p>{{ modelProvider(item.model) }}</p></div><span :class="['pricing-state', { missing: item.input_per_million == null }]">{{ item.input_per_million == null ? '待定价' : '可用' }}</span></div><div class="model-price-grid"><div><span>输入</span><strong>{{ formatPrice(item.input_per_million, actualMultiplier(item)) }}</strong><small>/ 1M tokens</small></div><div><span>缓存输入</span><strong>{{ formatPrice(item.cached_input_per_million, actualMultiplier(item)) }}</strong><small>/ 1M tokens</small></div><div><span>输出</span><strong>{{ formatPrice(item.output_per_million, actualMultiplier(item)) }}</strong><small>/ 1M tokens</small></div></div><footer><div class="model-groups"><span v-for="group in item.groups" :key="group.id" :class="{ selected: catalogGroup === group.id }">{{ group.name }}</span></div><span class="actual-rate">实际倍率 <b>{{ actualMultiplier(item).toFixed(2) }}x</b></span></footer></article><Empty v-if="!filteredCatalog.length" :text="catalog.length ? '没有符合筛选条件的模型' : error ? '模型目录暂时不可用' : '启用渠道并配置模型后将在这里展示'" /></div>
       <p class="pricing-note">展示价 = 模型基础价格 × 模型倍率 × 当前筛选分组倍率。选择“全部分组”时，每张卡片采用其首个可用分组。</p>
@@ -207,24 +299,22 @@ onMounted(async () => {
   </main>
 
   <main v-else-if="isAuthPage" class="login-shell">
-    <section class="login-card"><div class="login-card-actions"><button class="theme-toggle" :aria-label="theme === 'dark' ? '切换为浅色模式' : '切换为深色模式'" @click="toggleTheme"><Sun v-if="theme === 'dark'" :size="16" /><Moon v-else :size="16" /></button><button class="login-close" aria-label="返回首页" @click="closeAuth">×</button></div><div class="brand-mark"><Bot :size="29" /></div><p class="eyebrow">XINGHAI ROUTER</p><h1>控制模型流量。</h1><div class="auth-tabs"><button :class="{ active: loginMode === 'login' }" @click="loginMode = 'login'">账户登录</button><button :class="{ active: loginMode === 'register' }" @click="loginMode = 'register'">创建账户</button></div><form @submit.prevent="accountSignIn(loginMode === 'register')"><label v-if="loginMode === 'register'">姓名<input v-model="accountForm.name" autocomplete="name" required maxlength="100" placeholder="例如：李雷" /></label><label>邮箱<input v-model="accountForm.email" type="email" autocomplete="email" required placeholder="name@example.com" /></label><label>密码<input v-model="accountForm.password" type="password" :autocomplete="loginMode === 'register' ? 'new-password' : 'current-password'" required minlength="8" placeholder="至少 8 个字符" /></label><button class="button primary full" :disabled="busy">{{ loginMode === 'register' ? '创建并进入控制台' : '登录控制台' }} <ChevronRight :size="16" /></button></form><p v-if="error" class="error"><CircleAlert :size="16" />{{ error }}</p></section>
+    <section class="login-card"><div class="login-card-actions"><button class="theme-toggle" :aria-label="theme === 'dark' ? '切换为浅色模式' : '切换为深色模式'" @click="toggleTheme"><Sun v-if="theme === 'dark'" :size="16" /><Moon v-else :size="16" /></button><button class="login-close" aria-label="返回首页" @click="closeAuth">×</button></div><div class="brand-mark"><Bot :size="29" /></div><p class="eyebrow">XINGHAI ROUTER</p><h1>控制模型流量。</h1><div class="auth-tabs"><button :class="{ active: loginMode === 'login' }" @click="loginMode = 'login'">账户登录</button><button :class="{ active: loginMode === 'register' }" @click="loginMode = 'register'">创建账户</button></div><form @submit.prevent="accountSignIn(loginMode === 'register')"><label v-if="loginMode === 'register'">姓名<input v-model="accountForm.name" autocomplete="name" required maxlength="100" placeholder="例如：李雷" /></label><label>邮箱<input v-model="accountForm.email" type="email" autocomplete="email" required placeholder="name@example.com" /></label><label>密码<input v-model="accountForm.password" type="password" :autocomplete="loginMode === 'register' ? 'new-password' : 'current-password'" required minlength="8" placeholder="至少 8 个字符" /></label><button class="button primary full" :disabled="busy">{{ loginMode === 'register' ? '创建并进入控制台' : '登录控制台' }} <ChevronRight :size="16" /></button></form></section>
   </main>
 
   <main v-else class="app-shell">
     <aside class="sidebar">
        <div class="logo"><span class="brand-mark small"><Bot :size="19" /></span><span>Xinghai</span><i>Router</i></div>
         <nav>
-          <div class="nav-group"><p class="nav-label">常规</p><button v-for="[id, label, Icon] in generalNav" :key="id" :class="{ active: view === id }" @click="openConsole(id)"><component :is="Icon" :size="17" /><span>{{ label }}</span></button></div>
+           <div class="nav-group"><p class="nav-label">常规</p><button v-for="[id, label, Icon] in generalNav" :key="id" :class="{ active: id === 'usage-overview' ? (route.query.view === id || route.params.view === id) : id === 'usage' ? view === id && route.query.view !== 'usage-overview' && route.params.view !== 'usage-overview' : view === id }" @click="openConsole(id)"><component :is="Icon" :size="17" /><span>{{ label }}</span></button></div>
           <div class="nav-group"><p class="nav-label">账户</p><button v-for="[id, label, Icon] in billingNav" :key="id" :class="{ active: view === id }" @click="openConsole(id)"><component :is="Icon" :size="17" /><span>{{ label }}</span></button></div>
           <div class="nav-group"><p class="nav-label">个人</p><button v-for="[id, label, Icon] in personalNav" :key="id" :class="{ active: view === id }" @click="openConsole(id)"><component :is="Icon" :size="17" /><span>{{ label }}</span></button></div>
           <div v-if="managementNav.length" class="nav-group management-group"><p class="nav-label">管理</p><button v-for="[id, label, Icon] in managementNav" :key="id" :class="{ active: view === id }" @click="openConsole(id)"><component :is="Icon" :size="17" /><span>{{ label }}</span></button></div>
         </nav>
       <div class="sidebar-footer"><div class="gateway-status"><span class="live-dot"></span><span><b>网关在线</b><small>服务运行正常</small></span></div><div class="sidebar-account"><i>{{ account?.name?.slice(0, 1) || '?' }}</i><span><b>{{ account?.name || '正在加载' }}</b><small>{{ account?.role || '账户' }}</small></span><button aria-label="退出登录" title="退出登录" @click="signOut"><LogOut :size="16" /></button></div></div>
     </aside>
-     <section class="content">
+      <section class="content" :data-usage-page="route.query.view === 'usage-overview' || route.params.view === 'usage-overview' ? 'overview' : 'logs'">
          <header class="console-header"><div><p class="eyebrow">{{ managementNav.some((item) => item[0] === view) ? '管理' : personalNav.some((item) => item[0] === view) ? '个人' : billingNav.some((item) => item[0] === view) ? '账户' : '常规' }}</p><h1>{{ [...managementNavItems, ...generalNav, ...billingNav, ...personalNav, ...adminExtraNav].find((item) => item[0] === view)?.[1] }}</h1></div><div class="header-actions"><a class="button ghost marketplace-link" href="/models"><Sparkles :size="15" />模型广场</a><span class="account-chip"><i>{{ account?.name?.slice(0, 1) || '?' }}</i>{{ account?.name || '正在加载' }}</span><button class="theme-toggle" :aria-label="theme === 'dark' ? '切换为浅色模式' : '切换为深色模式'" :title="theme === 'dark' ? '切换为浅色模式' : '切换为深色模式'" @click="toggleTheme"><Sun v-if="theme === 'dark'" :size="16" /><Moon v-else :size="16" /></button><button class="button ghost" @click="load" :disabled="busy"><RefreshCw :size="16" :class="{ spinning: busy }" />刷新</button></div></header>
-      <p v-if="error" class="error banner"><CircleAlert :size="16" />{{ error }}</p>
-
       <template v-if="view === 'overview'">
         <section class="setup-workspace">
           <div class="setup-guide">
@@ -232,7 +322,7 @@ onMounted(async () => {
             <div class="setup-steps">
               <button :class="{ complete: accountKeys.some((item) => !item.revoked_at) }" @click="openConsole('account')"><i><Check v-if="accountKeys.some((item) => !item.revoked_at)" :size="14" /><span v-else>1</span></i><span><b>创建 API 密钥</b><small>为应用签发访问凭证</small></span><ChevronRight :size="16" /></button>
               <button :class="{ complete: Number(account?.balance ?? 0) > 0 }" @click="openConsole('wallet')"><i><Check v-if="Number(account?.balance ?? 0) > 0" :size="14" /><span v-else>2</span></i><span><b>确认账户余额</b><small>为模型调用准备可用额度</small></span><ChevronRight :size="16" /></button>
-              <button :class="{ complete: personalRequests > 0 }" @click="openConsole('usage')"><i><Check v-if="personalRequests > 0" :size="14" /><span v-else>3</span></i><span><b>发送模型请求</b><small>在用量明细中确认调用结果</small></span><ChevronRight :size="16" /></button>
+              <button :class="{ complete: personalRequests > 0 }" @click="openConsole('usage')"><i><Check v-if="personalRequests > 0" :size="14" /><span v-else>3</span></i><span><b>发送模型请求</b><small>在使用日志中确认调用结果</small></span><ChevronRight :size="16" /></button>
             </div>
           </div>
           <div class="request-preview"><div class="request-preview-title"><span><TerminalSquare :size="16" />第一条 API 请求</span><code>curl</code></div><pre><span>curl {{ apiEndpoint }} \</span><span>  -H <i>"Authorization: Bearer sk-xh-..."</i> \</span><span>  -H <i>"Content-Type: application/json"</i> \</span><span>  -d <i>'{"model":"gpt-4o-mini",</i></span><span><i>       "messages":[{"role":"user","content":"你好"}]}'</i></span></pre><div class="request-signals"><span><i></i>网关在线</span><button @click="openConsole('account')">查看密钥 <ChevronRight :size="14" /></button></div></div>
@@ -241,22 +331,20 @@ onMounted(async () => {
         <div class="grid-two"><section class="panel usage-line-chart"><div class="panel-title"><div><h2>用量趋势</h2><p>近 7 日 Token 消耗</p></div><button class="text-button" @click="openConsole('usage')">查看全部</button></div><div class="line-plot"><svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-label="近 7 日 Token 趋势"><defs><linearGradient id="usageFill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stop-color="#65a986" stop-opacity=".34" /><stop offset="100%" stop-color="#65a986" stop-opacity="0" /></linearGradient></defs><path :d="`M 0,100 L ${usageLinePoints} L 100,100 Z`" fill="url(#usageFill)" /><polyline :points="usageLinePoints" fill="none" stroke="#2d7657" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" vector-effect="non-scaling-stroke" /></svg><div class="line-labels"><span v-for="day in usageChart" :key="day.key">{{ day.label }}<b>{{ day.tokens ? day.tokens.toLocaleString() : '-' }}</b></span></div></div></section><section class="panel"><div class="panel-title"><div><h2>访问密钥</h2><p>当前账户可用的 API 密钥</p></div><button class="text-button" @click="openConsole('account')">我的账户</button></div><div v-if="accountKeys.length" class="compact-list"><div v-for="key in accountKeys.slice(0, 5)" :key="key.id"><code>{{ key.key_prefix }}...</code><span>{{ key.name }}</span><b :class="key.revoked_at ? 'danger' : 'success'">{{ key.revoked_at ? '已吊销' : '有效' }}</b></div></div><Empty v-else text="尚未创建 API 密钥" /></section></div>
       </template>
 
-       <template v-if="view === 'users'"><section class="toolbar"><div><h2>用户与权限</h2><p>管理员可以修改用户资料、状态、角色、分组、余额和登录密码。</p></div></section><section class="panel table-panel"><table><thead><tr><th>用户</th><th>角色</th><th>分组</th><th>余额</th><th>权限</th><th>状态</th><th></th></tr></thead><tbody><tr v-for="user in users" :key="user.id"><td><b>{{ user.name }}</b><small>{{ user.email }}</small></td><td><span class="pill">{{ user.role }}</span></td><td>{{ user.groups.length || '无' }}</td><td>{{ Number(user.balance ?? 0).toFixed(4) }}<small v-if="Number(user.reserved ?? 0)">预扣 {{ Number(user.reserved).toFixed(4) }}</small></td><td>{{ user.role === 'admin' ? '全部权限' : user.permissions.join(', ') || '无' }}</td><td><span :class="['state', user.enabled ? 'good' : 'bad']">{{ user.enabled ? '已启用' : '已停用' }}</span></td><td><button v-if="can('system.manage')" class="text-button" @click="manageUser(user)">编辑全部</button></td></tr></tbody></table><Empty v-if="!users.length" text="还没有用户" /></section></template>
+       <template v-if="view === 'users'"><section class="toolbar"><div><h2>用户与权限</h2><p>管理员可以修改用户资料、状态、角色、分组、余额和登录密码。</p></div></section><section class="panel table-panel"><table><thead><tr><th>用户</th><th>角色</th><th>分组</th><th>余额</th><th>权限</th><th>状态</th><th></th></tr></thead><tbody><tr v-for="user in users" :key="user.id"><td><b>{{ user.name }}</b><small>{{ user.email }}</small></td><td><span class="pill">{{ user.role }}</span></td><td>{{ user.groups.length || '无' }}</td><td>{{ Number(user.balance ?? 0).toFixed(4) }}<small v-if="Number(user.reserved ?? 0)">预扣 {{ Number(user.reserved).toFixed(4) }}</small></td><td>{{ user.role === 'admin' ? '全部权限' : user.permissions.join(', ') || '无' }}</td><td><span :class="['state', user.enabled ? 'good' : 'bad']">{{ user.enabled ? '已启用' : '已停用' }}</span></td><td><button v-if="can('system.manage')" class="text-button" @click="manageUser(user)">编辑</button></td></tr></tbody></table><Empty v-if="!users.length" text="还没有用户" /></section></template>
         <template v-if="view === 'groups'"><section class="toolbar"><div><h2>访问分组</h2><p>管理渠道和用户的访问范围，分组倍率会参与实际结算。</p></div></section><div class="group-page"><form class="panel group-import-form" @submit.prevent="importGroups"><div><h3>批量导入分组</h3><p>粘贴 JSON 对象；同名分组会更新倍率，不同名分组会创建。</p></div><textarea v-model="groupImportText" required placeholder="请输入 JSON 对象，例如 { &quot;free_gpt&quot;: 0.08 }"></textarea><button class="button primary" :disabled="busy"><Plus :size="16" />一键导入</button></form><form class="panel group-create-form" @submit.prevent="createGroup"><div><h3>新建分组</h3><p>创建后可在用户、密钥和渠道配置中使用。</p></div><label>分组名称<input v-model="groupForm.name" required maxlength="100" placeholder="例如：标准用户" /></label><label>结算倍率<input v-model.number="groupForm.multiplier" required type="number" min="0" step="0.01" /></label><button class="button primary" :disabled="busy"><Plus :size="16" />创建分组</button></form><section class="panel table-panel"><table><thead><tr><th>分组名称</th><th>创建时间</th><th>结算倍率</th><th></th></tr></thead><tbody><tr v-for="group in groups" :key="group.id"><td><b>{{ group.name }}</b><small>{{ group.id }}</small></td><td>{{ formatDate(group.created_at) }}</td><td><form class="group-rate-form" @submit.prevent="editGroupMultiplier(group, $event)"><input name="multiplier" :value="Number(group.multiplier)" aria-label="结算倍率" required type="number" min="0" step="0.01" /><span>x</span><button class="button ghost" :disabled="busy">保存</button></form></td><td></td></tr></tbody></table><Empty v-if="!groups.length" text="还没有访问分组" /></section></div></template>
       <template v-if="view === 'keys'"><section class="toolbar"><div><h2>API 密钥</h2><p>仅在创建时显示一次完整密钥。</p></div><button class="button primary" :disabled="!users.length" @click="showKey = true"><Plus :size="16" />创建密钥</button></section><section class="panel table-panel"><table><thead><tr><th>名称</th><th>所属用户</th><th>前缀</th><th>最后使用</th><th>状态</th><th></th></tr></thead><tbody><tr v-for="key in keys" :key="key.id"><td><b>{{ key.name }}</b></td><td>{{ userName(key.user_id) }}</td><td><code>{{ key.key_prefix }}...</code></td><td>{{ formatDate(key.last_used_at) }}</td><td><span :class="['state', key.revoked_at ? 'bad' : 'good']">{{ key.revoked_at ? '已吊销' : '有效' }}</span></td><td><button v-if="!key.revoked_at" class="text-button danger" @click="revokeKey(key)">吊销</button></td></tr></tbody></table><Empty v-if="!keys.length" text="创建用户后，即可签发 API 密钥" /></section></template>
       <template v-if="view === 'channels'"><section class="toolbar"><div><h2>上游渠道</h2><p>模型请求按渠道优先级进行选择。</p></div><button v-if="can('channels.manage')" class="button primary" @click="showChannel = true"><Plus :size="16" />添加渠道</button></section><div class="channel-cards"><article v-for="channel in channels" :key="channel.id" class="panel channel-card"><div class="card-top"><span :class="['status-dot', { off: !channel.enabled }]"></span><span>优先级 {{ channel.priority }}</span><button v-if="can('channels.manage')" class="toggle" :class="{ on: channel.enabled }" :aria-label="channel.enabled ? '停用渠道' : '启用渠道'" @click="toggleChannel(channel)"><i></i></button></div><h3>{{ channel.name }}</h3><p class="url">{{ channel.base_url }}</p><div class="model-tags"><span v-for="model in channel.models" :key="model">{{ model }}</span></div></article><Empty v-if="!channels.length" text="添加 OpenAI-compatible 上游开始路由" /></div></template>
-       <template v-if="view === 'logs'"><section class="toolbar"><div><h2>请求日志</h2><p>最多显示最新 100 条记录。</p></div></section><section class="panel table-panel"><table><thead><tr><th>时间</th><th>模型</th><th>状态</th><th>耗时</th><th>Token</th><th>请求 ID</th></tr></thead><tbody><tr v-for="log in logs" :key="log.request_id"><td>{{ formatDate(log.created_at) }}</td><td><code>{{ log.model }}</code></td><td><span :class="['state', log.status_code < 400 ? 'good' : 'bad']">{{ log.status_code }}</span></td><td>{{ log.duration_ms }} ms</td><td>{{ log.total_tokens ?? 0 }}</td><td><code>{{ short(log.request_id) }}</code></td></tr></tbody></table><Empty v-if="!logs.length" text="暂无请求日志" /></section></template>
            <template v-if="view === 'account'"><section class="toolbar"><div><h2>API 密钥</h2><p>用于访问 OpenAI-compatible 模型接口。</p></div><button class="button primary" @click="showAccountKey = true"><Plus :size="16" />创建密钥</button></section><section class="panel table-panel"><table><thead><tr><th>名称</th><th>密钥前缀</th><th>创建时间</th><th>最后使用</th><th>状态</th></tr></thead><tbody><tr v-for="key in accountKeys" :key="key.id"><td><b>{{ key.name }}</b></td><td><code>{{ key.key_prefix }}...</code></td><td>{{ formatDate(key.created_at) }}</td><td>{{ formatDate(key.last_used_at) }}</td><td><span :class="['state', key.revoked_at ? 'bad' : 'good']">{{ key.revoked_at ? '已吊销' : '有效' }}</span></td></tr></tbody></table><Empty v-if="!accountKeys.length" text="尚未创建 API 密钥" /></section></template>
            <template v-if="view === 'profile'"><section class="profile-layout"><section class="panel account-card"><div class="profile-avatar">{{ account?.name?.slice(0, 1) || '?' }}</div><div><span class="overview-kicker">账户资料</span><h2>{{ account?.name }}</h2><p>{{ account?.email }}</p></div></section><section class="panel profile-details"><div><span>账户角色</span><b>{{ account?.role }}</b></div><div><span>账户 ID</span><code>{{ account?.id }}</code></div><div><span>权限范围</span><b>{{ account?.role === 'admin' ? '全部权限' : account?.permissions.join(', ') || '普通账户' }}</b></div></section></section></template>
         <template v-if="view === 'wallet'"><section class="wallet-hero"><div><span>可用余额</span><strong>{{ Number(account?.balance ?? 0).toFixed(4) }}</strong><p>余额可用于后续模型调用费用结算。</p></div><WalletCards :size="64" /></section><div class="metrics wallet-metrics"><article><span>当前余额</span><strong>{{ Number(account?.balance ?? 0).toFixed(4) }}</strong><p><WalletCards :size="15" />账户可用额度</p></article><article><span>预扣金额</span><strong>{{ Number(account?.reserved ?? 0).toFixed(4) }}</strong><p>并发请求中的预留费用</p></article><article><span>累计消费</span><strong>{{ personalCost.toFixed(6) }}</strong><p><ReceiptText :size="15" />最近 100 条用量</p></article></div><section class="panel table-panel"><div class="panel-title"><div><h2>余额流水</h2><p>充值、扣费及退款记录</p></div><button class="text-button" @click="openConsole('ledger')">查看全部</button></div><table><thead><tr><th>时间</th><th>类型</th><th>变动</th><th>余额</th><th>说明</th></tr></thead><tbody><tr v-for="item in ledger.slice(0, 10)" :key="item.id"><td>{{ formatDate(item.created_at) }}</td><td>{{ item.kind }}</td><td :class="item.amount < 0 ? 'danger' : 'success'">{{ item.amount }}</td><td>{{ item.balance_after }}</td><td>{{ item.note || item.request_id }}</td></tr></tbody></table><Empty v-if="!ledger.length" text="暂无余额流水" /></section></template>
-        <template v-if="view === 'usage'"><section class="usage-summary"><article><span>近 7 日 Token</span><strong>{{ personalTokens.toLocaleString() }}</strong><small>输入与输出 Token 总和</small></article><article><span>近 7 日费用</span><strong>{{ personalCost.toFixed(6) }}</strong><small>按当前价格规则结算</small></article><article><span>调用次数</span><strong>{{ personalRequests }}</strong><small>最近 100 条用量记录</small></article></section><section class="panel usage-chart"><div class="panel-title"><div><h2>用量趋势</h2><p>近 7 天 Token 消耗与费用变化</p></div><div class="chart-legend"><span><i class="token-dot"></i>Token</span><span><i class="cost-dot"></i>费用</span></div></div><div class="chart-bars"><div v-for="day in usageChart" :key="day.key" class="chart-day"><div class="chart-values"><span :style="{ height: `${day.tokenHeight}%` }" :title="`${day.tokens.toLocaleString()} tokens`"></span><i :style="{ height: `${day.costHeight}%` }" :title="`费用 ${day.cost.toFixed(6)}`"></i></div><b>{{ day.label }}</b><small>{{ day.tokens ? day.tokens.toLocaleString() : '-' }}</small></div></div></section><section class="panel table-panel"><div class="panel-title"><div><h2>用量明细</h2><p>最近 100 条模型调用记录</p></div></div><table><thead><tr><th>时间</th><th>模型</th><th>输入</th><th>输出</th><th>费用</th><th>状态</th></tr></thead><tbody><tr v-for="item in usageRecords" :key="item.request_id"><td>{{ formatDate(item.created_at) }}</td><td><code>{{ item.model }}</code></td><td>{{ item.prompt_tokens }}</td><td>{{ item.completion_tokens }}</td><td>{{ Number(item.cost).toFixed(6) }}</td><td>{{ item.status }}</td></tr></tbody></table><Empty v-if="!usageRecords.length" text="暂无用量记录" /></section></template>
+         <template v-if="view === 'usage'"><section class="usage-summary"><article><span>近 7 日 Token</span><strong>{{ personalTokens.toLocaleString() }}</strong><small>输入与输出 Token 总和</small></article><article><span>近 7 日费用</span><strong>{{ personalCost.toFixed(6) }}</strong><small>按当前价格规则结算</small></article><article><span>调用次数</span><strong>{{ personalRequests }}</strong><small>最近 100 条用量记录</small></article></section><section class="panel usage-chart"><div class="panel-title"><div><h2>用量趋势</h2><p>近 7 天 Token 消耗与费用变化</p></div><div class="chart-legend"><span><i class="token-dot"></i>Token</span><span><i class="cost-dot"></i>费用</span></div></div><div class="chart-bars"><div v-for="day in usageChart" :key="day.key" class="chart-day"><div class="chart-values"><span :style="{ height: `${day.tokenHeight}%` }" :title="`${day.tokens.toLocaleString()} tokens`"></span><i :style="{ height: `${day.costHeight}%` }" :title="`费用 ${day.cost.toFixed(6)}`"></i></div><b>{{ day.label }}</b><small>{{ day.tokens ? day.tokens.toLocaleString() : '-' }}</small></div></div></section><form class="panel activity-filters" @submit.prevent="loadActivity(true)"><label v-if="can('users.read')">用户<select v-model="activityFilters.user_id"><option value="">全部用户</option><option v-for="user in users" :key="user.id" :value="user.id">{{ user.name }} · {{ user.email }}</option></select></label><label>模型<select v-model="activityFilters.model"><option value="">全部模型</option><option v-for="model in activityModels" :key="model" :value="model">{{ model }}</option></select></label><label>分组<select v-model="activityFilters.group_id"><option value="">全部分组</option><option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }}</option></select></label><label>类型<select v-model="activityFilters.type"><option value="">全部类型</option><option value="request">模型请求</option><option value="login">登录</option><option value="register">注册</option><option value="logout">退出</option><option value="topup">充值</option><option value="operation">其他操作</option></select></label><label>开始时间<input v-model="activityFilters.start" type="datetime-local" /></label><label>结束时间<input v-model="activityFilters.end" type="datetime-local" /></label><div class="activity-filter-actions"><button class="button primary" :disabled="busy">筛选</button><button type="button" class="button ghost" :disabled="busy" @click="resetActivityFilters">重置</button></div></form><section class="panel table-panel"><div class="panel-title"><div><h2>使用日志</h2><p>请求用量与登录、注册、充值及管理操作统一展示，最多返回 500 条。</p></div></div><table><thead><tr><th>时间</th><th>类型</th><th>用户</th><th>模型 / 操作</th><th>分组</th><th>状态 / 耗时</th><th>用量 / 详情</th></tr></thead><tbody><tr v-for="item in activityLogs" :key="`${item.type}-${item.id}`"><td>{{ formatDate(item.created_at) }}</td><td><span class="pill">{{ activityTypeLabel[item.type] }}</span></td><td>{{ item.user_name }}</td><td><code v-if="item.model">{{ item.model }}</code><span v-else>{{ actionLabel(item) }}</span></td><td>{{ item.group_name || '-' }}</td><td><span v-if="item.status_code != null" :class="['state', item.status_code < 400 ? 'good' : 'bad']">{{ item.status_code }}</span><small v-if="item.duration_ms != null">{{ item.duration_ms }} ms</small><span v-if="item.status_code == null">成功</span></td><td><code>{{ activityDetail(item) }}</code></td></tr></tbody></table><Empty v-if="!activityLogs.length" text="暂无符合条件的使用日志" /></section></template>
         <template v-if="view === 'ledger'"><section class="toolbar"><div><h2>余额流水</h2><p>查看账户余额的每一笔变动记录。</p></div></section><section class="panel table-panel"><table><thead><tr><th>时间</th><th>类型</th><th>变动</th><th>余额</th><th>说明</th></tr></thead><tbody><tr v-for="item in ledger" :key="item.id"><td>{{ formatDate(item.created_at) }}</td><td><span class="pill">{{ item.kind }}</span></td><td :class="item.amount < 0 ? 'danger' : 'success'">{{ item.amount }}</td><td>{{ item.balance_after }}</td><td>{{ item.note || item.request_id }}</td></tr></tbody></table><Empty v-if="!ledger.length" text="暂无余额流水" /></section></template>
         <template v-if="view === 'pricing'"><section class="toolbar"><div><h2>模型定价</h2><p>按百万 token 配置输入、缓存输入和输出价格。</p></div></section><form v-if="can('pricing.manage')" class="panel pricing-form" @submit.prevent="savePricing"><label>模型<input v-model="pricingForm.model" required placeholder="例如 gpt-4o" /></label><label>输入价格<input v-model.number="pricingForm.input_per_million" type="number" min="0" step="any" placeholder="0" /></label><label>缓存输入<input v-model.number="pricingForm.cached_input_per_million" type="number" min="0" step="any" placeholder="0" /></label><label>输出价格<input v-model.number="pricingForm.output_per_million" type="number" min="0" step="any" placeholder="0" /></label><label>倍率<input v-model.number="pricingForm.multiplier" type="number" min="0.01" step="any" placeholder="1" /></label><button class="button primary">保存规则</button></form><section class="panel table-panel"><table><thead><tr><th>模型</th><th>输入</th><th>缓存输入</th><th>输出</th><th>倍率</th></tr></thead><tbody><tr v-for="item in pricing" :key="item.id"><td><code>{{ item.model }}</code></td><td>{{ item.input_per_million }}</td><td>{{ item.cached_input_per_million }}</td><td>{{ item.output_per_million }}</td><td>{{ item.multiplier }}</td></tr></tbody></table><Empty v-if="!pricing.length" text="暂无模型定价规则" /></section></template>
-        <template v-if="view === 'audit'"><section class="toolbar"><div><h2>操作审计</h2><p>追踪管理操作及其影响对象。</p></div></section><section class="panel table-panel"><table><thead><tr><th>时间</th><th>动作</th><th>对象</th><th>详情</th></tr></thead><tbody><tr v-for="item in auditLogs" :key="String(item.id)"><td>{{ formatDate(String(item.created_at)) }}</td><td><span class="pill">{{ item.action }}</span></td><td>{{ item.entity_type }} / {{ item.entity_id }}</td><td><code>{{ JSON.stringify(item.details) }}</code></td></tr></tbody></table><Empty v-if="!auditLogs.length" text="暂无操作审计" /></section></template>
     </section>
 
     <div v-if="selectedUser || showKey || showAccountKey || showChannel || createdKey" class="modal-backdrop" @click.self="selectedUser = null; showKey = showAccountKey = showChannel = false">
-      <form v-if="selectedUser" class="modal" @submit.prevent="saveUserAccess"><div class="modal-title"><h2>编辑用户全部数据</h2><button type="button" @click="selectedUser = null">×</button></div><p class="muted">{{ selectedUser.id }}</p><label>姓名<input v-model="selectedUser.name" required maxlength="100" /></label><label>邮箱<input v-model="selectedUser.email" required type="email" /></label><label>新密码 <small>留空表示不修改</small><input v-model="userPassword" type="password" minlength="8" autocomplete="new-password" /></label><label>账户状态<select v-model="selectedUser.enabled"><option :value="true">已启用</option><option :value="false">已停用</option></select></label><label>角色<select v-model="selectedUser.role"><option value="user">用户</option><option value="operator">运营</option><option value="admin">管理员（全部权限）</option></select></label><label>余额<input v-model.number="userBalance" required type="number" min="0" step="0.00000001" /></label><label>余额变更说明<input v-model="userBalanceNote" maxlength="200" placeholder="例如：管理员充值" /></label><label>用户分组<select v-model="selectedGroups" multiple size="5"><option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }} · {{ Number(group.multiplier).toFixed(2) }}x</option></select></label><label v-if="selectedUser.role !== 'admin'">细粒度权限<select v-model="selectedPermissions" multiple size="8"><option v-for="permission in permissions" :key="permission" :value="permission">{{ permission }}</option></select></label><button class="button primary full" :disabled="busy">保存用户全部数据</button></form>
+      <form v-if="selectedUser" class="modal" @submit.prevent="saveUserAccess"><div class="modal-title"><h2>编辑用户</h2><button type="button" @click="selectedUser = null; originalUser = null">×</button></div><p class="muted">{{ selectedUser.id }}</p><label>姓名<input v-model="selectedUser.name" required maxlength="100" /></label><label>邮箱<input v-model="selectedUser.email" required type="email" /></label><label>新密码 <small>留空表示不修改</small><input v-model="userPassword" type="password" minlength="8" autocomplete="new-password" /></label><label>账户状态<select v-model="selectedUser.enabled"><option :value="true">已启用</option><option :value="false">已停用</option></select></label><label>角色<select v-model="selectedUser.role"><option value="user">用户</option><option value="operator">运营</option><option value="admin">管理员（全部权限）</option></select></label><label>余额<input v-model.number="userBalance" required type="number" min="0" step="0.00000001" /></label><label>余额变更说明<input v-model="userBalanceNote" maxlength="200" placeholder="例如：管理员充值" /></label><label>用户分组<select v-model="selectedGroups" multiple size="5"><option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }} · {{ Number(group.multiplier).toFixed(2) }}x</option></select></label><label v-if="selectedUser.role !== 'admin'">细粒度权限<select v-model="selectedPermissions" multiple size="8"><option v-for="permission in permissions" :key="permission" :value="permission">{{ permission }}</option></select></label><button class="button primary full" :disabled="busy">保存修改</button></form>
       <form v-if="showKey" class="modal" @submit.prevent="createKey"><div class="modal-title"><h2>创建 API 密钥</h2><button type="button" @click="showKey = false">×</button></div><label>用户<select v-model="keyForm.user_id" required><option disabled value="">选择用户</option><option v-for="user in users" :key="user.id" :value="user.id">{{ user.name }} · {{ user.email }}</option></select></label><label>使用分组<select v-model="keyForm.group_id"><option value="">自动匹配（1.00x）</option><option v-for="group in groups.filter((item) => users.find((user) => user.id === keyForm.user_id)?.groups.includes(item.id))" :key="group.id" :value="group.id">{{ group.name }} · {{ Number(group.multiplier).toFixed(2) }}x</option></select></label><label>密钥名称<input v-model="keyForm.name" required placeholder="例如：生产环境" /></label><label>过期时间 <small>可选</small><input v-model="keyForm.expires_at" type="datetime-local" /></label><button class="button primary full" :disabled="busy">签发密钥</button></form>
       <form v-if="showAccountKey" class="modal" @submit.prevent="createAccountKey"><div class="modal-title"><h2>创建 API 密钥</h2><button type="button" @click="showAccountKey = false">×</button></div><p class="muted">密钥将归属当前账户，仅在创建后显示一次。</p><label>使用分组<select v-model="accountKeyForm.group_id"><option value="">自动匹配（1.00x）</option><option v-for="group in groups.filter((item) => ownGroups.includes(item.name))" :key="group.id" :value="group.id">{{ group.name }} · {{ Number(group.multiplier).toFixed(2) }}x</option></select></label><label>密钥名称<input v-model="accountKeyForm.name" required maxlength="100" placeholder="例如：本地开发" /></label><label>过期时间 <small>可选</small><input v-model="accountKeyForm.expires_at" type="datetime-local" /></label><button class="button primary full" :disabled="busy">创建密钥</button></form>
       <form v-if="showChannel" class="modal" @submit.prevent="createChannel"><div class="modal-title"><h2>添加上游渠道</h2><button type="button" @click="showChannel = false">×</button></div><label>名称<input v-model="channelForm.name" required placeholder="例如：OpenAI 主线路" /></label><label>上游类型<select v-model="channelForm.provider" @change="setChannelProvider"><option value="openai">OpenAI-compatible</option><option value="anthropic">Anthropic Messages</option><option value="ollama">Ollama</option><option value="kimi">Kimi</option><option value="opencode_go">OpenCode Go</option></select></label><label>Base URL<input v-model="channelForm.base_url" required type="url" /></label><label>上游 API Key<input v-model="channelForm.api_key" required type="password" /></label><label>模型 <small>逗号分隔</small><div class="model-input"><input v-model="channelForm.models" required placeholder="gpt-4o-mini, gpt-4o" /><button type="button" class="button ghost" :disabled="busy || !channelForm.base_url || !channelForm.api_key" @click="fetchChannelModels">获取模型</button></div></label><label>访问分组<select v-model="channelForm.groups" multiple size="5"><option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }}</option></select><small>不选择表示所有用户可访问</small></label><label>优先级 <input v-model.number="channelForm.priority" type="number" min="0" /></label><button class="button primary full" :disabled="busy">保存渠道</button></form>

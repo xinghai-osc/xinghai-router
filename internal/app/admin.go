@@ -131,9 +131,13 @@ func (s *Service) listAuditLogs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) audit(r *http.Request, action, entityType, entityID string, details map[string]any) {
+	s.auditActor(r, accountFromContext(r).userID, action, entityType, entityID, details)
+}
+
+func (s *Service) auditActor(r *http.Request, actor, action, entityType, entityID string, details map[string]any) {
 	raw, _ := json.Marshal(details)
 	id, _ := randomID()
-	_, _ = s.db.Exec(r.Context(), `insert into audit_logs(id,action,actor,entity_type,entity_id,details) values($1,$2,$3,$4,$5,$6)`, id, action, accountFromContext(r).userID, entityType, entityID, raw)
+	_, _ = s.db.Exec(r.Context(), `insert into audit_logs(id,action,actor,entity_type,entity_id,details) values($1,$2,$3,$4,$5,$6)`, id, action, actor, entityType, entityID, raw)
 }
 
 func (s *Service) listUsers(w http.ResponseWriter, r *http.Request) {
@@ -159,139 +163,230 @@ func (s *Service) listUsers(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) updateUser(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Email       string   `json:"email"`
-		Name        string   `json:"name"`
-		Password    string   `json:"password"`
-		Role        string   `json:"role"`
-		Enabled     bool     `json:"enabled"`
-		Permissions []string `json:"permissions"`
-		Groups      []string `json:"groups"`
-		Balance     *float64 `json:"balance"`
-		Note        string   `json:"note"`
+		Email       *string   `json:"email"`
+		Name        *string   `json:"name"`
+		Password    *string   `json:"password"`
+		Role        *string   `json:"role"`
+		Enabled     *bool     `json:"enabled"`
+		Permissions *[]string `json:"permissions"`
+		Groups      *[]string `json:"groups"`
+		Balance     *float64  `json:"balance"`
+		Note        *string   `json:"note"`
 	}
-	if decode(r, &in) != nil || strings.TrimSpace(in.Name) == "" || strings.TrimSpace(in.Email) == "" || (in.Role != "user" && in.Role != "operator" && in.Role != "admin") {
-		writeError(w, 400, "invalid_request", "name, email, and a valid role are required")
+	if decode(r, &in) != nil {
+		writeError(w, 400, "invalid_request", "invalid user update")
 		return
 	}
-	parsed, err := mail.ParseAddress(strings.TrimSpace(in.Email))
-	if err != nil || parsed.Address != strings.TrimSpace(in.Email) {
-		writeError(w, 400, "invalid_request", "email is invalid")
+	if in.Email == nil && in.Name == nil && in.Password == nil && in.Role == nil && in.Enabled == nil && in.Permissions == nil && in.Groups == nil && in.Balance == nil {
+		writeError(w, 400, "invalid_request", "at least one user field is required")
 		return
 	}
-	if in.Password != "" && len(in.Password) < 8 {
+	if in.Name != nil && strings.TrimSpace(*in.Name) == "" {
+		writeError(w, 400, "invalid_request", "name is required")
+		return
+	}
+	if in.Email != nil {
+		email := strings.TrimSpace(*in.Email)
+		parsed, err := mail.ParseAddress(email)
+		if err != nil || parsed.Address != email {
+			writeError(w, 400, "invalid_request", "email is invalid")
+			return
+		}
+	}
+	if in.Role != nil && *in.Role != "user" && *in.Role != "operator" && *in.Role != "admin" {
+		writeError(w, 400, "invalid_request", "role must be user, operator, or admin")
+		return
+	}
+	if in.Password != nil && len(*in.Password) < 8 {
 		writeError(w, 400, "invalid_request", "password must be at least 8 characters")
 		return
 	}
-	for _, permission := range in.Permissions {
-		if !availablePermissions[permission] {
-			writeError(w, 400, "invalid_request", "invalid permissions")
-			return
+	if in.Permissions != nil {
+		seen := map[string]bool{}
+		for _, permission := range *in.Permissions {
+			if !availablePermissions[permission] || seen[permission] {
+				writeError(w, 400, "invalid_request", "invalid permissions")
+				return
+			}
+			seen[permission] = true
 		}
 	}
 	if in.Balance != nil && (math.IsNaN(*in.Balance) || math.IsInf(*in.Balance, 0) || *in.Balance < 0) {
 		writeError(w, 400, "invalid_request", "balance must be a non-negative number")
 		return
 	}
-	actor := accountFromContext(r)
-	userID := r.PathValue("id")
-	if actor.userID == userID && (in.Role != "admin" || !in.Enabled) {
-		writeError(w, 400, "invalid_request", "cannot remove or disable your own administrator account")
+	if in.Note != nil && in.Balance == nil {
+		writeError(w, 400, "invalid_request", "note can only be provided with balance")
 		return
 	}
 	passwordHash := ""
-	if in.Password != "" {
-		passwordHash, err = hashPassword(in.Password)
+	if in.Password != nil {
+		var err error
+		passwordHash, err = hashPassword(*in.Password)
 		if err != nil {
 			writeError(w, 500, "internal_error", "could not secure password")
 			return
 		}
 	}
+	actor := accountFromContext(r)
+	userID := r.PathValue("id")
 	tx, err := s.db.Begin(r.Context())
 	if err != nil {
 		writeError(w, 500, "internal_error", "could not update user")
 		return
 	}
 	defer tx.Rollback(r.Context())
-	var oldBalance, reserved float64
-	if err = tx.QueryRow(r.Context(), `select coalesce(w.balance,0),coalesce(w.reserved,0) from users u left join user_wallets w on w.user_id=u.id where u.id=$1`, userID).Scan(&oldBalance, &reserved); err != nil {
+	var currentRole string
+	var currentEnabled bool
+	if err = tx.QueryRow(r.Context(), `select role,enabled from users where id=$1 for update`, userID).Scan(&currentRole, &currentEnabled); err != nil {
 		writeError(w, 404, "not_found", "user not found")
 		return
 	}
-	if _, err = tx.Exec(r.Context(), `insert into user_wallets(user_id) values($1) on conflict(user_id) do nothing`, userID); err != nil {
-		writeError(w, 500, "internal_error", "could not load wallet")
+	resultingRole := currentRole
+	if in.Role != nil {
+		resultingRole = *in.Role
+	}
+	resultingEnabled := currentEnabled
+	if in.Enabled != nil {
+		resultingEnabled = *in.Enabled
+	}
+	if actor.userID == userID && (resultingRole != "admin" || !resultingEnabled) {
+		writeError(w, 400, "invalid_request", "cannot remove or disable your own administrator account")
 		return
 	}
-	if err = tx.QueryRow(r.Context(), `select balance,reserved from user_wallets where user_id=$1 for update`, userID).Scan(&oldBalance, &reserved); err != nil {
-		writeError(w, 500, "internal_error", "could not lock wallet")
-		return
-	}
-	if in.Balance != nil && *in.Balance < reserved {
-		writeError(w, 400, "invalid_request", "balance cannot be lower than reserved amount")
-		return
-	}
-	if passwordHash != "" {
-		_, err = tx.Exec(r.Context(), `update users set email=$1,name=$2,role=$3,enabled=$4,password_hash=$5 where id=$6`, strings.ToLower(strings.TrimSpace(in.Email)), strings.TrimSpace(in.Name), in.Role, in.Enabled, passwordHash, userID)
-	} else {
-		_, err = tx.Exec(r.Context(), `update users set email=$1,name=$2,role=$3,enabled=$4 where id=$5`, strings.ToLower(strings.TrimSpace(in.Email)), strings.TrimSpace(in.Name), in.Role, in.Enabled, userID)
-	}
-	if err != nil {
-		writeError(w, 409, "conflict", "email already exists or user could not be updated")
-		return
-	}
-	if _, err = tx.Exec(r.Context(), `insert into user_wallets(user_id,balance) values($1,coalesce($2,0)) on conflict(user_id) do update set balance=coalesce($2,user_wallets.balance),updated_at=now()`, userID, in.Balance); err != nil {
-		writeError(w, 500, "internal_error", "could not update balance")
-		return
-	}
-	if in.Balance != nil && *in.Balance != oldBalance {
-		id, _ := randomID()
-		note := strings.TrimSpace(in.Note)
-		if note == "" {
-			note = "管理员修改用户余额"
-		}
-		kind := "adjustment"
-		if *in.Balance > oldBalance {
-			kind = "topup"
-		}
-		if _, err = tx.Exec(r.Context(), `insert into wallet_ledger(id,user_id,amount,balance_after,kind,note) values($1,$2,$3,$4,$5,$6)`, id, userID, *in.Balance-oldBalance, *in.Balance, kind, note); err != nil {
-			writeError(w, 500, "internal_error", "could not record balance change")
+	changed := map[string]any{}
+	if in.Email != nil {
+		email := strings.ToLower(strings.TrimSpace(*in.Email))
+		if _, err = tx.Exec(r.Context(), `update users set email=$1 where id=$2`, email, userID); err != nil {
+			writeError(w, 409, "conflict", "email already exists or user could not be updated")
 			return
 		}
+		changed["email"] = email
 	}
-	if _, err = tx.Exec(r.Context(), `delete from user_permissions where user_id=$1`, userID); err != nil {
-		writeError(w, 500, "internal_error", "could not update permissions")
-		return
+	if in.Name != nil {
+		name := strings.TrimSpace(*in.Name)
+		if _, err = tx.Exec(r.Context(), `update users set name=$1 where id=$2`, name, userID); err != nil {
+			writeError(w, 500, "internal_error", "could not update name")
+			return
+		}
+		changed["name"] = name
 	}
-	for _, permission := range in.Permissions {
-		if _, err = tx.Exec(r.Context(), `insert into user_permissions(user_id,permission) values($1,$2)`, userID, permission); err != nil {
+	if in.Password != nil {
+		if _, err = tx.Exec(r.Context(), `update users set password_hash=$1 where id=$2`, passwordHash, userID); err != nil {
+			writeError(w, 500, "internal_error", "could not update password")
+			return
+		}
+		changed["password"] = true
+	}
+	if in.Role != nil {
+		if _, err = tx.Exec(r.Context(), `update users set role=$1 where id=$2`, *in.Role, userID); err != nil {
+			writeError(w, 500, "internal_error", "could not update role")
+			return
+		}
+		changed["role"] = *in.Role
+	}
+	if in.Enabled != nil {
+		if _, err = tx.Exec(r.Context(), `update users set enabled=$1 where id=$2`, *in.Enabled, userID); err != nil {
+			writeError(w, 500, "internal_error", "could not update status")
+			return
+		}
+		changed["enabled"] = *in.Enabled
+	}
+	var oldBalance float64
+	if in.Balance != nil {
+		if _, err = tx.Exec(r.Context(), `insert into user_wallets(user_id) values($1) on conflict(user_id) do nothing`, userID); err != nil {
+			writeError(w, 500, "internal_error", "could not load wallet")
+			return
+		}
+		var reserved float64
+		if err = tx.QueryRow(r.Context(), `select balance,reserved from user_wallets where user_id=$1 for update`, userID).Scan(&oldBalance, &reserved); err != nil {
+			writeError(w, 500, "internal_error", "could not lock wallet")
+			return
+		}
+		if *in.Balance < reserved {
+			writeError(w, 400, "invalid_request", "balance cannot be lower than reserved amount")
+			return
+		}
+		if _, err = tx.Exec(r.Context(), `update user_wallets set balance=$1,updated_at=now() where user_id=$2`, *in.Balance, userID); err != nil {
+			writeError(w, 500, "internal_error", "could not update balance")
+			return
+		}
+		changed["balance"] = *in.Balance
+		if *in.Balance != oldBalance {
+			id, _ := randomID()
+			note := ""
+			if in.Note != nil {
+				note = strings.TrimSpace(*in.Note)
+			}
+			if note == "" {
+				note = "管理员修改用户余额"
+			}
+			kind := "adjustment"
+			if *in.Balance > oldBalance {
+				kind = "topup"
+			}
+			if _, err = tx.Exec(r.Context(), `insert into wallet_ledger(id,user_id,amount,balance_after,kind,note) values($1,$2,$3,$4,$5,$6)`, id, userID, *in.Balance-oldBalance, *in.Balance, kind, note); err != nil {
+				writeError(w, 500, "internal_error", "could not record balance change")
+				return
+			}
+		}
+	}
+	if in.Permissions != nil {
+		if _, err = tx.Exec(r.Context(), `delete from user_permissions where user_id=$1`, userID); err != nil {
 			writeError(w, 500, "internal_error", "could not update permissions")
 			return
 		}
-	}
-	if _, err = tx.Exec(r.Context(), `delete from user_groups where user_id=$1`, userID); err != nil {
-		writeError(w, 500, "internal_error", "could not update groups")
-		return
-	}
-	for _, group := range in.Groups {
-		var groupID string
-		if err = tx.QueryRow(r.Context(), `select id from groups where id::text=$1 or name=$1`, strings.TrimSpace(group)).Scan(&groupID); err != nil {
-			writeError(w, 400, "invalid_request", "unknown group")
-			return
+		for _, permission := range *in.Permissions {
+			if _, err = tx.Exec(r.Context(), `insert into user_permissions(user_id,permission) values($1,$2)`, userID, permission); err != nil {
+				writeError(w, 500, "internal_error", "could not update permissions")
+				return
+			}
 		}
-		if _, err = tx.Exec(r.Context(), `insert into user_groups(user_id,group_id) values($1,$2)`, userID, groupID); err != nil {
+		changed["permissions"] = *in.Permissions
+	}
+	if in.Groups != nil {
+		resolvedGroups := make([]string, 0, len(*in.Groups))
+		seenGroups := map[string]bool{}
+		for _, group := range *in.Groups {
+			var groupID string
+			if err = tx.QueryRow(r.Context(), `select id from groups where id::text=$1 or name=$1`, strings.TrimSpace(group)).Scan(&groupID); err != nil {
+				writeError(w, 400, "invalid_request", "unknown group")
+				return
+			}
+			if !seenGroups[groupID] {
+				resolvedGroups = append(resolvedGroups, groupID)
+				seenGroups[groupID] = true
+			}
+		}
+		if _, err = tx.Exec(r.Context(), `delete from user_groups where user_id=$1`, userID); err != nil {
 			writeError(w, 500, "internal_error", "could not update groups")
 			return
 		}
-	}
-	if _, err = tx.Exec(r.Context(), `update api_keys set group_id=null where user_id=$1 and group_id is not null and not exists(select 1 from user_groups ug where ug.user_id=$1 and ug.group_id=api_keys.group_id)`, userID); err != nil {
-		writeError(w, 500, "internal_error", "could not update API key groups")
-		return
+		for _, groupID := range resolvedGroups {
+			if _, err = tx.Exec(r.Context(), `insert into user_groups(user_id,group_id) values($1,$2)`, userID, groupID); err != nil {
+				writeError(w, 500, "internal_error", "could not update groups")
+				return
+			}
+		}
+		if _, err = tx.Exec(r.Context(), `update api_keys set group_id=null where user_id=$1 and group_id is not null and not exists(select 1 from user_groups ug where ug.user_id=$1 and ug.group_id=api_keys.group_id)`, userID); err != nil {
+			writeError(w, 500, "internal_error", "could not update API key groups")
+			return
+		}
+		changed["groups"] = resolvedGroups
 	}
 	if err = tx.Commit(r.Context()); err != nil {
 		writeError(w, 500, "internal_error", "could not update user")
 		return
 	}
-	s.audit(r, "user.updated", "user", userID, map[string]any{"email": in.Email, "role": in.Role, "enabled": in.Enabled, "groups": in.Groups, "balance_changed": in.Balance != nil})
-	writeJSON(w, 200, map[string]any{"id": userID, "balance": in.Balance})
+	if in.Balance != nil && *in.Balance != oldBalance {
+		note := ""
+		if in.Note != nil {
+			note = *in.Note
+		}
+		s.audit(r, "wallet.adjusted", "user", userID, map[string]any{"amount": *in.Balance - oldBalance, "balance_after": *in.Balance, "note": note})
+	}
+	s.audit(r, "user.updated", "user", userID, changed)
+	writeJSON(w, 200, map[string]any{"id": userID, "updated": changed})
 }
 
 func (s *Service) listGroups(w http.ResponseWriter, r *http.Request) {

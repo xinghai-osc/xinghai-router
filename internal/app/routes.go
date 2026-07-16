@@ -30,6 +30,7 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("GET /account/usage", s.account(s.accountUsage))
 	mux.Handle("GET /account/ledger", s.account(s.accountLedger))
 	mux.Handle("GET /account/groups", s.account(s.accountGroups))
+	mux.Handle("GET /activity-logs", s.account(s.listActivityLogs))
 	mux.Handle("GET /admin/users", s.permission("users.read", s.listUsers))
 	mux.Handle("PUT /admin/users/{id}", s.permission("system.manage", s.updateUser))
 	mux.Handle("POST /admin/users/{id}/role", s.permission("system.manage", s.setUserRole))
