@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-type keyContext struct{ userID, keyID string }
+type keyContext struct{ userID, keyID, groupID string }
 type contextKey struct{}
 
 func (s *Service) routes() http.Handler {
@@ -20,21 +20,31 @@ func (s *Service) routes() http.Handler {
 	})
 	mux.HandleFunc("POST /auth/register", s.register)
 	mux.HandleFunc("POST /auth/login", s.login)
+	mux.HandleFunc("GET /model-catalog", s.modelCatalog)
 	mux.Handle("POST /auth/logout", s.account(s.logout))
 	mux.Handle("GET /account/me", s.account(s.accountMe))
 	mux.Handle("GET /account/keys", s.account(s.accountKeys))
 	mux.Handle("POST /account/keys", s.account(s.createAccountKey))
+	mux.Handle("PUT /account/keys/{id}/group", s.account(s.setAccountKeyGroup))
 	mux.Handle("GET /account/usage", s.account(s.accountUsage))
 	mux.Handle("GET /account/ledger", s.account(s.accountLedger))
+	mux.Handle("GET /account/groups", s.account(s.accountGroups))
 	mux.Handle("GET /admin/users", s.permission("users.read", s.listUsers))
 	mux.Handle("POST /admin/users/{id}/role", s.permission("system.manage", s.setUserRole))
 	mux.Handle("PUT /admin/users/{id}/permissions", s.permission("system.manage", s.setUserPermissions))
+	mux.Handle("GET /admin/groups", s.permission("users.read", s.listGroups))
+	mux.Handle("GET /group", s.permission("users.read", s.listGroupNames))
+	mux.Handle("POST /admin/groups", s.permission("system.manage", s.createGroup))
+	mux.Handle("PUT /admin/groups/{id}", s.permission("system.manage", s.updateGroup))
+	mux.Handle("PUT /admin/users/{id}/groups", s.permission("system.manage", s.setUserGroups))
 	mux.Handle("POST /admin/keys", s.permission("keys.manage", s.createKey))
 	mux.Handle("GET /admin/keys", s.permission("keys.manage", s.listKeys))
 	mux.Handle("POST /admin/keys/{id}/revoke", s.permission("keys.manage", s.revokeKey))
+	mux.Handle("PUT /admin/keys/{id}/group", s.permission("keys.manage", s.setKeyGroup))
 	mux.Handle("POST /admin/channels", s.permission("channels.manage", s.createChannel))
 	mux.Handle("GET /admin/channels", s.permission("channels.read", s.listChannels))
 	mux.Handle("POST /admin/channels/{id}/status", s.permission("channels.manage", s.setChannelStatus))
+	mux.Handle("PUT /admin/channels/{id}/groups", s.permission("channels.manage", s.setChannelGroups))
 	mux.Handle("GET /admin/request-logs", s.permission("logs.read", s.listLogs))
 	mux.Handle("GET /admin/pricing", s.permission("pricing.read", s.listPricing))
 	mux.Handle("POST /admin/pricing", s.permission("pricing.manage", s.upsertPricing))
@@ -47,8 +57,10 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("GET /me/keys", s.api(s.myKeys))
 	mux.Handle("GET /me/usage", s.api(s.myUsage))
 	mux.Handle("GET /me/ledger", s.api(s.myLedger))
+	mux.Handle("GET /me/groups", s.api(s.myGroups))
 	mux.Handle("GET /v1/models", s.api(s.models))
 	mux.Handle("POST /v1/chat/completions", s.api(s.chatCompletions))
+	mux.Handle("POST /v1/messages", s.api(s.anthropicMessages))
 	return s.requestID(mux)
 }
 func (s *Service) requestID(next http.Handler) http.Handler {
@@ -74,7 +86,7 @@ func (s *Service) api(next http.HandlerFunc) http.Handler {
 			return
 		}
 		var k keyContext
-		err := s.db.QueryRow(r.Context(), `select k.user_id,k.id from api_keys k join users u on u.id=k.user_id where k.secret_hash=$1 and k.revoked_at is null and (k.expires_at is null or k.expires_at>now()) and u.enabled`, hashSecret(token)).Scan(&k.userID, &k.keyID)
+		err := s.db.QueryRow(r.Context(), `select k.user_id,k.id,coalesce(k.group_id::text,'') from api_keys k join users u on u.id=k.user_id where k.secret_hash=$1 and k.revoked_at is null and (k.expires_at is null or k.expires_at>now()) and u.enabled and (k.group_id is null or exists(select 1 from user_groups ug where ug.user_id=k.user_id and ug.group_id=k.group_id))`, hashSecret(token)).Scan(&k.userID, &k.keyID, &k.groupID)
 		if err != nil {
 			writeError(w, 401, "invalid_api_key", "invalid or expired API key")
 			return
@@ -100,7 +112,7 @@ func (s *Service) me(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Service) myKeys(w http.ResponseWriter, r *http.Request) {
 	key := r.Context().Value(contextKey{}).(keyContext)
-	rows, err := s.db.Query(r.Context(), `select id,name,key_prefix,expires_at,revoked_at,last_used_at,created_at from api_keys where user_id=$1 order by created_at desc`, key.userID)
+	rows, err := s.db.Query(r.Context(), `select k.id,k.name,k.key_prefix,k.expires_at,k.revoked_at,k.last_used_at,k.created_at,coalesce(k.group_id::text,''),coalesce(g.name,'') from api_keys k left join groups g on g.id=k.group_id where k.user_id=$1 order by k.created_at desc`, key.userID)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
@@ -108,10 +120,10 @@ func (s *Service) myKeys(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	data := []map[string]any{}
 	for rows.Next() {
-		var id, name, prefix string
+		var id, name, prefix, groupID, groupName string
 		var expires, revoked, used, created any
-		if rows.Scan(&id, &name, &prefix, &expires, &revoked, &used, &created) == nil {
-			data = append(data, map[string]any{"id": id, "name": name, "key_prefix": prefix, "expires_at": expires, "revoked_at": revoked, "last_used_at": used, "created_at": created})
+		if rows.Scan(&id, &name, &prefix, &expires, &revoked, &used, &created, &groupID, &groupName) == nil {
+			data = append(data, map[string]any{"id": id, "name": name, "key_prefix": prefix, "group_id": groupID, "group_name": groupName, "expires_at": expires, "revoked_at": revoked, "last_used_at": used, "created_at": created})
 		}
 	}
 	writeJSON(w, 200, map[string]any{"data": data})
@@ -159,7 +171,7 @@ func bearer(r *http.Request) string {
 	if strings.HasPrefix(v, p) {
 		return strings.TrimSpace(strings.TrimPrefix(v, p))
 	}
-	return ""
+	return strings.TrimSpace(r.Header.Get("X-API-Key"))
 }
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")

@@ -1,9 +1,11 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 )
 
@@ -79,7 +81,7 @@ func (s *Service) audit(r *http.Request, action, entityType, entityID string, de
 }
 
 func (s *Service) listUsers(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query(r.Context(), `select u.id,u.email,u.name,u.role,u.enabled,u.created_at,coalesce(array_agg(p.permission) filter (where p.permission is not null), '{}') from users u left join user_permissions p on p.user_id=u.id group by u.id order by u.created_at desc`)
+	rows, err := s.db.Query(r.Context(), `select u.id,u.email,u.name,u.role,u.enabled,u.created_at,coalesce(array_agg(p.permission) filter (where p.permission is not null), '{}'),coalesce((select array_agg(ug.group_id order by ug.group_id) from user_groups ug where ug.user_id=u.id), '{}') from users u left join user_permissions p on p.user_id=u.id group by u.id order by u.created_at desc`)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
@@ -91,10 +93,289 @@ func (s *Service) listUsers(w http.ResponseWriter, r *http.Request) {
 		var enabled bool
 		var created any
 		var permissions []string
-		rows.Scan(&id, &email, &name, &role, &enabled, &created, &permissions)
-		out = append(out, map[string]any{"id": id, "email": email, "name": name, "role": role, "enabled": enabled, "permissions": permissions, "created_at": created})
+		var groups []string
+		rows.Scan(&id, &email, &name, &role, &enabled, &created, &permissions, &groups)
+		out = append(out, map[string]any{"id": id, "email": email, "name": name, "role": role, "enabled": enabled, "permissions": permissions, "groups": groups, "created_at": created})
 	}
 	writeJSON(w, 200, map[string]any{"data": out})
+}
+
+func (s *Service) listGroups(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.db.Query(r.Context(), `select id,name,multiplier,created_at from groups order by name`)
+	if err != nil {
+		writeError(w, 500, "internal_error", "query failed")
+		return
+	}
+	defer rows.Close()
+	data := []map[string]any{}
+	for rows.Next() {
+		var id, name string
+		var multiplier, created any
+		if rows.Scan(&id, &name, &multiplier, &created) == nil {
+			data = append(data, map[string]any{"id": id, "name": name, "multiplier": multiplier, "created_at": created})
+		}
+	}
+	writeJSON(w, 200, map[string]any{"data": data})
+}
+
+func (s *Service) listGroupNames(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.db.Query(r.Context(), `select name from groups order by name`)
+	if err != nil {
+		writeError(w, 500, "internal_error", "query failed")
+		return
+	}
+	defer rows.Close()
+	names := []string{}
+	for rows.Next() {
+		var name string
+		if rows.Scan(&name) == nil {
+			names = append(names, name)
+		}
+	}
+	writeJSON(w, 200, map[string]any{"data": names})
+}
+
+func (s *Service) groupNamesForUser(ctx context.Context, userID string) ([]string, error) {
+	rows, err := s.db.Query(ctx, `select g.name from groups g join user_groups ug on ug.group_id=g.id where ug.user_id=$1 order by g.name`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	names := []string{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		names = append(names, name)
+	}
+	return names, rows.Err()
+}
+
+func firstGroup(groups []string) string {
+	if len(groups) == 0 {
+		return ""
+	}
+	return groups[0]
+}
+
+func (s *Service) accountGroups(w http.ResponseWriter, r *http.Request) {
+	account := accountFromContext(r)
+	names, err := s.groupNamesForUser(r.Context(), account.userID)
+	if err != nil {
+		writeError(w, 500, "internal_error", "query failed")
+		return
+	}
+	rows, err := s.db.Query(r.Context(), `select g.id,g.name,g.multiplier,g.created_at from groups g join user_groups ug on ug.group_id=g.id where ug.user_id=$1 order by g.name`, account.userID)
+	if err != nil {
+		writeError(w, 500, "internal_error", "query failed")
+		return
+	}
+	defer rows.Close()
+	groups := []map[string]any{}
+	for rows.Next() {
+		var id, name string
+		var multiplier, created any
+		if rows.Scan(&id, &name, &multiplier, &created) == nil {
+			groups = append(groups, map[string]any{"id": id, "name": name, "multiplier": multiplier, "created_at": created})
+		}
+	}
+	writeJSON(w, 200, map[string]any{"data": names, "groups": groups, "user_groups": names, "user_group": firstGroup(names)})
+}
+
+func (s *Service) myGroups(w http.ResponseWriter, r *http.Request) {
+	key := r.Context().Value(contextKey{}).(keyContext)
+	names, err := s.groupNamesForUser(r.Context(), key.userID)
+	if err != nil {
+		writeError(w, 500, "internal_error", "query failed")
+		return
+	}
+	writeJSON(w, 200, map[string]any{"data": names, "user_groups": names, "user_group": firstGroup(names)})
+}
+
+func (s *Service) createGroup(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Name       string  `json:"name"`
+		Multiplier float64 `json:"multiplier"`
+	}
+	if decode(r, &in) != nil || strings.TrimSpace(in.Name) == "" {
+		writeError(w, 400, "invalid_request", "name is required")
+		return
+	}
+	if in.Multiplier == 0 {
+		in.Multiplier = 1
+	}
+	if in.Multiplier < 0 {
+		writeError(w, 400, "invalid_request", "multiplier must be greater than zero")
+		return
+	}
+	id, _ := randomID()
+	_, err := s.db.Exec(r.Context(), `insert into groups(id,name,multiplier) values($1,$2,$3)`, id, strings.TrimSpace(in.Name), in.Multiplier)
+	if err != nil {
+		writeError(w, 409, "conflict", "group name already exists")
+		return
+	}
+	s.audit(r, "group.created", "group", id, map[string]any{"name": in.Name, "multiplier": in.Multiplier})
+	writeJSON(w, 201, map[string]any{"id": id, "name": strings.TrimSpace(in.Name), "multiplier": in.Multiplier})
+}
+
+func (s *Service) updateGroup(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Multiplier float64 `json:"multiplier"`
+	}
+	if decode(r, &in) != nil || in.Multiplier <= 0 {
+		writeError(w, 400, "invalid_request", "multiplier must be greater than zero")
+		return
+	}
+	result, err := s.db.Exec(r.Context(), `update groups set multiplier=$1 where id=$2`, in.Multiplier, r.PathValue("id"))
+	if err != nil || result.RowsAffected() == 0 {
+		writeError(w, 404, "not_found", "group not found")
+		return
+	}
+	s.audit(r, "group.updated", "group", r.PathValue("id"), map[string]any{"multiplier": in.Multiplier})
+	writeJSON(w, 200, map[string]any{"id": r.PathValue("id"), "multiplier": in.Multiplier})
+}
+
+func (s *Service) modelCatalog(w http.ResponseWriter, r *http.Request) {
+	account := accountFromContext(r)
+	rows, err := s.db.Query(r.Context(), `
+		with available as (
+			select jsonb_array_elements_text(c.models) as model, c.id as channel_id
+			from channels c where c.enabled
+			union
+			select m.public_model, c.id from model_routes m join channels c on c.id=m.channel_id
+			where m.enabled and c.enabled
+		), catalog as (
+			select distinct a.model, coalesce(g.id::text, '__public') as group_id,
+				coalesce(g.name, '公共') as group_name, coalesce(g.multiplier, 1) as group_multiplier
+			from available a
+			left join channel_groups cg on cg.channel_id=a.channel_id
+			left join groups g on g.id=cg.group_id
+			where g.id is null or exists(select 1 from user_groups ug where ug.user_id=$1 and ug.group_id=g.id)
+		)
+		select c.model,c.group_id,c.group_name,c.group_multiplier,
+			p.id,p.input_per_million,p.cached_input_per_million,p.output_per_million,p.multiplier
+		from catalog c left join pricing_rules p on p.model=c.model and p.enabled
+		order by c.model,c.group_name`, account.userID)
+	if err != nil {
+		writeError(w, 500, "internal_error", "query failed")
+		return
+	}
+	defer rows.Close()
+	type catalogModel struct {
+		ID, Model                         string
+		Input, Cached, Output, Multiplier any
+		Groups                            []map[string]any
+	}
+	models := map[string]*catalogModel{}
+	order := []string{}
+	groups := map[string]map[string]any{}
+	for rows.Next() {
+		var model, groupID, groupName string
+		var groupMultiplier any
+		var priceID *string
+		var input, cached, output, modelMultiplier any
+		if rows.Scan(&model, &groupID, &groupName, &groupMultiplier, &priceID, &input, &cached, &output, &modelMultiplier) != nil {
+			continue
+		}
+		group := map[string]any{"id": groupID, "name": groupName, "multiplier": groupMultiplier}
+		groups[groupID] = group
+		item := models[model]
+		if item == nil {
+			item = &catalogModel{Model: model, Input: input, Cached: cached, Output: output, Multiplier: modelMultiplier, Groups: []map[string]any{}}
+			if priceID != nil {
+				item.ID = *priceID
+			}
+			models[model] = item
+			order = append(order, model)
+		}
+		item.Groups = append(item.Groups, group)
+	}
+	data := make([]map[string]any, 0, len(order))
+	for _, model := range order {
+		item := models[model]
+		data = append(data, map[string]any{"id": item.ID, "model": item.Model, "input_per_million": item.Input, "cached_input_per_million": item.Cached, "output_per_million": item.Output, "multiplier": item.Multiplier, "groups": item.Groups})
+	}
+	groupList := make([]map[string]any, 0, len(groups))
+	for _, group := range groups {
+		groupList = append(groupList, group)
+	}
+	sort.Slice(groupList, func(i, j int) bool { return groupList[i]["name"].(string) < groupList[j]["name"].(string) })
+	writeJSON(w, 200, map[string]any{"data": data, "groups": groupList})
+}
+
+func (s *Service) setGroups(w http.ResponseWriter, r *http.Request, table, column, entity, entityType string) {
+	var in struct {
+		Groups   []string `json:"groups"`
+		GroupIDs []string `json:"group_ids"`
+	}
+	if decode(r, &in) != nil {
+		writeError(w, 400, "invalid_request", "groups are required")
+		return
+	}
+	var entityExists bool
+	if s.db.QueryRow(r.Context(), `select exists(select 1 from `+map[string]string{"user_groups": "users", "channel_groups": "channels"}[table]+` where id=$1)`, entity).Scan(&entityExists) != nil || !entityExists {
+		writeError(w, 404, "not_found", entityType+" not found")
+		return
+	}
+	refs := append(in.Groups, in.GroupIDs...)
+	resolved := map[string]bool{}
+	for _, ref := range refs {
+		ref = strings.TrimSpace(ref)
+		if ref == "" {
+			continue
+		}
+		var id string
+		if s.db.QueryRow(r.Context(), `select id from groups where id=$1 or name=$2`, ref, ref).Scan(&id) != nil {
+			writeError(w, 400, "invalid_request", "unknown group")
+			return
+		}
+		resolved[id] = true
+	}
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		writeError(w, 500, "internal_error", "could not update groups")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	if _, err = tx.Exec(r.Context(), `delete from `+table+` where `+column+`=$1`, entity); err != nil {
+		writeError(w, 500, "internal_error", "could not update groups")
+		return
+	}
+	for id := range resolved {
+		if _, err = tx.Exec(r.Context(), `insert into `+table+`(`+column+`,group_id) values($1,$2)`, entity, id); err != nil {
+			writeError(w, 500, "internal_error", "could not update groups")
+			return
+		}
+	}
+	if table == "user_groups" {
+		if _, err = tx.Exec(r.Context(), `update api_keys set group_id=null where user_id=$1 and group_id is not null and not exists(select 1 from user_groups ug where ug.user_id=$1 and ug.group_id=api_keys.group_id)`, entity); err != nil {
+			writeError(w, 500, "internal_error", "could not update API key groups")
+			return
+		}
+	}
+	if err = tx.Commit(r.Context()); err != nil {
+		writeError(w, 500, "internal_error", "could not update groups")
+		return
+	}
+	s.audit(r, entityType+".groups_changed", entityType, entity, map[string]any{"groups": refs})
+	writeJSON(w, 200, map[string]any{"groups": refs, "group_ids": sortedKeys(resolved)})
+}
+
+func sortedKeys(values map[string]bool) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func (s *Service) setUserGroups(w http.ResponseWriter, r *http.Request) {
+	s.setGroups(w, r, "user_groups", "user_id", r.PathValue("id"), "user")
+}
+func (s *Service) setChannelGroups(w http.ResponseWriter, r *http.Request) {
+	s.setGroups(w, r, "channel_groups", "channel_id", r.PathValue("id"), "channel")
 }
 
 var availablePermissions = map[string]bool{
@@ -177,6 +458,7 @@ func (s *Service) createKey(w http.ResponseWriter, r *http.Request) {
 		UserID    string `json:"user_id"`
 		Name      string `json:"name"`
 		ExpiresAt string `json:"expires_at"`
+		GroupID   string `json:"group_id"`
 	}
 	if decode(r, &in) != nil || in.UserID == "" || in.Name == "" {
 		writeError(w, 400, "invalid_request", "user_id and name are required")
@@ -193,16 +475,21 @@ func (s *Service) createKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, _ := randomID()
-	_, err = s.db.Exec(r.Context(), `insert into api_keys(id,user_id,name,key_prefix,secret_hash,expires_at) values($1,$2,$3,$4,$5,$6)`, id, in.UserID, in.Name, secret[:12], hashSecret(secret), expires)
+	groupID, err := s.validKeyGroup(r.Context(), in.UserID, in.GroupID)
+	if err != nil {
+		writeError(w, 400, "invalid_request", "group must belong to user")
+		return
+	}
+	_, err = s.db.Exec(r.Context(), `insert into api_keys(id,user_id,name,key_prefix,secret_hash,expires_at,group_id) values($1,$2,$3,$4,$5,$6,$7)`, id, in.UserID, in.Name, secret[:12], hashSecret(secret), expires, groupID)
 	if err != nil {
 		writeError(w, 400, "invalid_request", "unknown user")
 		return
 	}
 	s.audit(r, "api_key.created", "api_key", id, map[string]any{"user_id": in.UserID, "name": in.Name})
-	writeJSON(w, 201, map[string]any{"id": id, "name": in.Name, "key": secret, "expires_at": expires})
+	writeJSON(w, 201, map[string]any{"id": id, "name": in.Name, "key": secret, "expires_at": expires, "group_id": groupID})
 }
 func (s *Service) listKeys(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query(r.Context(), `select id,user_id,name,key_prefix,expires_at,revoked_at,last_used_at,created_at from api_keys order by created_at desc`)
+	rows, err := s.db.Query(r.Context(), `select k.id,k.user_id,k.name,k.key_prefix,k.expires_at,k.revoked_at,k.last_used_at,k.created_at,coalesce(k.group_id::text,''),coalesce(g.name,'') from api_keys k left join groups g on g.id=k.group_id order by k.created_at desc`)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
@@ -211,11 +498,49 @@ func (s *Service) listKeys(w http.ResponseWriter, r *http.Request) {
 	data := []map[string]any{}
 	for rows.Next() {
 		var id, uid, name, prefix string
+		var groupID, groupName string
 		var expiry, revoked, used, created any
-		rows.Scan(&id, &uid, &name, &prefix, &expiry, &revoked, &used, &created)
-		data = append(data, map[string]any{"id": id, "user_id": uid, "name": name, "key_prefix": prefix, "expires_at": expiry, "revoked_at": revoked, "last_used_at": used, "created_at": created})
+		rows.Scan(&id, &uid, &name, &prefix, &expiry, &revoked, &used, &created, &groupID, &groupName)
+		data = append(data, map[string]any{"id": id, "user_id": uid, "name": name, "key_prefix": prefix, "expires_at": expiry, "revoked_at": revoked, "last_used_at": used, "created_at": created, "group_id": groupID, "group_name": groupName})
 	}
 	writeJSON(w, 200, map[string]any{"data": data})
+}
+
+func (s *Service) validKeyGroup(ctx context.Context, userID, groupRef string) (any, error) {
+	groupRef = strings.TrimSpace(groupRef)
+	if groupRef == "" {
+		return nil, nil
+	}
+	var groupID string
+	err := s.db.QueryRow(ctx, `select g.id from groups g join user_groups ug on ug.group_id=g.id where ug.user_id=$1 and (g.id::text=$2 or g.name=$2)`, userID, groupRef).Scan(&groupID)
+	return groupID, err
+}
+
+func (s *Service) setKeyGroup(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		GroupID string `json:"group_id"`
+	}
+	if decode(r, &in) != nil {
+		writeError(w, 400, "invalid_request", "group_id is required")
+		return
+	}
+	var userID string
+	if s.db.QueryRow(r.Context(), `select user_id from api_keys where id=$1`, r.PathValue("id")).Scan(&userID) != nil {
+		writeError(w, 404, "not_found", "API key not found")
+		return
+	}
+	groupID, err := s.validKeyGroup(r.Context(), userID, in.GroupID)
+	if err != nil {
+		writeError(w, 400, "invalid_request", "group must belong to user")
+		return
+	}
+	_, err = s.db.Exec(r.Context(), `update api_keys set group_id=$1 where id=$2`, groupID, r.PathValue("id"))
+	if err != nil {
+		writeError(w, 500, "internal_error", "could not update API key group")
+		return
+	}
+	s.audit(r, "api_key.group_changed", "api_key", r.PathValue("id"), map[string]any{"group_id": groupID})
+	writeJSON(w, 200, map[string]any{"group_id": groupID})
 }
 func (s *Service) revokeKey(w http.ResponseWriter, r *http.Request) {
 	result, err := s.db.Exec(r.Context(), `update api_keys set revoked_at=coalesce(revoked_at, now()) where id=$1`, r.PathValue("id"))
@@ -233,14 +558,37 @@ func (s *Service) createChannel(w http.ResponseWriter, r *http.Request) {
 		APIKey   string   `json:"api_key"`
 		Models   []string `json:"models"`
 		Priority int      `json:"priority"`
+		Groups   []string `json:"groups"`
+		Provider string   `json:"provider"`
+	}
+	if in.Provider == "" {
+		in.Provider = "openai"
 	}
 	if decode(r, &in) != nil || in.Name == "" || in.APIKey == "" || len(in.Models) == 0 {
 		writeError(w, 400, "invalid_request", "name, api_key, and models are required")
 		return
 	}
+	if !map[string]bool{"openai": true, "ollama": true, "kimi": true, "opencode_go": true, "anthropic": true}[in.Provider] {
+		writeError(w, 400, "invalid_request", "unsupported provider")
+		return
+	}
+	groupIDs := []string{}
+	seenGroups := map[string]bool{}
+	for _, groupRef := range in.Groups {
+		groupRef = strings.TrimSpace(groupRef)
+		var groupID string
+		if s.db.QueryRow(r.Context(), `select id from groups where id=$1 or name=$2`, groupRef, groupRef).Scan(&groupID) != nil {
+			writeError(w, 400, "invalid_request", "unknown group")
+			return
+		}
+		if !seenGroups[groupID] {
+			seenGroups[groupID] = true
+			groupIDs = append(groupIDs, groupID)
+		}
+	}
 	u, err := url.Parse(in.BaseURL)
-	if err != nil || u.Scheme != "https" || u.Host == "" {
-		writeError(w, 400, "invalid_request", "base_url must be an HTTPS URL")
+	if err != nil || u.Host == "" || (u.Scheme != "https" && !(u.Scheme == "http" && isLoopbackHost(u.Hostname()))) {
+		writeError(w, 400, "invalid_request", "base_url must use HTTPS, except for loopback HTTP services")
 		return
 	}
 	encrypted, err := crypt(s.cfg.EncryptionKey, in.APIKey, false)
@@ -250,16 +598,32 @@ func (s *Service) createChannel(w http.ResponseWriter, r *http.Request) {
 	}
 	models, _ := json.Marshal(in.Models)
 	id, _ := randomID()
-	_, err = s.db.Exec(r.Context(), `insert into channels(id,name,base_url,api_key,models,priority) values($1,$2,$3,$4,$5,$6)`, id, in.Name, strings.TrimRight(in.BaseURL, "/"), encrypted, models, in.Priority)
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		writeError(w, 500, "internal_error", "could not create channel")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	_, err = tx.Exec(r.Context(), `insert into channels(id,name,base_url,api_key,models,priority,provider) values($1,$2,$3,$4,$5,$6,$7)`, id, in.Name, strings.TrimRight(in.BaseURL, "/"), encrypted, models, in.Priority, in.Provider)
 	if err != nil {
 		writeError(w, 409, "conflict", "channel name already exists")
 		return
 	}
-	s.audit(r, "channel.created", "channel", id, map[string]any{"name": in.Name, "models": in.Models})
-	writeJSON(w, 201, map[string]any{"id": id, "name": in.Name, "models": in.Models, "enabled": true})
+	for _, groupID := range groupIDs {
+		if _, err = tx.Exec(r.Context(), `insert into channel_groups(channel_id,group_id) values($1,$2)`, id, groupID); err != nil {
+			writeError(w, 400, "invalid_request", "unknown group")
+			return
+		}
+	}
+	if err = tx.Commit(r.Context()); err != nil {
+		writeError(w, 500, "internal_error", "could not create channel")
+		return
+	}
+	s.audit(r, "channel.created", "channel", id, map[string]any{"name": in.Name, "models": in.Models, "provider": in.Provider})
+	writeJSON(w, 201, map[string]any{"id": id, "name": in.Name, "models": in.Models, "provider": in.Provider, "enabled": true})
 }
 func (s *Service) listChannels(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query(r.Context(), `select id,name,base_url,models,enabled,priority,created_at,updated_at from channels order by priority,id`)
+	rows, err := s.db.Query(r.Context(), `select c.id,c.name,c.base_url,c.models,c.enabled,c.priority,c.created_at,c.updated_at,coalesce((select array_agg(cg.group_id order by cg.group_id) from channel_groups cg where cg.channel_id=c.id), '{}'),c.provider from channels c order by c.priority,c.id`)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
@@ -272,10 +636,14 @@ func (s *Service) listChannels(w http.ResponseWriter, r *http.Request) {
 		var enabled bool
 		var priority int
 		var created, updated any
-		rows.Scan(&id, &name, &base, &models, &enabled, &priority, &created, &updated)
+		var groups []string
+		var provider string
+		if rows.Scan(&id, &name, &base, &models, &enabled, &priority, &created, &updated, &groups, &provider) != nil {
+			continue
+		}
 		var list []string
 		json.Unmarshal(models, &list)
-		data = append(data, map[string]any{"id": id, "name": name, "base_url": base, "models": list, "enabled": enabled, "priority": priority, "created_at": created, "updated_at": updated})
+		data = append(data, map[string]any{"id": id, "name": name, "base_url": base, "models": list, "provider": provider, "enabled": enabled, "priority": priority, "groups": groups, "created_at": created, "updated_at": updated})
 	}
 	writeJSON(w, 200, map[string]any{"data": data})
 }

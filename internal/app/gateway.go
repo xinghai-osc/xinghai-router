@@ -11,14 +11,26 @@ import (
 )
 
 type channel struct {
-	id, baseURL, apiKey, upstreamModel string
+	id, baseURL, apiKey, upstreamModel, provider string
 	priority, weight                   int
 }
 
 type reservation struct{ amount float64 }
 
+func (s *Service) groupMultiplier(r *http.Request, key keyContext) float64 {
+	if key.groupID == "" {
+		return 1
+	}
+	var multiplier float64
+	if err := s.db.QueryRow(r.Context(), `select multiplier from groups where id=$1`, key.groupID).Scan(&multiplier); err != nil || multiplier <= 0 {
+		return 1
+	}
+	return multiplier
+}
+
 func (s *Service) models(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query(r.Context(), `select model from (select jsonb_array_elements_text(models) as model from channels where enabled union select m.public_model as model from model_routes m join channels c on c.id=m.channel_id where m.enabled and c.enabled) available order by model`)
+	key := r.Context().Value(contextKey{}).(keyContext)
+	rows, err := s.db.Query(r.Context(), `select model from (select jsonb_array_elements_text(c.models) as model from channels c where c.enabled and (not exists(select 1 from channel_groups cg where cg.channel_id=c.id) or ($2<>'' and exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($2,'')::uuid)) or ($2='' and exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$1))) union select m.public_model as model from model_routes m join channels c on c.id=m.channel_id where m.enabled and c.enabled and (not exists(select 1 from channel_groups cg where cg.channel_id=c.id) or ($2<>'' and exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($2,'')::uuid)) or ($2='' and exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$1)))) available order by model`, key.userID, key.groupID)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
@@ -40,8 +52,6 @@ func (s *Service) models(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) chatCompletions(w http.ResponseWriter, r *http.Request) {
-	started := time.Now()
-	key := r.Context().Value(contextKey{}).(keyContext)
 	body, err := io.ReadAll(io.LimitReader(r.Body, 2<<20))
 	if err != nil {
 		writeError(w, 400, "invalid_request", "could not read request")
@@ -55,19 +65,28 @@ func (s *Service) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_request", "model is required")
 		return
 	}
-	if err := s.checkQuota(r, key, request.Model); err != nil {
+	s.proxyChatCompletions(w, r, body, request.Model, request.Stream, nil, nil)
+}
+
+type responseTransform func([]byte) ([]byte, error)
+type streamTransform func(http.ResponseWriter, *http.Response) error
+
+func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, body []byte, model string, stream bool, transform responseTransform, streamFn streamTransform) {
+	started := time.Now()
+	key := r.Context().Value(contextKey{}).(keyContext)
+	if err := s.checkQuota(r, key, model); err != nil {
 		writeError(w, 429, "quota_exceeded", "request quota exceeded")
 		return
 	}
-	reserved, err := s.reserveUsage(r, key, request.Model, body)
+	reserved, err := s.reserveUsage(r, key, model, body)
 	if err != nil {
 		writeError(w, 402, "insufficient_quota", "insufficient balance for this request")
 		return
 	}
-	defer func() { s.releaseReservation(r, key, reserved, request.Model) }()
-	channels, err := s.channelsForModel(r, request.Model)
+	defer func() { s.releaseReservation(r, key, reserved, model) }()
+	channels, err := s.channelsForModel(r, model)
 	if err != nil {
-		s.logRequest(r, key, "", request.Model, 503, 0, 0, 0, time.Since(started), "no_channel")
+		s.logRequest(r, key, "", model, 503, 0, 0, 0, time.Since(started), "no_channel")
 		writeError(w, 503, "model_unavailable", "no enabled channel supports this model")
 		return
 	}
@@ -77,20 +96,32 @@ func (s *Service) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		ch = candidate
 		upstreamURL := ch.baseURL + "/v1/chat/completions"
 		upstreamBody := body
-		if ch.upstreamModel != "" && ch.upstreamModel != request.Model {
+		if ch.upstreamModel != "" && ch.upstreamModel != model {
 			var payload map[string]any
 			if json.Unmarshal(body, &payload) == nil {
 				payload["model"] = ch.upstreamModel
 				upstreamBody, _ = json.Marshal(payload)
 			}
 		}
+		if ch.provider == "anthropic" {
+			upstreamURL = ch.baseURL + "/v1/messages"
+			upstreamBody, err = openAIRequestToAnthropic(upstreamBody)
+			if err != nil {
+				continue
+			}
+		}
 		upstreamReq, requestErr := http.NewRequestWithContext(r.Context(), http.MethodPost, upstreamURL, bytes.NewReader(upstreamBody))
 		if requestErr != nil {
 			continue
 		}
-		upstreamReq.Header.Set("Authorization", "Bearer "+ch.apiKey)
+		if ch.provider == "anthropic" {
+			upstreamReq.Header.Set("X-API-Key", ch.apiKey)
+			upstreamReq.Header.Set("Anthropic-Version", "2023-06-01")
+		} else {
+			upstreamReq.Header.Set("Authorization", "Bearer "+ch.apiKey)
+		}
 		upstreamReq.Header.Set("Content-Type", "application/json")
-		upstreamReq.Header.Set("Accept", map[bool]string{true: "text/event-stream", false: "application/json"}[request.Stream])
+		upstreamReq.Header.Set("Accept", map[bool]string{true: "text/event-stream", false: "application/json"}[stream])
 		resp, err = s.httpClient.Do(upstreamReq)
 		if err == nil && !retryableStatus(resp.StatusCode) {
 			break
@@ -104,14 +135,20 @@ func (s *Service) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if resp == nil {
-		s.logRequest(r, key, ch.id, request.Model, 502, 0, 0, 0, time.Since(started), "upstream_unreachable")
+		s.logRequest(r, key, ch.id, model, 502, 0, 0, 0, time.Since(started), "upstream_unreachable")
 		writeError(w, 502, "upstream_error", "all upstream channels failed")
 		return
 	}
 	defer resp.Body.Close()
-	if request.Stream && resp.StatusCode >= 200 && resp.StatusCode < 300 && strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
-		s.streamResponse(w, resp)
-		s.logRequest(r, key, ch.id, request.Model, resp.StatusCode, 0, 0, 0, time.Since(started), "")
+	if stream && resp.StatusCode >= 200 && resp.StatusCode < 300 && strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
+		if ch.provider == "anthropic" && streamFn == nil {
+			_ = streamAnthropicToOpenAI(w, resp)
+		} else if streamFn != nil && ch.provider != "anthropic" {
+			_ = streamFn(w, resp)
+		} else {
+			s.streamResponse(w, resp)
+		}
+		s.logRequest(r, key, ch.id, model, resp.StatusCode, 0, 0, 0, time.Since(started), "")
 		s.channelSucceeded(r, ch.id)
 		return
 	}
@@ -120,11 +157,25 @@ func (s *Service) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 502, "upstream_error", "could not read upstream response")
 		return
 	}
+	if ch.provider == "anthropic" && resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		responseBody, err = anthropicResponseToOpenAI(responseBody)
+		if err != nil {
+			writeError(w, 502, "upstream_error", "could not convert upstream response")
+			return
+		}
+	}
 	prompt, completion, total := usage(responseBody)
-	s.logRequest(r, key, ch.id, request.Model, resp.StatusCode, prompt, completion, total, time.Since(started), errorCode(resp.StatusCode))
+	s.logRequest(r, key, ch.id, model, resp.StatusCode, prompt, completion, total, time.Since(started), errorCode(resp.StatusCode))
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		s.settleUsage(r, key, reserved, request.Model, prompt, completion)
+		s.settleUsage(r, key, reserved, model, prompt, completion)
 		s.channelSucceeded(r, ch.id)
+		if transform != nil {
+			responseBody, err = transform(responseBody)
+			if err != nil {
+				writeError(w, 502, "upstream_error", "could not convert upstream response")
+				return
+			}
+		}
 	}
 	w.Header().Set("Content-Type", contentType(resp.Header.Get("Content-Type")))
 	w.WriteHeader(resp.StatusCode)
@@ -144,7 +195,7 @@ func (s *Service) reserveUsage(r *http.Request, key keyContext, model string, bo
 		return reservation{}, nil
 	}
 	// Reserve the configured maximum output plus a conservative request-body estimate.
-	amount := (float64(len(body)/3)*input + float64(request.MaxTokens)*output) / 1000000 * multiplier
+	amount := (float64(len(body)/3)*input + float64(request.MaxTokens)*output) / 1000000 * multiplier * s.groupMultiplier(r, key)
 	if amount == 0 {
 		return reservation{}, nil
 	}
@@ -178,7 +229,7 @@ func (s *Service) settleUsage(r *http.Request, key keyContext, held reservation,
 	defer tx.Rollback(r.Context())
 	var input, cached, output, multiplier float64
 	_ = tx.QueryRow(r.Context(), `select input_per_million,cached_input_per_million,output_per_million,multiplier from pricing_rules where model=$1 and enabled`, model).Scan(&input, &cached, &output, &multiplier)
-	cost := (float64(prompt)*input + float64(completion)*output) / 1000000 * multiplier
+	cost := (float64(prompt)*input + float64(completion)*output) / 1000000 * multiplier * s.groupMultiplier(r, key)
 	var balance float64
 	if err = tx.QueryRow(r.Context(), `select balance from user_wallets where user_id=$1 for update`, key.userID).Scan(&balance); err != nil {
 		return
@@ -235,7 +286,8 @@ func (s *Service) checkQuota(r *http.Request, key keyContext, model string) erro
 	return rows.Err()
 }
 func (s *Service) channelsForModel(r *http.Request, model string) ([]channel, error) {
-	rows, err := s.db.Query(r.Context(), `select c.id,c.base_url,c.api_key,coalesce(m.priority,c.priority),coalesce(m.weight,c.weight),coalesce(m.upstream_model,'') from channels c left join model_routes m on m.channel_id=c.id and m.public_model=$1 and m.enabled where c.enabled and c.cooldown_until is null and (c.models ? $1 or m.public_model is not null) order by coalesce(m.priority,c.priority), c.priority, c.id`, model)
+	key := r.Context().Value(contextKey{}).(keyContext)
+	rows, err := s.db.Query(r.Context(), `select c.id,c.base_url,c.api_key,coalesce(m.priority,c.priority),coalesce(m.weight,c.weight),coalesce(m.upstream_model,''),c.provider from channels c left join model_routes m on m.channel_id=c.id and m.public_model=$1 and m.enabled where c.enabled and (c.cooldown_until is null or c.cooldown_until<=now()) and (c.models ? $1 or m.public_model is not null) and (not exists(select 1 from channel_groups cg where cg.channel_id=c.id) or ($3<>'' and exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($3,'')::uuid)) or ($3='' and exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$2))) order by coalesce(m.priority,c.priority), c.priority, c.id`, model, key.userID, key.groupID)
 	if err != nil {
 		return nil, err
 	}
@@ -244,7 +296,7 @@ func (s *Service) channelsForModel(r *http.Request, model string) ([]channel, er
 	for rows.Next() {
 		var ch channel
 		var encrypted string
-		if err := rows.Scan(&ch.id, &ch.baseURL, &encrypted, &ch.priority, &ch.weight, &ch.upstreamModel); err != nil {
+		if err := rows.Scan(&ch.id, &ch.baseURL, &encrypted, &ch.priority, &ch.weight, &ch.upstreamModel, &ch.provider); err != nil {
 			return nil, err
 		}
 		ch.apiKey, err = crypt(s.cfg.EncryptionKey, encrypted, true)

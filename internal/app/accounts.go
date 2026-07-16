@@ -114,7 +114,7 @@ func (s *Service) accountMe(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) accountKeys(w http.ResponseWriter, r *http.Request) {
 	account := accountFromContext(r)
-	rows, err := s.db.Query(r.Context(), `select id,name,key_prefix,expires_at,revoked_at,last_used_at,created_at from api_keys where user_id=$1 order by created_at desc`, account.userID)
+	rows, err := s.db.Query(r.Context(), `select k.id,k.name,k.key_prefix,k.expires_at,k.revoked_at,k.last_used_at,k.created_at,coalesce(k.group_id::text,''),coalesce(g.name,'') from api_keys k left join groups g on g.id=k.group_id where k.user_id=$1 order by k.created_at desc`, account.userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
 		return
@@ -122,10 +122,10 @@ func (s *Service) accountKeys(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	data := []map[string]any{}
 	for rows.Next() {
-		var id, name, prefix string
+		var id, name, prefix, groupID, groupName string
 		var expires, revoked, used, created any
-		if rows.Scan(&id, &name, &prefix, &expires, &revoked, &used, &created) == nil {
-			data = append(data, map[string]any{"id": id, "name": name, "key_prefix": prefix, "expires_at": expires, "revoked_at": revoked, "last_used_at": used, "created_at": created})
+		if rows.Scan(&id, &name, &prefix, &expires, &revoked, &used, &created, &groupID, &groupName) == nil {
+			data = append(data, map[string]any{"id": id, "name": name, "key_prefix": prefix, "group_id": groupID, "group_name": groupName, "expires_at": expires, "revoked_at": revoked, "last_used_at": used, "created_at": created})
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": data})
@@ -136,6 +136,7 @@ func (s *Service) createAccountKey(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Name      string `json:"name"`
 		ExpiresAt string `json:"expires_at"`
+		GroupID   string `json:"group_id"`
 	}
 	if decode(r, &in) != nil || strings.TrimSpace(in.Name) == "" {
 		writeError(w, http.StatusBadRequest, "invalid_request", "name is required")
@@ -157,13 +158,45 @@ func (s *Service) createAccountKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := strings.TrimSpace(in.Name)
-	_, err = s.db.Exec(r.Context(), `insert into api_keys(id,user_id,name,key_prefix,secret_hash,expires_at) values($1,$2,$3,$4,$5,$6)`, id, account.userID, name, secret[:12], hashSecret(secret), expires)
+	groupID, err := s.validKeyGroup(r.Context(), account.userID, in.GroupID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "group must belong to user")
+		return
+	}
+	_, err = s.db.Exec(r.Context(), `insert into api_keys(id,user_id,name,key_prefix,secret_hash,expires_at,group_id) values($1,$2,$3,$4,$5,$6,$7)`, id, account.userID, name, secret[:12], hashSecret(secret), expires, groupID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not create API key")
 		return
 	}
 	s.audit(r, "api_key.created", "api_key", id, map[string]any{"user_id": account.userID, "name": name, "self_service": true})
-	writeJSON(w, http.StatusCreated, map[string]any{"id": id, "name": name, "key": secret, "expires_at": expires})
+	writeJSON(w, http.StatusCreated, map[string]any{"id": id, "name": name, "key": secret, "expires_at": expires, "group_id": groupID})
+}
+
+func (s *Service) setAccountKeyGroup(w http.ResponseWriter, r *http.Request) {
+	account := accountFromContext(r)
+	var in struct {
+		GroupID string `json:"group_id"`
+	}
+	if decode(r, &in) != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "group_id is required")
+		return
+	}
+	var exists bool
+	if s.db.QueryRow(r.Context(), `select exists(select 1 from api_keys where id=$1 and user_id=$2)`, r.PathValue("id"), account.userID).Scan(&exists) != nil || !exists {
+		writeError(w, http.StatusNotFound, "not_found", "API key not found")
+		return
+	}
+	groupID, err := s.validKeyGroup(r.Context(), account.userID, in.GroupID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "group must belong to user")
+		return
+	}
+	if _, err = s.db.Exec(r.Context(), `update api_keys set group_id=$1 where id=$2 and user_id=$3`, groupID, r.PathValue("id"), account.userID); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not update API key group")
+		return
+	}
+	s.audit(r, "api_key.group_changed", "api_key", r.PathValue("id"), map[string]any{"group_id": groupID, "self_service": true})
+	writeJSON(w, http.StatusOK, map[string]any{"group_id": groupID})
 }
 
 func (s *Service) accountUsage(w http.ResponseWriter, r *http.Request) {
