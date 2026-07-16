@@ -9,6 +9,8 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 func hashSecret(secret string) string {
@@ -33,6 +35,13 @@ func randomSecret(prefix string) (string, error) {
 		return "", err
 	}
 	return prefix + base64.RawURLEncoding.EncodeToString(b), nil
+}
+func hashPassword(password string) (string, error) {
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	return string(hash), err
+}
+func passwordMatches(hash, password string) bool {
+	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) == nil
 }
 func crypt(key, value string, decrypt bool) (string, error) {
 	sum := sha256.Sum256([]byte(key))

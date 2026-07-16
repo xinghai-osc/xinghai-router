@@ -18,22 +18,27 @@ func (s *Service) routes() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
-	mux.Handle("POST /admin/users", s.admin(s.createUser))
-	mux.Handle("GET /admin/users", s.admin(s.listUsers))
-	mux.Handle("POST /admin/keys", s.admin(s.createKey))
-	mux.Handle("GET /admin/keys", s.admin(s.listKeys))
-	mux.Handle("POST /admin/keys/{id}/revoke", s.admin(s.revokeKey))
-	mux.Handle("POST /admin/channels", s.admin(s.createChannel))
-	mux.Handle("GET /admin/channels", s.admin(s.listChannels))
-	mux.Handle("POST /admin/channels/{id}/status", s.admin(s.setChannelStatus))
-	mux.Handle("GET /admin/request-logs", s.admin(s.listLogs))
-	mux.Handle("GET /admin/pricing", s.admin(s.listPricing))
-	mux.Handle("POST /admin/pricing", s.admin(s.upsertPricing))
-	mux.Handle("GET /admin/audit-logs", s.admin(s.listAuditLogs))
-	mux.Handle("POST /admin/wallets/adjustments", s.admin(s.adjustBalance))
-	mux.Handle("GET /admin/model-routes", s.admin(s.listModelRoutes))
-	mux.Handle("POST /admin/model-routes", s.admin(s.createModelRoute))
-	mux.Handle("POST /admin/quota-limits", s.admin(s.upsertQuota))
+	mux.HandleFunc("POST /auth/register", s.register)
+	mux.HandleFunc("POST /auth/login", s.login)
+	mux.Handle("POST /auth/logout", s.account(s.logout))
+	mux.Handle("GET /account/me", s.account(s.accountMe))
+	mux.Handle("GET /admin/users", s.permission("users.read", s.listUsers))
+	mux.Handle("POST /admin/users/{id}/role", s.permission("system.manage", s.setUserRole))
+	mux.Handle("PUT /admin/users/{id}/permissions", s.permission("system.manage", s.setUserPermissions))
+	mux.Handle("POST /admin/keys", s.permission("keys.manage", s.createKey))
+	mux.Handle("GET /admin/keys", s.permission("keys.manage", s.listKeys))
+	mux.Handle("POST /admin/keys/{id}/revoke", s.permission("keys.manage", s.revokeKey))
+	mux.Handle("POST /admin/channels", s.permission("channels.manage", s.createChannel))
+	mux.Handle("GET /admin/channels", s.permission("channels.read", s.listChannels))
+	mux.Handle("POST /admin/channels/{id}/status", s.permission("channels.manage", s.setChannelStatus))
+	mux.Handle("GET /admin/request-logs", s.permission("logs.read", s.listLogs))
+	mux.Handle("GET /admin/pricing", s.permission("pricing.read", s.listPricing))
+	mux.Handle("POST /admin/pricing", s.permission("pricing.manage", s.upsertPricing))
+	mux.Handle("GET /admin/audit-logs", s.permission("audit.read", s.listAuditLogs))
+	mux.Handle("POST /admin/wallets/adjustments", s.permission("wallets.manage", s.adjustBalance))
+	mux.Handle("GET /admin/model-routes", s.permission("routes.manage", s.listModelRoutes))
+	mux.Handle("POST /admin/model-routes", s.permission("routes.manage", s.createModelRoute))
+	mux.Handle("POST /admin/quota-limits", s.permission("quotas.manage", s.upsertQuota))
 	mux.Handle("GET /me", s.api(s.me))
 	mux.Handle("GET /me/keys", s.api(s.myKeys))
 	mux.Handle("GET /me/usage", s.api(s.myUsage))
@@ -57,15 +62,6 @@ func (s *Service) requestID(next http.Handler) http.Handler {
 type requestIDKey struct{}
 
 func requestID(ctx context.Context) string { id, _ := ctx.Value(requestIDKey{}).(string); return id }
-func (s *Service) admin(next http.HandlerFunc) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !equalSecret(bearer(r), s.cfg.AdminToken) {
-			writeError(w, 401, "unauthorized", "administrator token required")
-			return
-		}
-		next(w, r)
-	})
-}
 func (s *Service) api(next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token := bearer(r)

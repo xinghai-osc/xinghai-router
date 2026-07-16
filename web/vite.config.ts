@@ -11,6 +11,8 @@ export default defineConfig({
       '/admin': 'http://localhost:8080',
       '/healthz': 'http://localhost:8080',
       '/me': 'http://localhost:8080',
+      '/auth': 'http://localhost:8080',
+      '/account': 'http://localhost:8080',
     },
   },
 })

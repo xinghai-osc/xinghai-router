@@ -40,3 +40,28 @@ func TestUsage(t *testing.T) {
 		t.Fatalf("got %d, %d, %d", prompt, completion, total)
 	}
 }
+
+func TestPasswordHash(t *testing.T) {
+	hash, err := hashPassword("correct horse battery staple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !passwordMatches(hash, "correct horse battery staple") || passwordMatches(hash, "incorrect password") {
+		t.Fatal("unexpected password verification result")
+	}
+}
+
+func TestValidAccountInput(t *testing.T) {
+	if !validAccountInput("user@example.com", "Example User", "password1") {
+		t.Fatal("expected valid account input")
+	}
+	for _, input := range []struct{ email, name, password string }{
+		{"not-an-email", "Example User", "password1"},
+		{"user@example.com", "", "password1"},
+		{"user@example.com", "Example User", "short"},
+	} {
+		if validAccountInput(input.email, input.name, input.password) {
+			t.Fatalf("expected invalid account input: %#v", input)
+		}
+	}
+}

@@ -75,38 +75,11 @@ func (s *Service) listAuditLogs(w http.ResponseWriter, r *http.Request) {
 func (s *Service) audit(r *http.Request, action, entityType, entityID string, details map[string]any) {
 	raw, _ := json.Marshal(details)
 	id, _ := randomID()
-	_, _ = s.db.Exec(r.Context(), `insert into audit_logs(id,action,actor,entity_type,entity_id,details) values($1,$2,$3,$4,$5,$6)`, id, action, "admin", entityType, entityID, raw)
+	_, _ = s.db.Exec(r.Context(), `insert into audit_logs(id,action,actor,entity_type,entity_id,details) values($1,$2,$3,$4,$5,$6)`, id, action, accountFromContext(r).userID, entityType, entityID, raw)
 }
 
-func (s *Service) createUser(w http.ResponseWriter, r *http.Request) {
-	var in struct {
-		Email string `json:"email"`
-		Name  string `json:"name"`
-		Role  string `json:"role"`
-	}
-	if decode(r, &in) != nil || in.Email == "" || in.Name == "" {
-		writeError(w, 400, "invalid_request", "email and name are required")
-		return
-	}
-	if in.Role == "" {
-		in.Role = "user"
-	}
-	if in.Role != "user" && in.Role != "operator" && in.Role != "admin" {
-		writeError(w, 400, "invalid_request", "invalid role")
-		return
-	}
-	id, _ := randomID()
-	_, err := s.db.Exec(r.Context(), `insert into users(id,email,name,role) values($1,$2,$3,$4)`, id, strings.ToLower(in.Email), in.Name, in.Role)
-	if err != nil {
-		writeError(w, 409, "conflict", "email already exists")
-		return
-	}
-	_, _ = s.db.Exec(r.Context(), `insert into user_wallets(user_id) values($1) on conflict do nothing`, id)
-	s.audit(r, "user.created", "user", id, map[string]any{"email": strings.ToLower(in.Email), "role": in.Role})
-	writeJSON(w, 201, map[string]any{"id": id, "email": strings.ToLower(in.Email), "name": in.Name, "role": in.Role})
-}
 func (s *Service) listUsers(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query(r.Context(), `select id,email,name,role,enabled,created_at from users order by created_at desc`)
+	rows, err := s.db.Query(r.Context(), `select u.id,u.email,u.name,u.role,u.enabled,u.created_at,coalesce(array_agg(p.permission) filter (where p.permission is not null), '{}') from users u left join user_permissions p on p.user_id=u.id group by u.id order by u.created_at desc`)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
@@ -117,10 +90,87 @@ func (s *Service) listUsers(w http.ResponseWriter, r *http.Request) {
 		var id, email, name, role string
 		var enabled bool
 		var created any
-		rows.Scan(&id, &email, &name, &role, &enabled, &created)
-		out = append(out, map[string]any{"id": id, "email": email, "name": name, "role": role, "enabled": enabled, "created_at": created})
+		var permissions []string
+		rows.Scan(&id, &email, &name, &role, &enabled, &created, &permissions)
+		out = append(out, map[string]any{"id": id, "email": email, "name": name, "role": role, "enabled": enabled, "permissions": permissions, "created_at": created})
 	}
 	writeJSON(w, 200, map[string]any{"data": out})
+}
+
+var availablePermissions = map[string]bool{
+	"users.read": true, "users.manage": true, "keys.manage": true, "channels.read": true,
+	"channels.manage": true, "logs.read": true, "pricing.read": true, "pricing.manage": true,
+	"audit.read": true, "wallets.manage": true, "routes.manage": true, "quotas.manage": true,
+	"system.manage": true,
+}
+
+func (s *Service) setUserRole(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Role string `json:"role"`
+	}
+	if decode(r, &in) != nil || (in.Role != "user" && in.Role != "operator" && in.Role != "admin") {
+		writeError(w, http.StatusBadRequest, "invalid_request", "role must be user, operator, or admin")
+		return
+	}
+	actor := accountFromContext(r)
+	userID := r.PathValue("id")
+	if actor.userID == userID && in.Role != "admin" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "cannot remove your own administrator role")
+		return
+	}
+	result, err := s.db.Exec(r.Context(), `update users set role=$1 where id=$2`, in.Role, userID)
+	if err != nil || result.RowsAffected() != 1 {
+		writeError(w, http.StatusNotFound, "not_found", "user not found")
+		return
+	}
+	s.audit(r, "user.role_changed", "user", userID, map[string]any{"role": in.Role})
+	writeJSON(w, http.StatusOK, map[string]string{"role": in.Role})
+}
+
+func (s *Service) setUserPermissions(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Permissions []string `json:"permissions"`
+	}
+	if decode(r, &in) != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "permissions are required")
+		return
+	}
+	seen := map[string]bool{}
+	for _, permission := range in.Permissions {
+		if !availablePermissions[permission] || seen[permission] {
+			writeError(w, http.StatusBadRequest, "invalid_request", "invalid permissions")
+			return
+		}
+		seen[permission] = true
+	}
+	userID := r.PathValue("id")
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not update permissions")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	var exists bool
+	if err = tx.QueryRow(r.Context(), `select exists(select 1 from users where id=$1)`, userID).Scan(&exists); err != nil || !exists {
+		writeError(w, http.StatusNotFound, "not_found", "user not found")
+		return
+	}
+	if _, err = tx.Exec(r.Context(), `delete from user_permissions where user_id=$1`, userID); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not update permissions")
+		return
+	}
+	for permission := range seen {
+		if _, err = tx.Exec(r.Context(), `insert into user_permissions(user_id,permission) values($1,$2)`, userID, permission); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "could not update permissions")
+			return
+		}
+	}
+	if err = tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not update permissions")
+		return
+	}
+	s.audit(r, "user.permissions_changed", "user", userID, map[string]any{"permissions": in.Permissions})
+	writeJSON(w, http.StatusOK, map[string]any{"permissions": in.Permissions})
 }
 func (s *Service) createKey(w http.ResponseWriter, r *http.Request) {
 	var in struct {

@@ -5,7 +5,7 @@
 ## Included
 
 - PostgreSQL migrations for users、哈希 API Key、加密渠道凭据、不可变钱包账本、用量、路由和审计记录。
-- 管理员令牌保护的用户、API Key、渠道、价格、余额调整、日志和审计 API。
+- 基于用户会话、管理员角色和细粒度权限保护的管理 API。
 - OpenAI-compatible `GET /v1/models` and `POST /v1/chat/completions` endpoints.
 - 透明 SSE、上游超时、每 Key 每分钟基础限流、请求 ID、模型别名和同优先级权重路由。
 - 对可重试上游错误自动切换备用渠道；连续失败三次的渠道冷却一分钟。
@@ -31,28 +31,43 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:5173` and enter `ADMIN_TOKEN`. The token is retained only in browser session storage. Vite proxies `/admin` calls to `http://localhost:8080`, so this development setup does not require a CORS policy. Create a production deployment by running `npm run build`; serve the generated `web/dist` directory behind the router or a reverse proxy.
+Open `http://localhost:5173/auth` and create an account or sign in with email and password. The first registered account becomes an administrator; administrators can promote users or grant individual permissions. Browser sessions are retained only in session storage. Vite proxies `/admin`, `/auth`, and `/account` calls to `http://localhost:8080`, so this development setup does not require a CORS policy. Create a production deployment by running `npm run build`; serve the generated `web/dist` directory behind the router or a reverse proxy.
 
 The service performs migrations automatically at startup. `base_url` for a channel must be an HTTPS origin or path prefix without `/v1`; for example, `https://api.openai.com`. Provider secrets are encrypted in the database using `ENCRYPTION_KEY`, so keep this value stable and securely backed up.
 
-## Admin API
+## Administration API
 
-All `/admin` endpoints require `Authorization: Bearer $ADMIN_TOKEN`.
+All `/admin` endpoints require an authenticated account session: `Authorization: Bearer $SESSION_TOKEN`. An `admin` user has every permission. Other users must be individually granted the permission required by each endpoint.
 
-Create a user:
+| Permission | Access |
+| --- | --- |
+| `users.read` | List users |
+| `keys.manage` | Create, list, and revoke API keys |
+| `channels.read`, `channels.manage` | View or manage upstream channels |
+| `logs.read`, `audit.read` | View request or audit logs |
+| `pricing.read`, `pricing.manage` | View or edit pricing |
+| `wallets.manage`, `routes.manage`, `quotas.manage` | Manage balances, model routes, or quotas |
+| `system.manage` | Promote users and assign permissions |
+
+Promote a user or grant permissions using `POST /admin/users/{id}/role` with `{"role":"admin"}`, and `PUT /admin/users/{id}/permissions` with `{"permissions":["channels.read","logs.read"]}`. These operations require `system.manage`.
+
+## Account API
+
+Register an account. Passwords must have at least eight characters; the service stores only bcrypt password hashes. A successful registration or login returns a seven-day bearer session token.
 
 ```sh
-curl -X POST http://localhost:8080/admin/users \
-  -H "Authorization: Bearer $ADMIN_TOKEN" \
+curl -X POST http://localhost:8080/auth/register \
   -H 'Content-Type: application/json' \
-  -d '{"email":"user@example.com","name":"Example User"}'
+  -d '{"email":"user@example.com","name":"Example User","password":"a-strong-password"}'
 ```
+
+Log in with `POST /auth/login` using `{"email":"user@example.com","password":"a-strong-password"}`. Use the returned token with `Authorization: Bearer $SESSION_TOKEN` for `GET /account/me`, and revoke the current session using `POST /auth/logout`.
 
 Create an API key. The full `key` in the response is displayed only at creation time:
 
 ```sh
 curl -X POST http://localhost:8080/admin/keys \
-  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Authorization: Bearer $SESSION_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"user_id":"USER_UUID","name":"development"}'
 ```
@@ -61,7 +76,7 @@ Create an OpenAI-compatible upstream channel:
 
 ```sh
 curl -X POST http://localhost:8080/admin/channels \
-  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Authorization: Bearer $SESSION_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"name":"openai","base_url":"https://api.openai.com","api_key":"PROVIDER_KEY","models":["gpt-4o-mini"],"priority":100}'
 ```
@@ -72,11 +87,11 @@ Set a model price (currency units per million tokens), then top up or adjust a u
 
 ```sh
 curl -X POST http://localhost:8080/admin/pricing \
-  -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $SESSION_TOKEN" -H 'Content-Type: application/json' \
   -d '{"model":"gpt-4o-mini","input_per_million":0.15,"cached_input_per_million":0.075,"output_per_million":0.60,"multiplier":1}'
 
 curl -X POST http://localhost:8080/admin/wallets/adjustments \
-  -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $SESSION_TOKEN" -H 'Content-Type: application/json' \
   -d '{"user_id":"USER_UUID","amount":10,"note":"initial credit"}'
 ```
 
@@ -84,11 +99,11 @@ Create a public-model alias for a specific channel, or apply a request quota to 
 
 ```sh
 curl -X POST http://localhost:8080/admin/model-routes \
-  -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $SESSION_TOKEN" -H 'Content-Type: application/json' \
   -d '{"public_model":"gpt-4o","upstream_model":"provider-gpt-4o","channel_id":"CHANNEL_UUID","priority":10,"weight":100}'
 
 curl -X POST http://localhost:8080/admin/quota-limits \
-  -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $SESSION_TOKEN" -H 'Content-Type: application/json' \
   -d '{"user_id":"USER_UUID","window":"day","max_requests":1000}'
 ```
 
