@@ -1,59 +1,136 @@
 <script setup lang="ts">
 import { useConsoleStore } from '~/composables/useConsoleStore'
 import Empty from '~/components/console/Empty.vue'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Badge } from '@/components/ui/badge'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 
 const store = useConsoleStore()
 const { t, busy, groups, subscriptionPlans, subscriptionPlanForm, editingPlanID, showPlanModal, savePlan, openPlanModal, editPlan, deletePlan } = store
+
+const selectClass = 'flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring'
 </script>
 
 <template>
-  <section class="toolbar">
+  <section class="flex flex-wrap items-center justify-between gap-4">
     <div>
-      <h2>{{ t('subscriptionPlans') }}</h2>
-      <p>{{ t('subscriptionPlansAdminDesc') }}</p>
+      <h2 class="text-lg font-semibold">{{ t('subscriptionPlans') }}</h2>
+      <p class="text-sm text-muted-foreground">{{ t('subscriptionPlansAdminDesc') }}</p>
     </div>
-    <button class="button primary" @click="openPlanModal">+ {{ t('createPlan') }}</button>
+    <Button @click="openPlanModal">+ {{ t('createPlan') }}</Button>
   </section>
 
-  <section class="panel table-panel">
-    <table>
-      <thead><tr><th>{{ t('planName') }}</th><th>{{ t('priceLabel') }}</th><th>{{ t('billingPeriod') }}</th><th>{{ t('creditAmount') }}</th><th>{{ t('groupLabel') }}</th><th>{{ t('models') }}</th><th>{{ t('sortOrder') }}</th><th>{{ t('accountStatus') }}</th><th/></tr></thead>
-      <tbody>
-        <tr v-for="plan in subscriptionPlans" :key="plan.id">
-          <td><b>{{ plan.name }}</b><small>{{ plan.description }}</small></td>
-          <td>¥{{ plan.price }} <small>{{ plan.currency }}</small></td>
-          <td><span class="pill">{{ plan.billing_period === 'year' ? t('yearPlan') : t('monthPlan') }}</span></td>
-          <td>{{ plan.credit_amount }}</td>
-          <td>{{ plan.group_name || '—' }}</td>
-          <td>{{ plan.model_whitelist.length ? plan.model_whitelist.length : t('all') }}</td>
-          <td>{{ plan.sort_order }}</td>
-          <td><span :class="['state', plan.enabled ? 'good' : 'bad']">{{ plan.enabled ? t('enabled') : t('disabled') }}</span></td>
-          <td>
-            <button class="text-button" @click="editPlan(plan)">{{ t('edit') }}</button>
-            <button class="text-button danger" @click="deletePlan(plan)">{{ t('remove') }}</button>
-          </td>
-        </tr>
-      </tbody>
-    </table>
+  <section class="mt-4 overflow-hidden rounded-lg border border-border bg-card">
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>{{ t('planName') }}</TableHead>
+          <TableHead>{{ t('priceLabel') }}</TableHead>
+          <TableHead>{{ t('billingPeriod') }}</TableHead>
+          <TableHead>{{ t('creditAmount') }}</TableHead>
+          <TableHead>{{ t('groupLabel') }}</TableHead>
+          <TableHead>{{ t('models') }}</TableHead>
+          <TableHead>{{ t('sortOrder') }}</TableHead>
+          <TableHead>{{ t('accountStatus') }}</TableHead>
+          <TableHead />
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        <TableRow v-for="plan in subscriptionPlans" :key="plan.id">
+          <TableCell>
+            <div class="font-medium">{{ plan.name }}</div>
+            <div class="text-xs text-muted-foreground">{{ plan.description }}</div>
+          </TableCell>
+          <TableCell>¥{{ plan.price }} <small class="text-muted-foreground">{{ plan.currency }}</small></TableCell>
+          <TableCell><Badge variant="outline">{{ plan.billing_period === 'year' ? t('yearPlan') : t('monthPlan') }}</Badge></TableCell>
+          <TableCell>{{ plan.credit_amount }}</TableCell>
+          <TableCell>{{ plan.group_name || '—' }}</TableCell>
+          <TableCell>{{ plan.model_whitelist.length ? plan.model_whitelist.length : t('all') }}</TableCell>
+          <TableCell>{{ plan.sort_order }}</TableCell>
+          <TableCell><Badge :variant="plan.enabled ? 'secondary' : 'destructive'">{{ plan.enabled ? t('enabled') : t('disabled') }}</Badge></TableCell>
+          <TableCell class="text-right">
+            <Button variant="link" size="sm" @click="editPlan(plan)">{{ t('edit') }}</Button>
+            <Button variant="link" size="sm" class="text-destructive" @click="deletePlan(plan)">{{ t('remove') }}</Button>
+          </TableCell>
+        </TableRow>
+      </TableBody>
+    </Table>
     <Empty v-if="!subscriptionPlans.length" :text="t('noSubscriptionPlans')" />
   </section>
 
-  <div v-if="showPlanModal" class="modal-backdrop" @click.self="showPlanModal = false">
-    <form class="modal" @submit.prevent="savePlan">
-      <div class="modal-title"><h2>{{ editingPlanID ? t('editPlan') : t('createPlan') }}</h2><button type="button" @click="showPlanModal = false">×</button></div>
-      <label>{{ t('planName') }}<input v-model="subscriptionPlanForm.name" required maxlength="100" ></label>
-      <label>{{ t('planDescription') }}<input v-model="subscriptionPlanForm.description" maxlength="500" ></label>
-      <label>{{ t('priceLabel') }}<input v-model="subscriptionPlanForm.price" required ></label>
-      <label>{{ t('currency') }}<input v-model="subscriptionPlanForm.currency" required maxlength="8" ></label>
-      <label>{{ t('billingPeriod') }}<select v-model="subscriptionPlanForm.billing_period"><option value="month">{{ t('monthPlan') }}</option><option value="year">{{ t('yearPlan') }}</option></select></label>
-      <label>{{ t('creditAmount') }}<input v-model="subscriptionPlanForm.credit_amount" type="number" min="0" step="any" ><small>{{ t('creditAmountHint') }}</small></label>
-      <label>{{ t('groupLabel') }}<select v-model="subscriptionPlanForm.group_id"><option value="">{{ t('none') }}</option><option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }}</option></select></label>
-      <label>{{ t('models') }} <small>{{ t('modelsCommaHint') }}</small><input v-model="subscriptionPlanForm.model_whitelist" :placeholder="t('modelsPlaceholder')" ></label>
-      <label>{{ t('maxRequestsPerPeriod') }} <small>{{ t('optional') }}</small><input v-model="subscriptionPlanForm.max_requests_per_period" type="number" min="0" step="1" :placeholder="t('unlimited')" ></label>
-      <label>{{ t('maxTokensPerPeriod') }} <small>{{ t('optional') }}</small><input v-model="subscriptionPlanForm.max_tokens_per_period" type="number" min="0" step="1" :placeholder="t('unlimited')" ></label>
-      <label>{{ t('sortOrder') }}<input v-model.number="subscriptionPlanForm.sort_order" type="number" min="0" step="1" ></label>
-      <label class="payment-enabled"><input v-model="subscriptionPlanForm.enabled" type="checkbox" >{{ t('enabled') }}</label>
-      <button class="button primary full" :disabled="busy">{{ t('saveLabel') }}</button>
-    </form>
-  </div>
+  <Dialog :open="showPlanModal" @update:open="v => !v && (showPlanModal = false)">
+    <DialogContent class="sm:max-w-lg">
+      <DialogHeader>
+        <DialogTitle>{{ editingPlanID ? t('editPlan') : t('createPlan') }}</DialogTitle>
+      </DialogHeader>
+      <form class="grid gap-4" @submit.prevent="savePlan">
+        <div class="flex flex-col gap-2">
+          <Label>{{ t('planName') }}</Label>
+          <Input v-model="subscriptionPlanForm.name" required maxlength="100" />
+        </div>
+        <div class="flex flex-col gap-2">
+          <Label>{{ t('planDescription') }}</Label>
+          <Input v-model="subscriptionPlanForm.description" maxlength="500" />
+        </div>
+        <div class="grid grid-cols-2 gap-4">
+          <div class="flex flex-col gap-2">
+            <Label>{{ t('priceLabel') }}</Label>
+            <Input v-model="subscriptionPlanForm.price" required />
+          </div>
+          <div class="flex flex-col gap-2">
+            <Label>{{ t('currency') }}</Label>
+            <Input v-model="subscriptionPlanForm.currency" required maxlength="8" />
+          </div>
+          <div class="flex flex-col gap-2">
+            <Label>{{ t('billingPeriod') }}</Label>
+            <select v-model="subscriptionPlanForm.billing_period" :class="selectClass">
+              <option value="month">{{ t('monthPlan') }}</option>
+              <option value="year">{{ t('yearPlan') }}</option>
+            </select>
+          </div>
+          <div class="flex flex-col gap-2">
+            <Label>{{ t('creditAmount') }}</Label>
+            <Input v-model="subscriptionPlanForm.credit_amount" type="number" min="0" step="any" />
+            <p class="text-xs text-muted-foreground">{{ t('creditAmountHint') }}</p>
+          </div>
+          <div class="flex flex-col gap-2">
+            <Label>{{ t('groupLabel') }}</Label>
+            <select v-model="subscriptionPlanForm.group_id" :class="selectClass">
+              <option value="">{{ t('none') }}</option>
+              <option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }}</option>
+            </select>
+          </div>
+          <div class="flex flex-col gap-2">
+            <Label>{{ t('sortOrder') }}</Label>
+            <Input v-model.number="subscriptionPlanForm.sort_order" type="number" min="0" step="1" />
+          </div>
+        </div>
+        <div class="flex flex-col gap-2">
+          <Label>{{ t('models') }} <span class="text-xs text-muted-foreground">{{ t('modelsCommaHint') }}</span></Label>
+          <Input v-model="subscriptionPlanForm.model_whitelist" :placeholder="t('modelsPlaceholder')" />
+        </div>
+        <div class="grid grid-cols-2 gap-4">
+          <div class="flex flex-col gap-2">
+            <Label>{{ t('maxRequestsPerPeriod') }} <span class="text-xs text-muted-foreground">{{ t('optional') }}</span></Label>
+            <Input v-model="subscriptionPlanForm.max_requests_per_period" type="number" min="0" step="1" :placeholder="t('unlimited')" />
+          </div>
+          <div class="flex flex-col gap-2">
+            <Label>{{ t('maxTokensPerPeriod') }} <span class="text-xs text-muted-foreground">{{ t('optional') }}</span></Label>
+            <Input v-model="subscriptionPlanForm.max_tokens_per_period" type="number" min="0" step="1" :placeholder="t('unlimited')" />
+          </div>
+        </div>
+        <div class="flex items-center gap-2">
+          <Checkbox id="plan-enabled" :model-value="subscriptionPlanForm.enabled" @update:model-value="v => subscriptionPlanForm.enabled = !!v" />
+          <Label for="plan-enabled">{{ t('enabled') }}</Label>
+        </div>
+        <DialogFooter>
+          <Button type="submit" :disabled="busy" class="w-full">{{ t('saveLabel') }}</Button>
+        </DialogFooter>
+      </form>
+    </DialogContent>
+  </Dialog>
 </template>

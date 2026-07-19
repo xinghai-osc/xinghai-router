@@ -2,6 +2,8 @@
 import { computed, ref } from 'vue'
 import { Check, ChevronRight, Copy } from 'lucide-vue-next'
 import { effectivePrice, formatSquarePrice, getDisplayGroup, vendorIconUrl, type SquareModel, type TokenUnit } from '~/src/marketplace'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 
 const props = defineProps<{
   model: SquareModel
@@ -40,54 +42,54 @@ async function copyName(event: MouseEvent) {
 </script>
 
 <template>
-  <div class="msq-card">
-    <div class="msq-card-top">
-      <div class="msq-card-id">
-        <div class="msq-iconbox">
-          <img v-if="props.model.vendor_slug && !iconError" :src="vendorIconUrl(props.model.vendor_slug)" :alt="props.model.vendor_name" loading="lazy" @error="iconError = true" >
-          <span v-else>{{ props.model.model.slice(0, 1).toUpperCase() }}</span>
-        </div>
-        <div class="msq-card-title">
-          <h3>{{ props.model.model }}</h3>
-          <div class="msq-card-prices">
-            <span class="msq-price-item">
+  <div class="flex flex-col gap-3 rounded-lg border border-border bg-card p-4 transition-colors hover:bg-accent/30">
+    <div class="flex items-start gap-3">
+      <div class="flex flex-1 items-start gap-3">
+        <span class="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted">
+          <img v-if="props.model.vendor_slug && !iconError" :src="vendorIconUrl(props.model.vendor_slug)" :alt="props.model.vendor_name" loading="lazy" class="h-full w-full object-contain" @error="iconError = true">
+          <span v-else class="text-base font-bold">{{ props.model.model.slice(0, 1).toUpperCase() }}</span>
+        </span>
+        <div class="min-w-0 flex-1">
+          <h3 class="truncate font-semibold">{{ props.model.model }}</h3>
+          <div class="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs">
+            <span class="flex items-center gap-1 text-muted-foreground">
               {{ t('inputLabel') }}
-              <b v-if="inputPrice">{{ inputPrice }}</b>
-              <b v-else class="msq-price-pending">{{ t('pendingConfig') }}</b>
+              <b v-if="inputPrice" class="font-mono font-medium text-foreground">{{ inputPrice }}</b>
+              <b v-else class="text-muted-foreground">{{ t('pendingConfig') }}</b>
             </span>
-            <span class="msq-price-item">
+            <span class="flex items-center gap-1 text-muted-foreground">
               {{ t('outputLabel') }}
-              <b v-if="outputPrice">{{ outputPrice }}</b>
-              <b v-else class="msq-price-pending">{{ t('pendingConfig') }}</b>
+              <b v-if="outputPrice" class="font-mono font-medium text-foreground">{{ outputPrice }}</b>
+              <b v-else class="text-muted-foreground">{{ t('pendingConfig') }}</b>
             </span>
-            <span v-if="cachePrice" class="msq-price-item">
+            <span v-if="cachePrice" class="flex items-center gap-1 text-muted-foreground">
               {{ t('msCached') }}
-              <b>{{ cachePrice }}</b>
+              <b class="font-mono font-medium text-foreground">{{ cachePrice }}</b>
             </span>
           </div>
         </div>
       </div>
-      <div class="msq-card-actions">
-        <button type="button" class="msq-details-btn" @click="emit('open', props.model)">
+      <div class="flex shrink-0 items-center gap-1">
+        <Button variant="outline" size="sm" @click="emit('open', props.model)">
           {{ t('msDetails') }}<ChevronRight :size="13" />
-        </button>
-        <button type="button" class="msq-copy-btn" :title="copied ? t('msCopied') : t('msCopy')" @click="copyName">
+        </Button>
+        <Button variant="ghost" size="icon-sm" :title="copied ? t('msCopied') : t('msCopy')" @click="copyName">
           <Check v-if="copied" :size="13" />
           <Copy v-else :size="13" />
-        </button>
+        </Button>
       </div>
     </div>
 
-    <p class="msq-card-desc">{{ props.model.vendor_name || t('msNoDesc') }}</p>
+    <p class="text-sm text-muted-foreground">{{ props.model.vendor_name || t('msNoDesc') }}</p>
 
-    <div class="msq-card-footer">
-      <div class="msq-card-footer-left">
-        <span v-if="primaryGroup" class="msq-group-name">{{ primaryGroup.name }}</span>
-        <span class="msq-billing-badge">{{ t('msTokenBased') }}</span>
+    <div class="flex items-center justify-between gap-2 border-t border-border pt-3">
+      <div class="flex items-center gap-2">
+        <span v-if="primaryGroup" class="text-xs font-medium">{{ primaryGroup.name }}</span>
+        <Badge variant="secondary" class="text-[10px]">{{ t('msTokenBased') }}</Badge>
       </div>
-      <div class="msq-card-footer-bottom">
-        <span class="msq-unit">{{ unitLabel }}</span>
-        <span v-if="hiddenCount > 0" class="msq-hidden-count">+{{ hiddenCount }}</span>
+      <div class="flex items-center gap-2">
+        <span class="text-xs text-muted-foreground">{{ unitLabel }}</span>
+        <Badge v-if="hiddenCount > 0" variant="outline" class="text-[10px]">+{{ hiddenCount }}</Badge>
       </div>
     </div>
   </div>

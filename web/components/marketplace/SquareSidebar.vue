@@ -3,6 +3,8 @@ import { computed, ref } from 'vue'
 import { ChevronDown, RotateCcw } from 'lucide-vue-next'
 import type { CatalogGroup } from '~/src/api'
 import { FILTER_ALL, extractVendors, formatRatio, vendorIconUrl, type SquareModel } from '~/src/marketplace'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 
 const props = defineProps<{
   models: SquareModel[]
@@ -36,65 +38,69 @@ const quotaOptions = computed(() => [
   { value: 'all', label: t('msAllModels'), count: props.models.length },
   { value: 'token', label: t('msTokenBased'), count: props.models.length },
 ])
+
+const chipClass = 'inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors'
+const chipActive = 'border-primary bg-primary text-primary-foreground'
+const chipIdle = 'border-border bg-card text-muted-foreground hover:bg-accent'
 </script>
 
 <template>
-  <aside :class="['msq-sidebar', { bare: props.bare }]">
-    <div class="msq-sidebar-head">
+  <aside :class="['flex flex-col gap-3', props.bare ? '' : 'rounded-lg border border-border bg-card p-4']">
+    <div class="flex items-start justify-between gap-2">
       <div>
-        <h2>{{ t('msFilter') }}</h2>
-        <p>{{ t('msFilterDesc') }}</p>
+        <h2 class="text-sm font-semibold">{{ t('msFilter') }}</h2>
+        <p class="text-xs text-muted-foreground">{{ t('msFilterDesc') }}</p>
       </div>
-      <button type="button" class="msq-reset" :disabled="!props.hasActiveFilters" @click="emit('clear')">
+      <Button variant="ghost" size="sm" :disabled="!props.hasActiveFilters" @click="emit('clear')">
         <RotateCcw :size="13" />{{ t('msReset') }}
-      </button>
+      </Button>
     </div>
-    <span v-if="props.hasActiveFilters" class="msq-active-badge">{{ t('msFiltersActive') }}</span>
+    <Badge v-if="props.hasActiveFilters" variant="secondary" class="w-fit">{{ t('msFiltersActive') }}</Badge>
 
-    <div class="msq-sections">
-      <section class="msq-section" :class="{ collapsed: collapsed.group }">
-        <button type="button" class="msq-section-head" @click="toggleSection('group')">
+    <div class="flex flex-col gap-3">
+      <section class="flex flex-col gap-2">
+        <button type="button" class="flex items-center justify-between text-sm font-medium" @click="toggleSection('group')">
           <span>{{ t('msGroups') }}</span>
-          <ChevronDown :size="15" class="msq-chevron" />
+          <ChevronDown :size="15" class="text-muted-foreground transition-transform" :class="{ '-rotate-90': collapsed.group }" />
         </button>
-        <div class="msq-chips">
-          <button type="button" :class="['msq-chip', { active: props.groupFilter === FILTER_ALL }]" @click="emit('update:groupFilter', FILTER_ALL)">
+        <div v-show="!collapsed.group" class="flex flex-wrap gap-1.5">
+          <button type="button" :class="[chipClass, props.groupFilter === FILTER_ALL ? chipActive : chipIdle]" @click="emit('update:groupFilter', FILTER_ALL)">
             <span>{{ t('msAllGroups') }}</span>
           </button>
-          <button v-for="group in props.groups" :key="group.id" type="button" :class="['msq-chip', { active: props.groupFilter === group.id }]" :title="group.name" @click="emit('update:groupFilter', group.id)">
-            <span class="msq-chip-label">{{ group.name }}</span>
-            <span class="msq-chip-meta">{{ formatRatio(Number(group.multiplier)) }}</span>
+          <button v-for="group in props.groups" :key="group.id" type="button" :class="[chipClass, props.groupFilter === group.id ? chipActive : chipIdle]" :title="group.name" @click="emit('update:groupFilter', group.id)">
+            <span>{{ group.name }}</span>
+            <span class="text-[10px] opacity-70">{{ formatRatio(Number(group.multiplier)) }}</span>
           </button>
         </div>
       </section>
 
-      <section class="msq-section" :class="{ collapsed: collapsed.vendor }">
-        <button type="button" class="msq-section-head" @click="toggleSection('vendor')">
+      <section class="flex flex-col gap-2">
+        <button type="button" class="flex items-center justify-between text-sm font-medium" @click="toggleSection('vendor')">
           <span>{{ t('msVendors') }}</span>
-          <ChevronDown :size="15" class="msq-chevron" />
+          <ChevronDown :size="15" class="text-muted-foreground transition-transform" :class="{ '-rotate-90': collapsed.vendor }" />
         </button>
-        <div class="msq-chips">
-          <button type="button" :class="['msq-chip', { active: props.vendorFilter === FILTER_ALL }]" @click="emit('update:vendorFilter', FILTER_ALL)">
+        <div v-show="!collapsed.vendor" class="flex flex-wrap gap-1.5">
+          <button type="button" :class="[chipClass, props.vendorFilter === FILTER_ALL ? chipActive : chipIdle]" @click="emit('update:vendorFilter', FILTER_ALL)">
             <span>{{ t('msAllVendors') }}</span>
-            <span class="msq-chip-meta">{{ props.models.length }}</span>
+            <span class="text-[10px] opacity-70">{{ props.models.length }}</span>
           </button>
-          <button v-for="vendor in vendors" :key="vendor.name" type="button" :class="['msq-chip', { active: props.vendorFilter === vendor.name }]" :title="vendor.name" @click="emit('update:vendorFilter', vendor.name)">
-            <img v-if="vendor.slug && !iconErrors.has(vendor.slug)" class="msq-chip-icon" :src="vendorIconUrl(vendor.slug)" :alt="vendor.name" loading="lazy" @error="iconFailed(vendor.slug)" >
-            <span class="msq-chip-label">{{ vendor.name }}</span>
-            <span class="msq-chip-meta">{{ vendor.count }}</span>
+          <button v-for="vendor in vendors" :key="vendor.name" type="button" :class="[chipClass, props.vendorFilter === vendor.name ? chipActive : chipIdle]" :title="vendor.name" @click="emit('update:vendorFilter', vendor.name)">
+            <img v-if="vendor.slug && !iconErrors.has(vendor.slug)" class="h-3.5 w-3.5 rounded-full" :src="vendorIconUrl(vendor.slug)" :alt="vendor.name" loading="lazy" @error="iconFailed(vendor.slug)">
+            <span>{{ vendor.name }}</span>
+            <span class="text-[10px] opacity-70">{{ vendor.count }}</span>
           </button>
         </div>
       </section>
 
-      <section class="msq-section" :class="{ collapsed: collapsed.quota }">
-        <button type="button" class="msq-section-head" @click="toggleSection('quota')">
+      <section class="flex flex-col gap-2">
+        <button type="button" class="flex items-center justify-between text-sm font-medium" @click="toggleSection('quota')">
           <span>{{ t('msPricingType') }}</span>
-          <ChevronDown :size="15" class="msq-chevron" />
+          <ChevronDown :size="15" class="text-muted-foreground transition-transform" :class="{ '-rotate-90': collapsed.quota }" />
         </button>
-        <div class="msq-chips">
-          <button v-for="option in quotaOptions" :key="option.value" type="button" :class="['msq-chip', { active: props.quotaTypeFilter === option.value }]" @click="emit('update:quotaTypeFilter', option.value)">
+        <div v-show="!collapsed.quota" class="flex flex-wrap gap-1.5">
+          <button v-for="option in quotaOptions" :key="option.value" type="button" :class="[chipClass, props.quotaTypeFilter === option.value ? chipActive : chipIdle]" @click="emit('update:quotaTypeFilter', option.value)">
             <span>{{ option.label }}</span>
-            <span class="msq-chip-meta">{{ option.count }}</span>
+            <span class="text-[10px] opacity-70">{{ option.count }}</span>
           </button>
         </div>
       </section>

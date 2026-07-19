@@ -1,7 +1,10 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ArrowUpDown, Check, Filter, Grid2X2, Table2 } from 'lucide-vue-next'
+import { computed } from 'vue'
 import type { SortOption, TokenUnit, ViewMode } from '~/src/marketplace'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 
 const props = defineProps<{
   filteredCount: number
@@ -20,8 +23,6 @@ const emit = defineEmits<{
 }>()
 const { t } = useI18n()
 
-const sortOpen = ref(false)
-const sortRef = ref<HTMLElement | null>(null)
 const sortLabels = computed<Record<SortOption, string>>(() => ({
   name: t('msSortName'),
   'price-low': t('msSortPriceLow'),
@@ -30,52 +31,49 @@ const sortLabels = computed<Record<SortOption, string>>(() => ({
 
 function chooseSort(value: SortOption) {
   emit('update:sortBy', value)
-  sortOpen.value = false
 }
 
-function handleOutside(event: MouseEvent) {
-  if (sortRef.value && !sortRef.value.contains(event.target as Node)) sortOpen.value = false
-}
-onMounted(() => document.addEventListener('click', handleOutside))
-onBeforeUnmount(() => document.removeEventListener('click', handleOutside))
+const segmentedBtn = 'inline-flex items-center justify-center px-3 py-1.5 text-xs font-medium transition-colors'
 </script>
 
 <template>
-  <div class="msq-toolbar">
-    <div class="msq-toolbar-left">
-      <button type="button" class="msq-filter-btn" @click="emit('openFilters')">
+  <div class="flex flex-wrap items-center justify-between gap-3 py-3">
+    <div class="flex items-center gap-3">
+      <Button variant="outline" size="sm" class="lg:hidden" @click="emit('openFilters')">
         <Filter :size="15" />{{ t('msFilter') }}
-        <span v-if="props.activeFilterCount > 0" class="msq-filter-count">{{ props.activeFilterCount }}</span>
-      </button>
-      <div class="msq-count">
-        <strong>{{ props.filteredCount.toLocaleString() }}</strong>
-        <span>{{ t('msModels') }}</span>
-        <small v-if="props.hasActiveFilters && props.totalCount">/ {{ props.totalCount.toLocaleString() }}</small>
+        <Badge v-if="props.activeFilterCount > 0" variant="secondary" class="ml-1 h-4 px-1 text-[10px]">{{ props.activeFilterCount }}</Badge>
+      </Button>
+      <div class="text-sm">
+        <strong class="font-semibold">{{ props.filteredCount.toLocaleString() }}</strong>
+        <span class="ml-1 text-muted-foreground">{{ t('msModels') }}</span>
+        <small v-if="props.hasActiveFilters && props.totalCount" class="ml-1 text-muted-foreground">/ {{ props.totalCount.toLocaleString() }}</small>
       </div>
     </div>
 
-    <div class="msq-toolbar-right">
-      <div class="msq-segmented msq-hide-mobile" role="group" :aria-label="t('msTokenUnit')">
-        <button type="button" :class="{ active: props.tokenUnit === 'M' }" :aria-pressed="props.tokenUnit === 'M'" @click="emit('update:tokenUnit', 'M')">/1M</button>
-        <button type="button" :class="{ active: props.tokenUnit === 'K' }" :aria-pressed="props.tokenUnit === 'K'" @click="emit('update:tokenUnit', 'K')">/1K</button>
+    <div class="flex items-center gap-2">
+      <div class="hidden items-center gap-0 rounded-md border border-border sm:inline-flex" role="group" :aria-label="t('msTokenUnit')">
+        <button type="button" :class="[segmentedBtn, 'rounded-l-md', props.tokenUnit === 'M' ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:bg-accent/50']" :aria-pressed="props.tokenUnit === 'M'" @click="emit('update:tokenUnit', 'M')">/1M</button>
+        <button type="button" :class="[segmentedBtn, 'rounded-r-md border-l border-border', props.tokenUnit === 'K' ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:bg-accent/50']" :aria-pressed="props.tokenUnit === 'K'" @click="emit('update:tokenUnit', 'K')">/1K</button>
       </div>
 
-      <div ref="sortRef" class="msq-dropdown">
-        <button type="button" class="msq-sort-btn" @click.stop="sortOpen = !sortOpen">
-          <ArrowUpDown :size="13" /><span>{{ sortLabels[props.sortBy] || t('msSort') }}</span>
-        </button>
-        <div v-if="sortOpen" class="msq-dropdown-menu">
-          <button v-for="(label, value) in sortLabels" :key="value" type="button" @click="chooseSort(value as SortOption)">
-            <Check :size="14" :style="{ opacity: props.sortBy === value ? 1 : 0 }" />{{ label }}
-          </button>
-        </div>
-      </div>
+      <DropdownMenu>
+        <DropdownMenuTrigger as-child>
+          <Button variant="outline" size="sm">
+            <ArrowUpDown :size="13" /><span>{{ sortLabels[props.sortBy] || t('msSort') }}</span>
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem v-for="(label, value) in sortLabels" :key="value" @select="chooseSort(value as SortOption)">
+            <Check :size="14" :class="props.sortBy === value ? 'opacity-100' : 'opacity-0'" />{{ label }}
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
 
-      <div class="msq-segmented" role="group" :aria-label="t('msViewMode')">
-        <button type="button" class="msq-icon-btn" :class="{ active: props.viewMode === 'card' }" :title="t('msCardView')" :aria-pressed="props.viewMode === 'card'" @click="emit('update:viewMode', 'card')">
+      <div class="flex items-center gap-0 rounded-md border border-border" role="group" :aria-label="t('msViewMode')">
+        <button type="button" :class="[segmentedBtn, 'rounded-l-md', props.viewMode === 'card' ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:bg-accent/50']" :title="t('msCardView')" :aria-pressed="props.viewMode === 'card'" @click="emit('update:viewMode', 'card')">
           <Grid2X2 :size="13" />
         </button>
-        <button type="button" class="msq-icon-btn" :class="{ active: props.viewMode === 'table' }" :title="t('msTableView')" :aria-pressed="props.viewMode === 'table'" @click="emit('update:viewMode', 'table')">
+        <button type="button" :class="[segmentedBtn, 'rounded-r-md border-l border-border', props.viewMode === 'table' ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:bg-accent/50']" :title="t('msTableView')" :aria-pressed="props.viewMode === 'table'" @click="emit('update:viewMode', 'table')">
           <Table2 :size="13" />
         </button>
       </div>

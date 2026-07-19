@@ -2,107 +2,133 @@
 import { WalletCards, ReceiptText } from 'lucide-vue-next'
 import { useConsoleStore } from '~/composables/useConsoleStore'
 import Empty from '~/components/console/Empty.vue'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Badge } from '@/components/ui/badge'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 
 const store = useConsoleStore()
 const { t, account, ledger, payments, paymentMethods, paymentsEnabled, paymentMessage, paymentForm, busy, personalCost, formatDate, openConsole, createPayment } = store
 </script>
 
 <template>
-  <section class="wallet-hero">
-    <div>
-      <span>{{ t('availableBalance') }}</span>
-      <strong>{{ Number(account?.balance ?? 0).toFixed(4) }}</strong>
-      <p>{{ t('balanceForModelCalls') }}</p>
-    </div>
-    <WalletCards :size="64" />
-  </section>
-  <div class="metrics wallet-metrics">
-    <article>
-      <span>{{ t('currentBalance') }}</span>
-      <strong>{{ Number(account?.balance ?? 0).toFixed(4) }}</strong>
-      <p><WalletCards :size="15" />{{ t('accountAvailableQuota') }}</p>
-    </article>
-    <article>
-      <span>{{ t('reservedAmount') }}</span>
-      <strong>{{ Number(account?.reserved ?? 0).toFixed(4) }}</strong>
-      <p>{{ t('reservedForConcurrent') }}</p>
-    </article>
-    <article>
-      <span>{{ t('cumulativeSpending') }}</span>
-      <strong>{{ personalCost.toFixed(6) }}</strong>
-      <p><ReceiptText :size="15" />{{ t('recent100Records') }}</p>
-    </article>
+  <Card class="overflow-hidden">
+    <CardContent class="flex items-center justify-between gap-4 pt-6">
+      <div>
+        <span class="text-xs text-muted-foreground">{{ t('availableBalance') }}</span>
+        <div class="text-3xl font-bold tracking-tight">{{ Number(account?.balance ?? 0).toFixed(4) }}</div>
+        <p class="text-sm text-muted-foreground">{{ t('balanceForModelCalls') }}</p>
+      </div>
+      <WalletCards :size="64" class="text-muted-foreground" />
+    </CardContent>
+  </Card>
+
+  <div class="mt-4 grid gap-4 sm:grid-cols-3">
+    <Card>
+      <CardContent class="pt-6">
+        <span class="text-xs text-muted-foreground">{{ t('currentBalance') }}</span>
+        <div class="text-2xl font-semibold">{{ Number(account?.balance ?? 0).toFixed(4) }}</div>
+        <p class="mt-1 flex items-center gap-1 text-xs text-muted-foreground"><WalletCards :size="13" />{{ t('accountAvailableQuota') }}</p>
+      </CardContent>
+    </Card>
+    <Card>
+      <CardContent class="pt-6">
+        <span class="text-xs text-muted-foreground">{{ t('reservedAmount') }}</span>
+        <div class="text-2xl font-semibold">{{ Number(account?.reserved ?? 0).toFixed(4) }}</div>
+        <p class="mt-1 text-xs text-muted-foreground">{{ t('reservedForConcurrent') }}</p>
+      </CardContent>
+    </Card>
+    <Card>
+      <CardContent class="pt-6">
+        <span class="text-xs text-muted-foreground">{{ t('cumulativeSpending') }}</span>
+        <div class="text-2xl font-semibold">{{ personalCost.toFixed(6) }}</div>
+        <p class="mt-1 flex items-center gap-1 text-xs text-muted-foreground"><ReceiptText :size="13" />{{ t('recent100Records') }}</p>
+      </CardContent>
+    </Card>
   </div>
-  <form class="panel payment-form" @submit.prevent="createPayment">
-    <div>
-      <h2>{{ t('onlineTopup') }}</h2>
-      <p>{{ paymentsEnabled ? t('onlineTopupDesc') : t('paymentNotConfigured') }}</p>
-      <strong v-if="paymentMessage" class="payment-message">{{ paymentMessage }}</strong>
+
+  <Card class="mt-4">
+    <CardHeader>
+      <CardTitle>{{ t('onlineTopup') }}</CardTitle>
+      <CardDescription>{{ paymentsEnabled ? t('onlineTopupDesc') : t('paymentNotConfigured') }}</CardDescription>
+    </CardHeader>
+    <CardContent>
+      <form class="flex flex-col gap-4 sm:flex-row sm:items-end" @submit.prevent="createPayment">
+        <div class="flex flex-col gap-2">
+          <Label>{{ t('topupAmount') }}</Label>
+          <Input v-model.number="paymentForm.amount" type="number" min="1" max="100000" step="0.01" required class="w-40" />
+        </div>
+        <div class="flex flex-col gap-2">
+          <Label>{{ t('paymentMethod') }}</Label>
+          <select v-model="paymentForm.type" required class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
+            <option v-for="method in paymentMethods" :key="method.id" :value="method.code">{{ method.name }}</option>
+          </select>
+        </div>
+        <Button type="submit" :disabled="busy || !paymentsEnabled || !paymentForm.type">{{ t('goToPay') }}</Button>
+      </form>
+      <p v-if="paymentMessage" class="mt-3 text-sm font-medium text-primary">{{ paymentMessage }}</p>
+    </CardContent>
+  </Card>
+
+  <section v-if="payments.length" class="mt-4 overflow-hidden rounded-lg border border-border bg-card">
+    <div class="border-b border-border px-4 py-3">
+      <h2 class="text-sm font-semibold">{{ t('topupOrders') }}</h2>
+      <p class="text-xs text-muted-foreground">{{ t('topupOrdersDesc') }}</p>
     </div>
-    <label>{{ t('topupAmount') }}<input v-model.number="paymentForm.amount" type="number" min="1" max="100000" step="0.01" required ></label>
-    <label>{{ t('paymentMethod') }}
-      <select v-model="paymentForm.type" required>
-        <option v-for="method in paymentMethods" :key="method.id" :value="method.code">{{ method.name }}</option>
-      </select>
-    </label>
-    <button class="button primary" :disabled="busy || !paymentsEnabled || !paymentForm.type">{{ t('goToPay') }}</button>
-  </form>
-  <section v-if="payments.length" class="panel table-panel payment-orders">
-    <div class="panel-title">
-      <div>
-        <h2>{{ t('topupOrders') }}</h2>
-        <p>{{ t('topupOrdersDesc') }}</p>
-      </div>
-    </div>
-    <table>
-      <thead>
-        <tr>
-          <th>{{ t('createdAt') }}</th>
-          <th>{{ t('orderNumber') }}</th>
-          <th>{{ t('paymentMethod') }}</th>
-          <th>{{ t('topupAmount') }}</th>
-          <th>{{ t('accountStatus') }}</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="item in payments.slice(0, 10)" :key="item.order_no">
-          <td>{{ formatDate(item.created_at) }}</td>
-          <td><code>{{ item.order_no }}</code></td>
-          <td>{{ paymentMethods.find((method) => method.code === item.payment_type)?.name ?? item.payment_type }}</td>
-          <td>{{ item.amount }}</td>
-          <td><span :class="['state', item.status === 'paid' ? 'good' : 'bad']">{{ item.status }}</span></td>
-        </tr>
-      </tbody>
-    </table>
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>{{ t('createdAt') }}</TableHead>
+          <TableHead>{{ t('orderNumber') }}</TableHead>
+          <TableHead>{{ t('paymentMethod') }}</TableHead>
+          <TableHead>{{ t('topupAmount') }}</TableHead>
+          <TableHead>{{ t('accountStatus') }}</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        <TableRow v-for="item in payments.slice(0, 10)" :key="item.order_no">
+          <TableCell>{{ formatDate(item.created_at) }}</TableCell>
+          <TableCell><code class="font-mono text-xs">{{ item.order_no }}</code></TableCell>
+          <TableCell>{{ paymentMethods.find((method) => method.code === item.payment_type)?.name ?? item.payment_type }}</TableCell>
+          <TableCell>{{ item.amount }}</TableCell>
+          <TableCell>
+            <Badge :variant="item.status === 'paid' ? 'secondary' : 'destructive'">{{ item.status }}</Badge>
+          </TableCell>
+        </TableRow>
+      </TableBody>
+    </Table>
   </section>
-  <section class="panel table-panel">
-    <div class="panel-title">
+
+  <section class="mt-4 overflow-hidden rounded-lg border border-border bg-card">
+    <div class="flex items-center justify-between border-b border-border px-4 py-3">
       <div>
-        <h2>{{ t('balanceLedger') }}</h2>
-        <p>{{ t('ledgerDesc') }}</p>
+        <h2 class="text-sm font-semibold">{{ t('balanceLedger') }}</h2>
+        <p class="text-xs text-muted-foreground">{{ t('ledgerDesc') }}</p>
       </div>
-      <button class="text-button" @click="openConsole('ledger')">{{ t('viewAll') }}</button>
+      <Button variant="link" size="sm" @click="openConsole('ledger')">{{ t('viewAll') }}</Button>
     </div>
-    <table>
-      <thead>
-        <tr>
-          <th>{{ t('createdAt') }}</th>
-          <th>{{ t('typeLabel') }}</th>
-          <th>Change</th>
-          <th>{{ t('balanceLabel') }}</th>
-          <th>Note</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="item in ledger.slice(0, 10)" :key="item.id">
-          <td>{{ formatDate(item.created_at) }}</td>
-          <td>{{ item.kind }}</td>
-          <td :class="item.amount < 0 ? 'danger' : 'success'">{{ item.amount }}</td>
-          <td>{{ item.balance_after }}</td>
-          <td>{{ item.note || item.request_id }}</td>
-        </tr>
-      </tbody>
-    </table>
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>{{ t('createdAt') }}</TableHead>
+          <TableHead>{{ t('typeLabel') }}</TableHead>
+          <TableHead>Change</TableHead>
+          <TableHead>{{ t('balanceLabel') }}</TableHead>
+          <TableHead>Note</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        <TableRow v-for="item in ledger.slice(0, 10)" :key="item.id">
+          <TableCell>{{ formatDate(item.created_at) }}</TableCell>
+          <TableCell><Badge variant="outline">{{ item.kind }}</Badge></TableCell>
+          <TableCell :class="item.amount < 0 ? 'text-destructive' : 'text-green-600 dark:text-green-500'">{{ item.amount }}</TableCell>
+          <TableCell>{{ item.balance_after }}</TableCell>
+          <TableCell class="text-xs text-muted-foreground">{{ item.note || item.request_id }}</TableCell>
+        </TableRow>
+      </TableBody>
+    </Table>
     <Empty v-if="!ledger.length" :text="t('noLedgerEntries')" />
   </section>
 </template>

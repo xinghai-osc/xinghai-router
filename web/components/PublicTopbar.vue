@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Bot, ChevronRight } from 'lucide-vue-next'
 import { computed, onMounted, ref } from 'vue'
-import { api, getToken, type SiteSettings } from '~/src/api'
+import { getToken } from '~/src/api'
 import { Button } from '@/components/ui/button'
 
 const props = withDefaults(defineProps<{

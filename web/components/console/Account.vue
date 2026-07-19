@@ -2,42 +2,49 @@
 import { Plus } from 'lucide-vue-next'
 import { useConsoleStore } from '~/composables/useConsoleStore'
 import Empty from '~/components/console/Empty.vue'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 
 const store = useConsoleStore()
 const { t, accountKeys, showAccountKey, formatDate, editAccountKey } = store
 </script>
 
 <template>
-  <section class="toolbar">
+  <section class="flex flex-wrap items-center justify-between gap-4">
     <div>
-      <h2>{{ t('account') }}</h2>
-      <p>{{ t('keyBelongsToAccount') }}</p>
+      <h2 class="text-lg font-semibold">{{ t('account') }}</h2>
+      <p class="text-sm text-muted-foreground">{{ t('keyBelongsToAccount') }}</p>
     </div>
-    <button class="button primary" @click="showAccountKey = true"><Plus :size="16" />{{ t('createKeyButton') }}</button>
+    <Button @click="showAccountKey = true"><Plus :size="16" />{{ t('createKeyButton') }}</Button>
   </section>
-  <section class="panel table-panel">
-    <table>
-      <thead>
-        <tr>
-          <th>{{ t('keyName') }}</th>
-          <th>{{ t('keyPrefix') }}</th>
-          <th>{{ t('createdAt') }}</th>
-          <th>{{ t('lastUsed') }}</th>
-          <th>{{ t('accountStatus') }}</th>
-          <th/>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="key in accountKeys" :key="key.id">
-          <td><b>{{ key.name }}</b></td>
-          <td><code>{{ key.key_prefix }}...</code></td>
-          <td>{{ formatDate(key.created_at) }}</td>
-          <td>{{ formatDate(key.last_used_at) }}</td>
-          <td><span :class="['state', key.revoked_at ? 'bad' : 'good']">{{ key.revoked_at ? t('revoked') : t('valid') }}</span></td>
-          <td><button v-if="!key.revoked_at" class="text-button" @click="editAccountKey(key)">{{ t('edit') }}</button></td>
-        </tr>
-      </tbody>
-    </table>
+  <section class="mt-4 overflow-hidden rounded-lg border border-border bg-card">
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>{{ t('keyName') }}</TableHead>
+          <TableHead>{{ t('keyPrefix') }}</TableHead>
+          <TableHead>{{ t('createdAt') }}</TableHead>
+          <TableHead>{{ t('lastUsed') }}</TableHead>
+          <TableHead>{{ t('accountStatus') }}</TableHead>
+          <TableHead />
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        <TableRow v-for="key in accountKeys" :key="key.id">
+          <TableCell class="font-medium">{{ key.name }}</TableCell>
+          <TableCell><code class="font-mono text-xs">{{ key.key_prefix }}...</code></TableCell>
+          <TableCell>{{ formatDate(key.created_at) }}</TableCell>
+          <TableCell>{{ formatDate(key.last_used_at) }}</TableCell>
+          <TableCell>
+            <Badge :variant="key.revoked_at ? 'destructive' : 'secondary'">{{ key.revoked_at ? t('revoked') : t('valid') }}</Badge>
+          </TableCell>
+          <TableCell class="text-right">
+            <Button v-if="!key.revoked_at" variant="link" size="sm" @click="editAccountKey(key)">{{ t('edit') }}</Button>
+          </TableCell>
+        </TableRow>
+      </TableBody>
+    </Table>
     <Empty v-if="!accountKeys.length" :text="t('noApiKeysYet')" />
   </section>
 </template>

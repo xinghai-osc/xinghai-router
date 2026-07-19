@@ -2,43 +2,50 @@
 import { Plus } from 'lucide-vue-next'
 import { useConsoleStore } from '~/composables/useConsoleStore'
 import Empty from '~/components/console/Empty.vue'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 
 const store = useConsoleStore()
 const { t, providers, can, openProvider, editProvider, removeProvider } = store
 </script>
 
 <template>
-  <section class="toolbar">
+  <section class="flex flex-wrap items-center justify-between gap-4">
     <div>
-      <h2>{{ t('modelProviders') }}</h2>
-      <p>{{ t('providersDesc') }}</p>
+      <h2 class="text-lg font-semibold">{{ t('modelProviders') }}</h2>
+      <p class="text-sm text-muted-foreground">{{ t('providersDesc') }}</p>
     </div>
-    <button v-if="can('system.manage')" class="button primary" @click="openProvider"><Plus :size="16" />{{ t('addProvider') }}</button>
+    <Button v-if="can('system.manage')" @click="openProvider"><Plus :size="16" />{{ t('addProvider') }}</Button>
   </section>
-  <section class="panel table-panel">
-    <table>
-      <thead>
-        <tr>
-          <th>{{ t('supplier') }}</th>
-          <th>{{ t('modelPrefix') }}</th>
-          <th>{{ t('iconSlug') }}</th>
-          <th>{{ t('matchPriority') }}</th>
-          <th v-if="can('system.manage')">{{ t('actions') }}</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="provider in providers" :key="provider.id">
-          <td><b>{{ provider.name }}</b></td>
-          <td><span v-for="prefix in provider.prefixes" :key="prefix" class="pill">{{ prefix }}</span></td>
-          <td><code>{{ provider.slug }}</code></td>
-          <td>{{ provider.priority }}</td>
-          <td v-if="can('system.manage')">
-            <button class="text-button" type="button" @click="editProvider(provider)">{{ t('edit') }}</button>
-            <button class="text-button danger" type="button" @click="removeProvider(provider)">{{ t('remove') }}</button>
-          </td>
-        </tr>
-      </tbody>
-    </table>
+  <section class="mt-4 overflow-hidden rounded-lg border border-border bg-card">
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>{{ t('supplier') }}</TableHead>
+          <TableHead>{{ t('modelPrefix') }}</TableHead>
+          <TableHead>{{ t('iconSlug') }}</TableHead>
+          <TableHead>{{ t('matchPriority') }}</TableHead>
+          <TableHead v-if="can('system.manage')">{{ t('actions') }}</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        <TableRow v-for="provider in providers" :key="provider.id">
+          <TableCell class="font-medium">{{ provider.name }}</TableCell>
+          <TableCell>
+            <div class="flex flex-wrap gap-1">
+              <Badge v-for="prefix in provider.prefixes" :key="prefix" variant="outline" class="font-mono">{{ prefix }}</Badge>
+            </div>
+          </TableCell>
+          <TableCell><code class="font-mono text-xs">{{ provider.slug }}</code></TableCell>
+          <TableCell>{{ provider.priority }}</TableCell>
+          <TableCell v-if="can('system.manage')" class="text-right">
+            <Button variant="link" size="sm" type="button" @click="editProvider(provider)">{{ t('edit') }}</Button>
+            <Button variant="link" size="sm" type="button" class="text-destructive" @click="removeProvider(provider)">{{ t('remove') }}</Button>
+          </TableCell>
+        </TableRow>
+      </TableBody>
+    </Table>
     <Empty v-if="!providers.length" :text="t('noProvidersYet')" />
   </section>
 </template>

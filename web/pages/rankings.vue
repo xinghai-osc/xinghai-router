@@ -2,6 +2,7 @@
 import { ArrowDown, ArrowUp, RefreshCw, Trophy } from 'lucide-vue-next'
 import { onMounted, ref } from 'vue'
 import type { Rankings, SiteSettings } from '~/src/api'
+import { Button } from '@/components/ui/button'
 
 type Period = 'today' | 'week' | 'month' | 'year'
 const period = ref<Period>('week')
@@ -64,10 +65,10 @@ onMounted(() => {
         <div><span><Trophy :size="15" /> LIVE USAGE RANKINGS</span><h1>{{ t('modelRankingsTitle') }}</h1><p>{{ t('rankingsDesc') }}</p></div>
         <div v-if="rankings" class="ranking-total"><strong>{{ compactNumber(rankings.total_tokens) }}</strong><small>{{ t('periodTokens') }}</small></div>
       </header>
-      <div class="rankings-controls"><div><span>{{ t('timeRange') }}</span><div class="period-tabs"><button v-for="item in periods" :key="item.value" :class="{ active: period === item.value }" :disabled="loading" @click="selectPeriod(item.value)">{{ item.label }}</button></div></div><button class="ranking-refresh" :disabled="loading" @click="load()"><RefreshCw :size="15" :class="{ spinning: loading }" />{{ t('refreshData') }}</button></div>
+      <div class="rankings-controls"><div><span>{{ t('timeRange') }}</span><div class="flex gap-1 rounded-lg border border-border bg-card p-1"><button v-for="item in periods" :key="item.value" class="min-w-[58px] rounded-md px-3 py-1.5 text-[10px] font-bold transition-colors disabled:opacity-50" :class="period === item.value ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-accent'" :disabled="loading" @click="selectPeriod(item.value)">{{ item.label }}</button></div></div><Button variant="ghost" size="sm" class="ranking-refresh" :disabled="loading" @click="load()"><RefreshCw :size="15" :class="{ 'animate-spin': loading }" />{{ t('refreshData') }}</Button></div>
 
       <div v-if="loading && !rankings" class="rankings-loading"><div/><div/><div/></div>
-      <section v-else-if="error && !rankings" class="rankings-error"><h2>{{ t('cannotLoadRankings') }}</h2><p>{{ error }}</p><button class="button ghost" @click="load()">{{ t('reload') }}</button></section>
+      <section v-else-if="error && !rankings" class="rankings-error"><h2>{{ t('cannotLoadRankings') }}</h2><p>{{ error }}</p><Button variant="outline" @click="load()">{{ t('reload') }}</Button></section>
       <template v-else-if="rankings">
         <section class="ranking-panel">
           <div class="ranking-panel-title"><div><span>TOP MODELS</span><h2>{{ t('llmRankings') }}</h2><p>{{ t('rankingsSortByTokens') }}</p></div><b>{{ rankings.models.length }} {{ t('modelCount') }}</b></div>

@@ -1,6 +1,11 @@
+import tailwindcss from '@tailwindcss/vite'
+
 export default defineNuxtConfig({
   modules: ['@nuxt/eslint'],
   css: ['~/src/style.css'],
+  vite: {
+    plugins: [tailwindcss()],
+  },
   nitro: {
     prerender: {
       routes: ['/', '/auth', '/rankings', '/terms', '/privacy'],
@@ -9,7 +14,7 @@ export default defineNuxtConfig({
   routeRules: {
     '/': { prerender: true },
     '/auth': { prerender: true },
-  '/rankings': { prerender: true },
+    '/rankings': { prerender: true },
     '/terms': { prerender: true },
     '/privacy': { prerender: true },
   },

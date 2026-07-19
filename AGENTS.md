@@ -29,7 +29,7 @@ Dockerfile         Multi-stage build for router (Go) and web (Nuxt)
 ## Tech stack and key libraries
 
 - Go 1.26, module `github.com/xinghai-osc/xinghai-router`. Only stdlib plus `github.com/jackc/pgx/v5` (pgxpool) and `golang.org/x/crypto` (bcrypt). Do not introduce new dependencies without strong reason.
-- Web: Nuxt 3 (`nuxt`), Vue 3, TypeScript, `lucide-vue-next`, `@lobehub/icons-static-svg`. ESLint is configured via flat config (`web/eslint.config.mjs` wrapping `@nuxt/eslint`); no test runner is configured for the web app.
+- Web: Nuxt 3 (`nuxt`), Vue 3, TypeScript, Tailwind CSS v4 (via `@tailwindcss/vite`), shadcn-vue (reka-ui + `class-variance-authority` + `clsx` + `tailwind-merge`), `lucide-vue-next`, `@lobehub/icons-static-svg`. ESLint is configured via flat config (`web/eslint.config.mjs` wrapping `@nuxt/eslint`); no test runner is configured for the web app.
 - DB: PostgreSQL 17. Migrations are plain `.sql` files embedded with `//go:embed migrations/*.sql` and applied idempotently by `internal/app/migrate.go`.
 
 ## Build and run
@@ -94,7 +94,9 @@ There is no web test script. No `vue-tsc` typecheck or Prettier is wired in yet.
 - Console state is in `composables/useConsoleStore.ts`; theming in `composables/useTheme.ts`; i18n in `composables/useI18n.ts`. Reuse these rather than introducing global state.
 - Typed API client and DTOs live in `web/src/api.ts`. When adding/changing a backend endpoint, update the interfaces there to match the Go response JSON exactly.
 - Browser requests go through `/api/*` and are proxied to the Go service by `web/server/api/[...path].ts` (Nuxt) — do not hardcode `http://127.0.0.1:8080` in client code.
-- CSS is a single global stylesheet at `web/src/style.css`; import it via `nuxt.config.ts` `css`. No CSS framework.
+- CSS is a single global stylesheet at `web/src/style.css`, imported via `nuxt.config.ts` `css`. It loads Tailwind v4 (`@import "tailwindcss"`) + `tw-animate-css` and exposes the shadcn-vue token system through an `@theme inline` block, so `bg-background`/`text-foreground`/`bg-primary`/`border-border`/`ring-ring` utilities resolve to the HSL `--background`/`--foreground`/... variables defined on `:root`. Dark mode is driven by `data-theme="dark"` on `<html>` (set by `composables/useTheme.ts` + a no-flash inline script in `app.vue`); Tailwind's `dark:` variant is routed to that attribute via `@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *))`. Multi-color / multi-radius / `a-site` preset switching still works through `:root[data-theme-color="..."]`, `:root[data-theme-radius="..."]`, `:root[data-theme-preset="a-site"]` overriding the same tokens.
+- shadcn-vue base components live in `web/components/ui/<name>/` (added via the `shadcn-vue` CLI, config in `web/components.json`). They import `cn` from `@/lib/utils` (which resolves to `web/lib/utils.ts` through Nuxt's default `@` alias). Prefer composing these primitives + Tailwind utilities for new UI rather than extending the hand-rolled classes in `style.css`. The legacy hand-rolled classes (`.button`, `.panel`, `.state`, `.msq-*`, ...) still work because they consume the same HSL tokens, and are intended to be incrementally replaced by shadcn-vue primitives.
+- `cn` helper is `web/lib/utils.ts` (not `src/lib/`) — `clsx` + `tailwind-merge`. Use it for class composition in new components.
 - Prerendered public routes are declared in `nuxt.config.ts` (`nitro.prerender.routes` and `routeRules`); update both when adding prerendered pages.
 
 ### Security

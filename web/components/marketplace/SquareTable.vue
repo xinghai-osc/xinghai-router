@@ -2,6 +2,8 @@
 import { computed, ref } from 'vue'
 import { effectivePrice, formatSquarePrice, vendorColor, vendorIconUrl, type SquareModel, type TokenUnit } from '~/src/marketplace'
 import SquarePagination from './SquarePagination.vue'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { Badge } from '@/components/ui/badge'
 
 const props = defineProps<{
   models: SquareModel[]
@@ -25,56 +27,54 @@ function price(model: SquareModel, kind: 'input' | 'output' | 'cache') {
 </script>
 
 <template>
-  <div class="msq-table-wrap">
-    <table class="msq-table">
-      <thead>
-        <tr>
-          <th>{{ t('msModel') }}</th>
-          <th>{{ t('msType') }}</th>
-          <th>{{ t('msPrice') }}</th>
-          <th>{{ t('msCached') }}</th>
-          <th>{{ t('msVendor') }}</th>
-          <th>{{ t('msGroups') }}</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="model in props.models" :key="model.model" @click="emit('open', model)">
-          <td>
-            <div class="msq-cell-model">
-              <img v-if="model.vendor_slug && !iconErrors.has(model.vendor_slug)" :src="vendorIconUrl(model.vendor_slug)" :alt="model.vendor_name" loading="lazy" @error="iconFailed(model.vendor_slug)" >
-              <span class="msq-mono">{{ model.model }}</span>
+  <div class="overflow-hidden rounded-lg border border-border bg-card">
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>{{ t('msModel') }}</TableHead>
+          <TableHead>{{ t('msType') }}</TableHead>
+          <TableHead>{{ t('msPrice') }}</TableHead>
+          <TableHead>{{ t('msCached') }}</TableHead>
+          <TableHead>{{ t('msVendor') }}</TableHead>
+          <TableHead>{{ t('msGroups') }}</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        <TableRow v-for="model in props.models" :key="model.model" class="cursor-pointer hover:bg-accent/50" @click="emit('open', model)">
+          <TableCell>
+            <div class="flex items-center gap-2">
+              <img v-if="model.vendor_slug && !iconErrors.has(model.vendor_slug)" class="h-5 w-5 rounded-full" :src="vendorIconUrl(model.vendor_slug)" :alt="model.vendor_name" loading="lazy" @error="iconFailed(model.vendor_slug)">
+              <span class="font-mono text-sm">{{ model.model }}</span>
             </div>
-          </td>
-          <td><span class="msq-billing-badge">{{ t('msTokenBased') }}</span></td>
-          <td>
-            <div class="msq-cell-price">
-              <span class="msq-mono">
-                <template v-if="price(model, 'input')">{{ price(model, 'input') }}<i>/</i>{{ price(model, 'output') }}</template>
+          </TableCell>
+          <TableCell><Badge variant="outline">{{ t('msTokenBased') }}</Badge></TableCell>
+          <TableCell>
+            <div class="flex flex-col">
+              <span class="font-mono text-sm">
+                <template v-if="price(model, 'input')">{{ price(model, 'input') }} / {{ price(model, 'output') }}</template>
                 <template v-else>{{ t('pendingConfig') }}</template>
               </span>
-              <small>/ {{ unitLabel }} tokens</small>
+              <small class="text-xs text-muted-foreground">/ {{ unitLabel }} tokens</small>
             </div>
-          </td>
-          <td>
-            <div v-if="price(model, 'cache')" class="msq-cell-price">
-              <span class="msq-mono">{{ price(model, 'cache') }}</span>
-              <small>/ {{ unitLabel }}</small>
+          </TableCell>
+          <TableCell>
+            <div v-if="price(model, 'cache')" class="flex flex-col">
+              <span class="font-mono text-sm">{{ price(model, 'cache') }}</span>
+              <small class="text-xs text-muted-foreground">/ {{ unitLabel }}</small>
             </div>
-            <span v-else class="msq-dash">—</span>
-          </td>
-          <td>
-            <span class="msq-vendor-badge" :style="{ background: vendorColor(model.vendor_name).bg, color: vendorColor(model.vendor_name).fg }">
-              {{ model.vendor_name }}
-            </span>
-          </td>
-          <td>
-            <div class="msq-cell-groups">
-              <span v-for="group in model.groups" :key="group.id" class="msq-group-badge">{{ group.name }}</span>
+            <span v-else class="text-muted-foreground">—</span>
+          </TableCell>
+          <TableCell>
+            <span class="inline-flex rounded-full px-2 py-0.5 text-xs font-medium" :style="{ background: vendorColor(model.vendor_name).bg, color: vendorColor(model.vendor_name).fg }">{{ model.vendor_name }}</span>
+          </TableCell>
+          <TableCell>
+            <div class="flex flex-wrap gap-1">
+              <Badge v-for="group in model.groups" :key="group.id" variant="secondary" class="text-[10px]">{{ group.name }}</Badge>
             </div>
-          </td>
-        </tr>
-      </tbody>
-    </table>
+          </TableCell>
+        </TableRow>
+      </TableBody>
+    </Table>
     <SquarePagination :page="props.page" :total-pages="props.totalPages" @update:page="emit('update:page', $event)" />
   </div>
 </template>

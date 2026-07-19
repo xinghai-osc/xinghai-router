@@ -1,6 +1,10 @@
 <script setup lang="ts">
 import { Copy } from 'lucide-vue-next'
 import { useConsoleStore } from '~/composables/useConsoleStore'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 
 const store = useConsoleStore()
 const {
@@ -14,148 +18,229 @@ const {
   saveProvider, copyKey,
 } = store
 
-function closeAll() {
-  selectedUser.value = null
-  originalUser.value = null
-  editingAccountKey.value = null
-  editingChannel.value = null
-  showKey.value = false
-  showAccountKey.value = false
-  showChannel.value = false
-  showProvider.value = false
-}
-
-const open = computed(() => Boolean(selectedUser.value || showKey.value || showAccountKey.value || editingAccountKey.value || showChannel.value || editingChannel.value || showProvider.value || createdKey.value))
+const selectClass = 'flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring'
+const selectMultiClass = 'flex min-h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring'
 </script>
 
 <template>
-  <div v-if="open" class="modal-backdrop" @click.self="closeAll">
-    <form v-if="selectedUser" class="modal" @submit.prevent="saveUserAccess">
-      <div class="modal-title">
-        <h2>{{ t('editUser') }}</h2>
-        <button type="button" @click="selectedUser = null; originalUser = null">×</button>
-      </div>
-      <p class="muted">{{ selectedUser.id }}</p>
-      <label>{{ t('nameLabel') }}<input v-model="selectedUser.name" required maxlength="100" ></label>
-      <label>{{ t('emailLabel') }}<input v-model="selectedUser.email" required type="email" ></label>
-      <label>{{ t('newPassword') }} <small>{{ t('leaveEmptyToKeep') }}</small><input v-model="userPassword" type="password" minlength="8" autocomplete="new-password" ></label>
-      <label>{{ t('accountStatus') }}
-        <select v-model="selectedUser.enabled">
-          <option :value="true">{{ t('enabled') }}</option>
-          <option :value="false">{{ t('disabled') }}</option>
-        </select>
-      </label>
-      <label>{{ t('roleLabel') }}
-        <select v-model="selectedUser.role">
-          <option value="user">{{ t('userRole') }}</option>
-          <option value="operator">{{ t('operatorRole') }}</option>
-          <option value="admin">{{ t('adminRoleFull') }}</option>
-        </select>
-      </label>
-      <label>{{ t('balanceLabel') }}<input v-model.number="userBalance" required type="number" min="0" step="0.00000001" ></label>
-      <label>{{ t('balanceChangeNote') }}<input v-model="userBalanceNote" maxlength="200" :placeholder="t('balanceNotePlaceholder')" ></label>
-      <label>{{ t('userGroupsLabel') }}
-        <select v-model="selectedGroups" multiple size="5">
-          <option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }} · {{ Number(group.multiplier).toFixed(2) }}x</option>
-        </select>
-      </label>
-      <label v-if="selectedUser.role !== 'admin'">{{ t('granularPermissions') }}
-        <select v-model="selectedPermissions" multiple size="8">
-          <option v-for="permission in permissions" :key="permission" :value="permission">{{ permission }}</option>
-        </select>
-      </label>
-      <button class="button primary full" :disabled="busy">{{ t('saveChanges') }}</button>
-    </form>
+  <Dialog :open="Boolean(selectedUser)" @update:open="v => !v && ((selectedUser = null) || (originalUser = null))">
+    <DialogContent class="sm:max-w-md">
+      <DialogHeader>
+        <DialogTitle>{{ t('editUser') }}</DialogTitle>
+        <DialogDescription class="font-mono">{{ selectedUser?.id }}</DialogDescription>
+      </DialogHeader>
+      <form v-if="selectedUser" class="grid gap-4" @submit.prevent="saveUserAccess">
+        <div class="flex flex-col gap-2">
+          <Label>{{ t('nameLabel') }}</Label>
+          <Input v-model="selectedUser.name" required maxlength="100" />
+        </div>
+        <div class="flex flex-col gap-2">
+          <Label>{{ t('emailLabel') }}</Label>
+          <Input v-model="selectedUser.email" required type="email" />
+        </div>
+        <div class="flex flex-col gap-2">
+          <Label>{{ t('newPassword') }} <span class="text-xs text-muted-foreground">{{ t('leaveEmptyToKeep') }}</span></Label>
+          <Input v-model="userPassword" type="password" minlength="8" autocomplete="new-password" />
+        </div>
+        <div class="grid grid-cols-2 gap-4">
+          <div class="flex flex-col gap-2">
+            <Label>{{ t('accountStatus') }}</Label>
+            <select v-model="selectedUser.enabled" :class="selectClass">
+              <option :value="true">{{ t('enabled') }}</option>
+              <option :value="false">{{ t('disabled') }}</option>
+            </select>
+          </div>
+          <div class="flex flex-col gap-2">
+            <Label>{{ t('roleLabel') }}</Label>
+            <select v-model="selectedUser.role" :class="selectClass">
+              <option value="user">{{ t('userRole') }}</option>
+              <option value="operator">{{ t('operatorRole') }}</option>
+              <option value="admin">{{ t('adminRoleFull') }}</option>
+            </select>
+          </div>
+        </div>
+        <div class="flex flex-col gap-2">
+          <Label>{{ t('balanceLabel') }}</Label>
+          <Input v-model.number="userBalance" required type="number" min="0" step="0.00000001" />
+        </div>
+        <div class="flex flex-col gap-2">
+          <Label>{{ t('balanceChangeNote') }}</Label>
+          <Input v-model="userBalanceNote" maxlength="200" :placeholder="t('balanceNotePlaceholder')" />
+        </div>
+        <div class="flex flex-col gap-2">
+          <Label>{{ t('userGroupsLabel') }}</Label>
+          <select v-model="selectedGroups" multiple size="5" :class="selectMultiClass">
+            <option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }} · {{ Number(group.multiplier).toFixed(2) }}x</option>
+          </select>
+        </div>
+        <div v-if="selectedUser.role !== 'admin'" class="flex flex-col gap-2">
+          <Label>{{ t('granularPermissions') }}</Label>
+          <select v-model="selectedPermissions" multiple size="8" :class="selectMultiClass">
+            <option v-for="permission in permissions" :key="permission" :value="permission">{{ permission }}</option>
+          </select>
+        </div>
+        <DialogFooter>
+          <Button type="submit" :disabled="busy" class="w-full">{{ t('saveChanges') }}</Button>
+        </DialogFooter>
+      </form>
+    </DialogContent>
+  </Dialog>
 
-    <form v-if="showKey" class="modal" @submit.prevent="createKey">
-      <div class="modal-title">
-        <h2>{{ t('createApiKeyTitle') }}</h2>
-        <button type="button" @click="showKey = false">×</button>
-      </div>
-      <label>{{ t('userLabel') }}
-        <select v-model="keyForm.user_id" required>
-          <option disabled value="">{{ t('selectUser') }}</option>
-          <option v-for="user in users" :key="user.id" :value="user.id">{{ user.name }} · {{ user.email }}</option>
-        </select>
-      </label>
-      <label>{{ t('useGroup') }}
-        <select v-model="keyForm.group_id">
-          <option value="">{{ t('autoMatch') }}</option>
-          <option v-for="group in groups.filter((item) => users.find((user) => user.id === keyForm.user_id)?.groups.includes(item.id))" :key="group.id" :value="group.id">{{ group.name }} · {{ Number(group.multiplier).toFixed(2) }}x</option>
-        </select>
-      </label>
-      <label>{{ t('keyName') }}<input v-model="keyForm.name" required :placeholder="t('keyNamePlaceholder')" ></label>
-      <label>{{ t('expiresAt') }} <small>{{ t('optional') }}</small><input v-model="keyForm.expires_at" type="datetime-local" ></label>
-      <button class="button primary full" :disabled="busy">{{ t('issueKey') }}</button>
-    </form>
+  <Dialog :open="showKey" @update:open="v => !v && (showKey = false)">
+    <DialogContent class="sm:max-w-md">
+      <DialogHeader>
+        <DialogTitle>{{ t('createApiKeyTitle') }}</DialogTitle>
+      </DialogHeader>
+      <form class="grid gap-4" @submit.prevent="createKey">
+        <div class="flex flex-col gap-2">
+          <Label>{{ t('userLabel') }}</Label>
+          <select v-model="keyForm.user_id" required :class="selectClass">
+            <option disabled value="">{{ t('selectUser') }}</option>
+            <option v-for="user in users" :key="user.id" :value="user.id">{{ user.name }} · {{ user.email }}</option>
+          </select>
+        </div>
+        <div class="flex flex-col gap-2">
+          <Label>{{ t('useGroup') }}</Label>
+          <select v-model="keyForm.group_id" :class="selectClass">
+            <option value="">{{ t('autoMatch') }}</option>
+            <option v-for="group in groups.filter((item) => users.find((user) => user.id === keyForm.user_id)?.groups.includes(item.id))" :key="group.id" :value="group.id">{{ group.name }} · {{ Number(group.multiplier).toFixed(2) }}x</option>
+          </select>
+        </div>
+        <div class="flex flex-col gap-2">
+          <Label>{{ t('keyName') }}</Label>
+          <Input v-model="keyForm.name" required :placeholder="t('keyNamePlaceholder')" />
+        </div>
+        <div class="flex flex-col gap-2">
+          <Label>{{ t('expiresAt') }} <span class="text-xs text-muted-foreground">{{ t('optional') }}</span></Label>
+          <Input v-model="keyForm.expires_at" type="datetime-local" />
+        </div>
+        <DialogFooter>
+          <Button type="submit" :disabled="busy" class="w-full">{{ t('issueKey') }}</Button>
+        </DialogFooter>
+      </form>
+    </DialogContent>
+  </Dialog>
 
-    <form v-if="showAccountKey || editingAccountKey" class="modal" @submit.prevent="editingAccountKey ? updateAccountKey() : createAccountKey()">
-      <div class="modal-title">
-        <h2>{{ editingAccountKey ? t('editApiKey') : t('createApiKeyTitle') }}</h2>
-        <button type="button" @click="showAccountKey = false; editingAccountKey = null">×</button>
-      </div>
-      <p v-if="!editingAccountKey" class="muted">{{ t('keyBelongsToAccount') }}</p>
-      <label>{{ t('useGroup') }}
-        <select v-model="accountKeyForm.group_id">
-          <option value="">{{ t('autoMatch') }}</option>
-          <option v-for="group in groups.filter((item) => ownGroups.includes(item.name))" :key="group.id" :value="group.id">{{ group.name }} · {{ Number(group.multiplier).toFixed(2) }}x</option>
-        </select>
-      </label>
-      <label>{{ t('keyName') }}<input v-model="accountKeyForm.name" required maxlength="100" :placeholder="t('keyNamePlaceholder2')" ></label>
-      <label>{{ t('expiresAt') }} <small>{{ t('optional') }}</small><input v-model="accountKeyForm.expires_at" type="datetime-local" ></label>
-      <button class="button primary full" :disabled="busy">{{ editingAccountKey ? t('saveChanges') : t('createKeyButton') }}</button>
-    </form>
+  <Dialog :open="showAccountKey || Boolean(editingAccountKey)" @update:open="v => !v && ((showAccountKey = false) || (editingAccountKey = null))">
+    <DialogContent class="sm:max-w-md">
+      <DialogHeader>
+        <DialogTitle>{{ editingAccountKey ? t('editApiKey') : t('createApiKeyTitle') }}</DialogTitle>
+        <DialogDescription v-if="!editingAccountKey">{{ t('keyBelongsToAccount') }}</DialogDescription>
+      </DialogHeader>
+      <form class="grid gap-4" @submit.prevent="editingAccountKey ? updateAccountKey() : createAccountKey()">
+        <div class="flex flex-col gap-2">
+          <Label>{{ t('useGroup') }}</Label>
+          <select v-model="accountKeyForm.group_id" :class="selectClass">
+            <option value="">{{ t('autoMatch') }}</option>
+            <option v-for="group in groups.filter((item) => ownGroups.includes(item.name))" :key="group.id" :value="group.id">{{ group.name }} · {{ Number(group.multiplier).toFixed(2) }}x</option>
+          </select>
+        </div>
+        <div class="flex flex-col gap-2">
+          <Label>{{ t('keyName') }}</Label>
+          <Input v-model="accountKeyForm.name" required maxlength="100" :placeholder="t('keyNamePlaceholder2')" />
+        </div>
+        <div class="flex flex-col gap-2">
+          <Label>{{ t('expiresAt') }} <span class="text-xs text-muted-foreground">{{ t('optional') }}</span></Label>
+          <Input v-model="accountKeyForm.expires_at" type="datetime-local" />
+        </div>
+        <DialogFooter>
+          <Button type="submit" :disabled="busy" class="w-full">{{ editingAccountKey ? t('saveChanges') : t('createKeyButton') }}</Button>
+        </DialogFooter>
+      </form>
+    </DialogContent>
+  </Dialog>
 
-    <form v-if="showChannel || editingChannel" class="modal" @submit.prevent="editingChannel ? updateChannel() : createChannel()">
-      <div class="modal-title">
-        <h2>{{ editingChannel ? t('editChannel') : t('addChannel') }}</h2>
-        <button type="button" @click="showChannel = false; editingChannel = null">×</button>
-      </div>
-      <label>{{ t('channelNameLabel') }}<input v-model="channelForm.name" required maxlength="100" ></label>
-      <label>{{ t('upstreamProtocol') }}
-        <select v-model="channelForm.provider">
-          <option value="openai">OpenAI</option>
-          <option value="anthropic">Anthropic</option>
-          <option value="ollama">Ollama</option>
-          <option value="kimi">Kimi</option>
-          <option value="opencode_go">OpenCode Go</option>
-        </select>
-      </label>
-      <label>{{ t('upstreamURL') }}<input v-model="channelForm.base_url" required type="url" ></label>
-      <label>{{ t('apiKeyLabel') }} <small>{{ editingChannel ? t('leaveBlankUnchanged') : t('requiredField') }}</small><input v-model="channelForm.api_key" :required="!editingChannel" type="password" autocomplete="new-password" ></label>
-      <label>{{ t('modelLabel') }} <small>{{ t('modelsCommaSeparated') }}</small><input v-model="channelForm.models" required ></label>
-      <button class="text-button" type="button" :disabled="busy || !channelForm.api_key" @click="fetchChannelModels">{{ t('fetchUpstreamModels') }}</button>
-      <label>{{ t('priorityLabel') }}<input v-model.number="channelForm.priority" required type="number" min="0" ></label>
-      <label>{{ t('availableGroups') }}
-        <select v-model="channelForm.groups" multiple size="5">
-          <option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }} · {{ Number(group.multiplier).toFixed(2) }}x</option>
-        </select>
-      </label>
-      <button class="button primary full" :disabled="busy">{{ editingChannel ? t('saveChanges') : t('addChannel') }}</button>
-    </form>
+  <Dialog :open="showChannel || Boolean(editingChannel)" @update:open="v => !v && ((showChannel = false) || (editingChannel = null))">
+    <DialogContent class="sm:max-w-md">
+      <DialogHeader>
+        <DialogTitle>{{ editingChannel ? t('editChannel') : t('addChannel') }}</DialogTitle>
+      </DialogHeader>
+      <form class="grid gap-4" @submit.prevent="editingChannel ? updateChannel() : createChannel()">
+        <div class="flex flex-col gap-2">
+          <Label>{{ t('channelNameLabel') }}</Label>
+          <Input v-model="channelForm.name" required maxlength="100" />
+        </div>
+        <div class="flex flex-col gap-2">
+          <Label>{{ t('upstreamProtocol') }}</Label>
+          <select v-model="channelForm.provider" :class="selectClass">
+            <option value="openai">OpenAI</option>
+            <option value="anthropic">Anthropic</option>
+            <option value="ollama">Ollama</option>
+            <option value="kimi">Kimi</option>
+            <option value="opencode_go">OpenCode Go</option>
+          </select>
+        </div>
+        <div class="flex flex-col gap-2">
+          <Label>{{ t('upstreamURL') }}</Label>
+          <Input v-model="channelForm.base_url" required type="url" />
+        </div>
+        <div class="flex flex-col gap-2">
+          <Label>{{ t('apiKeyLabel') }} <span class="text-xs text-muted-foreground">{{ editingChannel ? t('leaveBlankUnchanged') : t('requiredField') }}</span></Label>
+          <Input v-model="channelForm.api_key" :required="!editingChannel" type="password" autocomplete="new-password" />
+        </div>
+        <div class="flex flex-col gap-2">
+          <Label>{{ t('modelLabel') }} <span class="text-xs text-muted-foreground">{{ t('modelsCommaSeparated') }}</span></Label>
+          <Input v-model="channelForm.models" required />
+        </div>
+        <Button variant="link" type="button" class="w-fit px-0" :disabled="busy || !channelForm.api_key" @click="fetchChannelModels">{{ t('fetchUpstreamModels') }}</Button>
+        <div class="flex flex-col gap-2">
+          <Label>{{ t('priorityLabel') }}</Label>
+          <Input v-model.number="channelForm.priority" required type="number" min="0" />
+        </div>
+        <div class="flex flex-col gap-2">
+          <Label>{{ t('availableGroups') }}</Label>
+          <select v-model="channelForm.groups" multiple size="5" :class="selectMultiClass">
+            <option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }} · {{ Number(group.multiplier).toFixed(2) }}x</option>
+          </select>
+        </div>
+        <DialogFooter>
+          <Button type="submit" :disabled="busy" class="w-full">{{ editingChannel ? t('saveChanges') : t('addChannel') }}</Button>
+        </DialogFooter>
+      </form>
+    </DialogContent>
+  </Dialog>
 
-    <form v-if="showProvider" class="modal" @submit.prevent="saveProvider">
-      <div class="modal-title">
-        <h2>{{ editingProviderID ? t('editProvider') : t('configureProvider') }}</h2>
-        <button type="button" @click="showProvider = false">×</button>
-      </div>
-      <p class="muted">{{ t('providerDesc') }}</p>
-      <label>{{ t('providerName') }}<input v-model="providerForm.name" required :placeholder="t('providerNamePlaceholder')" ></label>
-      <label>{{ t('iconSlug') }}<input v-model="providerForm.slug" required :placeholder="t('iconSlugPlaceholder')" ></label>
-      <label>{{ t('modelPrefix') }}<input v-model="providerForm.prefixes" required :placeholder="t('modelPrefixPlaceholder')" ></label>
-      <label>{{ t('matchPriority') }}<input v-model.number="providerForm.priority" required type="number" min="0" ></label>
-      <button class="button primary full" :disabled="busy">{{ t('saveProviderButton') }}</button>
-    </form>
+  <Dialog :open="showProvider" @update:open="v => !v && (showProvider = false)">
+    <DialogContent class="sm:max-w-md">
+      <DialogHeader>
+        <DialogTitle>{{ editingProviderID ? t('editProvider') : t('configureProvider') }}</DialogTitle>
+        <DialogDescription>{{ t('providerDesc') }}</DialogDescription>
+      </DialogHeader>
+      <form class="grid gap-4" @submit.prevent="saveProvider">
+        <div class="flex flex-col gap-2">
+          <Label>{{ t('providerName') }}</Label>
+          <Input v-model="providerForm.name" required :placeholder="t('providerNamePlaceholder')" />
+        </div>
+        <div class="flex flex-col gap-2">
+          <Label>{{ t('iconSlug') }}</Label>
+          <Input v-model="providerForm.slug" required :placeholder="t('iconSlugPlaceholder')" />
+        </div>
+        <div class="flex flex-col gap-2">
+          <Label>{{ t('modelPrefix') }}</Label>
+          <Input v-model="providerForm.prefixes" required :placeholder="t('modelPrefixPlaceholder')" />
+        </div>
+        <div class="flex flex-col gap-2">
+          <Label>{{ t('matchPriority') }}</Label>
+          <Input v-model.number="providerForm.priority" required type="number" min="0" />
+        </div>
+        <DialogFooter>
+          <Button type="submit" :disabled="busy" class="w-full">{{ t('saveProviderButton') }}</Button>
+        </DialogFooter>
+      </form>
+    </DialogContent>
+  </Dialog>
 
-    <section v-if="createdKey" class="modal secret">
-      <div class="modal-title">
-        <h2>{{ t('saveApiKey') }}</h2>
-        <button @click="createdKey = ''">×</button>
+  <Dialog :open="Boolean(createdKey)" @update:open="v => !v && (createdKey = '')">
+    <DialogContent class="sm:max-w-md">
+      <DialogHeader>
+        <DialogTitle>{{ t('saveApiKey') }}</DialogTitle>
+        <DialogDescription>{{ t('saveKeyWarning') }}</DialogDescription>
+      </DialogHeader>
+      <div class="flex flex-col gap-4">
+        <code class="break-all rounded-md bg-muted p-3 font-mono text-sm">{{ createdKey }}</code>
+        <Button class="w-full" @click="copyKey"><Copy :size="16" />{{ t('copyKeyButton') }}</Button>
+        <Button variant="outline" class="w-full" @click="createdKey = ''">{{ t('iHaveSaved') }}</Button>
       </div>
-      <p>{{ t('saveKeyWarning') }}</p>
-      <code>{{ createdKey }}</code>
-      <button class="button primary full" @click="copyKey"><Copy :size="16" />{{ t('copyKeyButton') }}</button>
-      <button class="button ghost full" @click="createdKey = ''">{{ t('iHaveSaved') }}</button>
-    </section>
-  </div>
+    </DialogContent>
+  </Dialog>
 </template>

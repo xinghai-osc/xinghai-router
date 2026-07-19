@@ -2,54 +2,62 @@
 import { Plus } from 'lucide-vue-next'
 import { useConsoleStore } from '~/composables/useConsoleStore'
 import Empty from '~/components/console/Empty.vue'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { Switch } from '@/components/ui/switch'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 
 const store = useConsoleStore()
 const { t, channels, can, showChannel, toggleChannel, editChannel } = store
 </script>
 
 <template>
-  <section class="toolbar">
+  <section class="flex flex-wrap items-center justify-between gap-4">
     <div>
-      <h2>{{ t('upstreamChannels') }}</h2>
-      <p>{{ t('channelsDesc') }}</p>
+      <h2 class="text-lg font-semibold">{{ t('upstreamChannels') }}</h2>
+      <p class="text-sm text-muted-foreground">{{ t('channelsDesc') }}</p>
     </div>
-    <button v-if="can('channels.manage')" class="button primary" @click="showChannel = true"><Plus :size="16" />{{ t('addChannel') }}</button>
+    <Button v-if="can('channels.manage')" @click="showChannel = true"><Plus :size="16" />{{ t('addChannel') }}</Button>
   </section>
-  <section class="panel table-panel channel-table-panel">
-    <table>
-      <thead>
-        <tr>
-          <th>Status</th>
-          <th>Channel name</th>
-          <th>Upstream URL</th>
-          <th>{{ t('modelLabel') }}</th>
-          <th>{{ t('priorityLabel') }}</th>
-          <th v-if="can('channels.manage')">{{ t('enableChannelLabel') }}</th>
-          <th v-if="can('channels.manage')"/>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="channel in channels" :key="channel.id">
-          <td>
-            <span :class="['state', channel.enabled ? 'good' : 'bad']">
-              <i :class="['status-dot', { off: !channel.enabled }]"/>
-              {{ channel.enabled ? t('enabled') : channel.auto_disabled ? t('autoDisabled') : t('disabled') }}
-            </span>
-            <small v-if="channel.auto_disabled && channel.disabled_reason" class="muted" :title="channel.disabled_reason">{{ channel.disabled_reason }}</small>
-          </td>
-          <td><b>{{ channel.name }}</b><small>{{ channel.provider }}</small></td>
-          <td><code :title="channel.base_url">{{ channel.base_url }}</code></td>
-          <td><div class="model-tags"><span v-for="model in channel.models" :key="model">{{ model }}</span></div></td>
-          <td>{{ channel.priority }}</td>
-          <td v-if="can('channels.manage')">
-            <button class="toggle" :class="{ on: channel.enabled }" :aria-label="channel.enabled ? t('disableChannelLabel') : t('enableChannelLabel')" @click="toggleChannel(channel)"><i/></button>
-          </td>
-          <td v-if="can('channels.manage')">
-            <button class="text-button" @click="editChannel(channel)">{{ t('edit') }}</button>
-          </td>
-        </tr>
-      </tbody>
-    </table>
+  <section class="mt-4 overflow-hidden rounded-lg border border-border bg-card">
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Status</TableHead>
+          <TableHead>Channel name</TableHead>
+          <TableHead>Upstream URL</TableHead>
+          <TableHead>{{ t('modelLabel') }}</TableHead>
+          <TableHead>{{ t('priorityLabel') }}</TableHead>
+          <TableHead v-if="can('channels.manage')">{{ t('enableChannelLabel') }}</TableHead>
+          <TableHead v-if="can('channels.manage')" />
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        <TableRow v-for="channel in channels" :key="channel.id">
+          <TableCell>
+            <Badge :variant="channel.enabled ? 'secondary' : 'destructive'">{{ channel.enabled ? t('enabled') : channel.auto_disabled ? t('autoDisabled') : t('disabled') }}</Badge>
+            <div v-if="channel.auto_disabled && channel.disabled_reason" class="mt-1 text-xs text-muted-foreground" :title="channel.disabled_reason">{{ channel.disabled_reason }}</div>
+          </TableCell>
+          <TableCell>
+            <div class="font-medium">{{ channel.name }}</div>
+            <div class="text-xs text-muted-foreground">{{ channel.provider }}</div>
+          </TableCell>
+          <TableCell><code class="font-mono text-xs" :title="channel.base_url">{{ channel.base_url }}</code></TableCell>
+          <TableCell>
+            <div class="flex flex-wrap gap-1">
+              <Badge v-for="model in channel.models" :key="model" variant="outline" class="font-mono">{{ model }}</Badge>
+            </div>
+          </TableCell>
+          <TableCell>{{ channel.priority }}</TableCell>
+          <TableCell v-if="can('channels.manage')">
+            <Switch :model-value="channel.enabled" :aria-label="channel.enabled ? t('disableChannelLabel') : t('enableChannelLabel')" @update:model-value="toggleChannel(channel)" />
+          </TableCell>
+          <TableCell v-if="can('channels.manage')" class="text-right">
+            <Button variant="link" size="sm" @click="editChannel(channel)">{{ t('edit') }}</Button>
+          </TableCell>
+        </TableRow>
+      </TableBody>
+    </Table>
     <Empty v-if="!channels.length" :text="t('addOpenAICompatibleUpstream')" />
   </section>
 </template>

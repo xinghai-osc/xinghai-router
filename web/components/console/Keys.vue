@@ -2,42 +2,49 @@
 import { Plus } from 'lucide-vue-next'
 import { useConsoleStore } from '~/composables/useConsoleStore'
 import Empty from '~/components/console/Empty.vue'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 
 const store = useConsoleStore()
 const { t, keys, users, showKey, userName, formatDate, revokeKey } = store
 </script>
 
 <template>
-  <section class="toolbar">
+  <section class="flex flex-wrap items-center justify-between gap-4">
     <div>
-      <h2>{{ t('keys') }}</h2>
-      <p>{{ t('showOnceAfterCreation') }}</p>
+      <h2 class="text-lg font-semibold">{{ t('keys') }}</h2>
+      <p class="text-sm text-muted-foreground">{{ t('showOnceAfterCreation') }}</p>
     </div>
-    <button class="button primary" :disabled="!users.length" @click="showKey = true"><Plus :size="16" />{{ t('createKeyButton') }}</button>
+    <Button :disabled="!users.length" @click="showKey = true"><Plus :size="16" />{{ t('createKeyButton') }}</Button>
   </section>
-  <section class="panel table-panel">
-    <table>
-      <thead>
-        <tr>
-          <th>{{ t('keyName') }}</th>
-          <th>{{ t('userLabel') }}</th>
-          <th>{{ t('keyPrefix') }}</th>
-          <th>{{ t('lastUsed') }}</th>
-          <th>{{ t('accountStatus') }}</th>
-          <th/>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="key in keys" :key="key.id">
-          <td><b>{{ key.name }}</b></td>
-          <td>{{ userName(key.user_id) }}</td>
-          <td><code>{{ key.key_prefix }}...</code></td>
-          <td>{{ formatDate(key.last_used_at) }}</td>
-          <td><span :class="['state', key.revoked_at ? 'bad' : 'good']">{{ key.revoked_at ? t('revoked') : t('valid') }}</span></td>
-          <td><button v-if="!key.revoked_at" class="text-button danger" @click="revokeKey(key)">{{ t('revokeLabel') }}</button></td>
-        </tr>
-      </tbody>
-    </table>
+  <section class="mt-4 overflow-hidden rounded-lg border border-border bg-card">
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>{{ t('keyName') }}</TableHead>
+          <TableHead>{{ t('userLabel') }}</TableHead>
+          <TableHead>{{ t('keyPrefix') }}</TableHead>
+          <TableHead>{{ t('lastUsed') }}</TableHead>
+          <TableHead>{{ t('accountStatus') }}</TableHead>
+          <TableHead />
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        <TableRow v-for="key in keys" :key="key.id">
+          <TableCell class="font-medium">{{ key.name }}</TableCell>
+          <TableCell>{{ userName(key.user_id) }}</TableCell>
+          <TableCell><code class="font-mono text-xs">{{ key.key_prefix }}...</code></TableCell>
+          <TableCell>{{ formatDate(key.last_used_at) }}</TableCell>
+          <TableCell>
+            <Badge :variant="key.revoked_at ? 'destructive' : 'secondary'">{{ key.revoked_at ? t('revoked') : t('valid') }}</Badge>
+          </TableCell>
+          <TableCell class="text-right">
+            <Button v-if="!key.revoked_at" variant="link" size="sm" class="text-destructive" @click="revokeKey(key)">{{ t('revokeLabel') }}</Button>
+          </TableCell>
+        </TableRow>
+      </TableBody>
+    </Table>
     <Empty v-if="!keys.length" :text="t('createUserThenIssueKey')" />
   </section>
 </template>

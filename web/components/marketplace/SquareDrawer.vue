@@ -1,7 +1,12 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { Check, Code2, Copy, Info, X } from 'lucide-vue-next'
+import { computed, ref, watch } from 'vue'
+import { Check, Code2, Copy, Info } from 'lucide-vue-next'
 import { formatRatio, formatSquarePrice, groupPrice, vendorColor, vendorIconUrl, type SquareModel, type TokenUnit } from '~/src/marketplace'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 
 const props = defineProps<{
   model: SquareModel
@@ -57,149 +62,144 @@ async function copyText(value: string, flag: 'name' | 'curl') {
   else { copiedCurl.value = true; window.setTimeout(() => { copiedCurl.value = false }, 1500) }
 }
 
-function handleKeydown(event: KeyboardEvent) {
-  if (event.key === 'Escape') emit('close')
-}
-onMounted(() => {
-  document.addEventListener('keydown', handleKeydown)
-  document.body.style.overflow = 'hidden'
+const open = computed({
+  get: () => true,
+  set: (v: boolean) => { if (!v) emit('close') },
 })
-onBeforeUnmount(() => {
-  document.removeEventListener('keydown', handleKeydown)
-  document.body.style.overflow = ''
-})
+
 watch(() => props.model.model, () => { tab.value = 'overview' })
 </script>
 
 <template>
-  <Teleport to="body">
-    <div class="msq-drawer-backdrop" @click="emit('close')"/>
-    <div class="msq-drawer" role="dialog" :aria-label="props.model.model">
-      <button type="button" class="msq-drawer-close" :aria-label="t('msClose')" @click="emit('close')"><X :size="16" /></button>
-      <div class="msq-drawer-body">
-        <header class="msq-drawer-header">
-          <div class="msq-drawer-title">
-            <span class="msq-iconbox small">
-              <img v-if="props.model.vendor_slug && !iconError" :src="vendorIconUrl(props.model.vendor_slug)" :alt="props.model.vendor_name" @error="iconError = true" >
-              <span v-else>{{ props.model.model.slice(0, 1).toUpperCase() }}</span>
-            </span>
-            <h1>{{ props.model.model }}</h1>
-            <button type="button" class="msq-copy-btn" :title="copiedName ? t('msCopied') : t('msCopyModelName')" @click="copyText(props.model.model, 'name')">
+  <Dialog :open="open" @update:open="v => !v && emit('close')">
+    <DialogContent class="max-w-2xl">
+      <DialogTitle class="sr-only">{{ props.model.model }}</DialogTitle>
+      <header class="flex items-start gap-3">
+        <span class="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted">
+          <img v-if="props.model.vendor_slug && !iconError" :src="vendorIconUrl(props.model.vendor_slug)" :alt="props.model.vendor_name" @error="iconError = true">
+          <span v-else class="text-base font-bold">{{ props.model.model.slice(0, 1).toUpperCase() }}</span>
+        </span>
+        <div class="min-w-0 flex-1">
+          <div class="flex items-center gap-2">
+            <h1 class="truncate text-lg font-semibold">{{ props.model.model }}</h1>
+            <Button variant="ghost" size="icon-sm" class="shrink-0" :title="copiedName ? t('msCopied') : t('msCopyModelName')" @click="copyText(props.model.model, 'name')">
               <Check v-if="copiedName" :size="12" />
               <Copy v-else :size="12" />
-            </button>
+            </Button>
           </div>
-          <div class="msq-drawer-meta">
+          <div class="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
             <span v-if="props.model.vendor_name">{{ props.model.vendor_name }}</span>
-            <i>·</i>
-            <span class="msq-billing-badge">{{ t('msTokenBased') }}</span>
+            <span>·</span>
+            <Badge variant="outline">{{ t('msTokenBased') }}</Badge>
           </div>
-          <p v-if="props.model.description" class="msq-drawer-desc">{{ props.model.description }}</p>
-        </header>
-
-        <div class="msq-tabs">
-          <button type="button" :class="{ active: tab === 'overview' }" @click="tab = 'overview'"><Info :size="13" />{{ t('msOverview') }}</button>
-          <button type="button" :class="{ active: tab === 'api' }" @click="tab = 'api'"><Code2 :size="13" />API</button>
+          <p v-if="props.model.description" class="mt-2 text-sm text-muted-foreground">{{ props.model.description }}</p>
         </div>
+      </header>
 
-        <div v-if="tab === 'overview'" class="msq-tab-body">
-          <section class="msq-panel">
-            <h2 class="msq-section-title">{{ t('msPricing') }}</h2>
+      <Tabs :default-value="tab" class="mt-4">
+        <TabsList>
+          <TabsTrigger value="overview" class="gap-1.5" @click="tab = 'overview'"><Info :size="13" />{{ t('msOverview') }}</TabsTrigger>
+          <TabsTrigger value="api" class="gap-1.5" @click="tab = 'api'"><Code2 :size="13" />API</TabsTrigger>
+        </TabsList>
 
-            <h3 class="msq-sub-title">{{ t('msBasePrice') }}</h3>
-            <div class="msq-price-cards">
-              <div class="msq-price-card">
-                <span>{{ t('inputLabel') }}</span>
-                <b v-if="baseGroupFree.input">{{ baseGroupFree.input }}<small>/ {{ unitLabel }}</small></b>
-                <b v-else class="msq-price-pending">{{ t('pendingConfig') }}</b>
+        <TabsContent value="overview" class="flex flex-col gap-4">
+          <section class="rounded-lg border border-border p-4">
+            <h2 class="mb-3 text-sm font-semibold">{{ t('msPricing') }}</h2>
+
+            <h3 class="mb-2 text-xs font-medium text-muted-foreground">{{ t('msBasePrice') }}</h3>
+            <div class="mb-3 grid grid-cols-2 gap-2">
+              <div class="rounded-md border border-border p-3">
+                <span class="text-xs text-muted-foreground">{{ t('inputLabel') }}</span>
+                <b v-if="baseGroupFree.input" class="mt-1 block text-lg font-semibold">{{ baseGroupFree.input }}<small class="ml-1 text-xs font-normal text-muted-foreground">/ {{ unitLabel }}</small></b>
+                <b v-else class="mt-1 block text-sm text-muted-foreground">{{ t('pendingConfig') }}</b>
               </div>
-              <div class="msq-price-card">
-                <span>{{ t('outputLabel') }}</span>
-                <b v-if="baseGroupFree.output">{{ baseGroupFree.output }}<small>/ {{ unitLabel }}</small></b>
-                <b v-else class="msq-price-pending">{{ t('pendingConfig') }}</b>
+              <div class="rounded-md border border-border p-3">
+                <span class="text-xs text-muted-foreground">{{ t('outputLabel') }}</span>
+                <b v-if="baseGroupFree.output" class="mt-1 block text-lg font-semibold">{{ baseGroupFree.output }}<small class="ml-1 text-xs font-normal text-muted-foreground">/ {{ unitLabel }}</small></b>
+                <b v-else class="mt-1 block text-sm text-muted-foreground">{{ t('pendingConfig') }}</b>
               </div>
             </div>
-            <div v-if="baseGroupFree.cache" class="msq-price-secondary">
+            <div v-if="baseGroupFree.cache" class="mb-4">
+              <div class="rounded-md border border-border p-3">
+                <span class="text-xs text-muted-foreground">{{ t('cachedInputLabel') }}</span>
+                <b class="mt-1 block font-mono text-base font-semibold">{{ baseGroupFree.cache }}<small class="ml-1 text-xs font-normal text-muted-foreground">/ {{ unitLabel }}</small></b>
+              </div>
+            </div>
+
+            <h3 class="mb-2 text-xs font-medium text-muted-foreground">{{ t('msGroupPricing') }}</h3>
+            <div v-if="props.model.groups.length" class="overflow-hidden rounded-md border border-border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>{{ t('msGroup') }}</TableHead>
+                    <TableHead>{{ t('msRatio') }}</TableHead>
+                    <TableHead class="text-right">{{ t('inputLabel') }}</TableHead>
+                    <TableHead class="text-right">{{ t('outputLabel') }}</TableHead>
+                    <TableHead v-if="hasCache" class="text-right">{{ t('msCached') }}</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  <TableRow v-for="group in props.model.groups" :key="group.id">
+                    <TableCell><Badge variant="secondary">{{ group.name }}</Badge></TableCell>
+                    <TableCell class="font-mono text-muted-foreground">{{ formatRatio(Number(group.multiplier)) }}</TableCell>
+                    <TableCell class="text-right font-mono">{{ price('input', group) || '—' }}</TableCell>
+                    <TableCell class="text-right font-mono">{{ price('output', group) || '—' }}</TableCell>
+                    <TableCell v-if="hasCache" class="text-right font-mono">{{ price('cache', group) || '—' }}</TableCell>
+                  </TableRow>
+                </TableBody>
+              </Table>
+            </div>
+            <p v-else class="text-sm text-muted-foreground">{{ t('msNoGroups') }}</p>
+            <p class="mt-2 text-xs text-muted-foreground">{{ t('msPriceNoteA') }} {{ unitLabel }} {{ t('msPriceNoteB') }}</p>
+          </section>
+
+          <section class="rounded-lg border border-border p-4">
+            <h2 class="mb-3 text-sm font-semibold">{{ t('msModel') }}</h2>
+            <div class="grid grid-cols-2 gap-3">
               <div>
-                <span>{{ t('cachedInputLabel') }}</span>
-                <b class="msq-mono">{{ baseGroupFree.cache }}<small>/ {{ unitLabel }}</small></b>
+                <span class="text-xs text-muted-foreground">{{ t('msVendor') }}</span>
+                <div class="mt-1"><span class="inline-flex rounded-full px-2 py-0.5 text-xs font-medium" :style="{ background: vendorColor(props.model.vendor_name).bg, color: vendorColor(props.model.vendor_name).fg }">{{ props.model.vendor_name }}</span></div>
               </div>
-            </div>
-
-            <h3 class="msq-sub-title">{{ t('msGroupPricing') }}</h3>
-            <table v-if="props.model.groups.length" class="msq-group-table">
-              <thead>
-                <tr>
-                  <th>{{ t('msGroup') }}</th>
-                  <th>{{ t('msRatio') }}</th>
-                  <th class="num">{{ t('inputLabel') }}</th>
-                  <th class="num">{{ t('outputLabel') }}</th>
-                  <th v-if="hasCache" class="num">{{ t('msCached') }}</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="group in props.model.groups" :key="group.id">
-                  <td><span class="msq-group-badge">{{ group.name }}</span></td>
-                  <td class="msq-mono muted">{{ formatRatio(Number(group.multiplier)) }}</td>
-                  <td class="num msq-mono">{{ price('input', group) || '—' }}</td>
-                  <td class="num msq-mono">{{ price('output', group) || '—' }}</td>
-                  <td v-if="hasCache" class="num msq-mono">{{ price('cache', group) || '—' }}</td>
-                </tr>
-              </tbody>
-            </table>
-            <p v-else class="msq-muted-text">{{ t('msNoGroups') }}</p>
-            <p class="msq-footnote">{{ t('msPriceNoteA') }} {{ unitLabel }} {{ t('msPriceNoteB') }}</p>
-          </section>
-
-          <section class="msq-panel">
-            <h2 class="msq-section-title">{{ t('msModel') }}</h2>
-            <div class="msq-info-grid">
-              <div class="msq-info-cell">
-                <span>{{ t('msVendor') }}</span>
-                <b>
-                  <em class="msq-vendor-badge" :style="{ background: vendorColor(props.model.vendor_name).bg, color: vendorColor(props.model.vendor_name).fg }">{{ props.model.vendor_name }}</em>
-                </b>
+              <div>
+                <span class="text-xs text-muted-foreground">{{ t('msType') }}</span>
+                <div class="mt-1"><Badge variant="outline">{{ t('msTokenBased') }}</Badge></div>
               </div>
-              <div class="msq-info-cell">
-                <span>{{ t('msType') }}</span>
-                <b><em class="msq-billing-badge">{{ t('msTokenBased') }}</em></b>
+              <div>
+                <span class="text-xs text-muted-foreground">{{ t('msGroups') }}</span>
+                <div class="mt-1 flex flex-wrap gap-1"><Badge v-for="group in props.model.groups" :key="group.id" variant="secondary" class="text-[10px]">{{ group.name }}</Badge></div>
               </div>
-              <div class="msq-info-cell">
-                <span>{{ t('msGroups') }}</span>
-                <b class="msq-info-groups"><em v-for="group in props.model.groups" :key="group.id" class="msq-group-badge">{{ group.name }}</em></b>
-              </div>
-              <div class="msq-info-cell">
-                <span>{{ t('msEndpoints') }}</span>
-                <b class="msq-info-groups"><em class="msq-group-badge">openai</em><em class="msq-group-badge">anthropic</em></b>
+              <div>
+                <span class="text-xs text-muted-foreground">{{ t('msEndpoints') }}</span>
+                <div class="mt-1 flex flex-wrap gap-1"><Badge variant="secondary" class="text-[10px]">openai</Badge><Badge variant="secondary" class="text-[10px]">anthropic</Badge></div>
               </div>
             </div>
           </section>
-        </div>
+        </TabsContent>
 
-        <div v-else class="msq-tab-body">
-          <section class="msq-panel">
-            <h2 class="msq-section-title">{{ t('msAvailableEndpoints') }}</h2>
-            <div class="msq-endpoint-list">
-              <div v-for="endpoint in endpoints" :key="endpoint.path" class="msq-endpoint">
-                <span :class="['msq-method', endpoint.method.toLowerCase()]">{{ endpoint.method }}</span>
-                <code>{{ endpoint.path }}</code>
-                <small>{{ endpoint.label }}</small>
+        <TabsContent value="api" class="flex flex-col gap-4">
+          <section class="rounded-lg border border-border p-4">
+            <h2 class="mb-3 text-sm font-semibold">{{ t('msAvailableEndpoints') }}</h2>
+            <div class="flex flex-col gap-2">
+              <div v-for="endpoint in endpoints" :key="endpoint.path" class="flex items-center gap-2 rounded-md border border-border p-2">
+                <Badge variant="secondary" class="font-mono text-[10px]">{{ endpoint.method }}</Badge>
+                <code class="font-mono text-xs">{{ endpoint.path }}</code>
+                <small class="ml-auto text-xs text-muted-foreground">{{ endpoint.label }}</small>
               </div>
             </div>
           </section>
-          <section class="msq-panel">
-            <div class="msq-code-head">
-              <h2 class="msq-section-title">{{ t('msRequestExample') }}</h2>
-              <button type="button" class="msq-copy-btn bordered" @click="copyText(curlExample, 'curl')">
+          <section class="rounded-lg border border-border p-4">
+            <div class="mb-3 flex items-center justify-between">
+              <h2 class="text-sm font-semibold">{{ t('msRequestExample') }}</h2>
+              <Button variant="outline" size="sm" @click="copyText(curlExample, 'curl')">
                 <Check v-if="copiedCurl" :size="12" />
                 <Copy v-else :size="12" />
                 {{ copiedCurl ? t('msCopied') : t('msCopy') }}
-              </button>
+              </Button>
             </div>
-            <pre class="msq-code"><code>{{ curlExample }}</code></pre>
+            <pre class="overflow-x-auto rounded-md bg-muted p-3 font-mono text-xs leading-relaxed"><code>{{ curlExample }}</code></pre>
           </section>
-        </div>
-      </div>
-    </div>
-  </Teleport>
+        </TabsContent>
+      </Tabs>
+    </DialogContent>
+  </Dialog>
 </template>
