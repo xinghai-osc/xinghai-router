@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { TooltipProvider } from '@/components/ui/tooltip'
 
 const route = useRoute()
 const { t } = useI18n()
@@ -34,5 +35,7 @@ onMounted(initializeTheme)
 </script>
 
 <template>
-  <NuxtPage />
+  <TooltipProvider :delay-duration="200">
+    <NuxtPage />
+  </TooltipProvider>
 </template>

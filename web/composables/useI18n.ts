@@ -179,6 +179,8 @@ const messages = {
     serviceRunning: '服务运行正常',
     loadingLabel: '正在加载',
     accountLabel: '账户',
+    expandSidebar: '展开侧边栏',
+    collapseSidebar: '收起侧边栏',
 
     quickStartHeading: '快速开始',
     myAccount: '我的账户',
@@ -784,6 +786,8 @@ const messages = {
     serviceRunning: 'Service running normally',
     loadingLabel: 'Loading...',
     accountLabel: 'Account',
+    expandSidebar: 'Expand sidebar',
+    collapseSidebar: 'Collapse sidebar',
 
     quickStartHeading: 'Quick start',
     myAccount: 'My account',
