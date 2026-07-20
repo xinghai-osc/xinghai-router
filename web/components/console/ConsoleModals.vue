@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from '@/components/ui/sheet'
+import { Sheet, SheetContent, SheetFooter, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 
 const store = useConsoleStore()
 const {
@@ -152,50 +152,51 @@ const selectMultiClass = 'flex min-h-9 w-full rounded-md border border-input bg-
   </Dialog>
 
   <Sheet :open="showChannel || Boolean(editingChannel)" @update:open="v => !v && ((showChannel = false) || (editingChannel = null))">
-    <SheetContent side="right" class="w-full overflow-y-auto sm:max-w-lg">
+    <SheetContent side="right" class="w-full sm:max-w-lg">
       <SheetHeader>
         <SheetTitle>{{ editingChannel ? t('editChannel') : t('addChannel') }}</SheetTitle>
-        <SheetDescription class="sr-only">{{ editingChannel ? t('editChannel') : t('addChannel') }}</SheetDescription>
       </SheetHeader>
-      <form class="grid gap-4 px-6 pb-6" @submit.prevent="editingChannel ? updateChannel() : createChannel()">
-        <div class="flex flex-col gap-2">
-          <Label>{{ t('channelNameLabel') }}</Label>
-          <Input v-model="channelForm.name" required maxlength="100" />
+      <form class="flex flex-1 flex-col overflow-y-auto px-6" @submit.prevent="editingChannel ? updateChannel() : createChannel()">
+        <div class="flex flex-col gap-5">
+          <div class="flex flex-col gap-2">
+            <Label>{{ t('channelNameLabel') }}</Label>
+            <Input v-model="channelForm.name" required maxlength="100" />
+          </div>
+          <div class="flex flex-col gap-2">
+            <Label>{{ t('upstreamProtocol') }}</Label>
+            <select v-model="channelForm.provider" :class="selectClass">
+              <option value="openai">OpenAI</option>
+              <option value="anthropic">Anthropic</option>
+              <option value="ollama">Ollama</option>
+              <option value="kimi">Kimi</option>
+              <option value="opencode_go">OpenCode Go</option>
+            </select>
+          </div>
+          <div class="flex flex-col gap-2">
+            <Label>{{ t('upstreamURL') }}</Label>
+            <Input v-model="channelForm.base_url" required type="url" />
+          </div>
+          <div class="flex flex-col gap-2">
+            <Label>{{ t('apiKeyLabel') }} <span class="text-xs text-muted-foreground">{{ editingChannel ? t('leaveBlankUnchanged') : t('requiredField') }}</span></Label>
+            <Input v-model="channelForm.api_key" :required="!editingChannel" type="password" autocomplete="new-password" />
+          </div>
+          <div class="flex flex-col gap-2">
+            <Label>{{ t('modelLabel') }} <span class="text-xs text-muted-foreground">{{ t('modelsCommaSeparated') }}</span></Label>
+            <Input v-model="channelForm.models" required />
+          </div>
+          <Button variant="link" type="button" class="w-fit px-0" :disabled="busy || !channelForm.api_key" @click="fetchChannelModels">{{ t('fetchUpstreamModels') }}</Button>
+          <div class="flex flex-col gap-2">
+            <Label>{{ t('priorityLabel') }}</Label>
+            <Input v-model.number="channelForm.priority" required type="number" min="0" />
+          </div>
+          <div class="flex flex-col gap-2">
+            <Label>{{ t('availableGroups') }}</Label>
+            <select v-model="channelForm.groups" multiple size="5" :class="selectMultiClass">
+              <option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }} · {{ Number(group.multiplier).toFixed(2) }}x</option>
+            </select>
+          </div>
         </div>
-        <div class="flex flex-col gap-2">
-          <Label>{{ t('upstreamProtocol') }}</Label>
-          <select v-model="channelForm.provider" :class="selectClass">
-            <option value="openai">OpenAI</option>
-            <option value="anthropic">Anthropic</option>
-            <option value="ollama">Ollama</option>
-            <option value="kimi">Kimi</option>
-            <option value="opencode_go">OpenCode Go</option>
-          </select>
-        </div>
-        <div class="flex flex-col gap-2">
-          <Label>{{ t('upstreamURL') }}</Label>
-          <Input v-model="channelForm.base_url" required type="url" />
-        </div>
-        <div class="flex flex-col gap-2">
-          <Label>{{ t('apiKeyLabel') }} <span class="text-xs text-muted-foreground">{{ editingChannel ? t('leaveBlankUnchanged') : t('requiredField') }}</span></Label>
-          <Input v-model="channelForm.api_key" :required="!editingChannel" type="password" autocomplete="new-password" />
-        </div>
-        <div class="flex flex-col gap-2">
-          <Label>{{ t('modelLabel') }} <span class="text-xs text-muted-foreground">{{ t('modelsCommaSeparated') }}</span></Label>
-          <Input v-model="channelForm.models" required />
-        </div>
-        <Button variant="link" type="button" class="w-fit px-0" :disabled="busy || !channelForm.api_key" @click="fetchChannelModels">{{ t('fetchUpstreamModels') }}</Button>
-        <div class="flex flex-col gap-2">
-          <Label>{{ t('priorityLabel') }}</Label>
-          <Input v-model.number="channelForm.priority" required type="number" min="0" />
-        </div>
-        <div class="flex flex-col gap-2">
-          <Label>{{ t('availableGroups') }}</Label>
-          <select v-model="channelForm.groups" multiple size="5" :class="selectMultiClass">
-            <option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }} · {{ Number(group.multiplier).toFixed(2) }}x</option>
-          </select>
-        </div>
-        <SheetFooter>
+        <SheetFooter class="mt-auto px-0 pb-6">
           <Button type="submit" :disabled="busy" class="w-full">{{ editingChannel ? t('saveChanges') : t('addChannel') }}</Button>
         </SheetFooter>
       </form>

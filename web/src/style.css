@@ -658,6 +658,19 @@ code { font-family: var(--font-mono); font-size: 11px; }
   -ms-overflow-style: none;
 }
 .sidebar nav::-webkit-scrollbar { display: none; }
+
+.app-sidebar nav { scrollbar-width: none; -ms-overflow-style: none; }
+.app-sidebar nav::-webkit-scrollbar { display: none; }
+.app-sidebar nav button { position: relative; }
+.app-sidebar nav button::before {
+  content: ''; position: absolute; left: 0; top: 50%; transform: translateY(-50%);
+  width: 3px; height: 0; border-radius: 0 3px 3px 0;
+  background: hsl(var(--primary));
+  transition: height 150ms ease;
+}
+.app-sidebar nav button.bg-accent::before { height: 18px; }
+.app-sidebar nav button:not(.bg-accent):hover { background: hsl(var(--accent) / 0.6); }
+.app-sidebar nav button:not(.bg-accent):hover::before { height: 10px; background: hsl(var(--muted-foreground) / 0.3); }
 .nav-group { display: grid; gap: 2px; margin-bottom: 17px; }
 .management-group { margin-bottom: 8px; padding-top: 15px; border-top: 1px solid hsl(var(--border)); }
 .nav-label {

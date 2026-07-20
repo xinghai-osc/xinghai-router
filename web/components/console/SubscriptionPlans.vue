@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from '@/components/ui/sheet'
+import { Sheet, SheetContent, SheetFooter, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 
 const store = useConsoleStore()
@@ -63,72 +63,73 @@ const selectClass = 'flex h-9 w-full rounded-md border border-input bg-transpare
   </section>
 
   <Sheet :open="showPlanModal" @update:open="v => !v && (showPlanModal = false)">
-    <SheetContent side="right" class="w-full overflow-y-auto sm:max-w-lg">
+    <SheetContent side="right" class="w-full sm:max-w-lg">
       <SheetHeader>
         <SheetTitle>{{ editingPlanID ? t('editPlan') : t('createPlan') }}</SheetTitle>
-        <SheetDescription class="sr-only">{{ editingPlanID ? t('editPlan') : t('createPlan') }}</SheetDescription>
       </SheetHeader>
-      <form class="grid gap-4 px-6 pb-6" @submit.prevent="savePlan">
-        <div class="flex flex-col gap-2">
-          <Label>{{ t('planName') }}</Label>
-          <Input v-model="subscriptionPlanForm.name" required maxlength="100" />
+      <form class="flex flex-1 flex-col overflow-y-auto px-6" @submit.prevent="savePlan">
+        <div class="flex flex-col gap-5">
+          <div class="flex flex-col gap-2">
+            <Label>{{ t('planName') }}</Label>
+            <Input v-model="subscriptionPlanForm.name" required maxlength="100" />
+          </div>
+          <div class="flex flex-col gap-2">
+            <Label>{{ t('planDescription') }}</Label>
+            <Input v-model="subscriptionPlanForm.description" maxlength="500" />
+          </div>
+          <div class="grid grid-cols-2 gap-4">
+            <div class="flex flex-col gap-2">
+              <Label>{{ t('priceLabel') }}</Label>
+              <Input v-model="subscriptionPlanForm.price" required />
+            </div>
+            <div class="flex flex-col gap-2">
+              <Label>{{ t('currency') }}</Label>
+              <Input v-model="subscriptionPlanForm.currency" required maxlength="8" />
+            </div>
+            <div class="flex flex-col gap-2">
+              <Label>{{ t('billingPeriod') }}</Label>
+              <select v-model="subscriptionPlanForm.billing_period" :class="selectClass">
+                <option value="month">{{ t('monthPlan') }}</option>
+                <option value="year">{{ t('yearPlan') }}</option>
+              </select>
+            </div>
+            <div class="flex flex-col gap-2">
+              <Label>{{ t('creditAmount') }}</Label>
+              <Input v-model="subscriptionPlanForm.credit_amount" type="number" min="0" step="any" />
+              <p class="text-xs text-muted-foreground">{{ t('creditAmountHint') }}</p>
+            </div>
+            <div class="flex flex-col gap-2">
+              <Label>{{ t('groupLabel') }}</Label>
+              <select v-model="subscriptionPlanForm.group_id" :class="selectClass">
+                <option value="">{{ t('none') }}</option>
+                <option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }}</option>
+              </select>
+            </div>
+            <div class="flex flex-col gap-2">
+              <Label>{{ t('sortOrder') }}</Label>
+              <Input v-model.number="subscriptionPlanForm.sort_order" type="number" min="0" step="1" />
+            </div>
+          </div>
+          <div class="flex flex-col gap-2">
+            <Label>{{ t('models') }} <span class="text-xs text-muted-foreground">{{ t('modelsCommaHint') }}</span></Label>
+            <Input v-model="subscriptionPlanForm.model_whitelist" :placeholder="t('modelsPlaceholder')" />
+          </div>
+          <div class="grid grid-cols-2 gap-4">
+            <div class="flex flex-col gap-2">
+              <Label>{{ t('maxRequestsPerPeriod') }} <span class="text-xs text-muted-foreground">{{ t('optional') }}</span></Label>
+              <Input v-model="subscriptionPlanForm.max_requests_per_period" type="number" min="0" step="1" :placeholder="t('unlimited')" />
+            </div>
+            <div class="flex flex-col gap-2">
+              <Label>{{ t('maxTokensPerPeriod') }} <span class="text-xs text-muted-foreground">{{ t('optional') }}</span></Label>
+              <Input v-model="subscriptionPlanForm.max_tokens_per_period" type="number" min="0" step="1" :placeholder="t('unlimited')" />
+            </div>
+          </div>
+          <div class="flex items-center gap-2">
+            <Checkbox id="plan-enabled" :model-value="subscriptionPlanForm.enabled" @update:model-value="v => subscriptionPlanForm.enabled = !!v" />
+            <Label for="plan-enabled">{{ t('enabled') }}</Label>
+          </div>
         </div>
-        <div class="flex flex-col gap-2">
-          <Label>{{ t('planDescription') }}</Label>
-          <Input v-model="subscriptionPlanForm.description" maxlength="500" />
-        </div>
-        <div class="grid grid-cols-2 gap-4">
-          <div class="flex flex-col gap-2">
-            <Label>{{ t('priceLabel') }}</Label>
-            <Input v-model="subscriptionPlanForm.price" required />
-          </div>
-          <div class="flex flex-col gap-2">
-            <Label>{{ t('currency') }}</Label>
-            <Input v-model="subscriptionPlanForm.currency" required maxlength="8" />
-          </div>
-          <div class="flex flex-col gap-2">
-            <Label>{{ t('billingPeriod') }}</Label>
-            <select v-model="subscriptionPlanForm.billing_period" :class="selectClass">
-              <option value="month">{{ t('monthPlan') }}</option>
-              <option value="year">{{ t('yearPlan') }}</option>
-            </select>
-          </div>
-          <div class="flex flex-col gap-2">
-            <Label>{{ t('creditAmount') }}</Label>
-            <Input v-model="subscriptionPlanForm.credit_amount" type="number" min="0" step="any" />
-            <p class="text-xs text-muted-foreground">{{ t('creditAmountHint') }}</p>
-          </div>
-          <div class="flex flex-col gap-2">
-            <Label>{{ t('groupLabel') }}</Label>
-            <select v-model="subscriptionPlanForm.group_id" :class="selectClass">
-              <option value="">{{ t('none') }}</option>
-              <option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }}</option>
-            </select>
-          </div>
-          <div class="flex flex-col gap-2">
-            <Label>{{ t('sortOrder') }}</Label>
-            <Input v-model.number="subscriptionPlanForm.sort_order" type="number" min="0" step="1" />
-          </div>
-        </div>
-        <div class="flex flex-col gap-2">
-          <Label>{{ t('models') }} <span class="text-xs text-muted-foreground">{{ t('modelsCommaHint') }}</span></Label>
-          <Input v-model="subscriptionPlanForm.model_whitelist" :placeholder="t('modelsPlaceholder')" />
-        </div>
-        <div class="grid grid-cols-2 gap-4">
-          <div class="flex flex-col gap-2">
-            <Label>{{ t('maxRequestsPerPeriod') }} <span class="text-xs text-muted-foreground">{{ t('optional') }}</span></Label>
-            <Input v-model="subscriptionPlanForm.max_requests_per_period" type="number" min="0" step="1" :placeholder="t('unlimited')" />
-          </div>
-          <div class="flex flex-col gap-2">
-            <Label>{{ t('maxTokensPerPeriod') }} <span class="text-xs text-muted-foreground">{{ t('optional') }}</span></Label>
-            <Input v-model="subscriptionPlanForm.max_tokens_per_period" type="number" min="0" step="1" :placeholder="t('unlimited')" />
-          </div>
-        </div>
-        <div class="flex items-center gap-2">
-          <Checkbox id="plan-enabled" :model-value="subscriptionPlanForm.enabled" @update:model-value="v => subscriptionPlanForm.enabled = !!v" />
-          <Label for="plan-enabled">{{ t('enabled') }}</Label>
-        </div>
-        <SheetFooter>
+        <SheetFooter class="mt-auto px-0 pb-6">
           <Button type="submit" :disabled="busy" class="w-full">{{ t('saveLabel') }}</Button>
         </SheetFooter>
       </form>
