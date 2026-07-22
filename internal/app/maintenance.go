@@ -54,7 +54,7 @@ func (s *Service) expireStalePendingOrders(ctx context.Context) {
 	if s.db == nil {
 		return
 	}
-	payN, subN := int64(0), int64(0)
+	payN, subOrderN, subN := int64(0), int64(0), int64(0)
 	if tag, err := s.db.Exec(ctx, `update payment_orders set status='expired', updated_at=now() where status='pending' and created_at < now() - $1::interval`, pendingOrderAgeSQL); err != nil {
 		log.Printf("order cleanup: expire payment orders: %v", err)
 	} else {
@@ -63,9 +63,22 @@ func (s *Service) expireStalePendingOrders(ctx context.Context) {
 	if tag, err := s.db.Exec(ctx, `update subscription_orders set status='expired', updated_at=now() where status='pending' and created_at < now() - $1::interval`, pendingOrderAgeSQL); err != nil {
 		log.Printf("order cleanup: expire subscription orders: %v", err)
 	} else {
+		subOrderN = tag.RowsAffected()
+	}
+	// Cancel pending subscriptions whose only unpaid orders have aged out, so
+	// they do not remain indefinitely selectable as pending.
+	if tag, err := s.db.Exec(ctx, `update user_subscriptions us set status='cancelled', cancelled_at=coalesce(us.cancelled_at, now()), updated_at=now()
+		where us.status='pending'
+		  and us.created_at < now() - $1::interval
+		  and not exists (
+			select 1 from subscription_orders o
+			where o.subscription_id=us.id and o.status in ('pending','paid')
+		  )`, pendingOrderAgeSQL); err != nil {
+		log.Printf("order cleanup: cancel pending subscriptions: %v", err)
+	} else {
 		subN = tag.RowsAffected()
 	}
-	if payN > 0 || subN > 0 {
-		log.Printf("order cleanup: expired %d payment orders and %d subscription orders older than %s", payN, subN, pendingOrderMaxAge)
+	if payN > 0 || subOrderN > 0 || subN > 0 {
+		log.Printf("order cleanup: expired %d payment orders, %d subscription orders, cancelled %d pending subscriptions older than %s", payN, subOrderN, subN, pendingOrderMaxAge)
 	}
 }
