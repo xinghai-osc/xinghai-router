@@ -4,7 +4,7 @@ Guidance for AI coding agents (opencode, Claude Code, etc.) working in this repo
 
 ## Project overview
 
-Xinghai Router is an LLM gateway and operations console. The Go service (`cmd/router`) exposes an OpenAI-compatible gateway (`/v1/*`), an Anthropic-compatible gateway (`/v1/messages`), account APIs (`/auth/*`, `/account/*`), public APIs (`/rankings`, `/subscription-plans`, `/model-catalog`, `/site-settings`), and admin APIs (`/admin/*`). A Nuxt 3 console in `web/` proxies `/api/*` to the Go service. PostgreSQL is the source of truth; Redis is provisioned in `docker-compose.yml` but not yet wired in (in-process limiter only). Provider credentials are encrypted at rest with `ENCRYPTION_KEY`.
+Xinghai Router is an LLM gateway and operations console. The Go service (`cmd/router`) exposes an OpenAI-compatible gateway (`/v1/*`), an Anthropic-compatible gateway (`/v1/messages`), account APIs (`/auth/*`, `/account/*`), public APIs (`/rankings`, `/subscription-plans`, `/model-catalog`, `/site-settings`), and admin APIs (`/admin/*`). A Nuxt 3 console in `web/` proxies `/api/*` to the Go service. PostgreSQL is the source of truth; Redis is used for shared API-key rate limiting when `REDIS_URL` is set (memory fallback otherwise). Provider credentials are encrypted at rest with `ENCRYPTION_KEY`.
 
 The repository is bilingual: README and user-facing copy are in Chinese and English. Match the language of the surrounding content when editing; do not translate existing strings unless asked.
 

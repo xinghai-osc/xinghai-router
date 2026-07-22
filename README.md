@@ -255,6 +255,38 @@ OpenCode 配置示例：
 
 The router selects an enabled channel advertising the requested model. It tries the lowest numeric priority first, distributes equal-priority traffic by weight, and retries a different eligible channel for connection errors and responses matching the configured retry status codes (by default every status except `2xx`, `408`, and `504`, up to 3 retries). Upstream errors matching the configured auto-disable status codes or keywords disable the channel immediately, and the optional background health check probes channels on a schedule (`scheduled_all`) or only after automatic disabling (`passive_recovery`), bringing recovered channels back online when configured. Manage these options through `GET|PUT /admin/reliability-settings` (`system.manage`).
 
+## Production checklist
+
+Use this before exposing the stack on a public host.
+
+### Secrets and identity
+
+1. Copy `.env.example` to `.env` and set unique values for `ENCRYPTION_KEY` (≥24 characters) and `POSTGRES_PASSWORD` (URL-safe). **Never rotate `ENCRYPTION_KEY` without re-encrypting provider and payment secrets** — lost keys make ciphertext unrecoverable.
+2. On first start with an empty admin table, the router seeds a bootstrap admin (default email `admin@localhost`, overridable with `BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_NAME`) and prints a one-time random password in the router logs. Sign in immediately and change the password under Profile → Change password (`PUT /account/password`).
+3. Prefer enabling Geetest and/or SMTP email verification for public registration (`GEETEST_*`, `SMTP_*` or admin site settings). Registration always creates `role=user`; only admins promote accounts.
+
+### Network and TLS
+
+1. Terminate TLS at a reverse proxy (Nginx, Caddy, cloud LB). Forward `X-Forwarded-Proto: https` so the router can emit HSTS on API responses.
+2. Expose only the web console and/or the gateway ports you need. Keep PostgreSQL and Redis off the public network (compose already binds them internally).
+3. Channel `base_url` values must be HTTPS (HTTP only for loopback). Payment `base_url` / `public_base_url` must be HTTPS in production.
+
+### Rate limiting and scale
+
+1. Compose injects `REDIS_URL=redis://redis:6379/0`. Use it so API-key rate limits are shared across router replicas (see Redis PR when merged). Without Redis the limiter is process-local.
+2. Horizontal scaling: run multiple router replicas behind the proxy only when Redis-backed limiting is enabled; wallet reservation already lives in PostgreSQL.
+
+### Operations
+
+1. Health: `GET /healthz` (compose healthchecks use this).
+2. Back up PostgreSQL regularly. Redis AOF is enabled in compose for limiter state durability, but Postgres is the source of truth for accounts and billing.
+3. After deploy: `docker compose logs -f router` for bootstrap password / migration errors; `go test ./...` and `go vet ./...` in CI.
+
+### Known production limits
+
+- Streaming (SSE) responses are not settled against the wallet; only non-stream requests bill tokens. Do not rely on stream traffic for metered revenue until upstream usage events are normalized.
+- Browser payment return URLs never credit balances; only the signed `epay/notify` callback does (idempotent on `order_no`).
+
 ## Verify
 
 Run `go test ./...` and `go vet ./...`.
