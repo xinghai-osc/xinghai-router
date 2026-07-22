@@ -4,6 +4,7 @@ import (
 	"context"
 	"embed"
 	"fmt"
+	"log"
 	"net/http"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -16,7 +17,7 @@ type Service struct {
 	cfg             Config
 	db              *pgxpool.Pool
 	httpClient      *http.Client
-	limiter         *limiter
+	limiter         rateLimiter
 	scheduler       context.CancelFunc
 	migration       migrationStatus
 	migrationCancel context.CancelFunc
@@ -35,7 +36,13 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 		db.Close()
 		return nil, err
 	}
-	s := &Service{cfg: cfg, db: db, httpClient: &http.Client{Timeout: cfg.RequestTimeout}, limiter: newLimiter(cfg.RateLimitPerMinute)}
+	limiter, mode := newRateLimiter(cfg.RedisURL, cfg.RateLimitPerMinute)
+	if mode == "redis" {
+		log.Printf("rate limiter backend: redis (memory fallback on redis errors)")
+	} else {
+		log.Printf("rate limiter backend: memory")
+	}
+	s := &Service{cfg: cfg, db: db, httpClient: &http.Client{Timeout: cfg.RequestTimeout}, limiter: limiter}
 	schedulerCtx, cancel := context.WithCancel(context.Background())
 	s.scheduler = cancel
 	s.startHealthCheckScheduler(schedulerCtx)
@@ -44,6 +51,9 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 func (s *Service) Close() {
 	if s.scheduler != nil {
 		s.scheduler()
+	}
+	if s.limiter != nil {
+		s.limiter.close()
 	}
 	s.db.Close()
 }

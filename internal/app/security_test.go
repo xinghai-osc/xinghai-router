@@ -34,6 +34,23 @@ func TestLimiter(t *testing.T) {
 	}
 }
 
+func TestNewRateLimiterFallsBackWithoutRedis(t *testing.T) {
+	l, mode := newRateLimiter("", 10)
+	if mode != "memory" {
+		t.Fatalf("mode = %q, want memory", mode)
+	}
+	if !l.allow("a") {
+		t.Fatal("expected allow")
+	}
+	l.close()
+
+	l, mode = newRateLimiter("redis://127.0.0.1:1/0", 10)
+	if mode != "memory" {
+		t.Fatalf("unreachable redis should fall back to memory, got %q", mode)
+	}
+	l.close()
+}
+
 func TestUsage(t *testing.T) {
 	prompt, completion, total := usage([]byte(`{"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}}`))
 	if prompt != 2 || completion != 3 || total != 5 {

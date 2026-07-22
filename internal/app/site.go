@@ -30,6 +30,9 @@ func (c systemConfig) emailVerificationEnabled() bool {
 
 func (s *Service) loadSystemConfig(ctx context.Context) systemConfig {
 	cfg := systemConfig{GeetestCaptchaID: s.cfg.GeetestCaptchaID, GeetestCaptchaKey: s.cfg.GeetestCaptchaKey, SMTPHost: s.cfg.SMTPHost, SMTPPort: s.cfg.SMTPPort, SMTPUsername: s.cfg.SMTPUsername, SMTPPassword: s.cfg.SMTPPassword, SMTPFrom: s.cfg.SMTPFrom}
+	if s.db == nil {
+		return cfg
+	}
 	var geetestID, geetestKeyEnc, smtpHost, smtpPort, smtpUser, smtpPassEnc, smtpFrom string
 	err := s.db.QueryRow(ctx, `select geetest_captcha_id,geetest_captcha_key_encrypted,smtp_host,smtp_port,smtp_username,smtp_password_encrypted,smtp_from from site_settings where id=true`).Scan(&geetestID, &geetestKeyEnc, &smtpHost, &smtpPort, &smtpUser, &smtpPassEnc, &smtpFrom)
 	if err != nil {
