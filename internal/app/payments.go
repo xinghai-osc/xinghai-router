@@ -105,6 +105,12 @@ func (s *Service) updatePaymentSettings(w http.ResponseWriter, r *http.Request) 
 	in.PublicBaseURL = strings.TrimRight(strings.TrimSpace(in.PublicBaseURL), "/")
 	in.MerchantID = strings.TrimSpace(in.MerchantID)
 	in.MerchantKey = strings.TrimSpace(in.MerchantKey)
+	if in.Enabled {
+		if validPublicURL(in.BaseURL) != nil || validPublicURL(in.PublicBaseURL) != nil || in.MerchantID == "" {
+			writeError(w, http.StatusBadRequest, "invalid_request", "enabled payment requires valid URLs and merchant credentials")
+			return
+		}
+	}
 	current, err := s.loadEpaySettings(r)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not load payment settings")
@@ -114,11 +120,9 @@ func (s *Service) updatePaymentSettings(w http.ResponseWriter, r *http.Request) 
 	if merchantKey == "" {
 		merchantKey = current.MerchantKey
 	}
-	if in.Enabled {
-		if validPublicURL(in.BaseURL) != nil || validPublicURL(in.PublicBaseURL) != nil || in.MerchantID == "" || merchantKey == "" {
-			writeError(w, http.StatusBadRequest, "invalid_request", "enabled payment requires valid URLs and merchant credentials")
-			return
-		}
+	if in.Enabled && merchantKey == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "enabled payment requires valid URLs and merchant credentials")
+		return
 	}
 	encryptedKey := ""
 	if merchantKey != "" {

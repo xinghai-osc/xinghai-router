@@ -109,12 +109,9 @@ func (s *Service) updateSiteSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "site name must contain 1 to 100 characters")
 		return
 	}
-	if in.IconURL != "" {
-		u, err := url.Parse(in.IconURL)
-		if err != nil || u.Host == "" || (u.Scheme != "https" && !(u.Scheme == "http" && isLoopbackHost(u.Hostname()))) {
-			writeError(w, http.StatusBadRequest, "invalid_request", "icon_url must use HTTPS, except for loopback HTTP URLs")
-			return
-		}
+	if in.IconURL != "" && !validIconURL(in.IconURL) {
+		writeError(w, http.StatusBadRequest, "invalid_request", "icon_url must use HTTPS, except for loopback HTTP URLs")
+		return
 	}
 	if in.SMTPPort != nil {
 		if port := strings.TrimSpace(*in.SMTPPort); port != "" && !validSMTPPort(port) {
@@ -185,4 +182,9 @@ func validSMTPPort(port string) bool {
 		n = n*10 + int(r-'0')
 	}
 	return n >= 1 && n <= 65535
+}
+
+func validIconURL(value string) bool {
+	u, err := url.Parse(value)
+	return err == nil && u.Host != "" && (u.Scheme == "https" || (u.Scheme == "http" && isLoopbackHost(u.Hostname())))
 }
