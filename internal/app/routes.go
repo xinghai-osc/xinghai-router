@@ -230,7 +230,10 @@ func decode(r *http.Request, target any) error {
 	return d.Decode(target)
 }
 
-var errInvalid = errors.New("invalid request")
+var (
+	errInvalid            = errors.New("invalid request")
+	errPricingUnavailable = errors.New("pricing unavailable")
+)
 
 func parseExpiry(value string) (*time.Time, error) {
 	if value == "" {

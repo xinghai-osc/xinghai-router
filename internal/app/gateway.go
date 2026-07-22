@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
@@ -81,11 +82,17 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 		return
 	}
 	subscriptionAccess := s.subscriptionCoversModel(r.Context(), key.userID, model)
-	reserved, err := s.reserveUsage(r, key, model, body)
-	if err != nil {
-		if subscriptionAccess {
-			reserved = reservation{}
-		} else {
+	var reserved reservation
+	if subscriptionAccess {
+		reserved = reservation{}
+	} else {
+		var err error
+		reserved, err = s.reserveUsage(r, key, model, body)
+		if err != nil {
+			if errors.Is(err, errPricingUnavailable) {
+				writeError(w, 402, "pricing_unavailable", "no enabled pricing rule for this model")
+				return
+			}
 			writeError(w, 402, "insufficient_quota", "insufficient balance for this request")
 			return
 		}
@@ -221,11 +228,12 @@ func (s *Service) reserveUsage(r *http.Request, key keyContext, model string, bo
 	}
 	var input, output, multiplier float64
 	if err := s.db.QueryRow(r.Context(), `select input_per_million,output_per_million,multiplier from pricing_rules where model=$1 and enabled`, model).Scan(&input, &output, &multiplier); err != nil {
-		return reservation{}, nil
+		return reservation{}, errPricingUnavailable
 	}
 	// Reserve the configured maximum output plus a conservative request-body estimate.
 	amount := (float64(len(body)/3)*input + float64(request.MaxTokens)*output) / 1000000 * multiplier * s.groupMultiplier(r, key)
 	if amount == 0 {
+		// Zero list prices are allowed only when an explicit enabled rule exists.
 		return reservation{}, nil
 	}
 	tx, err := s.db.Begin(r.Context())
