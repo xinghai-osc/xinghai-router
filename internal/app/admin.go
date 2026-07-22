@@ -825,6 +825,29 @@ func validPositiveFinite(value float64) bool {
 	return validFinite(value) && value > 0
 }
 
+func redactDSN(dsn string) string {
+	if dsn == "" {
+		return ""
+	}
+	if u, err := url.Parse(dsn); err == nil && u.Scheme != "" && u.Host != "" {
+		if u.User != nil {
+			name := u.User.Username()
+			if name == "" {
+				name = "user"
+			}
+			u.User = url.UserPassword(name, "***")
+		}
+		return u.String()
+	}
+	if at := strings.LastIndex(dsn, "@"); at > 0 {
+		head := dsn[:at]
+		if colon := strings.Index(head, ":"); colon >= 0 {
+			return head[:colon+1] + "***" + dsn[at:]
+		}
+	}
+	return "[redacted-dsn]"
+}
+
 func (s *Service) setUserRole(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Role string `json:"role"`
@@ -1160,8 +1183,8 @@ func (s *Service) adjustBalance(w http.ResponseWriter, r *http.Request) {
 		Amount float64 `json:"amount"`
 		Note   string  `json:"note"`
 	}
-	if decode(r, &in) != nil || in.UserID == "" || in.Amount == 0 || in.Note == "" {
-		writeError(w, 400, "invalid_request", "user_id, non-zero amount, and note are required")
+	if decode(r, &in) != nil || in.UserID == "" || !validFinite(in.Amount) || in.Amount == 0 || strings.TrimSpace(in.Note) == "" {
+		writeError(w, 400, "invalid_request", "user_id, non-zero finite amount, and note are required")
 		return
 	}
 	tx, err := s.db.Begin(r.Context())
@@ -1303,7 +1326,7 @@ func (s *Service) runMigration(w http.ResponseWriter, r *http.Request) {
 	}
 	in.SourceDSN = strings.TrimPrefix(in.SourceDSN, "mysql://")
 
-	log.Printf("Migration requested: driver=%s source=%s target=%s", in.SourceDriver, in.SourceDSN, s.cfg.DatabaseURL)
+	log.Printf("Migration requested: driver=%s source=%s target=%s", in.SourceDriver, redactDSN(in.SourceDSN), redactDSN(s.cfg.DatabaseURL))
 
 	if !s.startMigration(in.SourceDSN, in.SourceDriver) {
 		writeError(w, 409, "migration_already_running", "A migration is already in progress")

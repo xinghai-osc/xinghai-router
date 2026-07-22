@@ -190,3 +190,49 @@ func TestMaskName(t *testing.T) {
 		t.Fatalf("unicode maskName = %q", got)
 	}
 }
+
+func TestAdjustBalanceRejectsInvalidBeforeDatabaseAccess(t *testing.T) {
+	for _, body := range []string{
+		`{}`,
+		`{"user_id":"1","amount":0,"note":"x"}`,
+		`{"user_id":"1","amount":1,"note":""}`,
+		`{"user_id":"","amount":1,"note":"x"}`,
+		`{"user_id":"1","amount":"NaN","note":"x"}`,
+		`{"user_id":"1","amount":"Inf","note":"x"}`,
+	} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/admin/wallets/adjustments", strings.NewReader(body))
+		(&Service{}).adjustBalance(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("body %s status = %d, want %d", body, rec.Code, http.StatusBadRequest)
+		}
+	}
+}
+
+func TestRunMigrationRejectsEmptyDSN(t *testing.T) {
+	for _, body := range []string{`{}`, `{"source_dsn":""}`, `{"source_driver":"mysql"}`} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/admin/migrate", strings.NewReader(body))
+		(&Service{}).runMigration(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("body %s status = %d", body, rec.Code)
+		}
+	}
+}
+
+func TestRedactDSN(t *testing.T) {
+	got := redactDSN("postgres://router:s3cret@postgres:5432/router?sslmode=disable")
+	if strings.Contains(got, "s3cret") {
+		t.Fatalf("password not redacted: %q", got)
+	}
+	if !strings.Contains(got, "***") && !strings.Contains(got, "%2A%2A%2A") {
+		t.Fatalf("expected redaction marker: %q", got)
+	}
+	got = redactDSN("user:pass@tcp(127.0.0.1:3306)/db")
+	if strings.Contains(got, ":pass@") {
+		t.Fatalf("mysql-style dsn not redacted: %q", got)
+	}
+	if redactDSN("") != "" {
+		t.Fatal("empty dsn should stay empty")
+	}
+}
