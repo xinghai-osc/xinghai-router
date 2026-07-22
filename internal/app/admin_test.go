@@ -71,6 +71,8 @@ func TestUpdateChannelRejectsInvalidRequestBeforeDatabaseAccess(t *testing.T) {
 		`{"name":"channel","base_url":"https://api.example.com","models":[]}`,
 		`{"name":"channel","base_url":"http://api.example.com","models":["model"]}`,
 		`{"name":"channel","base_url":"https://api.example.com","models":["model"],"provider":"unknown"}`,
+		`{"name":"channel","base_url":"https://169.254.169.254","models":["m"]}`,
+		`{"name":"channel","base_url":"https://192.168.0.1","models":["m"]}`,
 	} {
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodPut, "/admin/channels/channel-id", strings.NewReader(body))
@@ -80,5 +82,30 @@ func TestUpdateChannelRejectsInvalidRequestBeforeDatabaseAccess(t *testing.T) {
 		if recorder.Code != http.StatusBadRequest {
 			t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
 		}
+	}
+}
+
+func TestCreateChannelRejectsPrivateHTTPSBeforeDatabaseAccess(t *testing.T) {
+	for _, body := range []string{
+		`{"name":"channel","api_key":"sk","base_url":"https://169.254.169.254","models":["model"]}`,
+		`{"name":"channel","api_key":"sk","base_url":"https://10.0.0.8","models":["model"]}`,
+		`{"name":"channel","api_key":"sk","base_url":"http://api.example.com","models":["model"]}`,
+	} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/admin/channels", strings.NewReader(body))
+		(&Service{}).createChannel(recorder, request)
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("body %s status = %d, want %d", body, recorder.Code, http.StatusBadRequest)
+		}
+	}
+}
+
+func TestSyncNewAPIPricingRejectsPrivateBaseURL(t *testing.T) {
+	body := `{"base_url":"https://10.0.0.1","price_per_quota_unit":1}`
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/admin/pricing/newapi/sync", strings.NewReader(body))
+	(&Service{}).syncNewAPIPricing(recorder, request)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
 	}
 }

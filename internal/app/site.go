@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"net/http"
-	"net/url"
 	"strings"
 )
 
@@ -109,12 +108,9 @@ func (s *Service) updateSiteSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "site name must contain 1 to 100 characters")
 		return
 	}
-	if in.IconURL != "" {
-		u, err := url.Parse(in.IconURL)
-		if err != nil || u.Host == "" || (u.Scheme != "https" && !(u.Scheme == "http" && isLoopbackHost(u.Hostname()))) {
-			writeError(w, http.StatusBadRequest, "invalid_request", "icon_url must use HTTPS, except for loopback HTTP URLs")
-			return
-		}
+	if in.IconURL != "" && validOutboundURL(in.IconURL) != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "icon_url must use HTTPS to a public host, or HTTP to loopback")
+		return
 	}
 	if in.SMTPPort != nil {
 		if port := strings.TrimSpace(*in.SMTPPort); port != "" && !validSMTPPort(port) {

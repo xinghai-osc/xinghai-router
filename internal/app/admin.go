@@ -23,8 +23,8 @@ func (s *Service) fetchChannelModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	baseURL, err := url.Parse(strings.TrimRight(strings.TrimSpace(in.BaseURL), "/"))
-	if err != nil || baseURL.Host == "" || (baseURL.Scheme != "https" && !(baseURL.Scheme == "http" && isLoopbackHost(baseURL.Hostname()))) {
-		writeError(w, 400, "invalid_request", "base_url must use HTTPS, except for loopback HTTP services")
+	if err != nil || validOutboundURL(baseURL.String()) != nil {
+		writeError(w, 400, "invalid_request", "base_url must use HTTPS to a public host, or HTTP to loopback")
 		return
 	}
 	baseURL.Path = strings.TrimRight(baseURL.Path, "/") + "/v1/models"
@@ -135,8 +135,8 @@ func (s *Service) syncNewAPIPricing(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	baseURL, err := url.Parse(strings.TrimRight(strings.TrimSpace(in.BaseURL), "/"))
-	if err != nil || baseURL.Host == "" || (baseURL.Scheme != "https" && !(baseURL.Scheme == "http" && isLoopbackHost(baseURL.Hostname()))) {
-		writeError(w, 400, "invalid_request", "base_url must use HTTPS, except for loopback HTTP services")
+	if err != nil || validOutboundURL(baseURL.String()) != nil {
+		writeError(w, 400, "invalid_request", "base_url must use HTTPS to a public host, or HTTP to loopback")
 		return
 	}
 	fetch := func(path string, out any) error {
@@ -1010,9 +1010,8 @@ func (s *Service) createChannel(w http.ResponseWriter, r *http.Request) {
 			groupIDs = append(groupIDs, groupID)
 		}
 	}
-	u, err := url.Parse(in.BaseURL)
-	if err != nil || u.Host == "" || (u.Scheme != "https" && !(u.Scheme == "http" && isLoopbackHost(u.Hostname()))) {
-		writeError(w, 400, "invalid_request", "base_url must use HTTPS, except for loopback HTTP services")
+	if validOutboundURL(in.BaseURL) != nil {
+		writeError(w, 400, "invalid_request", "base_url must use HTTPS to a public host, or HTTP to loopback")
 		return
 	}
 	encrypted, err := crypt(s.cfg.EncryptionKey, in.APIKey, false)
@@ -1066,9 +1065,8 @@ func (s *Service) updateChannel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_request", "unsupported provider")
 		return
 	}
-	u, err := url.Parse(in.BaseURL)
-	if err != nil || u.Host == "" || (u.Scheme != "https" && !(u.Scheme == "http" && isLoopbackHost(u.Hostname()))) {
-		writeError(w, 400, "invalid_request", "base_url must use HTTPS, except for loopback HTTP services")
+	if validOutboundURL(in.BaseURL) != nil {
+		writeError(w, 400, "invalid_request", "base_url must use HTTPS to a public host, or HTTP to loopback")
 		return
 	}
 	models, _ := json.Marshal(in.Models)
