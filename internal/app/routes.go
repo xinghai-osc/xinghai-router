@@ -138,6 +138,7 @@ func (s *Service) api(next http.HandlerFunc) http.Handler {
 			writeError(w, 429, "rate_limit_exceeded", "too many requests")
 			return
 		}
+		_, _ = s.db.Exec(r.Context(), `update api_keys set last_used_at=now() where id=$1`, k.keyID)
 		next(w, r.WithContext(context.WithValue(r.Context(), contextKey{}, k)))
 	})
 }

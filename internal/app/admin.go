@@ -1208,12 +1208,27 @@ func (s *Service) createModelRoute(w http.ResponseWriter, r *http.Request) {
 		Priority      int    `json:"priority"`
 		Weight        int    `json:"weight"`
 	}
-	if decode(r, &in) != nil || in.PublicModel == "" || in.UpstreamModel == "" || in.ChannelID == "" {
+	if decode(r, &in) != nil {
 		writeError(w, 400, "invalid_request", "public_model, upstream_model, and channel_id are required")
 		return
 	}
-	if in.Weight <= 0 {
+	in.PublicModel = strings.TrimSpace(in.PublicModel)
+	in.UpstreamModel = strings.TrimSpace(in.UpstreamModel)
+	in.ChannelID = strings.TrimSpace(in.ChannelID)
+	if in.PublicModel == "" || in.UpstreamModel == "" || in.ChannelID == "" {
+		writeError(w, 400, "invalid_request", "public_model, upstream_model, and channel_id are required")
+		return
+	}
+	if in.Weight < 0 || in.Weight > 10000 {
+		writeError(w, 400, "invalid_request", "weight must be between 0 and 10000")
+		return
+	}
+	if in.Weight == 0 {
 		in.Weight = 100
+	}
+	if in.Priority < -10000 || in.Priority > 10000 {
+		writeError(w, 400, "invalid_request", "priority must be between -10000 and 10000")
+		return
 	}
 	id, _ := randomID()
 	_, err := s.db.Exec(r.Context(), `insert into model_routes(id,public_model,upstream_model,channel_id,priority,weight) values($1,$2,$3,$4,$5,$6)`, id, in.PublicModel, in.UpstreamModel, in.ChannelID, in.Priority, in.Weight)
