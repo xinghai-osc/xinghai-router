@@ -210,7 +210,26 @@ func quotaToBalance(quota int64) float64 {
 	return float64(quota) / 500000.0 * 0.002
 }
 
-func Run(sourceDSN, sourceDriver, targetDSN string) error {
+type Progress struct {
+	Step     string `json:"step"`
+	Detail   string `json:"detail"`
+	Current  int    `json:"current"`
+	Total    int    `json:"total"`
+	Finished bool   `json:"finished"`
+}
+
+type ProgressFunc func(Progress)
+
+type step struct {
+	name   string
+	action func() (string, error)
+}
+
+func Run(ctx context.Context, sourceDSN, sourceDriver, targetDSN string, progress ProgressFunc) error {
+	if progress != nil {
+		progress(Progress{Step: "connect", Detail: "Connecting to source and target databases"})
+	}
+
 	src, err := sql.Open(sourceDriver, sourceDSN)
 	if err != nil {
 		return fmt.Errorf("open source database: %w", err)
@@ -221,81 +240,96 @@ func Run(sourceDSN, sourceDriver, targetDSN string) error {
 	src.SetMaxOpenConns(10)
 	src.SetMaxIdleConns(5)
 
-	if err := src.Ping(); err != nil {
+	if err := src.PingContext(ctx); err != nil {
 		return fmt.Errorf("ping source database: %w", err)
 	}
 
-	target, err := pgxpool.New(context.Background(), targetDSN)
+	target, err := pgxpool.New(ctx, targetDSN)
 	if err != nil {
 		return fmt.Errorf("connect target database: %w", err)
 	}
 	defer target.Close()
 
-	if err := target.Ping(context.Background()); err != nil {
+	if err := target.Ping(ctx); err != nil {
 		return fmt.Errorf("ping target database: %w", err)
 	}
 
 	log.Println("Connected to source and target databases")
 
-	userMap, err := migrateUsers(context.Background(), src, target)
-	if err != nil {
-		return fmt.Errorf("migrate users: %w", err)
-	}
-	log.Printf("Migrated %d users", len(userMap))
+	var (
+		userMap    map[int]string
+		groupMap   map[string]string
+		channelMap map[int]string
+		planMap    map[int]string
+		subMap     map[int]string
+	)
 
-	tokenCount, err := migrateTokens(context.Background(), src, target, userMap)
-	if err != nil {
-		return fmt.Errorf("migrate tokens: %w", err)
+	steps := []step{
+		{"users", func() (string, error) {
+			var err error
+			userMap, err = migrateUsers(ctx, src, target)
+			return fmt.Sprintf("%d users", len(userMap)), err
+		}},
+		{"tokens", func() (string, error) {
+			n, err := migrateTokens(ctx, src, target, userMap)
+			return fmt.Sprintf("%d tokens", n), err
+		}},
+		{"groups", func() (string, error) {
+			var err error
+			groupMap, err = migrateGroups(ctx, src, target, userMap)
+			return fmt.Sprintf("%d groups", len(groupMap)), err
+		}},
+		{"user_groups", func() (string, error) {
+			n, err := migrateUserGroups(ctx, src, target, userMap, groupMap)
+			return fmt.Sprintf("%d user-group assignments", n), err
+		}},
+		{"channels", func() (string, error) {
+			var err error
+			channelMap, err = migrateChannels(ctx, src, target, groupMap)
+			return fmt.Sprintf("%d channels", len(channelMap)), err
+		}},
+		{"subscription_plans", func() (string, error) {
+			var err error
+			planMap, err = migrateSubscriptionPlans(ctx, src, target, groupMap)
+			return fmt.Sprintf("%d subscription plans", len(planMap)), err
+		}},
+		{"user_subscriptions", func() (string, error) {
+			var err error
+			subMap, _, err = migrateUserSubscriptions(ctx, src, target, userMap, planMap)
+			return "", err
+		}},
+		{"subscription_orders", func() (string, error) {
+			n, err := migrateSubscriptionOrders(ctx, src, target, userMap, planMap, subMap)
+			return fmt.Sprintf("%d subscription orders", n), err
+		}},
+		{"topups", func() (string, error) {
+			n, err := migrateTopups(ctx, src, target, userMap)
+			return fmt.Sprintf("%d topup records", n), err
+		}},
+		{"options", func() (string, error) {
+			n, err := migrateOptions(ctx, src, target)
+			return fmt.Sprintf("%d options", n), err
+		}},
 	}
-	log.Printf("Migrated %d tokens", tokenCount)
 
-	groupMap, err := migrateGroups(context.Background(), src, target, userMap)
-	if err != nil {
-		return fmt.Errorf("migrate groups: %w", err)
+	total := len(steps)
+	for i, st := range steps {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if progress != nil {
+			progress(Progress{Step: st.name, Current: i, Total: total})
+		}
+		detail, err := st.action()
+		if err != nil {
+			return fmt.Errorf("migrate %s: %w", st.name, err)
+		}
+		log.Printf("[%d/%d] %s: %s", i+1, total, st.name, detail)
 	}
-	log.Printf("Migrated %d groups", len(groupMap))
 
-	ugCount, err := migrateUserGroups(context.Background(), src, target, userMap, groupMap)
-	if err != nil {
-		return fmt.Errorf("migrate user groups: %w", err)
+	if progress != nil {
+		progress(Progress{Step: "done", Current: total, Total: total, Finished: true})
 	}
-	log.Printf("Migrated %d user-group assignments", ugCount)
-
-	channelMap, err := migrateChannels(context.Background(), src, target, groupMap)
-	if err != nil {
-		return fmt.Errorf("migrate channels: %w", err)
-	}
-	log.Printf("Migrated %d channels", len(channelMap))
-
-	planMap, err := migrateSubscriptionPlans(context.Background(), src, target, groupMap)
-	if err != nil {
-		return fmt.Errorf("migrate subscription plans: %w", err)
-	}
-	log.Printf("Migrated %d subscription plans", len(planMap))
-
-	subMap, subCount, err := migrateUserSubscriptions(context.Background(), src, target, userMap, planMap)
-	if err != nil {
-		return fmt.Errorf("migrate user subscriptions: %w", err)
-	}
-	log.Printf("Migrated %d user subscriptions", subCount)
-
-	orderCount, err := migrateSubscriptionOrders(context.Background(), src, target, userMap, planMap, subMap)
-	if err != nil {
-		return fmt.Errorf("migrate subscription orders: %w", err)
-	}
-	log.Printf("Migrated %d subscription orders", orderCount)
-
-	topupCount, err := migrateTopups(context.Background(), src, target, userMap)
-	if err != nil {
-		return fmt.Errorf("migrate topups: %w", err)
-	}
-	log.Printf("Migrated %d topup records", topupCount)
-
-	optionCount, err := migrateOptions(context.Background(), src, target)
-	if err != nil {
-		return fmt.Errorf("migrate options: %w", err)
-	}
-	log.Printf("Migrated %d options", optionCount)
 
 	return nil
 }
@@ -351,14 +385,17 @@ func migrateUsers(ctx context.Context, src *sql.DB, target *pgxpool.Pool) (map[i
 
 		createdAt := time.Unix(u.CreatedAt, 0)
 
-		_, err = target.Exec(ctx, `insert into users(id,email,name,role,password_hash,enabled,created_at)
-			values($1,$2,$3,$4,$5,$6,$7) on conflict (email) do nothing`,
-			id, strings.ToLower(strings.TrimSpace(u.Email)), name, role, passwordHash, enabled, createdAt)
+		err = target.QueryRow(ctx, `insert into users(id,email,name,role,password_hash,enabled,created_at)
+			values($1,$2,$3,$4,$5,$6,$7) on conflict (email) do update set email=excluded.email returning id`,
+			id, strings.ToLower(strings.TrimSpace(u.Email)), name, role, passwordHash, enabled, createdAt).Scan(&id)
 		if err != nil {
 			return nil, fmt.Errorf("insert user %d: %w", u.ID, err)
 		}
 
 		balance := float64(u.Quota) / 500000.0 * 0.002
+		if balance < 0 {
+			balance = 0
+		}
 		_, err = target.Exec(ctx, `insert into user_wallets(user_id,balance,reserved,updated_at)
 			values($1,$2,0,now()) on conflict (user_id) do nothing`, id, balance)
 		if err != nil {
