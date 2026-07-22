@@ -1,0 +1,13 @@
+# Optional override for reverse-proxy / panel networks (e.g. Baota).
+# Usage:
+#   docker network create baota_net   # once, if missing
+#   docker compose -f docker-compose.yml -f docker-compose.baota.yml up -d --build
+services:
+  router:
+    networks:
+      - default
+      - baota_net
+
+networks:
+  baota_net:
+    external: true
