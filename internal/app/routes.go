@@ -27,6 +27,7 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("POST /auth/logout", s.account(s.logout))
 	mux.Handle("GET /account/me", s.account(s.accountMe))
 	mux.Handle("PUT /account/profile", s.account(s.updateAccountProfile))
+	mux.Handle("PUT /account/password", s.account(s.changeAccountPassword))
 	mux.Handle("PUT /account/preferences", s.account(s.updateAccountPreferences))
 	mux.Handle("GET /account/keys", s.account(s.accountKeys))
 	mux.Handle("POST /account/keys", s.account(s.createAccountKey))

@@ -112,6 +112,8 @@ const leaderboardPrefs = reactive({ opt_in: true, mask_name: true })
 async function saveLeaderboardPrefs() { await action(async () => { await endpoints.updateAccountPreferences(leaderboardPrefs.opt_in, leaderboardPrefs.mask_name); if (account.value) { account.value.leaderboard_opt_in = leaderboardPrefs.opt_in; account.value.leaderboard_mask_name = leaderboardPrefs.mask_name } }) }
 const avatarInput = ref<HTMLInputElement | null>(null)
 const avatarUrlInput = ref('')
+const passwordForm = reactive({ current_password: '', new_password: '', confirm_password: '' })
+const passwordMessage = ref('')
 const isLanding = computed(() => route.path === '/')
 const isAuthPage = computed(() => route.path === '/auth')
 const isMarketplacePage = computed(() => route.path === '/models')
@@ -266,6 +268,14 @@ async function load() {
   busy.value = true; error.value = ''
   try {
     await loadCore()
+    if (account.value?.must_change_password) {
+      currentView.value = 'profile'
+      if (route.path.startsWith('/console') && route.query.view !== 'profile') {
+        await router.replace({ path: '/console', query: { view: 'profile' } })
+      }
+      loadedViews.value.clear()
+      return
+    }
     await loadPersonal()
     loadedViews.value.clear()
     await loadView(view.value, true)
@@ -407,6 +417,22 @@ async function chooseAvatar(event: Event) {
   if (avatarInput.value) avatarInput.value.value = ''
 }
 async function removeAvatar() { await action(async () => { await endpoints.updateAccountProfile(''); await load() }) }
+async function changePassword() {
+  passwordMessage.value = ''
+  if (passwordForm.new_password !== passwordForm.confirm_password) {
+    error.value = t('passwordMismatch')
+    return
+  }
+  await action(async () => {
+    await endpoints.changeAccountPassword(passwordForm.current_password, passwordForm.new_password)
+    passwordForm.current_password = ''
+    passwordForm.new_password = ''
+    passwordForm.confirm_password = ''
+    passwordMessage.value = t('passwordChanged')
+    if (account.value) account.value.must_change_password = false
+    await load()
+  })
+}
 async function saveAvatarUrl() {
   const url = avatarUrlInput.value.trim()
   if (!url) return
@@ -494,7 +520,7 @@ provide(CONSOLE_STORE_KEY, {
   selectedUser, originalUser, selectedPermissions, selectedGroups,
   userPassword, userBalance, userBalanceNote,
   keyForm, accountKeyForm, channelForm, providerForm, editingProviderID, groupForm, groupImportText,
-  avatarUrlInput, avatarInput,
+  avatarUrlInput, avatarInput, passwordForm, passwordMessage, changePassword,
   load, action, loadActivity, filterActivity, resetActivityFilters,
   createKey, createAccountKey, editAccountKey, updateAccountKey,
   fetchChannelModels, createChannel, editChannel, updateChannel,

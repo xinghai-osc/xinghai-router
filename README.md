@@ -33,7 +33,7 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-The web console is available at `http://localhost:3000`; the OpenAI/Anthropic gateway is available at `http://localhost:8080`. PostgreSQL and Redis are internal-only and persist data in the `postgres-data` and `redis-data` volumes. Migrations run automatically when the router starts. Follow startup logs with `docker compose logs -f router` and stop the stack with `docker compose down` (use `docker compose down -v` only when intentionally deleting data).
+The web console is available at `http://localhost:3000`; the OpenAI/Anthropic gateway is available at `http://localhost:8080`. PostgreSQL and Redis are internal-only and persist data in the `postgres-data` and `redis-data` volumes. Migrations run automatically when the router starts; if no admin user exists, a bootstrap admin is created and its one-time password is printed in the router logs (`docker compose logs -f router`). Change that password after first login. Stop the stack with `docker compose down` (use `docker compose down -v` only when intentionally deleting data).
 
 ### Admin web console
 
@@ -45,9 +45,9 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:5173/auth` and create an account or sign in with email and password. The first registered account becomes an administrator; administrators can promote users or grant individual permissions. Browser sessions are retained only in session storage. Nuxt proxies browser requests from `/api/*` to `http://127.0.0.1:8080/*`, so this development setup does not require a CORS policy. `npm run generate` emits prerendered HTML for the public home and authentication pages; deploy the Nuxt `.output` directory for the full application.
+Open `http://localhost:5173/auth` and create an account or sign in with email and password. On first database initialization, when no administrator account exists, the router creates a bootstrap admin (`admin@localhost` by default, overridable with `BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_NAME`), logs a one-time random password, and recommends changing it immediately after login. Public registration always creates normal user accounts; administrators can promote users or grant individual permissions. Browser sessions are retained only in session storage. Nuxt proxies browser requests from `/api/*` to `http://127.0.0.1:8080/*`, so this development setup does not require a CORS policy. `npm run generate` emits prerendered HTML for the public home and authentication pages; deploy the Nuxt `.output` directory for the full application.
 
-The service performs migrations automatically at startup. `base_url` for a channel must be an HTTPS origin or path prefix without `/v1`; for example, `https://api.openai.com`. Loopback HTTP URLs are also accepted for local services such as Ollama, for example `http://127.0.0.1:11434`. Provider secrets are encrypted in the database using `ENCRYPTION_KEY`, so keep this value stable and securely backed up.
+The service performs migrations automatically at startup and seeds the bootstrap admin when needed. `base_url` for a channel must be an HTTPS origin or path prefix without `/v1`; for example, `https://api.openai.com`. Loopback HTTP URLs are also accepted for local services such as Ollama, for example `http://127.0.0.1:11434`. Provider secrets are encrypted in the database using `ENCRYPTION_KEY`, so keep this value stable and securely backed up.
 
 ### 易支付充值
 
@@ -254,6 +254,8 @@ OpenCode 配置示例：
 ```
 
 The router selects an enabled channel advertising the requested model. It tries the lowest numeric priority first, distributes equal-priority traffic by weight, and retries a different eligible channel for connection errors and responses matching the configured retry status codes (by default every status except `2xx`, `408`, and `504`, up to 3 retries). Upstream errors matching the configured auto-disable status codes or keywords disable the channel immediately, and the optional background health check probes channels on a schedule (`scheduled_all`) or only after automatic disabling (`passive_recovery`), bringing recovered channels back online when configured. Manage these options through `GET|PUT /admin/reliability-settings` (`system.manage`).
+
+Bootstrap admin accounts are created with `must_change_password=true`. Until the password is changed via Profile → Change password (`PUT /account/password`), session-authenticated APIs other than `/account/me`, `/account/password`, and `/auth/logout` return `403 password_change_required`.
 
 ## Verify
 

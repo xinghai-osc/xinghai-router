@@ -373,11 +373,17 @@ func (s *Service) updateUser(w http.ResponseWriter, r *http.Request) {
 		changed["name"] = name
 	}
 	if in.Password != nil {
-		if _, err = tx.Exec(r.Context(), `update users set password_hash=$1 where id=$2`, passwordHash, userID); err != nil {
+		if _, err = tx.Exec(r.Context(), `update users set password_hash=$1, must_change_password=true where id=$2`, passwordHash, userID); err != nil {
 			writeError(w, 500, "internal_error", "could not update password")
 			return
 		}
+		if _, err = tx.Exec(r.Context(), `delete from user_sessions where user_id=$1`, userID); err != nil {
+			writeError(w, 500, "internal_error", "could not revoke sessions after password change")
+			return
+		}
 		changed["password"] = true
+		changed["must_change_password"] = true
+		changed["sessions_revoked"] = true
 	}
 	if in.Role != nil {
 		if _, err = tx.Exec(r.Context(), `update users set role=$1 where id=$2`, *in.Role, userID); err != nil {

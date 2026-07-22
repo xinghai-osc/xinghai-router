@@ -11,9 +11,10 @@ import (
 )
 
 type accountContext struct {
-	userID      string
-	role        string
-	permissions map[string]bool
+	userID             string
+	role               string
+	permissions        map[string]bool
+	mustChangePassword bool
 }
 type accountContextKey struct{}
 
@@ -58,17 +59,8 @@ func (s *Service) register(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not create account")
 		return
 	}
-	var hasAccountAdmin bool
-	if err = tx.QueryRow(r.Context(), `select exists(select 1 from users where role='admin' and password_hash is not null)`).Scan(&hasAccountAdmin); err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "could not create account")
-		return
-	}
-	role := "user"
-	if !hasAccountAdmin {
-		role = "admin"
-	}
 	var id string
-	err = tx.QueryRow(r.Context(), `insert into users(email,name,role,password_hash) values($1,$2,$3,$4) returning id`, email, strings.TrimSpace(in.Name), role, passwordHash).Scan(&id)
+	err = tx.QueryRow(r.Context(), `insert into users(email,name,role,password_hash) values($1,$2,'user',$3) returning id`, email, strings.TrimSpace(in.Name), passwordHash).Scan(&id)
 	if err != nil {
 		writeError(w, http.StatusConflict, "conflict", "email already exists")
 		return
@@ -119,9 +111,9 @@ func (s *Service) logout(w http.ResponseWriter, r *http.Request) {
 func (s *Service) accountMe(w http.ResponseWriter, r *http.Request) {
 	account := r.Context().Value(accountContextKey{}).(accountContext)
 	var email, name, role, avatarURL string
-	var leaderboardOptIn, leaderboardMaskName bool
+	var leaderboardOptIn, leaderboardMaskName, mustChangePassword bool
 	var balance, reserved any
-	err := s.db.QueryRow(r.Context(), `select u.email,u.name,u.role,u.avatar_url,u.leaderboard_opt_in,u.leaderboard_mask_name,coalesce(w.balance,0),coalesce(w.reserved,0) from users u left join user_wallets w on w.user_id=u.id where u.id=$1`, account.userID).Scan(&email, &name, &role, &avatarURL, &leaderboardOptIn, &leaderboardMaskName, &balance, &reserved)
+	err := s.db.QueryRow(r.Context(), `select u.email,u.name,u.role,u.avatar_url,u.leaderboard_opt_in,u.leaderboard_mask_name,u.must_change_password,coalesce(w.balance,0),coalesce(w.reserved,0) from users u left join user_wallets w on w.user_id=u.id where u.id=$1`, account.userID).Scan(&email, &name, &role, &avatarURL, &leaderboardOptIn, &leaderboardMaskName, &mustChangePassword, &balance, &reserved)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not load account")
 		return
@@ -131,7 +123,7 @@ func (s *Service) accountMe(w http.ResponseWriter, r *http.Request) {
 		permissions = append(permissions, permission)
 	}
 	sort.Strings(permissions)
-	writeJSON(w, http.StatusOK, map[string]any{"id": account.userID, "email": email, "name": name, "role": role, "avatar_url": avatarURL, "permissions": permissions, "balance": balance, "reserved": reserved, "leaderboard_opt_in": leaderboardOptIn, "leaderboard_mask_name": leaderboardMaskName})
+	writeJSON(w, http.StatusOK, map[string]any{"id": account.userID, "email": email, "name": name, "role": role, "avatar_url": avatarURL, "permissions": permissions, "balance": balance, "reserved": reserved, "leaderboard_opt_in": leaderboardOptIn, "leaderboard_mask_name": leaderboardMaskName, "must_change_password": mustChangePassword})
 }
 
 func (s *Service) updateAccountPreferences(w http.ResponseWriter, r *http.Request) {
@@ -157,6 +149,56 @@ func (s *Service) updateAccountPreferences(w http.ResponseWriter, r *http.Reques
 		}
 	}
 	s.audit(r, "account.preferences_updated", "user", account.userID, map[string]any{"leaderboard_opt_in": in.LeaderboardOptIn, "leaderboard_mask_name": in.LeaderboardMaskName})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func validatePasswordChange(currentPassword, newPassword string) string {
+	if currentPassword == "" || newPassword == "" {
+		return "current_password and new_password are required"
+	}
+	if len(newPassword) < 8 || len(newPassword) > 128 {
+		return "new password must be between 8 and 128 characters"
+	}
+	if currentPassword == newPassword {
+		return "new password must differ from the current password"
+	}
+	return ""
+}
+
+func (s *Service) changeAccountPassword(w http.ResponseWriter, r *http.Request) {
+	account := accountFromContext(r)
+	var in struct {
+		CurrentPassword string `json:"current_password"`
+		NewPassword     string `json:"new_password"`
+	}
+	if decode(r, &in) != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "current_password and new_password are required")
+		return
+	}
+	if msg := validatePasswordChange(in.CurrentPassword, in.NewPassword); msg != "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", msg)
+		return
+	}
+	var passwordHash string
+	err := s.db.QueryRow(r.Context(), `select password_hash from users where id=$1 and enabled and password_hash is not null`, account.userID).Scan(&passwordHash)
+	if err != nil || !passwordMatches(passwordHash, in.CurrentPassword) {
+		writeError(w, http.StatusUnauthorized, "invalid_credentials", "current password is incorrect")
+		return
+	}
+	newHash, err := hashPassword(in.NewPassword)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not secure password")
+		return
+	}
+	if _, err = s.db.Exec(r.Context(), `update users set password_hash=$1, must_change_password=false where id=$2`, newHash, account.userID); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not update password")
+		return
+	}
+	if _, err = s.db.Exec(r.Context(), `delete from user_sessions where user_id=$1 and token_hash<>$2`, account.userID, hashSecret(bearer(r))); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not revoke other sessions")
+		return
+	}
+	s.audit(r, "account.password_changed", "user", account.userID, map[string]any{"other_sessions_revoked": true, "must_change_password_cleared": true})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -368,7 +410,7 @@ func (s *Service) optionalAccount(next http.HandlerFunc) http.Handler {
 		account := accountContext{}
 		token := bearer(r)
 		if token != "" {
-			err := s.db.QueryRow(r.Context(), `select s.user_id,u.role from user_sessions s join users u on u.id=s.user_id where s.token_hash=$1 and s.expires_at>now() and u.enabled`, hashSecret(token)).Scan(&account.userID, &account.role)
+			err := s.db.QueryRow(r.Context(), `select s.user_id,u.role,u.must_change_password from user_sessions s join users u on u.id=s.user_id where s.token_hash=$1 and s.expires_at>now() and u.enabled`, hashSecret(token)).Scan(&account.userID, &account.role, &account.mustChangePassword)
 			if err != nil {
 				writeError(w, http.StatusUnauthorized, "unauthorized", "invalid or expired session")
 				return
@@ -376,6 +418,15 @@ func (s *Service) optionalAccount(next http.HandlerFunc) http.Handler {
 		}
 		next(w, r.WithContext(context.WithValue(r.Context(), accountContextKey{}, account)))
 	})
+}
+
+func passwordChangeAllowedPath(path string) bool {
+	switch path {
+	case "/account/me", "/account/password", "/auth/logout":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Service) account(next http.HandlerFunc) http.Handler {
@@ -386,9 +437,13 @@ func (s *Service) account(next http.HandlerFunc) http.Handler {
 			return
 		}
 		var account accountContext
-		err := s.db.QueryRow(r.Context(), `select s.user_id,u.role from user_sessions s join users u on u.id=s.user_id where s.token_hash=$1 and s.expires_at>now() and u.enabled`, hashSecret(token)).Scan(&account.userID, &account.role)
+		err := s.db.QueryRow(r.Context(), `select s.user_id,u.role,u.must_change_password from user_sessions s join users u on u.id=s.user_id where s.token_hash=$1 and s.expires_at>now() and u.enabled`, hashSecret(token)).Scan(&account.userID, &account.role, &account.mustChangePassword)
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, "unauthorized", "invalid or expired session")
+			return
+		}
+		if account.mustChangePassword && !passwordChangeAllowedPath(r.URL.Path) {
+			writeError(w, http.StatusForbidden, "password_change_required", "password change required before continuing")
 			return
 		}
 		account.permissions = map[string]bool{}
