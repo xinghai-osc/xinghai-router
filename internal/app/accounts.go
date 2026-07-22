@@ -410,10 +410,14 @@ func (s *Service) account(next http.HandlerFunc) http.Handler {
 	})
 }
 
+func accountHasPermission(account accountContext, permission string) bool {
+	return account.role == "admin" || account.permissions[permission]
+}
+
 func (s *Service) permission(permission string, next http.HandlerFunc) http.Handler {
 	return s.account(func(w http.ResponseWriter, r *http.Request) {
 		account := r.Context().Value(accountContextKey{}).(accountContext)
-		if account.role != "admin" && !account.permissions[permission] {
+		if !accountHasPermission(account, permission) {
 			writeError(w, http.StatusForbidden, "forbidden", "missing permission: "+permission)
 			return
 		}
