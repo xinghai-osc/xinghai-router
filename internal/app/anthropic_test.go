@@ -1,8 +1,11 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -99,5 +102,15 @@ func TestAnthropicAPIKeyAndLoopback(t *testing.T) {
 	}
 	if isLoopbackHost("ollama.example.com") {
 		t.Fatal("unexpected loopback result")
+	}
+}
+
+func TestAnthropicMessagesRequiresVersionHeader(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"claude","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`))
+	req = req.WithContext(context.WithValue(req.Context(), contextKey{}, keyContext{userID: "1", keyID: "k"}))
+	(&Service{}).anthropicMessages(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "anthropic-version") {
+		t.Fatalf("status/body = %d %s", rec.Code, rec.Body.String())
 	}
 }
