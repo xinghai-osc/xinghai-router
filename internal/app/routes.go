@@ -15,9 +15,8 @@ type contextKey struct{}
 
 func (s *Service) routes() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-	})
+	mux.HandleFunc("GET /healthz", s.healthz)
+	mux.HandleFunc("GET /readyz", s.readyz)
 	mux.HandleFunc("POST /auth/register", s.register)
 	mux.HandleFunc("POST /auth/login", s.login)
 	mux.HandleFunc("POST /auth/email-code", s.sendEmailCode)

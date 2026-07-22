@@ -278,7 +278,7 @@ Use this before exposing the stack on a public host.
 
 ### Operations
 
-1. Health: `GET /healthz` (compose healthchecks use this).
+1. Liveness: `GET /healthz` (process up). Readiness: `GET /readyz` (PostgreSQL ping). Compose healthchecks use `/readyz`.
 2. Back up PostgreSQL regularly. Redis AOF is enabled in compose for limiter state durability, but Postgres is the source of truth for accounts and billing.
 3. After deploy: `docker compose logs -f router` for bootstrap password / migration errors; `go test ./...` and `go vet ./...` in CI.
 
