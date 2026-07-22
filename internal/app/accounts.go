@@ -95,13 +95,27 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "email and password are required")
 		return
 	}
+	email := strings.ToLower(strings.TrimSpace(in.Email))
+	clientIP := requestMetadata(r).clientIP
+	if s.limiter != nil {
+		if !s.limiter.allow("auth:login:ip:"+clientIP) || !s.limiter.allow("auth:login:email:"+email) {
+			writeError(w, http.StatusTooManyRequests, "rate_limit_exceeded", "too many login attempts")
+			return
+		}
+	}
 	if err := s.verifyGeetest(r.Context(), in.geetestPayload); err != nil {
 		writeError(w, http.StatusForbidden, "captcha_failed", err.Error())
 		return
 	}
 	var userID, passwordHash string
-	err := s.db.QueryRow(r.Context(), `select id,password_hash from users where email=$1 and enabled and password_hash is not null`, strings.ToLower(strings.TrimSpace(in.Email))).Scan(&userID, &passwordHash)
-	if err != nil || !passwordMatches(passwordHash, in.Password) {
+	err := s.db.QueryRow(r.Context(), `select id,password_hash from users where email=$1 and enabled and password_hash is not null`, email).Scan(&userID, &passwordHash)
+	if err != nil {
+		// Spend comparable time to a real bcrypt check so missing users are not free to probe.
+		_ = passwordMatches(dummyPasswordHash, in.Password)
+		writeError(w, http.StatusUnauthorized, "invalid_credentials", "invalid email or password")
+		return
+	}
+	if !passwordMatches(passwordHash, in.Password) {
 		writeError(w, http.StatusUnauthorized, "invalid_credentials", "invalid email or password")
 		return
 	}
