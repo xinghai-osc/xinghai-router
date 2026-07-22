@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -80,5 +81,111 @@ func TestUpdateChannelRejectsInvalidRequestBeforeDatabaseAccess(t *testing.T) {
 		if recorder.Code != http.StatusBadRequest {
 			t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
 		}
+	}
+}
+
+func TestCreateChannelRejectsInvalidRequestBeforeDatabaseAccess(t *testing.T) {
+	for _, body := range []string{
+		`{}`,
+		`{"name":"channel","api_key":"sk","base_url":"https://api.example.com","models":[]}`,
+		`{"name":"channel","api_key":"sk","base_url":"http://api.example.com","models":["model"]}`,
+		`{"name":"channel","api_key":"sk","base_url":"https://api.example.com","models":["model"],"provider":"unknown"}`,
+		`{"name":"","api_key":"sk","base_url":"https://api.example.com","models":["model"]}`,
+	} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/admin/channels", strings.NewReader(body))
+		(&Service{}).createChannel(recorder, request)
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("body %s status = %d, want %d", body, recorder.Code, http.StatusBadRequest)
+		}
+	}
+}
+
+func TestUpsertPricingRejectsInvalidValuesBeforeDatabaseAccess(t *testing.T) {
+	for _, body := range []string{
+		`{}`,
+		`{"model":"","input_per_million":1,"cached_input_per_million":0,"output_per_million":1}`,
+		`{"model":"m","input_per_million":-1,"cached_input_per_million":0,"output_per_million":1}`,
+		`{"model":"m","input_per_million":1,"cached_input_per_million":0,"output_per_million":1,"multiplier":-1}`,
+		`{"model":"m","input_per_million":1,"cached_input_per_million":0,"output_per_million":1,"multiplier":"nan"}`,
+	} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/admin/pricing", strings.NewReader(body))
+		(&Service{}).upsertPricing(recorder, request)
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("body %s status = %d, want %d", body, recorder.Code, http.StatusBadRequest)
+		}
+	}
+}
+
+func TestCreateAndUpdateGroupRejectInvalidMultipliers(t *testing.T) {
+	for _, body := range []string{
+		`{"name":"g","multiplier":-1}`,
+		`{"name":"g","multiplier":"nan"}`,
+		`{"name":"g","multiplier":"Inf"}`,
+	} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/admin/groups", strings.NewReader(body))
+		(&Service{}).createGroup(recorder, request)
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("createGroup body %s status = %d", body, recorder.Code)
+		}
+	}
+	for _, body := range []string{
+		`{"multiplier":-1}`,
+		`{"multiplier":"nan"}`,
+		`{"multiplier":"-Inf"}`,
+	} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPut, "/admin/groups/group-id", strings.NewReader(body))
+		(&Service{}).updateGroup(recorder, request)
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("updateGroup body %s status = %d", body, recorder.Code)
+		}
+	}
+}
+
+func TestSetUserRoleRejectsInvalidBeforeDatabaseAccess(t *testing.T) {
+	for _, body := range []string{`{}`, `{"role":"owner"}`, `{"role":""}`} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/admin/users/1/role", strings.NewReader(body))
+		(&Service{}).setUserRole(recorder, request)
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("body %s status = %d", body, recorder.Code)
+		}
+	}
+}
+
+func TestValidFiniteHelpers(t *testing.T) {
+	if !validNonNegativeFinite(0) || !validNonNegativeFinite(1.5) {
+		t.Fatal("expected non-negative finite values accepted")
+	}
+	if validNonNegativeFinite(-0.1) || validNonNegativeFinite(math.NaN()) || validNonNegativeFinite(math.Inf(1)) {
+		t.Fatal("expected invalid non-negative values rejected")
+	}
+	if !validPositiveFinite(0.01) || validPositiveFinite(0) || validPositiveFinite(math.Inf(-1)) {
+		t.Fatal("unexpected positive finite validation")
+	}
+}
+
+func TestMethodEnabled(t *testing.T) {
+	methods := []paymentMethod{{Code: "alipay", Enabled: true}, {Code: "wxpay", Enabled: false}}
+	if !methodEnabled(methods, "alipay") {
+		t.Fatal("enabled method should match")
+	}
+	if methodEnabled(methods, "wxpay") || methodEnabled(methods, "missing") {
+		t.Fatal("disabled or missing method must not match")
+	}
+}
+
+func TestMaskName(t *testing.T) {
+	if got := maskName("  Alice  "); got != "A***" {
+		t.Fatalf("maskName = %q", got)
+	}
+	if got := maskName(""); got != "***" {
+		t.Fatalf("empty maskName = %q", got)
+	}
+	if got := maskName("张三"); got != "张***" {
+		t.Fatalf("unicode maskName = %q", got)
 	}
 }
