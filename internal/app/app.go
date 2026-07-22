@@ -35,6 +35,10 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := ensureBootstrapAdmin(ctx, db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	s := &Service{cfg: cfg, db: db, httpClient: &http.Client{Timeout: cfg.RequestTimeout}, limiter: newLimiter(cfg.RateLimitPerMinute)}
 	schedulerCtx, cancel := context.WithCancel(context.Background())
 	s.scheduler = cancel

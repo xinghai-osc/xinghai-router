@@ -58,17 +58,8 @@ func (s *Service) register(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not create account")
 		return
 	}
-	var hasAccountAdmin bool
-	if err = tx.QueryRow(r.Context(), `select exists(select 1 from users where role='admin' and password_hash is not null)`).Scan(&hasAccountAdmin); err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "could not create account")
-		return
-	}
-	role := "user"
-	if !hasAccountAdmin {
-		role = "admin"
-	}
 	var id string
-	err = tx.QueryRow(r.Context(), `insert into users(email,name,role,password_hash) values($1,$2,$3,$4) returning id`, email, strings.TrimSpace(in.Name), role, passwordHash).Scan(&id)
+	err = tx.QueryRow(r.Context(), `insert into users(email,name,role,password_hash) values($1,$2,'user',$3) returning id`, email, strings.TrimSpace(in.Name), passwordHash).Scan(&id)
 	if err != nil {
 		writeError(w, http.StatusConflict, "conflict", "email already exists")
 		return
