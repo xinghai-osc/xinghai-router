@@ -273,7 +273,7 @@ Use this before exposing the stack on a public host.
 
 ### Rate limiting and scale
 
-1. Compose injects `REDIS_URL=redis://redis:6379/0`. Use it so API-key rate limits are shared across router replicas (see Redis PR when merged). Without Redis the limiter is process-local.
+1. Compose injects `REDIS_URL=redis://redis:6379/0`. Use it so API-key rate limits are shared across router replicas. Without Redis the limiter is process-local.
 2. Horizontal scaling: run multiple router replicas behind the proxy only when Redis-backed limiting is enabled; wallet reservation already lives in PostgreSQL.
 
 ### Operations
