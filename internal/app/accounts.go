@@ -151,6 +151,52 @@ func (s *Service) updateAccountPreferences(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+func validatePasswordChange(currentPassword, newPassword string) string {
+	if currentPassword == "" || newPassword == "" {
+		return "current_password and new_password are required"
+	}
+	if len(newPassword) < 8 || len(newPassword) > 128 {
+		return "new password must be between 8 and 128 characters"
+	}
+	if currentPassword == newPassword {
+		return "new password must differ from the current password"
+	}
+	return ""
+}
+
+func (s *Service) changeAccountPassword(w http.ResponseWriter, r *http.Request) {
+	account := accountFromContext(r)
+	var in struct {
+		CurrentPassword string `json:"current_password"`
+		NewPassword     string `json:"new_password"`
+	}
+	if decode(r, &in) != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "current_password and new_password are required")
+		return
+	}
+	if msg := validatePasswordChange(in.CurrentPassword, in.NewPassword); msg != "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", msg)
+		return
+	}
+	var passwordHash string
+	err := s.db.QueryRow(r.Context(), `select password_hash from users where id=$1 and enabled and password_hash is not null`, account.userID).Scan(&passwordHash)
+	if err != nil || !passwordMatches(passwordHash, in.CurrentPassword) {
+		writeError(w, http.StatusUnauthorized, "invalid_credentials", "current password is incorrect")
+		return
+	}
+	newHash, err := hashPassword(in.NewPassword)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not secure password")
+		return
+	}
+	if _, err = s.db.Exec(r.Context(), `update users set password_hash=$1 where id=$2`, newHash, account.userID); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not update password")
+		return
+	}
+	s.audit(r, "account.password_changed", "user", account.userID, nil)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 func (s *Service) updateAccountProfile(w http.ResponseWriter, r *http.Request) {
 	account := accountFromContext(r)
 	var in struct {
