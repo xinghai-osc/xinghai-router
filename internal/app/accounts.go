@@ -171,22 +171,8 @@ func (s *Service) updateAccountProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	avatarURL := strings.TrimSpace(in.AvatarURL)
 	if avatarURL != "" {
-		if len(avatarURL) > 2<<20 || !strings.HasPrefix(avatarURL, "data:image/") {
-			writeError(w, http.StatusBadRequest, "invalid_request", "avatar must be an image smaller than 2 MB")
-			return
-		}
-		comma := strings.IndexByte(avatarURL, ',')
-		if comma < 0 || !strings.HasSuffix(avatarURL[:comma], ";base64") {
-			writeError(w, http.StatusBadRequest, "invalid_request", "invalid avatar image")
-			return
-		}
-		mime := strings.TrimPrefix(strings.TrimSuffix(avatarURL[:comma], ";base64"), "data:")
-		if !map[string]bool{"image/png": true, "image/jpeg": true, "image/gif": true, "image/webp": true}[mime] {
-			writeError(w, http.StatusBadRequest, "invalid_request", "avatar must be PNG, JPEG, GIF, or WebP")
-			return
-		}
-		if _, err := base64.StdEncoding.DecodeString(avatarURL[comma+1:]); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_request", "invalid avatar image")
+		if msg := validateAvatarDataURL(avatarURL); msg != "" {
+			writeError(w, http.StatusBadRequest, "invalid_request", msg)
 			return
 		}
 	}
@@ -449,4 +435,22 @@ func validAccountInput(email, name, password string) bool {
 func validEmail(email string) bool {
 	parsed, err := mail.ParseAddress(strings.TrimSpace(email))
 	return err == nil && parsed.Address == strings.TrimSpace(email)
+}
+
+func validateAvatarDataURL(avatarURL string) string {
+	if len(avatarURL) > 2<<20 || !strings.HasPrefix(avatarURL, "data:image/") {
+		return "avatar must be an image smaller than 2 MB"
+	}
+	comma := strings.IndexByte(avatarURL, ',')
+	if comma < 0 || !strings.HasSuffix(avatarURL[:comma], ";base64") {
+		return "invalid avatar image"
+	}
+	mime := strings.TrimPrefix(strings.TrimSuffix(avatarURL[:comma], ";base64"), "data:")
+	if !map[string]bool{"image/png": true, "image/jpeg": true, "image/gif": true, "image/webp": true}[mime] {
+		return "avatar must be PNG, JPEG, GIF, or WebP"
+	}
+	if _, err := base64.StdEncoding.DecodeString(avatarURL[comma+1:]); err != nil {
+		return "invalid avatar image"
+	}
+	return ""
 }

@@ -1,6 +1,11 @@
 package app
 
-import "testing"
+import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
 
 func TestParseCreditAmount(t *testing.T) {
 	tests := []struct {
@@ -48,5 +53,21 @@ func TestFormatCredit(t *testing.T) {
 	}
 	if got := formatCredit(0); got != "0" {
 		t.Fatalf("formatCredit(0) = %q, want %q", got, "0")
+	}
+}
+
+func TestBatchExtendSubscriptionsRejectsInvalidDaysBeforeDatabase(t *testing.T) {
+	for _, body := range []string{
+		`not-json`,
+		`{"plan_id":"p1","days":0}`,
+		`{"plan_id":"p1","days":-1}`,
+		`{"plan_id":"p1","days":3651}`,
+	} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/admin/subscriptions/extend", strings.NewReader(body))
+		(&Service{}).batchExtendSubscriptions(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("body %s status = %d, want %d", body, rec.Code, http.StatusBadRequest)
+		}
 	}
 }
