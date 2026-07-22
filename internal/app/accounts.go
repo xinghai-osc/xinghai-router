@@ -11,9 +11,10 @@ import (
 )
 
 type accountContext struct {
-	userID      string
-	role        string
-	permissions map[string]bool
+	userID             string
+	role               string
+	permissions        map[string]bool
+	mustChangePassword bool
 }
 type accountContextKey struct{}
 
@@ -110,9 +111,9 @@ func (s *Service) logout(w http.ResponseWriter, r *http.Request) {
 func (s *Service) accountMe(w http.ResponseWriter, r *http.Request) {
 	account := r.Context().Value(accountContextKey{}).(accountContext)
 	var email, name, role, avatarURL string
-	var leaderboardOptIn, leaderboardMaskName bool
+	var leaderboardOptIn, leaderboardMaskName, mustChangePassword bool
 	var balance, reserved any
-	err := s.db.QueryRow(r.Context(), `select u.email,u.name,u.role,u.avatar_url,u.leaderboard_opt_in,u.leaderboard_mask_name,coalesce(w.balance,0),coalesce(w.reserved,0) from users u left join user_wallets w on w.user_id=u.id where u.id=$1`, account.userID).Scan(&email, &name, &role, &avatarURL, &leaderboardOptIn, &leaderboardMaskName, &balance, &reserved)
+	err := s.db.QueryRow(r.Context(), `select u.email,u.name,u.role,u.avatar_url,u.leaderboard_opt_in,u.leaderboard_mask_name,u.must_change_password,coalesce(w.balance,0),coalesce(w.reserved,0) from users u left join user_wallets w on w.user_id=u.id where u.id=$1`, account.userID).Scan(&email, &name, &role, &avatarURL, &leaderboardOptIn, &leaderboardMaskName, &mustChangePassword, &balance, &reserved)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not load account")
 		return
@@ -122,7 +123,7 @@ func (s *Service) accountMe(w http.ResponseWriter, r *http.Request) {
 		permissions = append(permissions, permission)
 	}
 	sort.Strings(permissions)
-	writeJSON(w, http.StatusOK, map[string]any{"id": account.userID, "email": email, "name": name, "role": role, "avatar_url": avatarURL, "permissions": permissions, "balance": balance, "reserved": reserved, "leaderboard_opt_in": leaderboardOptIn, "leaderboard_mask_name": leaderboardMaskName})
+	writeJSON(w, http.StatusOK, map[string]any{"id": account.userID, "email": email, "name": name, "role": role, "avatar_url": avatarURL, "permissions": permissions, "balance": balance, "reserved": reserved, "leaderboard_opt_in": leaderboardOptIn, "leaderboard_mask_name": leaderboardMaskName, "must_change_password": mustChangePassword})
 }
 
 func (s *Service) updateAccountPreferences(w http.ResponseWriter, r *http.Request) {
@@ -189,7 +190,7 @@ func (s *Service) changeAccountPassword(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not secure password")
 		return
 	}
-	if _, err = s.db.Exec(r.Context(), `update users set password_hash=$1 where id=$2`, newHash, account.userID); err != nil {
+	if _, err = s.db.Exec(r.Context(), `update users set password_hash=$1, must_change_password=false where id=$2`, newHash, account.userID); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not update password")
 		return
 	}
@@ -197,7 +198,7 @@ func (s *Service) changeAccountPassword(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not revoke other sessions")
 		return
 	}
-	s.audit(r, "account.password_changed", "user", account.userID, map[string]any{"other_sessions_revoked": true})
+	s.audit(r, "account.password_changed", "user", account.userID, map[string]any{"other_sessions_revoked": true, "must_change_password_cleared": true})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -409,7 +410,7 @@ func (s *Service) optionalAccount(next http.HandlerFunc) http.Handler {
 		account := accountContext{}
 		token := bearer(r)
 		if token != "" {
-			err := s.db.QueryRow(r.Context(), `select s.user_id,u.role from user_sessions s join users u on u.id=s.user_id where s.token_hash=$1 and s.expires_at>now() and u.enabled`, hashSecret(token)).Scan(&account.userID, &account.role)
+			err := s.db.QueryRow(r.Context(), `select s.user_id,u.role,u.must_change_password from user_sessions s join users u on u.id=s.user_id where s.token_hash=$1 and s.expires_at>now() and u.enabled`, hashSecret(token)).Scan(&account.userID, &account.role, &account.mustChangePassword)
 			if err != nil {
 				writeError(w, http.StatusUnauthorized, "unauthorized", "invalid or expired session")
 				return
@@ -417,6 +418,15 @@ func (s *Service) optionalAccount(next http.HandlerFunc) http.Handler {
 		}
 		next(w, r.WithContext(context.WithValue(r.Context(), accountContextKey{}, account)))
 	})
+}
+
+func passwordChangeAllowedPath(path string) bool {
+	switch path {
+	case "/account/me", "/account/password", "/auth/logout":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Service) account(next http.HandlerFunc) http.Handler {
@@ -427,9 +437,13 @@ func (s *Service) account(next http.HandlerFunc) http.Handler {
 			return
 		}
 		var account accountContext
-		err := s.db.QueryRow(r.Context(), `select s.user_id,u.role from user_sessions s join users u on u.id=s.user_id where s.token_hash=$1 and s.expires_at>now() and u.enabled`, hashSecret(token)).Scan(&account.userID, &account.role)
+		err := s.db.QueryRow(r.Context(), `select s.user_id,u.role,u.must_change_password from user_sessions s join users u on u.id=s.user_id where s.token_hash=$1 and s.expires_at>now() and u.enabled`, hashSecret(token)).Scan(&account.userID, &account.role, &account.mustChangePassword)
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, "unauthorized", "invalid or expired session")
+			return
+		}
+		if account.mustChangePassword && !passwordChangeAllowedPath(r.URL.Path) {
+			writeError(w, http.StatusForbidden, "password_change_required", "password change required before continuing")
 			return
 		}
 		account.permissions = map[string]bool{}

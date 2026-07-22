@@ -77,8 +77,8 @@ func ensureBootstrapAdmin(ctx context.Context, db *pgxpool.Pool) error {
 	}
 
 	var id string
-	err = tx.QueryRow(ctx, `insert into users(email,name,role,password_hash) values($1,$2,'admin',$3)
-		on conflict (email) do update set role='admin', password_hash=excluded.password_hash, name=excluded.name, enabled=true
+	err = tx.QueryRow(ctx, `insert into users(email,name,role,password_hash,must_change_password) values($1,$2,'admin',$3,true)
+		on conflict (email) do update set role='admin', password_hash=excluded.password_hash, name=excluded.name, enabled=true, must_change_password=true
 		returning id`, email, name, passwordHash).Scan(&id)
 	if err != nil {
 		return fmt.Errorf("bootstrap admin insert: %w", err)

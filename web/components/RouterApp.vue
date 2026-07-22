@@ -268,6 +268,14 @@ async function load() {
   busy.value = true; error.value = ''
   try {
     await loadCore()
+    if (account.value?.must_change_password) {
+      currentView.value = 'profile'
+      if (route.path.startsWith('/console') && route.query.view !== 'profile') {
+        await router.replace({ path: '/console', query: { view: 'profile' } })
+      }
+      loadedViews.value.clear()
+      return
+    }
     await loadPersonal()
     loadedViews.value.clear()
     await loadView(view.value, true)
@@ -421,6 +429,8 @@ async function changePassword() {
     passwordForm.new_password = ''
     passwordForm.confirm_password = ''
     passwordMessage.value = t('passwordChanged')
+    if (account.value) account.value.must_change_password = false
+    await load()
   })
 }
 async function saveAvatarUrl() {

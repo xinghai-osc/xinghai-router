@@ -73,12 +73,15 @@ const { t, account, ownGroups, avatarUrlInput, avatarInput, passwordForm, passwo
     </CardContent>
   </Card>
 
-  <Card class="mt-4">
+  <Card class="mt-4" :class="account?.must_change_password ? 'border-amber-500/60' : ''">
     <CardHeader>
       <CardTitle>{{ t('changePasswordSection') }}</CardTitle>
-      <CardDescription>{{ t('changePasswordDesc') }}</CardDescription>
+      <CardDescription>{{ account?.must_change_password ? t('mustChangePasswordRequired') : t('changePasswordDesc') }}</CardDescription>
     </CardHeader>
     <CardContent>
+      <div v-if="account?.must_change_password" class="mb-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-900 dark:text-amber-100">
+        {{ t('mustChangePasswordBanner') }}
+      </div>
       <form class="grid max-w-md gap-3" @submit.prevent="changePassword">
         <div class="grid gap-2">
           <Label>{{ t('currentPassword') }}</Label>
