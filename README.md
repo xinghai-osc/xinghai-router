@@ -22,7 +22,7 @@
 2. Create configuration: `cp .env.example .env`, then replace both secrets with unique random values.
 3. Export the environment variables in `.env` using your shell or an environment loader.
 4. Run: `go run ./cmd/router`.
-5. Check: `curl http://localhost:8080/healthz`.
+5. Check liveness: `curl http://localhost:8080/healthz`. Check readiness (DB up): `curl http://localhost:8080/readyz`.
 
 ## Docker deployment
 

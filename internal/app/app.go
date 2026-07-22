@@ -48,3 +48,19 @@ func (s *Service) Close() {
 	s.db.Close()
 }
 func (s *Service) Handler() http.Handler { return s.routes() }
+
+func (s *Service) healthz(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Service) readyz(w http.ResponseWriter, r *http.Request) {
+	if s.db == nil {
+		writeError(w, http.StatusServiceUnavailable, "not_ready", "database is not configured")
+		return
+	}
+	if err := s.db.Ping(r.Context()); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "not_ready", "database is unavailable")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+}

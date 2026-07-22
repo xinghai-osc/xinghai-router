@@ -33,7 +33,7 @@ services:
       - default
       - baota_net
     healthcheck:
-      test: ["CMD", "wget", "--spider", "--quiet", "http://127.0.0.1:8080/healthz"]
+      test: ["CMD", "wget", "--spider", "--quiet", "http://127.0.0.1:8080/readyz"]
       interval: 10s
       timeout: 5s
       retries: 6
