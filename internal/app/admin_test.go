@@ -82,3 +82,49 @@ func TestUpdateChannelRejectsInvalidRequestBeforeDatabaseAccess(t *testing.T) {
 		}
 	}
 }
+
+func TestCreateChannelRejectsInvalidPriorityBeforeDatabaseAccess(t *testing.T) {
+	for _, body := range []string{
+		`{"name":"channel","api_key":"sk","base_url":"https://api.example.com","models":["model"],"priority":10001}`,
+		`{"name":"channel","api_key":"sk","base_url":"https://api.example.com","models":["model"],"priority":-10001}`,
+		`{"name":"channel","api_key":"sk","base_url":"https://api.example.com","models":["model"],"provider":"unknown"}`,
+	} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/admin/channels", strings.NewReader(body))
+		(&Service{}).createChannel(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("body %s status = %d, want %d", body, rec.Code, http.StatusBadRequest)
+		}
+	}
+}
+
+func TestUpdateChannelRejectsInvalidPriorityBeforeDatabaseAccess(t *testing.T) {
+	for _, body := range []string{
+		`{"name":"channel","base_url":"https://api.example.com","models":["m"],"priority":10001}`,
+		`{"name":"channel","base_url":"https://api.example.com","models":["m"],"priority":-10001}`,
+	} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPut, "/admin/channels/channel-id", strings.NewReader(body))
+		(&Service{}).updateChannel(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("body %s status = %d, want %d", body, rec.Code, http.StatusBadRequest)
+		}
+	}
+}
+
+func TestValidChannelProviderAndPriority(t *testing.T) {
+	for _, p := range []string{"openai", "ollama", "kimi", "opencode_go", "anthropic"} {
+		if !validChannelProvider(p) {
+			t.Fatalf("expected provider %q valid", p)
+		}
+	}
+	if validChannelProvider("azure") || validChannelProvider("") {
+		t.Fatal("unknown provider must be invalid")
+	}
+	if !validChannelPriority(0) || !validChannelPriority(-10000) || !validChannelPriority(10000) {
+		t.Fatal("boundary priorities must be valid")
+	}
+	if validChannelPriority(-10001) || validChannelPriority(10001) {
+		t.Fatal("out-of-range priority must be invalid")
+	}
+}

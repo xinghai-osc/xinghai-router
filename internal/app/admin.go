@@ -809,6 +809,14 @@ var availablePermissions = map[string]bool{
 	"system.manage": true,
 }
 
+func validChannelProvider(provider string) bool {
+	return map[string]bool{"openai": true, "ollama": true, "kimi": true, "opencode_go": true, "anthropic": true}[provider]
+}
+
+func validChannelPriority(priority int) bool {
+	return priority >= -10000 && priority <= 10000
+}
+
 func (s *Service) setUserRole(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Role string `json:"role"`
@@ -985,15 +993,19 @@ func (s *Service) createChannel(w http.ResponseWriter, r *http.Request) {
 		Groups   []string `json:"groups"`
 		Provider string   `json:"provider"`
 	}
-	if decode(r, &in) != nil || in.Name == "" || in.APIKey == "" || len(in.Models) == 0 {
+	if decode(r, &in) != nil || strings.TrimSpace(in.Name) == "" || strings.TrimSpace(in.APIKey) == "" || len(in.Models) == 0 {
 		writeError(w, 400, "invalid_request", "name, api_key, and models are required")
 		return
 	}
 	if in.Provider == "" {
 		in.Provider = "openai"
 	}
-	if !map[string]bool{"openai": true, "ollama": true, "kimi": true, "opencode_go": true, "anthropic": true}[in.Provider] {
+	if !validChannelProvider(in.Provider) {
 		writeError(w, 400, "invalid_request", "unsupported provider")
+		return
+	}
+	if !validChannelPriority(in.Priority) {
+		writeError(w, 400, "invalid_request", "priority must be between -10000 and 10000")
 		return
 	}
 	groupIDs := []string{}
@@ -1062,8 +1074,12 @@ func (s *Service) updateChannel(w http.ResponseWriter, r *http.Request) {
 	if in.Provider == "" {
 		in.Provider = "openai"
 	}
-	if !map[string]bool{"openai": true, "ollama": true, "kimi": true, "opencode_go": true, "anthropic": true}[in.Provider] {
+	if !validChannelProvider(in.Provider) {
 		writeError(w, 400, "invalid_request", "unsupported provider")
+		return
+	}
+	if !validChannelPriority(in.Priority) {
+		writeError(w, 400, "invalid_request", "priority must be between -10000 and 10000")
 		return
 	}
 	u, err := url.Parse(in.BaseURL)
