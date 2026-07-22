@@ -114,11 +114,18 @@ func (s *Service) sendEmailCode(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "a valid email is required")
 		return
 	}
+	email := strings.ToLower(strings.TrimSpace(in.Email))
+	clientIP := requestMetadata(r).clientIP
+	if s.limiter != nil {
+		if !s.limiter.allow("auth:email-code:ip:"+clientIP) || !s.limiter.allow("auth:email-code:email:"+email) {
+			writeError(w, http.StatusTooManyRequests, "rate_limit_exceeded", "too many verification code requests")
+			return
+		}
+	}
 	if err := s.verifyGeetest(r.Context(), in.geetestPayload); err != nil {
 		writeError(w, http.StatusForbidden, "captcha_failed", err.Error())
 		return
 	}
-	email := strings.ToLower(strings.TrimSpace(in.Email))
 	ctx := r.Context()
 	var exists bool
 	if err := s.db.QueryRow(ctx, `select exists(select 1 from users where email=$1)`, email).Scan(&exists); err == nil && exists {

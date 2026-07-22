@@ -43,6 +43,16 @@ func hashPassword(password string) (string, error) {
 func passwordMatches(hash, password string) bool {
 	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) == nil
 }
+
+// dummyPasswordHash is a fixed bcrypt hash used when no user row is found so login
+// failures take similar time whether or not the email exists.
+var dummyPasswordHash = func() string {
+	hash, err := bcrypt.GenerateFromPassword([]byte("xinghai-login-timing-pad"), bcrypt.DefaultCost)
+	if err != nil {
+		return "$2a$10$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWXYZ012345"
+	}
+	return string(hash)
+}()
 func crypt(key, value string, decrypt bool) (string, error) {
 	sum := sha256.Sum256([]byte(key))
 	block, err := aes.NewCipher(sum[:])

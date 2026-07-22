@@ -110,7 +110,7 @@ There is no web test script. No `vue-tsc` typecheck or Prettier is wired in yet.
 
 ### Known limits (do not "fix" silently)
 
-- The rate limiter is in-process (`internal/app/limiter.go`). Horizontal scaling requires replacing it with a Redis sliding window — `REDIS_URL` is already passed through compose for this.
+- The rate limiter uses Redis fixed-window counters when `REDIS_URL` is set (`internal/app/redis_limiter.go`), with automatic fallback to the in-process limiter (`internal/app/limiter.go`) if Redis is unreachable.
 - Streaming (SSE) responses are passed through transparently and are **not** settled against the wallet; only non-stream requests record tokens and bill. Do not introduce streaming billing without solving inconsistent upstream SSE usage events.
 - Balance reservation happens before the upstream call to prevent concurrent overspend; releases/refunds must go through the wallet ledger (`internal/app/gateway.go`).
 
