@@ -4,6 +4,7 @@ import (
 	"context"
 	"embed"
 	"fmt"
+	"log"
 	"net/http"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -34,6 +35,13 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 	if err := migrate(ctx, db); err != nil {
 		db.Close()
 		return nil, err
+	}
+	if err := setTrustedProxies(cfg.TrustedProxies); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("trusted proxies: %w", err)
+	}
+	if cfg.TrustedProxies != "" {
+		log.Printf("trusted proxies enabled: %s", cfg.TrustedProxies)
 	}
 	s := &Service{cfg: cfg, db: db, httpClient: &http.Client{Timeout: cfg.RequestTimeout}, limiter: newLimiter(cfg.RateLimitPerMinute)}
 	schedulerCtx, cancel := context.WithCancel(context.Background())
