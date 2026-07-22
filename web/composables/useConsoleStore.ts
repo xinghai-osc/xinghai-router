@@ -145,6 +145,7 @@ export interface ConsoleStore {
   importGroups: () => Promise<void>
   toggleChannel: (channel: Channel) => Promise<void>
   revokeKey: (key: ApiKey) => Promise<void>
+  revokeAccountKey: (key: ApiKey) => Promise<void>
   createPayment: () => Promise<void>
   savePaymentSettings: () => Promise<void>
   createPaymentMethod: () => Promise<void>

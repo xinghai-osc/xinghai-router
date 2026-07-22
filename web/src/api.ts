@@ -191,6 +191,7 @@ export const endpoints = {
   getAccountSubscriptionOrders: () => get<{ data: SubscriptionOrder[] }>('/account/subscription-orders'),
   getAccountSubscriptionOrder: (orderNo: string) => get<SubscriptionOrder>(`/account/subscription-orders/${encodeURIComponent(orderNo)}`),
   updateAccountProfile: (avatarUrl: string) => send('/account/profile', 'PUT', { avatar_url: avatarUrl }),
+  revokeAccountKey: (id: string) => send(`/account/keys/${encodeURIComponent(id)}/revoke`, 'POST'),
   updateAccountPreferences: (leaderboardOptIn: boolean, leaderboardMaskName: boolean) => send('/account/preferences', 'PUT', { leaderboard_opt_in: leaderboardOptIn, leaderboard_mask_name: leaderboardMaskName }),
   createAccountKey: (form: AccountKeyForm) => post<{ key: string }>('/account/keys', form),
   updateAccountKey: (id: string, form: AccountKeyForm) => send(`/account/keys/${encodeURIComponent(id)}`, 'PUT', form),

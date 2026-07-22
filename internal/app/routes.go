@@ -32,6 +32,7 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("POST /account/keys", s.account(s.createAccountKey))
 	mux.Handle("PUT /account/keys/{id}", s.account(s.updateAccountKey))
 	mux.Handle("PUT /account/keys/{id}/group", s.account(s.setAccountKeyGroup))
+	mux.Handle("POST /account/keys/{id}/revoke", s.account(s.revokeAccountKey))
 	mux.Handle("GET /account/usage", s.account(s.accountUsage))
 	mux.Handle("GET /account/ledger", s.account(s.accountLedger))
 	mux.Handle("GET /account/payments", s.account(s.listAccountPayments))

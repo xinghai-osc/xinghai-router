@@ -7,7 +7,7 @@ import { Badge } from '@/components/ui/badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 
 const store = useConsoleStore()
-const { t, accountKeys, showAccountKey, formatDate, editAccountKey } = store
+const { t, accountKeys, showAccountKey, formatDate, editAccountKey, revokeAccountKey } = store
 </script>
 
 <template>
@@ -41,6 +41,7 @@ const { t, accountKeys, showAccountKey, formatDate, editAccountKey } = store
           </TableCell>
           <TableCell class="text-right">
             <Button v-if="!key.revoked_at" variant="link" size="sm" @click="editAccountKey(key)">{{ t('edit') }}</Button>
+            <Button v-if="!key.revoked_at" variant="link" size="sm" class="text-destructive" @click="revokeAccountKey(key)">{{ t('revokeLabel') }}</Button>
           </TableCell>
         </TableRow>
       </TableBody>

@@ -301,6 +301,7 @@ async function editGroupMultiplier(group: Group, event: Event) { const multiplie
 async function importGroups() { let values: Record<string, unknown>; try { values = JSON.parse(groupImportText.value) } catch { error.value = t('enterValidJSON'); return } if (!values || Array.isArray(values) || typeof values !== 'object') { error.value = t('importMustBeGroupMultiplierJSON'); return } const entries = Object.entries(values); if (!entries.length || entries.some(([name, multiplier]) => !name.trim() || typeof multiplier !== 'number' || !Number.isFinite(multiplier) || multiplier < 0)) { error.value = t('groupNameRequiredMultiplierNonNegative'); return } await action(async () => { await endpoints.importGroups(values as Record<string, number>); groupImportText.value = ''; await load() }) }
 async function toggleChannel(channel: Channel) { await action(async () => { await endpoints.toggleChannel(channel.id, !channel.enabled); await load() }) }
 async function revokeKey(key: ApiKey) { if (!confirm(t('revokeKeyConfirm').replace('{prefix}', key.key_prefix))) return; await action(async () => { await endpoints.revokeKey(key.id); await load() }) }
+async function revokeAccountKey(key: ApiKey) { if (!confirm(t('revokeKeyConfirm').replace('{prefix}', key.key_prefix))) return; await action(async () => { await endpoints.revokeAccountKey(key.id); await load() }) }
 async function action(work: () => Promise<void>) { busy.value = true; error.value = ''; try { await work() } catch (cause) { error.value = cause instanceof Error ? cause.message : t('operationFailed') } finally { busy.value = false } }
 async function createPayment() {
   const amount = Number(paymentForm.amount)
@@ -500,7 +501,7 @@ provide(CONSOLE_STORE_KEY, {
   fetchChannelModels, createChannel, editChannel, updateChannel,
   saveProvider, openProvider, editProvider, removeProvider,
   createGroup, editGroupMultiplier, importGroups,
-  toggleChannel, revokeKey, createPayment, savePaymentSettings,
+  toggleChannel, revokeKey, revokeAccountKey, createPayment, savePaymentSettings,
   createPaymentMethod, updatePaymentMethod, deletePaymentMethod,
   copyKey, savePricing, syncNewAPIPricing,
   manageUser, saveUserAccess, chooseAvatar, removeAvatar, saveAvatarUrl,

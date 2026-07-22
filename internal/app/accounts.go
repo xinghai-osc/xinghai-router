@@ -306,7 +306,7 @@ func (s *Service) updateAccountKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "group must belong to user")
 		return
 	}
-	result, err := s.db.Exec(r.Context(), `update api_keys set name=$1,expires_at=$2,group_id=$3 where id=$4 and user_id=$5`, strings.TrimSpace(in.Name), expires, groupID, r.PathValue("id"), account.userID)
+	result, err := s.db.Exec(r.Context(), `update api_keys set name=$1,expires_at=$2,group_id=$3 where id=$4 and user_id=$5 and revoked_at is null`, strings.TrimSpace(in.Name), expires, groupID, r.PathValue("id"), account.userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not update API key")
 		return
@@ -317,6 +317,26 @@ func (s *Service) updateAccountKey(w http.ResponseWriter, r *http.Request) {
 	}
 	s.audit(r, "api_key.updated", "api_key", r.PathValue("id"), map[string]any{"name": strings.TrimSpace(in.Name), "expires_at": expires, "group_id": groupID, "self_service": true})
 	writeJSON(w, http.StatusOK, map[string]any{"id": r.PathValue("id"), "name": strings.TrimSpace(in.Name), "expires_at": expires, "group_id": groupID})
+}
+
+func (s *Service) revokeAccountKey(w http.ResponseWriter, r *http.Request) {
+	account := accountFromContext(r)
+	keyID := strings.TrimSpace(r.PathValue("id"))
+	if keyID == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "key id is required")
+		return
+	}
+	result, err := s.db.Exec(r.Context(), `update api_keys set revoked_at=coalesce(revoked_at, now()) where id=$1 and user_id=$2 and revoked_at is null`, keyID, account.userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not revoke API key")
+		return
+	}
+	if result.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "not_found", "API key not found")
+		return
+	}
+	s.audit(r, "api_key.revoked", "api_key", keyID, map[string]any{"self_service": true})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Service) accountUsage(w http.ResponseWriter, r *http.Request) {
