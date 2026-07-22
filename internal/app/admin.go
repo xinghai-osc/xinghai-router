@@ -809,6 +809,26 @@ var availablePermissions = map[string]bool{
 	"system.manage": true,
 }
 
+func sanitizeChannelModels(models []string) ([]string, bool) {
+	out := make([]string, 0, len(models))
+	seen := map[string]bool{}
+	for _, model := range models {
+		model = strings.TrimSpace(model)
+		if model == "" || seen[model] {
+			continue
+		}
+		if len(model) > 200 {
+			return nil, false
+		}
+		seen[model] = true
+		out = append(out, model)
+	}
+	if len(out) == 0 {
+		return nil, false
+	}
+	return out, true
+}
+
 func (s *Service) setUserRole(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Role string `json:"role"`
@@ -985,10 +1005,16 @@ func (s *Service) createChannel(w http.ResponseWriter, r *http.Request) {
 		Groups   []string `json:"groups"`
 		Provider string   `json:"provider"`
 	}
-	if decode(r, &in) != nil || in.Name == "" || in.APIKey == "" || len(in.Models) == 0 {
+	if decode(r, &in) != nil || strings.TrimSpace(in.Name) == "" || strings.TrimSpace(in.APIKey) == "" {
 		writeError(w, 400, "invalid_request", "name, api_key, and models are required")
 		return
 	}
+	modelsList, ok := sanitizeChannelModels(in.Models)
+	if !ok {
+		writeError(w, 400, "invalid_request", "at least one non-empty model name is required")
+		return
+	}
+	in.Models = modelsList
 	if in.Provider == "" {
 		in.Provider = "openai"
 	}
@@ -1055,10 +1081,16 @@ func (s *Service) updateChannel(w http.ResponseWriter, r *http.Request) {
 		Priority int      `json:"priority"`
 		Provider string   `json:"provider"`
 	}
-	if decode(r, &in) != nil || strings.TrimSpace(in.Name) == "" || len(in.Models) == 0 {
+	if decode(r, &in) != nil || strings.TrimSpace(in.Name) == "" {
 		writeError(w, 400, "invalid_request", "name and models are required")
 		return
 	}
+	modelsList, ok := sanitizeChannelModels(in.Models)
+	if !ok {
+		writeError(w, 400, "invalid_request", "at least one non-empty model name is required")
+		return
+	}
+	in.Models = modelsList
 	if in.Provider == "" {
 		in.Provider = "openai"
 	}
