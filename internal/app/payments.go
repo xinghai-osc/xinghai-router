@@ -223,7 +223,7 @@ func (s *Service) createAccountPayment(w http.ResponseWriter, r *http.Request) {
 	}
 	cents, amount, ok := parsePaymentAmount(in.Amount)
 	paymentType := strings.ToLower(strings.TrimSpace(in.Type))
-	if !ok || cents < minPaymentCents || cents > maxPaymentCents || !methodEnabled(settings.Methods, paymentType) {
+	if !ok || !paymentAmountInBounds(cents) || !methodEnabled(settings.Methods, paymentType) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "invalid amount or payment type")
 		return
 	}
@@ -411,6 +411,10 @@ func validPublicURL(value string) error {
 		return fmt.Errorf("must be an HTTPS URL (HTTP is allowed for localhost)")
 	}
 	return nil
+}
+
+func paymentAmountInBounds(cents int64) bool {
+	return cents >= minPaymentCents && cents <= maxPaymentCents
 }
 
 func parsePaymentAmount(value string) (int64, string, bool) {
