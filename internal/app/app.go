@@ -57,6 +57,7 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 	schedulerCtx, cancel := context.WithCancel(context.Background())
 	s.scheduler = cancel
 	s.startHealthCheckScheduler(schedulerCtx)
+	s.startAuthCleanupScheduler(schedulerCtx)
 	return s, nil
 }
 func (s *Service) Close() {
