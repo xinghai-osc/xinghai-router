@@ -2,6 +2,7 @@ package app
 
 import (
 	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -62,5 +63,26 @@ func TestValidPaymentMethod(t *testing.T) {
 		if validPaymentMethod(code, "Payment") {
 			t.Fatalf("expected %q to be invalid", code)
 		}
+	}
+}
+
+func TestEpayNotifySignatureCompare(t *testing.T) {
+	values := url.Values{
+		"pid":          {"1001"},
+		"type":         {"alipay"},
+		"out_trade_no": {"xh123"},
+		"money":        {"10.00"},
+		"name":         {"Top up"},
+	}
+	sig := epaySign(values, "secret")
+	if !equalSecret(strings.ToLower(strings.ToUpper(sig)), sig) {
+		t.Fatal("case-normalized sign should match")
+	}
+	if equalSecret(sig, epaySign(values, "wrong-secret")) {
+		t.Fatal("wrong merchant key must not verify")
+	}
+	values.Set("money", "10.01")
+	if equalSecret(sig, epaySign(values, "secret")) {
+		t.Fatal("mutated payload must not verify")
 	}
 }

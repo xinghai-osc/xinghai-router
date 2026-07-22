@@ -407,7 +407,7 @@ func methodEnabled(methods []paymentMethod, target string) bool {
 
 func validPublicURL(value string) error {
 	u, err := url.Parse(value)
-	if err != nil || u.Host == "" || (u.Scheme != "https" && !(u.Scheme == "http" && (u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1"))) {
+	if err != nil || u.Host == "" || (u.Scheme != "https" && !(u.Scheme == "http" && isLoopbackHost(u.Hostname()))) {
 		return fmt.Errorf("must be an HTTPS URL (HTTP is allowed for localhost)")
 	}
 	return nil
