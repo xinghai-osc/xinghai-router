@@ -81,13 +81,20 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 		return
 	}
 	subscriptionAccess := s.subscriptionCoversModel(r.Context(), key.userID, model)
-	reserved, err := s.reserveUsage(r, key, model, body)
-	if err != nil {
-		if subscriptionAccess {
-			reserved = reservation{}
-		} else {
-			writeError(w, 402, "insufficient_quota", "insufficient balance for this request")
-			return
+	var reserved reservation
+	// Streaming responses are not settled; do not hold wallet reserved balance for them.
+	if stream {
+		reserved = reservation{}
+	} else {
+		var err error
+		reserved, err = s.reserveUsage(r, key, model, body)
+		if err != nil {
+			if subscriptionAccess {
+				reserved = reservation{}
+			} else {
+				writeError(w, 402, "insufficient_quota", "insufficient balance for this request")
+				return
+			}
 		}
 	}
 	defer func() { s.releaseReservation(r, key, reserved, model) }()

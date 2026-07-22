@@ -255,6 +255,8 @@ OpenCode 配置示例：
 
 The router selects an enabled channel advertising the requested model. It tries the lowest numeric priority first, distributes equal-priority traffic by weight, and retries a different eligible channel for connection errors and responses matching the configured retry status codes (by default every status except `2xx`, `408`, and `504`, up to 3 retries). Upstream errors matching the configured auto-disable status codes or keywords disable the channel immediately, and the optional background health check probes channels on a schedule (`scheduled_all`) or only after automatic disabling (`passive_recovery`), bringing recovered channels back online when configured. Manage these options through `GET|PUT /admin/reliability-settings` (`system.manage`).
 
+Streaming (SSE) responses are not settled against the wallet and do not hold wallet `reserved` balance; only non-stream requests reserve and bill tokens.
+
 ## Verify
 
 Run `go test ./...` and `go vet ./...`.
