@@ -46,6 +46,7 @@ func TestUpdateUserRejectsInvalidPartialUpdatesBeforeDatabaseAccess(t *testing.T
 		{name: "invalid email", body: `{"email":"invalid"}`},
 		{name: "invalid role", body: `{"role":"owner"}`},
 		{name: "short password", body: `{"password":"short"}`},
+		{name: "long password", body: `{"password":"` + strings.Repeat("a", 73) + `"}`},
 		{name: "invalid permission", body: `{"permissions":["unknown"]}`},
 		{name: "negative balance", body: `{"balance":-1}`},
 		{name: "note without balance", body: `{"note":"adjustment"}`},

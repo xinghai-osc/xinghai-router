@@ -116,6 +116,8 @@ export interface ConsoleStore {
   groupImportText: Ref<string>
   avatarUrlInput: Ref<string>
   avatarInput: Ref<HTMLInputElement | null>
+  passwordForm: { current_password: string; new_password: string; confirm_password: string }
+  passwordMessage: Ref<string>
 
   // Migration
   migrateForm: { source_dsn: string; source_driver: string }
@@ -158,6 +160,7 @@ export interface ConsoleStore {
   chooseAvatar: (event: Event) => Promise<void>
   removeAvatar: () => Promise<void>
   saveAvatarUrl: () => Promise<void>
+  changePassword: () => Promise<void>
   saveLeaderboardPrefs: () => Promise<void>
   saveSiteSettings: () => Promise<void>
   saveReliabilitySettings: () => Promise<void>

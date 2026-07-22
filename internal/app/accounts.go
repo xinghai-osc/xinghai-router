@@ -160,6 +160,56 @@ func (s *Service) updateAccountPreferences(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+func validatePasswordChange(currentPassword, newPassword string) string {
+	if currentPassword == "" || newPassword == "" {
+		return "current_password and new_password are required"
+	}
+	if !validPasswordLength(newPassword) {
+		return "new password must be between 8 and 72 characters"
+	}
+	if currentPassword == newPassword {
+		return "new password must differ from the current password"
+	}
+	return ""
+}
+
+func (s *Service) changeAccountPassword(w http.ResponseWriter, r *http.Request) {
+	account := accountFromContext(r)
+	var in struct {
+		CurrentPassword string `json:"current_password"`
+		NewPassword     string `json:"new_password"`
+	}
+	if decode(r, &in) != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "current_password and new_password are required")
+		return
+	}
+	if msg := validatePasswordChange(in.CurrentPassword, in.NewPassword); msg != "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", msg)
+		return
+	}
+	var passwordHash string
+	err := s.db.QueryRow(r.Context(), `select password_hash from users where id=$1 and enabled and password_hash is not null`, account.userID).Scan(&passwordHash)
+	if err != nil || !passwordMatches(passwordHash, in.CurrentPassword) {
+		writeError(w, http.StatusUnauthorized, "invalid_credentials", "current password is incorrect")
+		return
+	}
+	newHash, err := hashPassword(in.NewPassword)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not secure password")
+		return
+	}
+	if _, err = s.db.Exec(r.Context(), `update users set password_hash=$1 where id=$2`, newHash, account.userID); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not update password")
+		return
+	}
+	if _, err = s.db.Exec(r.Context(), `delete from user_sessions where user_id=$1 and token_hash<>$2`, account.userID, hashSecret(bearer(r))); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not revoke other sessions")
+		return
+	}
+	s.audit(r, "account.password_changed", "user", account.userID, map[string]any{"other_sessions_revoked": true})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 func (s *Service) updateAccountProfile(w http.ResponseWriter, r *http.Request) {
 	account := accountFromContext(r)
 	var in struct {
@@ -441,9 +491,13 @@ func (s *Service) createSession(w http.ResponseWriter, r *http.Request, userID s
 	writeJSON(w, status, map[string]any{"token": token, "expires_at": expiresAt})
 }
 
+func validPasswordLength(password string) bool {
+	return len(password) >= 8 && len(password) <= 72
+}
+
 func validAccountInput(email, name, password string) bool {
 	parsed, err := mail.ParseAddress(strings.TrimSpace(email))
-	return err == nil && parsed.Address == strings.TrimSpace(email) && len(strings.TrimSpace(name)) > 0 && len(strings.TrimSpace(name)) <= 100 && len(password) >= 8 && len(password) <= 128
+	return err == nil && parsed.Address == strings.TrimSpace(email) && len(strings.TrimSpace(name)) > 0 && len(strings.TrimSpace(name)) <= 100 && validPasswordLength(password)
 }
 
 func validEmail(email string) bool {

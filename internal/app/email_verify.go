@@ -169,7 +169,7 @@ func (s *Service) verifyEmailCode(ctx context.Context, email, code string) error
 	if attempts >= emailCodeMaxAttempts {
 		return fmt.Errorf("too many incorrect attempts, request a new code")
 	}
-	if hashEmailCode(email, code) != codeHash {
+	if !equalSecret(hashEmailCode(email, code), codeHash) {
 		_, _ = s.db.Exec(ctx, `update email_verification_codes set attempts=attempts+1 where id=$1`, id)
 		return fmt.Errorf("the verification code is invalid or expired")
 	}
