@@ -104,7 +104,7 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("GET /v1/models", s.api(s.models))
 	mux.Handle("POST /v1/chat/completions", s.api(s.chatCompletions))
 	mux.Handle("POST /v1/messages", s.api(s.anthropicMessages))
-	return s.requestID(mux)
+	return recoverPanic(securityHeaders(maxBodyBytes(2<<20, s.requestID(mux))))
 }
 func (s *Service) requestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
