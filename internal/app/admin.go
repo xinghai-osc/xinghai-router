@@ -384,6 +384,13 @@ func (s *Service) updateUser(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 500, "internal_error", "could not update role")
 			return
 		}
+		if currentRole == "admin" && *in.Role != "admin" {
+			if _, err = tx.Exec(r.Context(), `delete from user_sessions where user_id=$1`, userID); err != nil {
+				writeError(w, 500, "internal_error", "could not revoke sessions after role change")
+				return
+			}
+			changed["sessions_revoked"] = true
+		}
 		changed["role"] = *in.Role
 	}
 	if in.Enabled != nil {
@@ -823,13 +830,35 @@ func (s *Service) setUserRole(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "cannot remove your own administrator role")
 		return
 	}
-	result, err := s.db.Exec(r.Context(), `update users set role=$1 where id=$2`, in.Role, userID)
-	if err != nil || result.RowsAffected() != 1 {
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not update role")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	var currentRole string
+	if err = tx.QueryRow(r.Context(), `select role from users where id=$1 for update`, userID).Scan(&currentRole); err != nil {
 		writeError(w, http.StatusNotFound, "not_found", "user not found")
 		return
 	}
-	s.audit(r, "user.role_changed", "user", userID, map[string]any{"role": in.Role})
-	writeJSON(w, http.StatusOK, map[string]string{"role": in.Role})
+	if _, err = tx.Exec(r.Context(), `update users set role=$1 where id=$2`, in.Role, userID); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not update role")
+		return
+	}
+	sessionsRevoked := false
+	if currentRole == "admin" && in.Role != "admin" {
+		if _, err = tx.Exec(r.Context(), `delete from user_sessions where user_id=$1`, userID); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "could not revoke sessions after role change")
+			return
+		}
+		sessionsRevoked = true
+	}
+	if err = tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not update role")
+		return
+	}
+	s.audit(r, "user.role_changed", "user", userID, map[string]any{"role": in.Role, "sessions_revoked": sessionsRevoked})
+	writeJSON(w, http.StatusOK, map[string]any{"role": in.Role, "sessions_revoked": sessionsRevoked})
 }
 
 func (s *Service) setUserPermissions(w http.ResponseWriter, r *http.Request) {
