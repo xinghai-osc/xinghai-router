@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -33,7 +34,7 @@ func main() {
 	}
 
 	fmt.Printf("Migrating from %s (%s) to PostgreSQL\n", sourceDSN, sourceDriver)
-	if err := migrate.Run(sourceDSN, sourceDriver, targetDSN); err != nil {
+	if err := migrate.Run(context.Background(), sourceDSN, sourceDriver, targetDSN, nil); err != nil {
 		log.Fatalf("Migration failed: %v", err)
 	}
 	fmt.Println("Migration completed successfully")

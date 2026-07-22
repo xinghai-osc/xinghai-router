@@ -257,7 +257,7 @@ func Run(ctx context.Context, sourceDSN, sourceDriver, targetDSN string, progres
 	log.Println("Connected to source and target databases")
 
 	var (
-		userMap    map[int]string
+		userMap    map[int]int64
 		groupMap   map[string]string
 		channelMap map[int]string
 		planMap    map[int]string
@@ -334,7 +334,7 @@ func Run(ctx context.Context, sourceDSN, sourceDriver, targetDSN string, progres
 	return nil
 }
 
-func migrateUsers(ctx context.Context, src *sql.DB, target *pgxpool.Pool) (map[int]string, error) {
+func migrateUsers(ctx context.Context, src *sql.DB, target *pgxpool.Pool) (map[int]int64, error) {
 	rows, err := src.QueryContext(ctx, `select id,username,password,display_name,role,status,email,quota,used_quota,` +
 		"`group`" + `,created_at,COALESCE(setting,''),COALESCE(remark,'') from users`)
 	if err != nil {
@@ -342,7 +342,7 @@ func migrateUsers(ctx context.Context, src *sql.DB, target *pgxpool.Pool) (map[i
 	}
 	defer rows.Close()
 
-	userMap := make(map[int]string)
+	userMap := make(map[int]int64)
 	var count int
 
 	for rows.Next() {
@@ -373,10 +373,7 @@ func migrateUsers(ctx context.Context, src *sql.DB, target *pgxpool.Pool) (map[i
 
 		enabled := u.Status == 1
 
-		id, err := newUUID()
-		if err != nil {
-			return nil, fmt.Errorf("generate uuid: %w", err)
-		}
+		id := int64(u.ID)
 
 		var passwordHash *string
 		if u.Password != "" {
@@ -414,7 +411,7 @@ func migrateUsers(ctx context.Context, src *sql.DB, target *pgxpool.Pool) (map[i
 	return userMap, nil
 }
 
-func migrateTokens(ctx context.Context, src *sql.DB, target *pgxpool.Pool, userMap map[int]string) (int, error) {
+func migrateTokens(ctx context.Context, src *sql.DB, target *pgxpool.Pool, userMap map[int]int64) (int, error) {
 	rows, err := src.QueryContext(ctx, `select id,user_id,`+"`key`"+`,status,name,created_time,accessed_time,
 		expired_time,remain_quota,unlimited_quota,used_quota,`+"`group`"+` from tokens`)
 	if err != nil {
@@ -485,7 +482,7 @@ func migrateTokens(ctx context.Context, src *sql.DB, target *pgxpool.Pool, userM
 	return count, nil
 }
 
-func migrateGroups(ctx context.Context, src *sql.DB, target *pgxpool.Pool, userMap map[int]string) (map[string]string, error) {
+func migrateGroups(ctx context.Context, src *sql.DB, target *pgxpool.Pool, userMap map[int]int64) (map[string]string, error) {
 	groupNames := make(map[string]bool)
 
 	rows, err := src.QueryContext(ctx, `select distinct `+"`group`"+` from users where `+"`group`"+` != ''`)
@@ -706,7 +703,7 @@ func hashSecret(secret string) string {
 	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
-func migrateUserGroups(ctx context.Context, src *sql.DB, target *pgxpool.Pool, userMap map[int]string, groupMap map[string]string) (int, error) {
+func migrateUserGroups(ctx context.Context, src *sql.DB, target *pgxpool.Pool, userMap map[int]int64, groupMap map[string]string) (int, error) {
 	rows, err := src.QueryContext(ctx, `select id,`+"`group`"+` from users where `+"`group`"+` != ''`)
 	if err != nil {
 		return 0, fmt.Errorf("query user groups: %w", err)
@@ -820,7 +817,7 @@ func migrateSubscriptionPlans(ctx context.Context, src *sql.DB, target *pgxpool.
 	return planMap, nil
 }
 
-func migrateUserSubscriptions(ctx context.Context, src *sql.DB, target *pgxpool.Pool, userMap map[int]string, planMap map[int]string) (map[int]string, int, error) {
+func migrateUserSubscriptions(ctx context.Context, src *sql.DB, target *pgxpool.Pool, userMap map[int]int64, planMap map[int]string) (map[int]string, int, error) {
 	rows, err := src.QueryContext(ctx, `select id,user_id,plan_id,COALESCE(price_amount,0),
 		COALESCE(amount_total,0),COALESCE(amount_used,0),start_time,end_time,status,
 		COALESCE(source,'order'),COALESCE(last_reset_time,0),COALESCE(next_reset_time,0),
@@ -894,7 +891,7 @@ func migrateUserSubscriptions(ctx context.Context, src *sql.DB, target *pgxpool.
 	return subMap, count, nil
 }
 
-func migrateSubscriptionOrders(ctx context.Context, src *sql.DB, target *pgxpool.Pool, userMap map[int]string, planMap map[int]string, subMap map[int]string) (int, error) {
+func migrateSubscriptionOrders(ctx context.Context, src *sql.DB, target *pgxpool.Pool, userMap map[int]int64, planMap map[int]string, subMap map[int]string) (int, error) {
 	rows, err := src.QueryContext(ctx, `select id,user_id,plan_id,COALESCE(money,0),
 		COALESCE(trade_no,''),COALESCE(payment_method,''),COALESCE(payment_provider,''),
 		COALESCE(gateway_id,''),status,create_time,COALESCE(complete_time,0),
@@ -969,7 +966,7 @@ func migrateSubscriptionOrders(ctx context.Context, src *sql.DB, target *pgxpool
 	return count, nil
 }
 
-func migrateTopups(ctx context.Context, src *sql.DB, target *pgxpool.Pool, userMap map[int]string) (int, error) {
+func migrateTopups(ctx context.Context, src *sql.DB, target *pgxpool.Pool, userMap map[int]int64) (int, error) {
 	rows, err := src.QueryContext(ctx, `select id,user_id,amount,money,trade_no,
 		COALESCE(payment_method,''),COALESCE(payment_provider,''),
 		COALESCE(gateway_id,''),create_time,complete_time,status from top_ups where status = 'success'`)

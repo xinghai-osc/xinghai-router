@@ -11,8 +11,6 @@ import (
 	"net/url"
 	"sort"
 	"strings"
-
-	xinghaimigrate "github.com/xinghai-osc/xinghai-router/internal/migrate"
 )
 
 func (s *Service) fetchChannelModels(w http.ResponseWriter, r *http.Request) {
@@ -676,7 +674,7 @@ func (s *Service) modelCatalog(w http.ResponseWriter, r *http.Request) {
 			from available a
 			left join channel_groups cg on cg.channel_id=a.channel_id
 			left join groups g on g.id=cg.group_id
-			where g.id is null or exists(select 1 from user_groups ug where ug.user_id=nullif($1, '')::uuid and ug.group_id=g.id)
+			where g.id is null or exists(select 1 from user_groups ug where ug.user_id=nullif($1, '')::bigint and ug.group_id=g.id)
 		)
 		select c.model,c.group_id,c.group_name,c.group_multiplier,
 			p.id,p.input_per_million,p.cached_input_per_million,p.output_per_million,p.multiplier
@@ -1245,7 +1243,7 @@ func (s *Service) upsertQuota(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, _ := randomID()
-	_, err := s.db.Exec(r.Context(), `insert into quota_limits(id,user_id,api_key_id,model,"window",max_requests,max_tokens) values($1,nullif($2,'')::uuid,nullif($3,'')::uuid,nullif($4,''),$5,$6,$7) on conflict (coalesce(user_id, '00000000-0000-0000-0000-000000000000'::uuid), coalesce(api_key_id, '00000000-0000-0000-0000-000000000000'::uuid), coalesce(model, ''), "window") do update set max_requests=excluded.max_requests,max_tokens=excluded.max_tokens`, id, in.UserID, in.APIKeyID, in.Model, in.Window, in.MaxRequests, in.MaxTokens)
+	_, err := s.db.Exec(r.Context(), `insert into quota_limits(id,user_id,api_key_id,model,"window",max_requests,max_tokens) values($1,nullif($2,'')::bigint,nullif($3,'')::uuid,nullif($4,''),$5,$6,$7) on conflict (coalesce(user_id, 0), coalesce(api_key_id, '00000000-0000-0000-0000-000000000000'::uuid), coalesce(model, ''), "window") do update set max_requests=excluded.max_requests,max_tokens=excluded.max_tokens`, id, in.UserID, in.APIKeyID, in.Model, in.Window, in.MaxRequests, in.MaxTokens)
 	if err != nil {
 		writeError(w, 400, "invalid_request", "could not save quota")
 		return
@@ -1291,12 +1289,11 @@ func (s *Service) runMigration(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Migration requested: driver=%s source=%s target=%s", in.SourceDriver, in.SourceDSN, s.cfg.DatabaseURL)
 
-	if err := xinghaimigrate.Run(in.SourceDSN, in.SourceDriver, s.cfg.DatabaseURL); err != nil {
-		log.Printf("Migration failed: %v", err)
-		writeError(w, 500, "migration_failed", err.Error())
+	if !s.startMigration(in.SourceDSN, in.SourceDriver) {
+		writeError(w, 409, "migration_already_running", "A migration is already in progress")
 		return
 	}
 
 	s.audit(r, "system.migrate", "system", "", map[string]any{"source_driver": in.SourceDriver})
-	writeJSON(w, 200, map[string]any{"message": "迁移完成"})
+	writeJSON(w, 200, map[string]any{"message": "Migration started"})
 }

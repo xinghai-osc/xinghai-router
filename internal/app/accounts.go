@@ -48,11 +48,6 @@ func (s *Service) register(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not secure password")
 		return
 	}
-	id, err := randomID()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "could not create account")
-		return
-	}
 	tx, err := s.db.Begin(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not create account")
@@ -72,7 +67,8 @@ func (s *Service) register(w http.ResponseWriter, r *http.Request) {
 	if !hasAccountAdmin {
 		role = "admin"
 	}
-	_, err = tx.Exec(r.Context(), `insert into users(id,email,name,role,password_hash) values($1,$2,$3,$4,$5)`, id, email, strings.TrimSpace(in.Name), role, passwordHash)
+	var id string
+	err = tx.QueryRow(r.Context(), `insert into users(email,name,role,password_hash) values($1,$2,$3,$4) returning id`, email, strings.TrimSpace(in.Name), role, passwordHash).Scan(&id)
 	if err != nil {
 		writeError(w, http.StatusConflict, "conflict", "email already exists")
 		return

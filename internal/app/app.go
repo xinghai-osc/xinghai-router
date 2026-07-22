@@ -13,11 +13,13 @@ import (
 var migrations embed.FS
 
 type Service struct {
-	cfg        Config
-	db         *pgxpool.Pool
-	httpClient *http.Client
-	limiter    *limiter
-	scheduler  context.CancelFunc
+	cfg             Config
+	db              *pgxpool.Pool
+	httpClient      *http.Client
+	limiter         *limiter
+	scheduler       context.CancelFunc
+	migration       migrationStatus
+	migrationCancel context.CancelFunc
 }
 
 func New(ctx context.Context, cfg Config) (*Service, error) {

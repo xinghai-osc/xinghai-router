@@ -41,7 +41,7 @@ func (s *Service) listActivityLogs(w http.ResponseWriter, r *http.Request) {
 			left join users u on u.id=rl.user_id
 			left join groups g on g.id=rl.group_id
 			left join usage_records ur on ur.request_id=rl.request_id
-			where ($7 or rl.user_id=$6::uuid)
+			where ($7 or rl.user_id=$6::bigint)
 			union all
 			select al.id::text,
 				case when al.action='account.logged_in' then 'login' when al.action='account.registered' then 'register' when al.action='account.logged_out' then 'logout' when al.action='wallet.adjusted' and coalesce((al.details->>'amount')::numeric,0)>0 then 'topup' else 'operation' end,
