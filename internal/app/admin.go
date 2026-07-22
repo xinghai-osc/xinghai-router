@@ -95,12 +95,16 @@ func (s *Service) upsertPricing(w http.ResponseWriter, r *http.Request) {
 		Output     float64 `json:"output_per_million"`
 		Multiplier float64 `json:"multiplier"`
 	}
-	if decode(r, &in) != nil || in.Model == "" || in.Input < 0 || in.Cached < 0 || in.Output < 0 {
+	if decode(r, &in) != nil || strings.TrimSpace(in.Model) == "" || !validNonNegativeFinite(in.Input) || !validNonNegativeFinite(in.Cached) || !validNonNegativeFinite(in.Output) {
 		writeError(w, 400, "invalid_request", "invalid pricing rule")
 		return
 	}
 	if in.Multiplier == 0 {
 		in.Multiplier = 1
+	}
+	if !validPositiveFinite(in.Multiplier) {
+		writeError(w, 400, "invalid_request", "multiplier must be a positive finite number")
+		return
 	}
 	id, _ := randomID()
 	_, err := s.db.Exec(r.Context(), `insert into pricing_rules(id,model,input_per_million,cached_input_per_million,output_per_million,multiplier) values($1,$2,$3,$4,$5,$6) on conflict(model) do update set input_per_million=excluded.input_per_million,cached_input_per_million=excluded.cached_input_per_million,output_per_million=excluded.output_per_million,multiplier=excluded.multiplier,updated_at=now()`, id, in.Model, in.Input, in.Cached, in.Output, in.Multiplier)
@@ -595,7 +599,7 @@ func (s *Service) createGroup(w http.ResponseWriter, r *http.Request) {
 	if in.Multiplier == 0 {
 		in.Multiplier = 1
 	}
-	if in.Multiplier < 0 {
+	if !validNonNegativeFinite(in.Multiplier) {
 		writeError(w, 400, "invalid_request", "multiplier must not be negative")
 		return
 	}
@@ -623,7 +627,7 @@ func (s *Service) importGroups(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback(r.Context())
 	for name, multiplier := range values {
 		name = strings.TrimSpace(name)
-		if name == "" || multiplier < 0 || math.IsNaN(multiplier) || math.IsInf(multiplier, 0) {
+		if name == "" || !validNonNegativeFinite(multiplier) {
 			writeError(w, 400, "invalid_request", "group names must be non-empty and multipliers must not be negative")
 			return
 		}
@@ -645,7 +649,7 @@ func (s *Service) updateGroup(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Multiplier float64 `json:"multiplier"`
 	}
-	if decode(r, &in) != nil || in.Multiplier < 0 {
+	if decode(r, &in) != nil || !validNonNegativeFinite(in.Multiplier) {
 		writeError(w, 400, "invalid_request", "multiplier must not be negative")
 		return
 	}
@@ -807,6 +811,41 @@ var availablePermissions = map[string]bool{
 	"channels.manage": true, "logs.read": true, "pricing.read": true, "pricing.manage": true,
 	"audit.read": true, "wallets.manage": true, "routes.manage": true, "quotas.manage": true,
 	"system.manage": true,
+}
+
+func validFinite(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0)
+}
+
+func validNonNegativeFinite(value float64) bool {
+	return validFinite(value) && value >= 0
+}
+
+func validPositiveFinite(value float64) bool {
+	return validFinite(value) && value > 0
+}
+
+func redactDSN(dsn string) string {
+	if dsn == "" {
+		return ""
+	}
+	if u, err := url.Parse(dsn); err == nil && u.Scheme != "" && u.Host != "" {
+		if u.User != nil {
+			name := u.User.Username()
+			if name == "" {
+				name = "user"
+			}
+			u.User = url.UserPassword(name, "***")
+		}
+		return u.String()
+	}
+	if at := strings.LastIndex(dsn, "@"); at > 0 {
+		head := dsn[:at]
+		if colon := strings.Index(head, ":"); colon >= 0 {
+			return head[:colon+1] + "***" + dsn[at:]
+		}
+	}
+	return "[redacted-dsn]"
 }
 
 func (s *Service) setUserRole(w http.ResponseWriter, r *http.Request) {
@@ -1144,8 +1183,8 @@ func (s *Service) adjustBalance(w http.ResponseWriter, r *http.Request) {
 		Amount float64 `json:"amount"`
 		Note   string  `json:"note"`
 	}
-	if decode(r, &in) != nil || in.UserID == "" || in.Amount == 0 || in.Note == "" {
-		writeError(w, 400, "invalid_request", "user_id, non-zero amount, and note are required")
+	if decode(r, &in) != nil || in.UserID == "" || !validFinite(in.Amount) || in.Amount == 0 || strings.TrimSpace(in.Note) == "" {
+		writeError(w, 400, "invalid_request", "user_id, non-zero finite amount, and note are required")
 		return
 	}
 	tx, err := s.db.Begin(r.Context())
@@ -1287,7 +1326,7 @@ func (s *Service) runMigration(w http.ResponseWriter, r *http.Request) {
 	}
 	in.SourceDSN = strings.TrimPrefix(in.SourceDSN, "mysql://")
 
-	log.Printf("Migration requested: driver=%s source=%s target=%s", in.SourceDriver, in.SourceDSN, s.cfg.DatabaseURL)
+	log.Printf("Migration requested: driver=%s source=%s target=%s", in.SourceDriver, redactDSN(in.SourceDSN), redactDSN(s.cfg.DatabaseURL))
 
 	if !s.startMigration(in.SourceDSN, in.SourceDriver) {
 		writeError(w, 409, "migration_already_running", "A migration is already in progress")
