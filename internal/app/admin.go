@@ -298,8 +298,8 @@ func (s *Service) updateUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_request", "role must be user, operator, or admin")
 		return
 	}
-	if in.Password != nil && len(*in.Password) < 8 {
-		writeError(w, 400, "invalid_request", "password must be at least 8 characters")
+	if in.Password != nil && !validPasswordLength(*in.Password) {
+		writeError(w, 400, "invalid_request", "password must be between 8 and 72 characters")
 		return
 	}
 	if in.Permissions != nil {
