@@ -809,6 +809,10 @@ var availablePermissions = map[string]bool{
 	"system.manage": true,
 }
 
+func validAPIKeyName(name string) bool {
+	return len(name) > 0 && len(name) <= 100
+}
+
 func (s *Service) setUserRole(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Role string `json:"role"`
@@ -884,8 +888,13 @@ func (s *Service) createKey(w http.ResponseWriter, r *http.Request) {
 		ExpiresAt string `json:"expires_at"`
 		GroupID   string `json:"group_id"`
 	}
-	if decode(r, &in) != nil || in.UserID == "" || in.Name == "" {
+	if decode(r, &in) != nil || strings.TrimSpace(in.UserID) == "" {
 		writeError(w, 400, "invalid_request", "user_id and name are required")
+		return
+	}
+	name := strings.TrimSpace(in.Name)
+	if !validAPIKeyName(name) {
+		writeError(w, 400, "invalid_request", "name must be 1-100 characters")
 		return
 	}
 	expires, err := parseExpiry(in.ExpiresAt)
@@ -904,13 +913,13 @@ func (s *Service) createKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_request", "group must belong to user")
 		return
 	}
-	_, err = s.db.Exec(r.Context(), `insert into api_keys(id,user_id,name,key_prefix,secret_hash,expires_at,group_id) values($1,$2,$3,$4,$5,$6,$7)`, id, in.UserID, in.Name, secret[:12], hashSecret(secret), expires, groupID)
+	_, err = s.db.Exec(r.Context(), `insert into api_keys(id,user_id,name,key_prefix,secret_hash,expires_at,group_id) values($1,$2,$3,$4,$5,$6,$7)`, id, in.UserID, name, secret[:12], hashSecret(secret), expires, groupID)
 	if err != nil {
 		writeError(w, 400, "invalid_request", "unknown user")
 		return
 	}
-	s.audit(r, "api_key.created", "api_key", id, map[string]any{"user_id": in.UserID, "name": in.Name})
-	writeJSON(w, 201, map[string]any{"id": id, "name": in.Name, "key": secret, "expires_at": expires, "group_id": groupID})
+	s.audit(r, "api_key.created", "api_key", id, map[string]any{"user_id": in.UserID, "name": name})
+	writeJSON(w, 201, map[string]any{"id": id, "name": name, "key": secret, "expires_at": expires, "group_id": groupID})
 }
 func (s *Service) listKeys(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.db.Query(r.Context(), `select k.id,k.user_id,k.name,k.key_prefix,k.expires_at,k.revoked_at,k.last_used_at,k.created_at,coalesce(k.group_id::text,''),coalesce(g.name,'') from api_keys k left join groups g on g.id=k.group_id order by k.created_at desc`)

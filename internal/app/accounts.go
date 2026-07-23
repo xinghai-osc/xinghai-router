@@ -224,8 +224,13 @@ func (s *Service) createAccountKey(w http.ResponseWriter, r *http.Request) {
 		ExpiresAt string `json:"expires_at"`
 		GroupID   string `json:"group_id"`
 	}
-	if decode(r, &in) != nil || strings.TrimSpace(in.Name) == "" {
+	if decode(r, &in) != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", "name is required")
+		return
+	}
+	name := strings.TrimSpace(in.Name)
+	if !validAPIKeyName(name) {
+		writeError(w, http.StatusBadRequest, "invalid_request", "name must be 1-100 characters")
 		return
 	}
 	expires, err := parseExpiry(in.ExpiresAt)
@@ -243,7 +248,6 @@ func (s *Service) createAccountKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "key generation failed")
 		return
 	}
-	name := strings.TrimSpace(in.Name)
 	groupID, err := s.validKeyGroup(r.Context(), account.userID, in.GroupID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", "group must belong to user")
@@ -292,7 +296,12 @@ func (s *Service) updateAccountKey(w http.ResponseWriter, r *http.Request) {
 		ExpiresAt string `json:"expires_at"`
 		GroupID   string `json:"group_id"`
 	}
-	if decode(r, &in) != nil || strings.TrimSpace(in.Name) == "" || len(strings.TrimSpace(in.Name)) > 100 {
+	if decode(r, &in) != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "name is required and must be at most 100 characters")
+		return
+	}
+	name := strings.TrimSpace(in.Name)
+	if !validAPIKeyName(name) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "name is required and must be at most 100 characters")
 		return
 	}
@@ -306,7 +315,7 @@ func (s *Service) updateAccountKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "group must belong to user")
 		return
 	}
-	result, err := s.db.Exec(r.Context(), `update api_keys set name=$1,expires_at=$2,group_id=$3 where id=$4 and user_id=$5`, strings.TrimSpace(in.Name), expires, groupID, r.PathValue("id"), account.userID)
+	result, err := s.db.Exec(r.Context(), `update api_keys set name=$1,expires_at=$2,group_id=$3 where id=$4 and user_id=$5`, name, expires, groupID, r.PathValue("id"), account.userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not update API key")
 		return
@@ -315,8 +324,8 @@ func (s *Service) updateAccountKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "API key not found")
 		return
 	}
-	s.audit(r, "api_key.updated", "api_key", r.PathValue("id"), map[string]any{"name": strings.TrimSpace(in.Name), "expires_at": expires, "group_id": groupID, "self_service": true})
-	writeJSON(w, http.StatusOK, map[string]any{"id": r.PathValue("id"), "name": strings.TrimSpace(in.Name), "expires_at": expires, "group_id": groupID})
+	s.audit(r, "api_key.updated", "api_key", r.PathValue("id"), map[string]any{"name": name, "expires_at": expires, "group_id": groupID, "self_service": true})
+	writeJSON(w, http.StatusOK, map[string]any{"id": r.PathValue("id"), "name": name, "expires_at": expires, "group_id": groupID})
 }
 
 func (s *Service) accountUsage(w http.ResponseWriter, r *http.Request) {
