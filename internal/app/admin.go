@@ -1138,14 +1138,34 @@ func (s *Service) setChannelStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]bool{"enabled": in.Enabled})
 }
 
+const maxWalletAdjustAmount = 1_000_000_000.0
+const maxWalletNoteLength = 500
+const maxQuotaLimit = int64(1_000_000_000_000)
+
+func validWalletAdjustAmount(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0) && value != 0 && value >= -maxWalletAdjustAmount && value <= maxWalletAdjustAmount
+}
+
+func validQuotaLimit(value *int64) bool {
+	if value == nil {
+		return true
+	}
+	return *value >= 0 && *value <= maxQuotaLimit
+}
+
 func (s *Service) adjustBalance(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		UserID string  `json:"user_id"`
 		Amount float64 `json:"amount"`
 		Note   string  `json:"note"`
 	}
-	if decode(r, &in) != nil || in.UserID == "" || in.Amount == 0 || in.Note == "" {
+	if decode(r, &in) != nil {
 		writeError(w, 400, "invalid_request", "user_id, non-zero amount, and note are required")
+		return
+	}
+	in.Note = strings.TrimSpace(in.Note)
+	if in.UserID == "" || !validWalletAdjustAmount(in.Amount) || in.Note == "" || len(in.Note) > maxWalletNoteLength {
+		writeError(w, 400, "invalid_request", "user_id, non-zero finite amount within ±1e9, and note (1-500 chars) are required")
 		return
 	}
 	tx, err := s.db.Begin(r.Context())
@@ -1238,8 +1258,13 @@ func (s *Service) upsertQuota(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_request", "scope, window, and a limit are required")
 		return
 	}
-	if (in.MaxRequests != nil && *in.MaxRequests < 0) || (in.MaxTokens != nil && *in.MaxTokens < 0) {
-		writeError(w, 400, "invalid_request", "limits cannot be negative")
+	in.Model = strings.TrimSpace(in.Model)
+	if in.Model != "" && (len(in.Model) > 200) {
+		writeError(w, 400, "invalid_request", "model must be 1-200 characters when set")
+		return
+	}
+	if !validQuotaLimit(in.MaxRequests) || !validQuotaLimit(in.MaxTokens) {
+		writeError(w, 400, "invalid_request", "limits must be between 0 and 1e12")
 		return
 	}
 	id, _ := randomID()
