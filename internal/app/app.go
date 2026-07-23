@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -56,7 +57,7 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 	} else {
 		log.Printf("rate limiter backend: memory")
 	}
-	s := &Service{cfg: cfg, db: db, httpClient: newHTTPClient(cfg.RequestTimeout), limiter: limiter, ipLimiter: ipLimiter}
+	s := &Service{cfg: cfg, db: db, httpClient: newHTTPClient(cfg.RequestTimeout), limiter: limiter, ipLimiter: ipLimiter, migration: migrationStatus{mu: &sync.Mutex{}}}
 	schedulerCtx, cancel := context.WithCancel(context.Background())
 	s.scheduler = cancel
 	s.startHealthCheckScheduler(schedulerCtx)

@@ -97,6 +97,7 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("POST /admin/quota-limits", s.permission("quotas.manage", s.upsertQuota))
 	mux.Handle("POST /admin/migrate", s.permission("system.manage", s.runMigration))
 	mux.Handle("GET /admin/migrate", s.permission("system.manage", s.getMigrationStatus))
+	mux.Handle("GET /admin/migrate/requests", s.permission("system.manage", s.listMigrationRequests))
 	mux.Handle("GET /me", s.api(s.me))
 	mux.Handle("GET /me/keys", s.api(s.myKeys))
 	mux.Handle("GET /me/usage", s.api(s.myUsage))
