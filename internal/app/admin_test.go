@@ -82,3 +82,37 @@ func TestUpdateChannelRejectsInvalidRequestBeforeDatabaseAccess(t *testing.T) {
 		}
 	}
 }
+
+func TestValidPricingHelpers(t *testing.T) {
+	if !validPricingMultiplier(0.01) || !validPricingMultiplier(maxPricingMultiplier) {
+		t.Fatal("boundary pricing multipliers must be valid")
+	}
+	if validPricingMultiplier(0) || validPricingMultiplier(maxPricingMultiplier+0.01) {
+		t.Fatal("out-of-range pricing multipliers must be invalid")
+	}
+	if !validPricingRate(0) || !validPricingRate(maxPricingRate) || validPricingRate(maxPricingRate+1) {
+		t.Fatal("pricing rate bounds unexpected")
+	}
+	if !validPricingModel("m") || validPricingModel("") || validPricingModel(strings.Repeat("m", 201)) {
+		t.Fatal("pricing model bounds unexpected")
+	}
+}
+
+func TestUpsertPricingRejectsOutOfRangeBeforeDatabaseAccess(t *testing.T) {
+	for _, body := range []string{
+		`{}`,
+		`{"model":"","input_per_million":1,"cached_input_per_million":0,"output_per_million":1}`,
+		`{"model":"m","input_per_million":-1,"cached_input_per_million":0,"output_per_million":1}`,
+		`{"model":"m","input_per_million":1,"cached_input_per_million":0,"output_per_million":1,"multiplier":-1}`,
+		`{"model":"m","input_per_million":1,"cached_input_per_million":0,"output_per_million":1,"multiplier":1000.01}`,
+		`{"model":"m","input_per_million":1000000.01,"cached_input_per_million":0,"output_per_million":1}`,
+		`{"model":"` + strings.Repeat("m", 201) + `","input_per_million":1,"cached_input_per_million":0,"output_per_million":1}`,
+	} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/admin/pricing", strings.NewReader(body))
+		(&Service{}).upsertPricing(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("body %s status = %d", body, rec.Code)
+		}
+	}
+}

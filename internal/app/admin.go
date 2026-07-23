@@ -87,6 +87,21 @@ func (s *Service) listPricing(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"data": data})
 }
 
+const maxPricingMultiplier = 1000.0
+const maxPricingRate = 1_000_000.0
+
+func validPricingMultiplier(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0) && value > 0 && value <= maxPricingMultiplier
+}
+
+func validPricingRate(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0) && value >= 0 && value <= maxPricingRate
+}
+
+func validPricingModel(model string) bool {
+	return len(model) > 0 && len(model) <= 200
+}
+
 func (s *Service) upsertPricing(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Model      string  `json:"model"`
@@ -95,12 +110,21 @@ func (s *Service) upsertPricing(w http.ResponseWriter, r *http.Request) {
 		Output     float64 `json:"output_per_million"`
 		Multiplier float64 `json:"multiplier"`
 	}
-	if decode(r, &in) != nil || in.Model == "" || in.Input < 0 || in.Cached < 0 || in.Output < 0 {
+	if decode(r, &in) != nil {
+		writeError(w, 400, "invalid_request", "invalid pricing rule")
+		return
+	}
+	in.Model = strings.TrimSpace(in.Model)
+	if !validPricingModel(in.Model) || !validPricingRate(in.Input) || !validPricingRate(in.Cached) || !validPricingRate(in.Output) {
 		writeError(w, 400, "invalid_request", "invalid pricing rule")
 		return
 	}
 	if in.Multiplier == 0 {
 		in.Multiplier = 1
+	}
+	if !validPricingMultiplier(in.Multiplier) {
+		writeError(w, 400, "invalid_request", "multiplier must be between 0 exclusive and 1000")
+		return
 	}
 	id, _ := randomID()
 	_, err := s.db.Exec(r.Context(), `insert into pricing_rules(id,model,input_per_million,cached_input_per_million,output_per_million,multiplier) values($1,$2,$3,$4,$5,$6) on conflict(model) do update set input_per_million=excluded.input_per_million,cached_input_per_million=excluded.cached_input_per_million,output_per_million=excluded.output_per_million,multiplier=excluded.multiplier,updated_at=now()`, id, in.Model, in.Input, in.Cached, in.Output, in.Multiplier)
