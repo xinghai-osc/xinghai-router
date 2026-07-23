@@ -80,6 +80,11 @@ func TestReadSubscriptionPlanInputRejectsInvalid(t *testing.T) {
 		`{"name":"Plan","price":"1","billing_period":"month","credit_amount":"abc"}`,
 		`{"name":"Plan","price":"1","billing_period":"month","credit_amount":"0","currency":"TOOLONGCODE"}`,
 		`{"name":"Plan","price":"1","billing_period":"month","credit_amount":"0","model_whitelist":[""]}`,
+		`{"name":"Plan","price":"100000.01","billing_period":"month","credit_amount":"0"}`,
+		`{"name":"Plan","price":"1","billing_period":"month","credit_amount":"1000000.01"}`,
+		`{"name":"Plan","price":"1","billing_period":"month","credit_amount":"0","sort_order":10001}`,
+		`{"name":"Plan","price":"1","billing_period":"month","credit_amount":"0","max_requests_per_period":-1}`,
+		`{"name":"Plan","price":"1","billing_period":"month","credit_amount":"0","description":"` + strings.Repeat("d", 2001) + `"}`,
 		`not-json`,
 	}
 	for _, body := range cases {

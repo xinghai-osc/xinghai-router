@@ -50,7 +50,9 @@ func TestUpdateUserRejectsInvalidPartialUpdatesBeforeDatabaseAccess(t *testing.T
 		{name: "long password", body: `{"password":"` + strings.Repeat("a", 73) + `"}`},
 		{name: "invalid permission", body: `{"permissions":["unknown"]}`},
 		{name: "negative balance", body: `{"balance":-1}`},
+		{name: "oversized balance", body: `{"balance":1000000000.01}`},
 		{name: "note without balance", body: `{"note":"adjustment"}`},
+		{name: "oversized note", body: `{"balance":1,"note":"` + strings.Repeat("n", 501) + `"}`},
 	}
 
 	for _, test := range tests {
@@ -416,6 +418,9 @@ func TestValidWalletAndQuotaHelpers(t *testing.T) {
 	}
 	if validWalletAdjustAmount(0) || validWalletAdjustAmount(maxWalletAdjustAmount+1) {
 		t.Fatal("out-of-range wallet amounts must be invalid")
+	}
+	if !validUserBalance(0) || !validUserBalance(maxWalletAdjustAmount) || validUserBalance(-0.01) || validUserBalance(maxWalletAdjustAmount+1) {
+		t.Fatal("user balance bounds unexpected")
 	}
 	var ok int64 = maxQuotaLimit
 	var over int64 = maxQuotaLimit + 1
