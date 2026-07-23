@@ -82,3 +82,58 @@ func TestUpdateChannelRejectsInvalidRequestBeforeDatabaseAccess(t *testing.T) {
 		}
 	}
 }
+
+func TestSanitizeChannelModels(t *testing.T) {
+	got, ok := sanitizeChannelModels([]string{" gpt-4 ", "", "gpt-4", "claude-3"})
+	if !ok || len(got) != 2 || got[0] != "gpt-4" || got[1] != "claude-3" {
+		t.Fatalf("sanitize = %#v ok=%v", got, ok)
+	}
+	if _, ok := sanitizeChannelModels(nil); ok {
+		t.Fatal("empty models must fail")
+	}
+	if _, ok := sanitizeChannelModels([]string{" ", ""}); ok {
+		t.Fatal("whitespace-only models must fail")
+	}
+	if _, ok := sanitizeChannelModels([]string{strings.Repeat("m", 201)}); ok {
+		t.Fatal("overlong model name must fail")
+	}
+}
+
+func TestCreateChannelRejectsEmptyModelsAfterSanitize(t *testing.T) {
+	body := `{"name":"channel","api_key":"sk","base_url":"https://api.example.com","models":[" ","\t"]}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/admin/channels", strings.NewReader(body))
+	(&Service{}).createChannel(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestValidChannelName(t *testing.T) {
+	if !validChannelName("openai") || !validChannelName(strings.Repeat("c", 100)) {
+		t.Fatal("expected valid channel names")
+	}
+	if validChannelName("") || validChannelName(strings.Repeat("c", 101)) {
+		t.Fatal("expected invalid channel names")
+	}
+}
+
+func TestCreateChannelRejectsOverlongNameBeforeDatabase(t *testing.T) {
+	body := `{"name":"` + strings.Repeat("n", 101) + `","api_key":"sk","base_url":"https://api.example.com","models":["m"]}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/admin/channels", strings.NewReader(body))
+	(&Service{}).createChannel(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestUpdateChannelRejectsOverlongNameBeforeDatabase(t *testing.T) {
+	body := `{"name":"` + strings.Repeat("n", 101) + `","base_url":"https://api.example.com","models":["m"]}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/admin/channels/channel-id", strings.NewReader(body))
+	(&Service{}).updateChannel(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
