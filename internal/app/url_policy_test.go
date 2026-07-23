@@ -1,6 +1,7 @@
 package app
 
 import (
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -73,6 +74,100 @@ func TestValidOutboundURL(t *testing.T) {
 		if err := validOutboundURL(value); err == nil {
 			t.Fatalf("validOutboundURL(%q) expected error", value)
 		}
+	}
+}
+
+func TestIsNonPublicIP(t *testing.T) {
+	nonPublic := []string{
+		"127.0.0.1",
+		"127.0.0.2",
+		"::1",
+		"10.0.0.1",
+		"10.255.255.255",
+		"172.16.0.1",
+		"172.31.255.255",
+		"192.168.0.1",
+		"192.168.255.255",
+		"169.254.169.254",
+		"169.254.1.1",
+		"0.0.0.0",
+		"::",
+		"224.0.0.1",
+		"ff02::1",
+		"fe80::1",
+		"fc00::1",
+		"fd12:3456:789a::1",
+	}
+	for _, s := range nonPublic {
+		ip := net.ParseIP(s)
+		if ip == nil {
+			t.Fatalf("ParseIP(%q) = nil", s)
+		}
+		if !isNonPublicIP(ip) {
+			t.Fatalf("expected %q to be non-public", s)
+		}
+	}
+	public := []string{"8.8.8.8", "1.1.1.1", "2001:4860:4860::8888"}
+	for _, s := range public {
+		ip := net.ParseIP(s)
+		if ip == nil {
+			t.Fatalf("ParseIP(%q) = nil", s)
+		}
+		if isNonPublicIP(ip) {
+			t.Fatalf("expected %q to be public", s)
+		}
+	}
+	if !isNonPublicIP(nil) {
+		t.Fatal("nil IP should be non-public")
+	}
+}
+
+func TestAllowDialIP(t *testing.T) {
+	type caseT struct {
+		host string
+		ip   string
+		ok   bool
+	}
+	cases := []caseT{
+		{"api.openai.com", "8.8.8.8", true},
+		{"api.openai.com", "1.1.1.1", true},
+		{"api.openai.com", "10.0.0.1", false},
+		{"api.openai.com", "192.168.1.1", false},
+		{"api.openai.com", "169.254.169.254", false},
+		{"api.openai.com", "127.0.0.1", false},
+		{"api.openai.com", "::1", false},
+		{"api.openai.com", "0.0.0.0", false},
+		{"api.openai.com", "fc00::1", false},
+		{"evil.example.com", "169.254.169.254", false},
+		{"evil.example.com", "10.1.2.3", false},
+		{"evil.example.com", "127.0.0.1", false},
+		{"localhost", "127.0.0.1", true},
+		{"LOCALHOST", "127.0.0.1", true},
+		{"localhost", "::1", true},
+		{"127.0.0.1", "127.0.0.1", true},
+		{"127.0.0.2", "127.0.0.2", true},
+		{"::1", "::1", true},
+		{"localhost", "10.0.0.1", false},
+		{"localhost", "169.254.169.254", false},
+		{"localhost", "8.8.8.8", true},
+		{"8.8.8.8", "8.8.8.8", true},
+		{"10.0.0.1", "10.0.0.1", false},
+		{"169.254.169.254", "169.254.169.254", false},
+		{"", "8.8.8.8", true},
+		{"", "127.0.0.1", false},
+	}
+	for _, c := range cases {
+		ip := net.ParseIP(c.ip)
+		if ip == nil {
+			t.Fatalf("ParseIP(%q) = nil", c.ip)
+		}
+		got := allowDialIP(c.host, ip)
+		if got != c.ok {
+			t.Fatalf("allowDialIP(%q, %q) = %v, want %v", c.host, c.ip, got, c.ok)
+		}
+	}
+	if allowDialIP("example.com", nil) {
+		t.Fatal("nil IP must be denied")
 	}
 }
 

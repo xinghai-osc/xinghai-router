@@ -121,15 +121,8 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 	}
 	subscriptionAccess := s.subscriptionCoversModel(r.Context(), key.userID, model)
 	var reserved reservation
-	// Streaming responses are not settled; do not hold wallet reserved balance for them.
-	if subscriptionAccess || stream {
+	if subscriptionAccess {
 		reserved = reservation{}
-		if !subscriptionAccess && stream {
-			if err := s.requireEnabledPricing(r, model); err != nil {
-				writeError(w, 402, "pricing_unavailable", "no enabled pricing rule for this model")
-				return
-			}
-		}
 	} else {
 		var err error
 		reserved, err = s.reserveUsage(r, key, model, body)
@@ -261,14 +254,6 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 	w.Header().Set("Content-Type", contentType(resp.Header.Get("Content-Type")))
 	w.WriteHeader(resp.StatusCode)
 	w.Write(responseBody)
-}
-
-func (s *Service) requireEnabledPricing(r *http.Request, model string) error {
-	var input float64
-	if err := s.db.QueryRow(r.Context(), `select input_per_million from pricing_rules where model=$1 and enabled`, model).Scan(&input); err != nil {
-		return errPricingUnavailable
-	}
-	return nil
 }
 
 func (s *Service) reserveUsage(r *http.Request, key keyContext, model string, body []byte) (reservation, error) {

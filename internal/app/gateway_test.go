@@ -92,17 +92,30 @@ func TestProxyChatCompletionsPricingErrorMapping(t *testing.T) {
 	}
 }
 
-func TestStreamSkipsWalletReservationFlag(t *testing.T) {
-	// Documented product rule: stream requests are not settled; reservation must stay empty
-	// so concurrent stream traffic does not pin wallet reserved balances.
-	var reserved reservation
-	stream := true
-	subscriptionAccess := false
-	if subscriptionAccess || stream {
-		reserved = reservation{}
+func TestStreamWalletReservePolicy(t *testing.T) {
+	// Non-subscription stream reserves (fail closed on pricing/balance) but never settles;
+	// subscription skips reserve; only non-stream non-subscription settles.
+	streamReserve := func(subscriptionAccess, stream bool) (reserve, settle bool) {
+		if subscriptionAccess {
+			return false, false
+		}
+		return true, !stream
 	}
-	if reserved.amount != 0 {
-		t.Fatal("stream path must not hold a non-zero reservation")
+	reserve, settle := streamReserve(false, true)
+	if !reserve || settle {
+		t.Fatalf("non-sub stream: reserve=%v settle=%v, want true/false", reserve, settle)
+	}
+	reserve, settle = streamReserve(false, false)
+	if !reserve || !settle {
+		t.Fatalf("non-sub non-stream: reserve=%v settle=%v, want true/true", reserve, settle)
+	}
+	reserve, settle = streamReserve(true, true)
+	if reserve || settle {
+		t.Fatalf("sub stream: reserve=%v settle=%v, want false/false", reserve, settle)
+	}
+	reserve, settle = streamReserve(true, false)
+	if reserve || settle {
+		t.Fatalf("sub non-stream: reserve=%v settle=%v, want false/false", reserve, settle)
 	}
 }
 

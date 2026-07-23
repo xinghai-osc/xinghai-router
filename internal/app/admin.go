@@ -1052,6 +1052,42 @@ func redactDSN(dsn string) string {
 	return "[redacted-dsn]"
 }
 
+func redactMigrationError(msg string, knownDSNs ...string) string {
+	if msg == "" {
+		return ""
+	}
+	out := msg
+	for _, dsn := range knownDSNs {
+		if dsn == "" {
+			continue
+		}
+		if strings.Contains(out, dsn) {
+			out = strings.ReplaceAll(out, dsn, redactDSN(dsn))
+		}
+		pass := ""
+		if u, err := url.Parse(dsn); err == nil && u.User != nil {
+			if p, ok := u.User.Password(); ok {
+				pass = p
+			}
+		}
+		if pass == "" {
+			if at := strings.LastIndex(dsn, "@"); at > 0 {
+				head := dsn[:at]
+				if i := strings.Index(head, "://"); i >= 0 {
+					head = head[i+3:]
+				}
+				if colon := strings.Index(head, ":"); colon >= 0 {
+					pass = head[colon+1:]
+				}
+			}
+		}
+		if pass != "" {
+			out = strings.ReplaceAll(out, pass, "***")
+		}
+	}
+	return out
+}
+
 func (s *Service) setUserRole(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Role string `json:"role"`

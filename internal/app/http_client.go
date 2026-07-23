@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -12,14 +13,60 @@ import (
 const maxRedirects = 5
 
 func newHTTPClient(timeout time.Duration) *http.Client {
+	dialer := &net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.DialContext = safeDialContext(dialer)
 	return &http.Client{
-		Timeout: timeout,
+		Timeout:   timeout,
+		Transport: transport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= maxRedirects {
 				return fmt.Errorf("stopped after %d redirects", maxRedirects)
 			}
 			return validateRedirectURL(req.URL)
 		},
+	}
+}
+
+func safeDialContext(dialer *net.Dialer) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, err
+		}
+		if ip := net.ParseIP(host); ip != nil {
+			if !allowDialIP(host, ip) {
+				return nil, fmt.Errorf("connection to non-public address %s is not allowed", ip)
+			}
+			return dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+		}
+		ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+		if err != nil {
+			return nil, err
+		}
+		var firstErr error
+		for _, ipAddr := range ips {
+			if !allowDialIP(host, ipAddr.IP) {
+				if firstErr == nil {
+					firstErr = fmt.Errorf("connection to non-public address %s for host %q is not allowed", ipAddr.IP, host)
+				}
+				continue
+			}
+			conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(ipAddr.IP.String(), port))
+			if err == nil {
+				return conn, nil
+			}
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+		if firstErr != nil {
+			return nil, firstErr
+		}
+		return nil, fmt.Errorf("no addresses for host %q", host)
 	}
 }
 
@@ -55,8 +102,15 @@ func validOutboundURL(value string) error {
 	}
 }
 
+func isNonPublicIP(ip net.IP) bool {
+	if ip == nil {
+		return true
+	}
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast()
+}
+
 // isNonPublicHost reports whether host is empty, localhost, or a non-public IP literal.
-// Non-IP hostnames are treated as public (DNS-based SSRF is out of scope for this check).
+// Non-IP hostnames are treated as public at parse time; DialContext re-checks after DNS resolve.
 func isNonPublicHost(host string) bool {
 	if host == "" || strings.EqualFold(host, "localhost") {
 		return true
@@ -65,7 +119,21 @@ func isNonPublicHost(host string) bool {
 	if ip == nil {
 		return false
 	}
-	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast()
+	return isNonPublicIP(ip)
+}
+
+// allowDialIP reports whether connecting to ip for request host is allowed.
+// Public IPs are always allowed. Loopback IPs are allowed only when the original
+// host is intentionally loopback (Ollama). Private/link-local/metadata IPs are never allowed,
+// blocking DNS rebinding SSRF even when the URL hostname looks public.
+func allowDialIP(host string, ip net.IP) bool {
+	if ip == nil {
+		return false
+	}
+	if !isNonPublicIP(ip) {
+		return true
+	}
+	return isLoopbackHost(host) && ip.IsLoopback()
 }
 
 // isUnsafeRedirectHost is kept as an alias for redirect checks (same policy as first-hop HTTPS).

@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -409,6 +410,26 @@ func TestRedactDSN(t *testing.T) {
 	}
 	if redactDSN("") != "" {
 		t.Fatal("empty dsn should stay empty")
+	}
+}
+
+func TestRedactMigrationError(t *testing.T) {
+	source := "user:s3cret@tcp(127.0.0.1:3306)/newapi"
+	target := "postgres://router:t4rget@postgres:5432/router?sslmode=disable"
+	msg := fmt.Sprintf("ping source database: dial error using %s; target was %s password=s3cret", source, target)
+	got := redactMigrationError(msg, source, target)
+	if strings.Contains(got, "s3cret") || strings.Contains(got, "t4rget") {
+		t.Fatalf("secret still present: %q", got)
+	}
+	if !strings.Contains(got, "ping source database") {
+		t.Fatalf("non-secret context lost: %q", got)
+	}
+	if redactMigrationError("") != "" {
+		t.Fatal("empty error should stay empty")
+	}
+	plain := "migrate users: relation does not exist"
+	if got := redactMigrationError(plain, source, target); got != plain {
+		t.Fatalf("plain error changed: %q", got)
 	}
 }
 func TestSetUserRoleRejectsInvalidRoleBeforeDatabaseAccess(t *testing.T) {

@@ -58,7 +58,7 @@ func (s *Service) runMigrationAsync(ctx context.Context, sourceDSN, sourceDriver
 	}
 	if err != nil {
 		s.migration.Status = "failed"
-		s.migration.Error = err.Error()
+		s.migration.Error = redactMigrationError(err.Error(), sourceDSN, s.cfg.DatabaseURL)
 		s.migration.FinishedAt = time.Now()
 		return
 	}
