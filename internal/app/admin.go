@@ -588,8 +588,13 @@ func (s *Service) createGroup(w http.ResponseWriter, r *http.Request) {
 		Name       string  `json:"name"`
 		Multiplier float64 `json:"multiplier"`
 	}
-	if decode(r, &in) != nil || strings.TrimSpace(in.Name) == "" {
+	if decode(r, &in) != nil {
 		writeError(w, 400, "invalid_request", "name is required")
+		return
+	}
+	name := strings.TrimSpace(in.Name)
+	if !validGroupName(name) {
+		writeError(w, 400, "invalid_request", "name must be 1-100 characters")
 		return
 	}
 	if in.Multiplier == 0 {
@@ -600,13 +605,13 @@ func (s *Service) createGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, _ := randomID()
-	_, err := s.db.Exec(r.Context(), `insert into groups(id,name,multiplier) values($1,$2,$3)`, id, strings.TrimSpace(in.Name), in.Multiplier)
+	_, err := s.db.Exec(r.Context(), `insert into groups(id,name,multiplier) values($1,$2,$3)`, id, name, in.Multiplier)
 	if err != nil {
 		writeError(w, 409, "conflict", "group name already exists")
 		return
 	}
-	s.audit(r, "group.created", "group", id, map[string]any{"name": in.Name, "multiplier": in.Multiplier})
-	writeJSON(w, 201, map[string]any{"id": id, "name": strings.TrimSpace(in.Name), "multiplier": in.Multiplier})
+	s.audit(r, "group.created", "group", id, map[string]any{"name": name, "multiplier": in.Multiplier})
+	writeJSON(w, 201, map[string]any{"id": id, "name": name, "multiplier": in.Multiplier})
 }
 
 func (s *Service) importGroups(w http.ResponseWriter, r *http.Request) {
@@ -623,8 +628,8 @@ func (s *Service) importGroups(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback(r.Context())
 	for name, multiplier := range values {
 		name = strings.TrimSpace(name)
-		if name == "" || multiplier < 0 || math.IsNaN(multiplier) || math.IsInf(multiplier, 0) {
-			writeError(w, 400, "invalid_request", "group names must be non-empty and multipliers must not be negative")
+		if !validGroupName(name) || multiplier < 0 || math.IsNaN(multiplier) || math.IsInf(multiplier, 0) {
+			writeError(w, 400, "invalid_request", "group names must be 1-100 characters and multipliers must not be negative")
 			return
 		}
 		id, _ := randomID()
@@ -807,6 +812,26 @@ var availablePermissions = map[string]bool{
 	"channels.manage": true, "logs.read": true, "pricing.read": true, "pricing.manage": true,
 	"audit.read": true, "wallets.manage": true, "routes.manage": true, "quotas.manage": true,
 	"system.manage": true,
+}
+
+func validGroupName(name string) bool {
+	return len(name) > 0 && len(name) <= 100
+}
+
+func validProviderSlug(slug string) bool {
+	if len(slug) == 0 || len(slug) > 64 {
+		return false
+	}
+	for i, r := range slug {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
+			continue
+		}
+		if r == '-' && i > 0 && i < len(slug)-1 {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func (s *Service) setUserRole(w http.ResponseWriter, r *http.Request) {

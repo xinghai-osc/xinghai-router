@@ -82,3 +82,57 @@ func TestUpdateChannelRejectsInvalidRequestBeforeDatabaseAccess(t *testing.T) {
 		}
 	}
 }
+
+func TestValidGroupNameAndProviderSlug(t *testing.T) {
+	if !validGroupName("default") || !validGroupName(strings.Repeat("a", 100)) {
+		t.Fatal("expected valid group names")
+	}
+	if validGroupName("") || validGroupName(strings.Repeat("a", 101)) {
+		t.Fatal("expected invalid group names")
+	}
+	for _, slug := range []string{"openai", "open-ai", "claude3", "a1"} {
+		if !validProviderSlug(slug) {
+			t.Fatalf("expected valid slug %q", slug)
+		}
+	}
+	for _, slug := range []string{"", "OpenAI", "-bad", "bad-", "has_under", "has space", strings.Repeat("a", 65)} {
+		if validProviderSlug(slug) {
+			t.Fatalf("expected invalid slug %q", slug)
+		}
+	}
+}
+
+func TestCreateGroupRejectsInvalidNameBeforeDatabase(t *testing.T) {
+	for _, body := range []string{
+		`{}`,
+		`{"name":" "}`,
+		`{"name":"` + strings.Repeat("n", 101) + `"}`,
+		`{"name":"ok","multiplier":-1}`,
+	} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/admin/groups", strings.NewReader(body))
+		(&Service{}).createGroup(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("body %s status = %d", body, rec.Code)
+		}
+	}
+}
+
+func TestSaveProviderRejectsInvalidBeforeDatabase(t *testing.T) {
+	for _, body := range []string{
+		`{}`,
+		`{"name":"OpenAI","slug":"open_ai","prefixes":["gpt-"]}`,
+		`{"name":"OpenAI","slug":"-openai","prefixes":["gpt-"]}`,
+		`{"name":"OpenAI","slug":"openai","prefixes":[]}`,
+		`{"name":"OpenAI","slug":"openai","prefixes":["gpt-"],"priority":-1}`,
+		`{"name":"OpenAI","slug":"openai","prefixes":["gpt-"],"priority":10001}`,
+		`{"name":"","slug":"openai","prefixes":["gpt-"]}`,
+	} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/admin/providers", strings.NewReader(body))
+		(&Service{}).saveProvider(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("body %s status = %d", body, rec.Code)
+		}
+	}
+}
