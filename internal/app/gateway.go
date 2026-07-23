@@ -12,12 +12,32 @@ import (
 	"time"
 )
 
+const (
+	maxGatewayMaxTokens     = 200_000
+	defaultGatewayMaxTokens = 4096
+	maxUpstreamResponseBody = 16 << 20
+)
+
 type channel struct {
 	id, baseURL, apiKey, upstreamModel, provider string
 	priority, weight                             int
 }
 
 type reservation struct{ amount float64 }
+
+func validGatewayMaxTokens(maxTokens int) bool {
+	return maxTokens > 0 && maxTokens <= maxGatewayMaxTokens
+}
+
+func resolveGatewayMaxTokens(maxTokens int) (int, bool) {
+	if maxTokens > maxGatewayMaxTokens {
+		return 0, false
+	}
+	if maxTokens <= 0 {
+		return defaultGatewayMaxTokens, true
+	}
+	return maxTokens, true
+}
 
 func (s *Service) groupMultiplier(r *http.Request, key keyContext) float64 {
 	if key.groupID == "" {
@@ -60,11 +80,16 @@ func (s *Service) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var request struct {
-		Model  string `json:"model"`
-		Stream bool   `json:"stream"`
+		Model     string `json:"model"`
+		Stream    bool   `json:"stream"`
+		MaxTokens int    `json:"max_tokens"`
 	}
 	if json.Unmarshal(body, &request) != nil || request.Model == "" {
 		writeError(w, 400, "invalid_request", "model is required")
+		return
+	}
+	if request.MaxTokens > maxGatewayMaxTokens {
+		writeError(w, 400, "invalid_request", "max_tokens must be at most 200000")
 		return
 	}
 	s.proxyChatCompletions(w, r, body, request.Model, request.Stream, nil, nil)
@@ -76,6 +101,14 @@ type streamTransform func(http.ResponseWriter, *http.Response) error
 func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, body []byte, model string, stream bool, transform responseTransform, streamFn streamTransform) {
 	started := time.Now()
 	key := r.Context().Value(contextKey{}).(keyContext)
+	var tokenReq struct {
+		MaxTokens int `json:"max_tokens"`
+	}
+	_ = json.Unmarshal(body, &tokenReq)
+	if tokenReq.MaxTokens > maxGatewayMaxTokens {
+		writeError(w, 400, "invalid_request", "max_tokens must be at most 200000")
+		return
+	}
 	if err := s.checkQuota(r, key, model); err != nil {
 		writeError(w, 429, "quota_exceeded", "request quota exceeded")
 		return
@@ -179,7 +212,7 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 		s.channelSucceeded(r, ch.id)
 		return
 	}
-	responseBody, err := io.ReadAll(resp.Body)
+	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, maxUpstreamResponseBody))
 	if err != nil {
 		writeError(w, 502, "upstream_error", "could not read upstream response")
 		return
@@ -216,9 +249,11 @@ func (s *Service) reserveUsage(r *http.Request, key keyContext, model string, bo
 		MaxTokens int `json:"max_tokens"`
 	}
 	_ = json.Unmarshal(body, &request)
-	if request.MaxTokens <= 0 {
-		request.MaxTokens = 4096
+	resolved, ok := resolveGatewayMaxTokens(request.MaxTokens)
+	if !ok {
+		return reservation{}, errInvalid
 	}
+	request.MaxTokens = resolved
 	var input, output, multiplier float64
 	if err := s.db.QueryRow(r.Context(), `select input_per_million,output_per_million,multiplier from pricing_rules where model=$1 and enabled`, model).Scan(&input, &output, &multiplier); err != nil {
 		return reservation{}, nil

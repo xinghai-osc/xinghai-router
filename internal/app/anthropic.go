@@ -35,8 +35,8 @@ type anthropicTool struct {
 
 func (s *Service) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 	var in anthropicRequest
-	if decode(r, &in) != nil || in.Model == "" || in.MaxTokens <= 0 || len(in.Messages) == 0 {
-		writeError(w, http.StatusBadRequest, "invalid_request", "model, messages, and max_tokens are required")
+	if decode(r, &in) != nil || in.Model == "" || !validGatewayMaxTokens(in.MaxTokens) || len(in.Messages) == 0 {
+		writeError(w, http.StatusBadRequest, "invalid_request", "model, messages, and max_tokens (1-200000) are required")
 		return
 	}
 	body, err := anthropicToOpenAI(in)

@@ -2,7 +2,9 @@ package app
 
 import (
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -99,5 +101,15 @@ func TestAnthropicAPIKeyAndLoopback(t *testing.T) {
 	}
 	if isLoopbackHost("ollama.example.com") {
 		t.Fatal("unexpected loopback result")
+	}
+}
+
+func TestAnthropicMessagesRejectsOversizeMaxTokens(t *testing.T) {
+	rec := httptest.NewRecorder()
+	body := `{"model":"claude","max_tokens":200001,"messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+	(&Service{}).anthropicMessages(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "max_tokens") {
+		t.Fatalf("status/body = %d %s", rec.Code, rec.Body.String())
 	}
 }
