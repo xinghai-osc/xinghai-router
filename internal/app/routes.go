@@ -18,9 +18,9 @@ func (s *Service) routes() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
-	mux.HandleFunc("POST /auth/register", s.register)
-	mux.HandleFunc("POST /auth/login", s.login)
-	mux.HandleFunc("POST /auth/email-code", s.sendEmailCode)
+	mux.Handle("POST /auth/register", s.ipRateLimit(s.register))
+	mux.Handle("POST /auth/login", s.ipRateLimit(s.login))
+	mux.Handle("POST /auth/email-code", s.ipRateLimit(s.sendEmailCode))
 	mux.Handle("GET /model-catalog", s.optionalAccount(s.modelCatalog))
 	mux.HandleFunc("GET /site-settings", s.siteSettings)
 	mux.HandleFunc("GET /rankings", s.rankings)
