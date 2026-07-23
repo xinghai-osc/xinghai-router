@@ -75,6 +75,32 @@ func TestPaymentAmountInBounds(t *testing.T) {
 	}
 }
 
+func TestEpaySettingsReady(t *testing.T) {
+	ready := epaySettings{
+		Enabled:       true,
+		BaseURL:       "https://pay.example.com",
+		MerchantID:    "1001",
+		MerchantKey:   "secret",
+		PublicBaseURL: "https://app.example.com",
+	}
+	if !ready.ready() {
+		t.Fatal("fully configured settings must be ready")
+	}
+	cases := []epaySettings{
+		{},
+		{Enabled: false, BaseURL: ready.BaseURL, MerchantID: ready.MerchantID, MerchantKey: ready.MerchantKey, PublicBaseURL: ready.PublicBaseURL},
+		{Enabled: true, BaseURL: "", MerchantID: ready.MerchantID, MerchantKey: ready.MerchantKey, PublicBaseURL: ready.PublicBaseURL},
+		{Enabled: true, BaseURL: ready.BaseURL, MerchantID: "", MerchantKey: ready.MerchantKey, PublicBaseURL: ready.PublicBaseURL},
+		{Enabled: true, BaseURL: ready.BaseURL, MerchantID: ready.MerchantID, MerchantKey: "", PublicBaseURL: ready.PublicBaseURL},
+		{Enabled: true, BaseURL: ready.BaseURL, MerchantID: ready.MerchantID, MerchantKey: ready.MerchantKey, PublicBaseURL: ""},
+	}
+	for i, settings := range cases {
+		if settings.ready() {
+			t.Fatalf("case %d must not be ready: %#v", i, settings)
+		}
+	}
+}
+
 func TestEpayNotifySignatureCompare(t *testing.T) {
 	values := url.Values{
 		"pid":          {"1001"},

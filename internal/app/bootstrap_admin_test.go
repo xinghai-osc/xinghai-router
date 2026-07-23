@@ -18,6 +18,15 @@ func TestBootstrapAdminEmailDefaultAndOverride(t *testing.T) {
 	}
 }
 
+func TestBootstrapAdminEmailWhitespaceOnlyUsesDefault(t *testing.T) {
+	for _, value := range []string{" ", "   ", "\t", "\n", " \t \n "} {
+		t.Setenv("BOOTSTRAP_ADMIN_EMAIL", value)
+		if got := bootstrapAdminEmail(); got != defaultBootstrapAdminEmail {
+			t.Fatalf("whitespace-only email env %q = %q, want %q", value, got, defaultBootstrapAdminEmail)
+		}
+	}
+}
+
 func TestBootstrapAdminNameDefaultAndOverride(t *testing.T) {
 	t.Setenv("BOOTSTRAP_ADMIN_NAME", "")
 	if got := bootstrapAdminName(); got != defaultBootstrapAdminName {
@@ -29,7 +38,17 @@ func TestBootstrapAdminNameDefaultAndOverride(t *testing.T) {
 	}
 }
 
+func TestBootstrapAdminNameWhitespaceOnlyUsesDefault(t *testing.T) {
+	for _, value := range []string{" ", "   ", "\t", "\n", " \t \n "} {
+		t.Setenv("BOOTSTRAP_ADMIN_NAME", value)
+		if got := bootstrapAdminName(); got != defaultBootstrapAdminName {
+			t.Fatalf("whitespace-only name env %q = %q, want %q", value, got, defaultBootstrapAdminName)
+		}
+	}
+}
+
 func TestRandomPasswordLengthAndCharset(t *testing.T) {
+	const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*-_"
 	password, err := randomPassword(24)
 	if err != nil {
 		t.Fatal(err)
@@ -38,8 +57,11 @@ func TestRandomPasswordLengthAndCharset(t *testing.T) {
 		t.Fatalf("len = %d, want 24", len(password))
 	}
 	for _, r := range password {
-		if !(unicode.IsLetter(r) || unicode.IsDigit(r) || strings.ContainsRune("!@#$%^&*-_", r)) {
+		if !strings.ContainsRune(alphabet, r) {
 			t.Fatalf("unexpected character %q in password", r)
+		}
+		if !(unicode.IsLetter(r) || unicode.IsDigit(r) || strings.ContainsRune("!@#$%^&*-_", r)) {
+			t.Fatalf("unexpected character class %q in password", r)
 		}
 	}
 	other, err := randomPassword(24)
@@ -52,12 +74,25 @@ func TestRandomPasswordLengthAndCharset(t *testing.T) {
 }
 
 func TestRandomPasswordMinimumLength(t *testing.T) {
-	password, err := randomPassword(4)
+	for _, length := range []int{0, 1, 4, 7, 8} {
+		password, err := randomPassword(length)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := length
+		if want < 8 {
+			want = 8
+		}
+		if len(password) != want {
+			t.Fatalf("randomPassword(%d) len = %d, want %d", length, len(password), want)
+		}
+	}
+	password, err := randomPassword(32)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(password) < 8 {
-		t.Fatalf("len = %d, want at least 8", len(password))
+	if len(password) != 32 {
+		t.Fatalf("len = %d, want 32", len(password))
 	}
 }
 

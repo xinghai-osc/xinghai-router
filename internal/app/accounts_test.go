@@ -230,3 +230,34 @@ func TestCreateAccountKeyRejectsInvalidNameBeforeDatabase(t *testing.T) {
 		}
 	}
 }
+
+func TestValidEmail(t *testing.T) {
+	valid := []string{
+		"user@example.com",
+		"  user@example.com  ",
+		"a@b.co",
+		"user+tag@example.com",
+		"user.name@example.com",
+	}
+	for _, email := range valid {
+		if !validEmail(email) {
+			t.Fatalf("validEmail(%q) = false, want true", email)
+		}
+	}
+	invalid := []string{
+		"",
+		"   ",
+		"not-an-email",
+		"@example.com",
+		"user@",
+		"user@example.com extra",
+		"Alice <alice@example.com>",
+		"user@@example.com",
+		"user example@example.com",
+	}
+	for _, email := range invalid {
+		if validEmail(email) {
+			t.Fatalf("validEmail(%q) = true, want false", email)
+		}
+	}
+}

@@ -10,16 +10,27 @@ import (
 )
 
 func TestPasswordChangeAllowedPath(t *testing.T) {
-	allowed := []string{"/account/me", "/account/password", "/auth/logout"}
-	for _, path := range allowed {
-		if !passwordChangeAllowedPath(path) {
-			t.Fatalf("%s must be allowed while must_change_password is set", path)
-		}
+	cases := []struct {
+		path    string
+		allowed bool
+	}{
+		{"/account/me", true},
+		{"/account/password", true},
+		{"/auth/logout", true},
+		{"/account/keys", false},
+		{"/admin/users", false},
+		{"/account/usage", false},
+		{"/account/preferences", false},
+		{"/account/me/", false},
+		{"/account/password/change", false},
+		{"/auth/login", false},
+		{"", false},
+		{"/", false},
+		{"/v1/models", false},
 	}
-	blocked := []string{"/account/keys", "/admin/users", "/account/usage", "/account/preferences"}
-	for _, path := range blocked {
-		if passwordChangeAllowedPath(path) {
-			t.Fatalf("%s must be blocked while must_change_password is set", path)
+	for _, tc := range cases {
+		if got := passwordChangeAllowedPath(tc.path); got != tc.allowed {
+			t.Fatalf("passwordChangeAllowedPath(%q) = %v, want %v", tc.path, got, tc.allowed)
 		}
 	}
 }
@@ -68,25 +79,35 @@ func TestAPIMiddlewareRequiresAPIKey(t *testing.T) {
 }
 
 func TestPermissionGateAdminBypass(t *testing.T) {
-	if !accountHasPermission(accountContext{role: "admin"}, "system.manage") {
-		t.Fatal("admin must have all permissions")
+	cases := []struct {
+		name       string
+		account    accountContext
+		permission string
+		want       bool
+	}{
+		{"admin any permission", accountContext{role: "admin"}, "system.manage", true},
+		{"admin empty permission", accountContext{role: "admin"}, "", true},
+		{"admin nil permissions map", accountContext{role: "admin", permissions: nil}, "users.read", true},
+		{"user empty grants", accountContext{role: "user", permissions: map[string]bool{}}, "system.manage", false},
+		{"user nil permissions", accountContext{role: "user"}, "users.read", false},
+		{"operator granted", accountContext{role: "operator", permissions: map[string]bool{"logs.read": true}}, "logs.read", true},
+		{"operator missing", accountContext{role: "operator", permissions: map[string]bool{"logs.read": true}}, "audit.read", false},
+		{"operator false grant", accountContext{role: "operator", permissions: map[string]bool{"logs.read": false}}, "logs.read", false},
+		{"user granted keys", accountContext{role: "user", permissions: map[string]bool{"keys.manage": true}}, "keys.manage", true},
+		{"user wrong grant", accountContext{role: "user", permissions: map[string]bool{"keys.manage": true}}, "channels.manage", false},
 	}
-	if accountHasPermission(accountContext{role: "user", permissions: map[string]bool{}}, "system.manage") {
-		t.Fatal("user without grants must be denied")
-	}
-	if !accountHasPermission(accountContext{role: "operator", permissions: map[string]bool{"logs.read": true}}, "logs.read") {
-		t.Fatal("granted permission must allow")
-	}
-	if accountHasPermission(accountContext{role: "operator", permissions: map[string]bool{"logs.read": true}}, "audit.read") {
-		t.Fatal("missing permission must deny")
+	for _, tc := range cases {
+		if got := accountHasPermission(tc.account, tc.permission); got != tc.want {
+			t.Fatalf("%s: accountHasPermission = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }
 
 func TestPermissionMiddlewareForbiddenWithoutGrant(t *testing.T) {
 	// permission wraps account(), which needs DB for real tokens. Exercise the
-	// gate by injecting account context into a thin wrapper that mirrors the check.
+	// gate via the real accountHasPermission symbol.
 	check := func(account accountContext, permission string) int {
-		if account.role != "admin" && !account.permissions[permission] {
+		if !accountHasPermission(account, permission) {
 			return http.StatusForbidden
 		}
 		return http.StatusNoContent
@@ -95,6 +116,12 @@ func TestPermissionMiddlewareForbiddenWithoutGrant(t *testing.T) {
 		t.Fatalf("code = %d", code)
 	}
 	if code := check(accountContext{role: "admin"}, "users.read"); code != http.StatusNoContent {
+		t.Fatalf("code = %d", code)
+	}
+	if code := check(accountContext{role: "operator", permissions: map[string]bool{"users.read": true}}, "users.read"); code != http.StatusNoContent {
+		t.Fatalf("code = %d", code)
+	}
+	if code := check(accountContext{role: "operator", permissions: map[string]bool{"logs.read": true}}, "users.read"); code != http.StatusForbidden {
 		t.Fatalf("code = %d", code)
 	}
 }

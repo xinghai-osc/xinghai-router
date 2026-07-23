@@ -98,3 +98,28 @@ func TestHandlerStackAppliesSecurityHeaders(t *testing.T) {
 		t.Fatal("expected request id")
 	}
 }
+
+func TestDecodeDisallowUnknownFields(t *testing.T) {
+	type sample struct {
+		Name string `json:"name"`
+	}
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"name":"ok"}`))
+	var ok sample
+	if err := decode(req, &ok); err != nil {
+		t.Fatalf("known fields must decode: %v", err)
+	}
+	if ok.Name != "ok" {
+		t.Fatalf("name = %q", ok.Name)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"name":"ok","extra":true}`))
+	var bad sample
+	if err := decode(req, &bad); err == nil {
+		t.Fatal("unknown fields must be rejected")
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`not-json`))
+	if err := decode(req, &sample{}); err == nil {
+		t.Fatal("invalid JSON must fail")
+	}
+}
