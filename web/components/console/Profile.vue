@@ -8,7 +8,7 @@ import { Switch } from '@/components/ui/switch'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 
 const store = useConsoleStore()
-const { t, account, ownGroups, avatarUrlInput, avatarInput, leaderboardPrefs, saveLeaderboardPrefs, chooseAvatar, removeAvatar, saveAvatarUrl } = store
+const { t, account, ownGroups, avatarUrlInput, avatarInput, passwordForm, passwordMessage, leaderboardPrefs, saveLeaderboardPrefs, chooseAvatar, removeAvatar, saveAvatarUrl, changePassword } = store
 </script>
 
 <template>
@@ -70,6 +70,36 @@ const { t, account, ownGroups, avatarUrlInput, avatarInput, leaderboardPrefs, sa
         <Button variant="outline" type="button" @click="avatarInput?.click()">{{ t('uploadAvatar') }}</Button>
         <Button v-if="account?.avatar_url" variant="link" class="text-destructive" type="button" @click="removeAvatar">{{ t('remove') }}</Button>
       </div>
+    </CardContent>
+  </Card>
+
+  <Card class="mt-4" :class="account?.must_change_password ? 'border-amber-500/60' : ''">
+    <CardHeader>
+      <CardTitle>{{ t('changePasswordSection') }}</CardTitle>
+      <CardDescription>{{ account?.must_change_password ? t('mustChangePasswordRequired') : t('changePasswordDesc') }}</CardDescription>
+    </CardHeader>
+    <CardContent>
+      <div v-if="account?.must_change_password" class="mb-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-900 dark:text-amber-100">
+        {{ t('mustChangePasswordBanner') }}
+      </div>
+      <form class="grid max-w-md gap-3" @submit.prevent="changePassword">
+        <div class="grid gap-2">
+          <Label>{{ t('currentPassword') }}</Label>
+          <Input v-model="passwordForm.current_password" type="password" autocomplete="current-password" required minlength="8" />
+        </div>
+        <div class="grid gap-2">
+          <Label>{{ t('newPassword') }}</Label>
+          <Input v-model="passwordForm.new_password" type="password" autocomplete="new-password" required minlength="8" :placeholder="t('passwordMinLength')" />
+        </div>
+        <div class="grid gap-2">
+          <Label>{{ t('confirmNewPassword') }}</Label>
+          <Input v-model="passwordForm.confirm_password" type="password" autocomplete="new-password" required minlength="8" />
+        </div>
+        <p v-if="passwordMessage" class="text-sm text-muted-foreground">{{ passwordMessage }}</p>
+        <div>
+          <Button type="submit">{{ t('changePassword') }}</Button>
+        </div>
+      </form>
     </CardContent>
   </Card>
 

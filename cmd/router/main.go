@@ -24,7 +24,15 @@ func main() {
 	}
 	defer svc.Close()
 
-	server := &http.Server{Addr: cfg.ListenAddr, Handler: svc.Handler(), ReadHeaderTimeout: 10 * time.Second}
+	server := &http.Server{
+		Addr:              cfg.ListenAddr,
+		Handler:           svc.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      0,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+	}
 	go func() {
 		log.Printf("xinghai-router listening on %s", cfg.ListenAddr)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {

@@ -7,18 +7,47 @@ import (
 	"time"
 )
 
+const (
+	authLoginPerMinute     = 10
+	authRegisterPerMinute  = 5
+	authEmailCodePerMinute = 5
+)
+
+type rateLimiter interface {
+	allow(key string) bool
+	allowN(key string, n int) bool
+	cleanup()
+	close()
+}
+
 type rateWindow struct {
 	start time.Time
 	count int
 }
-type limiter struct {
+
+type memoryLimiter struct {
 	mu        sync.Mutex
 	perMinute int
 	entries   map[string]rateWindow
 }
 
-func newLimiter(n int) *limiter { return &limiter{perMinute: n, entries: map[string]rateWindow{}} }
-func (l *limiter) allow(key string) bool {
+func newMemoryLimiter(n int) *memoryLimiter {
+	if n <= 0 {
+		n = 60
+	}
+	return &memoryLimiter{perMinute: n, entries: map[string]rateWindow{}}
+}
+
+func newLimiter(n int) *memoryLimiter { return newMemoryLimiter(n) }
+
+func (l *memoryLimiter) allow(key string) bool {
+	return l.allowN(key, l.perMinute)
+}
+
+func (l *memoryLimiter) allowN(key string, n int) bool {
+	if n <= 0 {
+		n = l.perMinute
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := time.Now()
@@ -26,7 +55,7 @@ func (l *limiter) allow(key string) bool {
 	if now.Sub(w.start) >= time.Minute {
 		w = rateWindow{start: now}
 	}
-	if w.count >= l.perMinute {
+	if w.count >= n {
 		l.entries[key] = w
 		return false
 	}
@@ -37,7 +66,7 @@ func (l *limiter) allow(key string) bool {
 
 // cleanup removes entries that have not been touched in over a minute.
 // Call it periodically to prevent unbounded map growth.
-func (l *limiter) cleanup() {
+func (l *memoryLimiter) cleanup() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	for k, w := range l.entries {
@@ -97,4 +126,44 @@ func (s *Service) ipRateLimit(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r)
 	}
+}
+
+func (l *memoryLimiter) close() {}
+
+type fallbackLimiter struct {
+	primary *redisLimiter
+	backup  *memoryLimiter
+}
+
+func (l *fallbackLimiter) allow(key string) bool {
+	return l.allowN(key, l.backup.perMinute)
+}
+
+func (l *fallbackLimiter) allowN(key string, n int) bool {
+	ok, err := l.primary.tryAllowN(key, n)
+	if err != nil {
+		return l.backup.allowN(key, n)
+	}
+	return ok
+}
+
+func (l *fallbackLimiter) cleanup() {
+	l.backup.cleanup()
+}
+
+func (l *fallbackLimiter) close() {
+	l.primary.close()
+	l.backup.close()
+}
+
+func newRateLimiter(redisURL string, perMinute int) (rateLimiter, string) {
+	mem := newMemoryLimiter(perMinute)
+	if redisURL == "" {
+		return mem, "memory"
+	}
+	redis, err := newRedisLimiter(redisURL, perMinute)
+	if err != nil {
+		return mem, "memory"
+	}
+	return &fallbackLimiter{primary: redis, backup: mem}, "redis"
 }

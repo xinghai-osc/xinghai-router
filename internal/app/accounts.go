@@ -11,9 +11,10 @@ import (
 )
 
 type accountContext struct {
-	userID      string
-	role        string
-	permissions map[string]bool
+	userID             string
+	role               string
+	permissions        map[string]bool
+	mustChangePassword bool
 }
 type accountContextKey struct{}
 
@@ -29,6 +30,14 @@ func (s *Service) register(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "a valid email, name, and password of at least 8 characters are required")
 		return
 	}
+	email := strings.ToLower(strings.TrimSpace(in.Email))
+	clientIP := requestMetadata(r).clientIP
+	if s.limiter != nil {
+		if !s.limiter.allowN("auth:register:ip:"+clientIP, authRegisterPerMinute) || !s.limiter.allowN("auth:register:email:"+email, authRegisterPerMinute) {
+			writeError(w, http.StatusTooManyRequests, "rate_limit_exceeded", "too many registration attempts")
+			return
+		}
+	}
 	if s.loadSystemConfig(r.Context()).emailVerificationEnabled() {
 		if strings.TrimSpace(in.Code) == "" {
 			writeError(w, http.StatusBadRequest, "code_required", "the email verification code is required")
@@ -42,7 +51,6 @@ func (s *Service) register(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "captcha_failed", err.Error())
 		return
 	}
-	email := strings.ToLower(strings.TrimSpace(in.Email))
 	passwordHash, err := hashPassword(in.Password)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not secure password")
@@ -58,17 +66,8 @@ func (s *Service) register(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not create account")
 		return
 	}
-	var hasAccountAdmin bool
-	if err = tx.QueryRow(r.Context(), `select exists(select 1 from users where role='admin' and password_hash is not null)`).Scan(&hasAccountAdmin); err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "could not create account")
-		return
-	}
-	role := "user"
-	if !hasAccountAdmin {
-		role = "admin"
-	}
 	var id string
-	err = tx.QueryRow(r.Context(), `insert into users(email,name,role,password_hash) values($1,$2,$3,$4) returning id`, email, strings.TrimSpace(in.Name), role, passwordHash).Scan(&id)
+	err = tx.QueryRow(r.Context(), `insert into users(email,name,role,password_hash) values($1,$2,'user',$3) returning id`, email, strings.TrimSpace(in.Name), passwordHash).Scan(&id)
 	if err != nil {
 		writeError(w, http.StatusConflict, "conflict", "email already exists")
 		return
@@ -95,13 +94,31 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "email and password are required")
 		return
 	}
+	if !validPasswordLength(in.Password) {
+		writeError(w, http.StatusBadRequest, "invalid_request", "password must be between 8 and 72 characters")
+		return
+	}
+	email := strings.ToLower(strings.TrimSpace(in.Email))
+	clientIP := requestMetadata(r).clientIP
+	if s.limiter != nil {
+		if !s.limiter.allowN("auth:login:ip:"+clientIP, authLoginPerMinute) || !s.limiter.allowN("auth:login:email:"+email, authLoginPerMinute) {
+			writeError(w, http.StatusTooManyRequests, "rate_limit_exceeded", "too many login attempts")
+			return
+		}
+	}
 	if err := s.verifyGeetest(r.Context(), in.geetestPayload); err != nil {
 		writeError(w, http.StatusForbidden, "captcha_failed", err.Error())
 		return
 	}
 	var userID, passwordHash string
-	err := s.db.QueryRow(r.Context(), `select id,password_hash from users where email=$1 and enabled and password_hash is not null`, strings.ToLower(strings.TrimSpace(in.Email))).Scan(&userID, &passwordHash)
-	if err != nil || !passwordMatches(passwordHash, in.Password) {
+	err := s.db.QueryRow(r.Context(), `select id,password_hash from users where email=$1 and enabled and password_hash is not null`, email).Scan(&userID, &passwordHash)
+	if err != nil {
+		// Spend comparable time to a real bcrypt check so missing users are not free to probe.
+		_ = passwordMatches(dummyPasswordHash, in.Password)
+		writeError(w, http.StatusUnauthorized, "invalid_credentials", "invalid email or password")
+		return
+	}
+	if !passwordMatches(passwordHash, in.Password) {
 		writeError(w, http.StatusUnauthorized, "invalid_credentials", "invalid email or password")
 		return
 	}
@@ -119,9 +136,9 @@ func (s *Service) logout(w http.ResponseWriter, r *http.Request) {
 func (s *Service) accountMe(w http.ResponseWriter, r *http.Request) {
 	account := r.Context().Value(accountContextKey{}).(accountContext)
 	var email, name, role, avatarURL string
-	var leaderboardOptIn, leaderboardMaskName bool
+	var leaderboardOptIn, leaderboardMaskName, mustChangePassword bool
 	var balance, reserved any
-	err := s.db.QueryRow(r.Context(), `select u.email,u.name,u.role,u.avatar_url,u.leaderboard_opt_in,u.leaderboard_mask_name,coalesce(w.balance,0),coalesce(w.reserved,0) from users u left join user_wallets w on w.user_id=u.id where u.id=$1`, account.userID).Scan(&email, &name, &role, &avatarURL, &leaderboardOptIn, &leaderboardMaskName, &balance, &reserved)
+	err := s.db.QueryRow(r.Context(), `select u.email,u.name,u.role,u.avatar_url,u.leaderboard_opt_in,u.leaderboard_mask_name,u.must_change_password,coalesce(w.balance,0),coalesce(w.reserved,0) from users u left join user_wallets w on w.user_id=u.id where u.id=$1`, account.userID).Scan(&email, &name, &role, &avatarURL, &leaderboardOptIn, &leaderboardMaskName, &mustChangePassword, &balance, &reserved)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not load account")
 		return
@@ -131,7 +148,7 @@ func (s *Service) accountMe(w http.ResponseWriter, r *http.Request) {
 		permissions = append(permissions, permission)
 	}
 	sort.Strings(permissions)
-	writeJSON(w, http.StatusOK, map[string]any{"id": account.userID, "email": email, "name": name, "role": role, "avatar_url": avatarURL, "permissions": permissions, "balance": balance, "reserved": reserved, "leaderboard_opt_in": leaderboardOptIn, "leaderboard_mask_name": leaderboardMaskName})
+	writeJSON(w, http.StatusOK, map[string]any{"id": account.userID, "email": email, "name": name, "role": role, "avatar_url": avatarURL, "permissions": permissions, "balance": balance, "reserved": reserved, "leaderboard_opt_in": leaderboardOptIn, "leaderboard_mask_name": leaderboardMaskName, "must_change_password": mustChangePassword})
 }
 
 func (s *Service) updateAccountPreferences(w http.ResponseWriter, r *http.Request) {
@@ -160,6 +177,56 @@ func (s *Service) updateAccountPreferences(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+func validatePasswordChange(currentPassword, newPassword string) string {
+	if currentPassword == "" || newPassword == "" {
+		return "current_password and new_password are required"
+	}
+	if !validPasswordLength(newPassword) {
+		return "new password must be between 8 and 72 characters"
+	}
+	if currentPassword == newPassword {
+		return "new password must differ from the current password"
+	}
+	return ""
+}
+
+func (s *Service) changeAccountPassword(w http.ResponseWriter, r *http.Request) {
+	account := accountFromContext(r)
+	var in struct {
+		CurrentPassword string `json:"current_password"`
+		NewPassword     string `json:"new_password"`
+	}
+	if decode(r, &in) != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "current_password and new_password are required")
+		return
+	}
+	if msg := validatePasswordChange(in.CurrentPassword, in.NewPassword); msg != "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", msg)
+		return
+	}
+	var passwordHash string
+	err := s.db.QueryRow(r.Context(), `select password_hash from users where id=$1 and enabled and password_hash is not null`, account.userID).Scan(&passwordHash)
+	if err != nil || !passwordMatches(passwordHash, in.CurrentPassword) {
+		writeError(w, http.StatusUnauthorized, "invalid_credentials", "current password is incorrect")
+		return
+	}
+	newHash, err := hashPassword(in.NewPassword)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not secure password")
+		return
+	}
+	if _, err = s.db.Exec(r.Context(), `update users set password_hash=$1, must_change_password=false where id=$2`, newHash, account.userID); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not update password")
+		return
+	}
+	if _, err = s.db.Exec(r.Context(), `delete from user_sessions where user_id=$1 and token_hash<>$2`, account.userID, hashSecret(bearer(r))); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not revoke other sessions")
+		return
+	}
+	s.audit(r, "account.password_changed", "user", account.userID, map[string]any{"other_sessions_revoked": true, "must_change_password_cleared": true})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 func (s *Service) updateAccountProfile(w http.ResponseWriter, r *http.Request) {
 	account := accountFromContext(r)
 	var in struct {
@@ -171,22 +238,8 @@ func (s *Service) updateAccountProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	avatarURL := strings.TrimSpace(in.AvatarURL)
 	if avatarURL != "" {
-		if len(avatarURL) > 2<<20 || !strings.HasPrefix(avatarURL, "data:image/") {
-			writeError(w, http.StatusBadRequest, "invalid_request", "avatar must be an image smaller than 2 MB")
-			return
-		}
-		comma := strings.IndexByte(avatarURL, ',')
-		if comma < 0 || !strings.HasSuffix(avatarURL[:comma], ";base64") {
-			writeError(w, http.StatusBadRequest, "invalid_request", "invalid avatar image")
-			return
-		}
-		mime := strings.TrimPrefix(strings.TrimSuffix(avatarURL[:comma], ";base64"), "data:")
-		if !map[string]bool{"image/png": true, "image/jpeg": true, "image/gif": true, "image/webp": true}[mime] {
-			writeError(w, http.StatusBadRequest, "invalid_request", "avatar must be PNG, JPEG, GIF, or WebP")
-			return
-		}
-		if _, err := base64.StdEncoding.DecodeString(avatarURL[comma+1:]); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_request", "invalid avatar image")
+		if msg := validateAvatarDataURL(avatarURL); msg != "" {
+			writeError(w, http.StatusBadRequest, "invalid_request", msg)
 			return
 		}
 	}
@@ -224,8 +277,13 @@ func (s *Service) createAccountKey(w http.ResponseWriter, r *http.Request) {
 		ExpiresAt string `json:"expires_at"`
 		GroupID   string `json:"group_id"`
 	}
-	if decode(r, &in) != nil || strings.TrimSpace(in.Name) == "" {
+	if decode(r, &in) != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", "name is required")
+		return
+	}
+	name := strings.TrimSpace(in.Name)
+	if !validAPIKeyName(name) {
+		writeError(w, http.StatusBadRequest, "invalid_request", "name must be 1-100 characters")
 		return
 	}
 	expires, err := parseExpiry(in.ExpiresAt)
@@ -243,7 +301,6 @@ func (s *Service) createAccountKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "key generation failed")
 		return
 	}
-	name := strings.TrimSpace(in.Name)
 	groupID, err := s.validKeyGroup(r.Context(), account.userID, in.GroupID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", "group must belong to user")
@@ -292,7 +349,12 @@ func (s *Service) updateAccountKey(w http.ResponseWriter, r *http.Request) {
 		ExpiresAt string `json:"expires_at"`
 		GroupID   string `json:"group_id"`
 	}
-	if decode(r, &in) != nil || strings.TrimSpace(in.Name) == "" || len(strings.TrimSpace(in.Name)) > 100 {
+	if decode(r, &in) != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "name is required and must be at most 100 characters")
+		return
+	}
+	name := strings.TrimSpace(in.Name)
+	if !validAPIKeyName(name) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "name is required and must be at most 100 characters")
 		return
 	}
@@ -306,7 +368,7 @@ func (s *Service) updateAccountKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "group must belong to user")
 		return
 	}
-	result, err := s.db.Exec(r.Context(), `update api_keys set name=$1,expires_at=$2,group_id=$3 where id=$4 and user_id=$5`, strings.TrimSpace(in.Name), expires, groupID, r.PathValue("id"), account.userID)
+	result, err := s.db.Exec(r.Context(), `update api_keys set name=$1,expires_at=$2,group_id=$3 where id=$4 and user_id=$5 and revoked_at is null`, name, expires, groupID, r.PathValue("id"), account.userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not update API key")
 		return
@@ -315,8 +377,28 @@ func (s *Service) updateAccountKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "API key not found")
 		return
 	}
-	s.audit(r, "api_key.updated", "api_key", r.PathValue("id"), map[string]any{"name": strings.TrimSpace(in.Name), "expires_at": expires, "group_id": groupID, "self_service": true})
-	writeJSON(w, http.StatusOK, map[string]any{"id": r.PathValue("id"), "name": strings.TrimSpace(in.Name), "expires_at": expires, "group_id": groupID})
+	s.audit(r, "api_key.updated", "api_key", r.PathValue("id"), map[string]any{"name": name, "expires_at": expires, "group_id": groupID, "self_service": true})
+	writeJSON(w, http.StatusOK, map[string]any{"id": r.PathValue("id"), "name": name, "expires_at": expires, "group_id": groupID})
+}
+
+func (s *Service) revokeAccountKey(w http.ResponseWriter, r *http.Request) {
+	account := accountFromContext(r)
+	keyID := strings.TrimSpace(r.PathValue("id"))
+	if keyID == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "key id is required")
+		return
+	}
+	result, err := s.db.Exec(r.Context(), `update api_keys set revoked_at=coalesce(revoked_at, now()) where id=$1 and user_id=$2 and revoked_at is null`, keyID, account.userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not revoke API key")
+		return
+	}
+	if result.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "not_found", "API key not found")
+		return
+	}
+	s.audit(r, "api_key.revoked", "api_key", keyID, map[string]any{"self_service": true})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Service) accountUsage(w http.ResponseWriter, r *http.Request) {
@@ -368,7 +450,7 @@ func (s *Service) optionalAccount(next http.HandlerFunc) http.Handler {
 		account := accountContext{}
 		token := bearer(r)
 		if token != "" {
-			err := s.db.QueryRow(r.Context(), `select s.user_id,u.role from user_sessions s join users u on u.id=s.user_id where s.token_hash=$1 and s.expires_at>now() and u.enabled`, hashSecret(token)).Scan(&account.userID, &account.role)
+			err := s.db.QueryRow(r.Context(), `select s.user_id,u.role,u.must_change_password from user_sessions s join users u on u.id=s.user_id where s.token_hash=$1 and s.expires_at>now() and u.enabled`, hashSecret(token)).Scan(&account.userID, &account.role, &account.mustChangePassword)
 			if err != nil {
 				writeError(w, http.StatusUnauthorized, "unauthorized", "invalid or expired session")
 				return
@@ -376,6 +458,15 @@ func (s *Service) optionalAccount(next http.HandlerFunc) http.Handler {
 		}
 		next(w, r.WithContext(context.WithValue(r.Context(), accountContextKey{}, account)))
 	})
+}
+
+func passwordChangeAllowedPath(path string) bool {
+	switch path {
+	case "/account/me", "/account/password", "/auth/logout":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Service) account(next http.HandlerFunc) http.Handler {
@@ -386,9 +477,13 @@ func (s *Service) account(next http.HandlerFunc) http.Handler {
 			return
 		}
 		var account accountContext
-		err := s.db.QueryRow(r.Context(), `select s.user_id,u.role from user_sessions s join users u on u.id=s.user_id where s.token_hash=$1 and s.expires_at>now() and u.enabled`, hashSecret(token)).Scan(&account.userID, &account.role)
+		err := s.db.QueryRow(r.Context(), `select s.user_id,u.role,u.must_change_password from user_sessions s join users u on u.id=s.user_id where s.token_hash=$1 and s.expires_at>now() and u.enabled`, hashSecret(token)).Scan(&account.userID, &account.role, &account.mustChangePassword)
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, "unauthorized", "invalid or expired session")
+			return
+		}
+		if account.mustChangePassword && !passwordChangeAllowedPath(r.URL.Path) {
+			writeError(w, http.StatusForbidden, "password_change_required", "password change required before continuing")
 			return
 		}
 		account.permissions = map[string]bool{}
@@ -410,10 +505,14 @@ func (s *Service) account(next http.HandlerFunc) http.Handler {
 	})
 }
 
+func accountHasPermission(account accountContext, permission string) bool {
+	return account.role == "admin" || account.permissions[permission]
+}
+
 func (s *Service) permission(permission string, next http.HandlerFunc) http.Handler {
 	return s.account(func(w http.ResponseWriter, r *http.Request) {
 		account := r.Context().Value(accountContextKey{}).(accountContext)
-		if account.role != "admin" && !account.permissions[permission] {
+		if !accountHasPermission(account, permission) {
 			writeError(w, http.StatusForbidden, "forbidden", "missing permission: "+permission)
 			return
 		}
@@ -441,12 +540,34 @@ func (s *Service) createSession(w http.ResponseWriter, r *http.Request, userID s
 	writeJSON(w, status, map[string]any{"token": token, "expires_at": expiresAt})
 }
 
+func validPasswordLength(password string) bool {
+	return len(password) >= 8 && len(password) <= 72
+}
+
 func validAccountInput(email, name, password string) bool {
 	parsed, err := mail.ParseAddress(strings.TrimSpace(email))
-	return err == nil && parsed.Address == strings.TrimSpace(email) && len(strings.TrimSpace(name)) > 0 && len(strings.TrimSpace(name)) <= 100 && len(password) >= 8 && len(password) <= 128
+	return err == nil && parsed.Address == strings.TrimSpace(email) && len(strings.TrimSpace(name)) > 0 && len(strings.TrimSpace(name)) <= 100 && validPasswordLength(password)
 }
 
 func validEmail(email string) bool {
 	parsed, err := mail.ParseAddress(strings.TrimSpace(email))
 	return err == nil && parsed.Address == strings.TrimSpace(email)
+}
+
+func validateAvatarDataURL(avatarURL string) string {
+	if len(avatarURL) > 2<<20 || !strings.HasPrefix(avatarURL, "data:image/") {
+		return "avatar must be an image smaller than 2 MB"
+	}
+	comma := strings.IndexByte(avatarURL, ',')
+	if comma < 0 || !strings.HasSuffix(avatarURL[:comma], ";base64") {
+		return "invalid avatar image"
+	}
+	mime := strings.TrimPrefix(strings.TrimSuffix(avatarURL[:comma], ";base64"), "data:")
+	if !map[string]bool{"image/png": true, "image/jpeg": true, "image/gif": true, "image/webp": true}[mime] {
+		return "avatar must be PNG, JPEG, GIF, or WebP"
+	}
+	if _, err := base64.StdEncoding.DecodeString(avatarURL[comma+1:]); err != nil {
+		return "invalid avatar image"
+	}
+	return ""
 }

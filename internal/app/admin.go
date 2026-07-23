@@ -18,13 +18,23 @@ func (s *Service) fetchChannelModels(w http.ResponseWriter, r *http.Request) {
 		BaseURL string `json:"base_url"`
 		APIKey  string `json:"api_key"`
 	}
-	if decode(r, &in) != nil || strings.TrimSpace(in.BaseURL) == "" || strings.TrimSpace(in.APIKey) == "" {
+	if decode(r, &in) != nil {
 		writeError(w, 400, "invalid_request", "base_url and api_key are required")
 		return
 	}
-	baseURL, err := url.Parse(strings.TrimRight(strings.TrimSpace(in.BaseURL), "/"))
-	if err != nil || baseURL.Host == "" || (baseURL.Scheme != "https" && !(baseURL.Scheme == "http" && isLoopbackHost(baseURL.Hostname()))) {
-		writeError(w, 400, "invalid_request", "base_url must use HTTPS, except for loopback HTTP services")
+	in.BaseURL = strings.TrimSpace(in.BaseURL)
+	in.APIKey = strings.TrimSpace(in.APIKey)
+	if !validChannelAPIKey(in.APIKey) {
+		writeError(w, 400, "invalid_request", "api_key must be 1-4096 characters")
+		return
+	}
+	if !validChannelBaseURL(in.BaseURL) {
+		writeError(w, 400, "invalid_request", "base_url must be 1-2048 characters and use HTTPS to a public host, or HTTP to loopback")
+		return
+	}
+	baseURL, err := url.Parse(strings.TrimRight(in.BaseURL, "/"))
+	if err != nil {
+		writeError(w, 400, "invalid_request", "invalid base_url")
 		return
 	}
 	baseURL.Path = strings.TrimRight(baseURL.Path, "/") + "/v1/models"
@@ -95,12 +105,21 @@ func (s *Service) upsertPricing(w http.ResponseWriter, r *http.Request) {
 		Output     float64 `json:"output_per_million"`
 		Multiplier float64 `json:"multiplier"`
 	}
-	if decode(r, &in) != nil || in.Model == "" || in.Input < 0 || in.Cached < 0 || in.Output < 0 {
+	if decode(r, &in) != nil {
+		writeError(w, 400, "invalid_request", "invalid pricing rule")
+		return
+	}
+	in.Model = strings.TrimSpace(in.Model)
+	if !validPricingModel(in.Model) || !validPricingRate(in.Input) || !validPricingRate(in.Cached) || !validPricingRate(in.Output) {
 		writeError(w, 400, "invalid_request", "invalid pricing rule")
 		return
 	}
 	if in.Multiplier == 0 {
 		in.Multiplier = 1
+	}
+	if !validPricingMultiplier(in.Multiplier) {
+		writeError(w, 400, "invalid_request", "multiplier must be between 0 exclusive and 1000")
+		return
 	}
 	id, _ := randomID()
 	_, err := s.db.Exec(r.Context(), `insert into pricing_rules(id,model,input_per_million,cached_input_per_million,output_per_million,multiplier) values($1,$2,$3,$4,$5,$6) on conflict(model) do update set input_per_million=excluded.input_per_million,cached_input_per_million=excluded.cached_input_per_million,output_per_million=excluded.output_per_million,multiplier=excluded.multiplier,updated_at=now()`, id, in.Model, in.Input, in.Cached, in.Output, in.Multiplier)
@@ -130,13 +149,23 @@ func (s *Service) syncNewAPIPricing(w http.ResponseWriter, r *http.Request) {
 		APIKey            string  `json:"api_key"`
 		PricePerQuotaUnit float64 `json:"price_per_quota_unit"`
 	}
-	if decode(r, &in) != nil || in.PricePerQuotaUnit < 0 {
+	if decode(r, &in) != nil || !validPricePerQuotaUnit(in.PricePerQuotaUnit) {
 		writeError(w, 400, "invalid_request", "invalid NewAPI pricing source")
 		return
 	}
-	baseURL, err := url.Parse(strings.TrimRight(strings.TrimSpace(in.BaseURL), "/"))
-	if err != nil || baseURL.Host == "" || (baseURL.Scheme != "https" && !(baseURL.Scheme == "http" && isLoopbackHost(baseURL.Hostname()))) {
-		writeError(w, 400, "invalid_request", "base_url must use HTTPS, except for loopback HTTP services")
+	in.BaseURL = strings.TrimSpace(in.BaseURL)
+	in.APIKey = strings.TrimSpace(in.APIKey)
+	if !validChannelBaseURL(in.BaseURL) {
+		writeError(w, 400, "invalid_request", "base_url must be 1-2048 characters and use HTTPS to a public host, or HTTP to loopback")
+		return
+	}
+	if in.APIKey != "" && !validChannelAPIKey(in.APIKey) {
+		writeError(w, 400, "invalid_request", "api_key must be 1-4096 characters")
+		return
+	}
+	baseURL, err := url.Parse(strings.TrimRight(in.BaseURL, "/"))
+	if err != nil {
+		writeError(w, 400, "invalid_request", "invalid base_url")
 		return
 	}
 	fetch := func(path string, out any) error {
@@ -146,8 +175,8 @@ func (s *Service) syncNewAPIPricing(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
-		if strings.TrimSpace(in.APIKey) != "" {
-			request.Header.Set("Authorization", "Bearer "+strings.TrimSpace(in.APIKey))
+		if in.APIKey != "" {
+			request.Header.Set("Authorization", "Bearer "+in.APIKey)
 		}
 		response, err := s.httpClient.Do(request)
 		if err != nil {
@@ -170,12 +199,16 @@ func (s *Service) syncNewAPIPricing(w http.ResponseWriter, r *http.Request) {
 		Success bool            `json:"success"`
 		Data    []newAPIPricing `json:"data"`
 	}
-	if err := fetch("/api/status", &status); err != nil || !status.Success || status.Data.QuotaPerUnit <= 0 {
+	if err := fetch("/api/status", &status); err != nil || !status.Success || !validPositiveFinite(status.Data.QuotaPerUnit) {
 		writeError(w, 502, "upstream_error", "could not read NewAPI quota configuration")
 		return
 	}
 	if err := fetch("/api/pricing", &pricing); err != nil || !pricing.Success {
 		writeError(w, 502, "upstream_error", "could not read NewAPI pricing")
+		return
+	}
+	if len(pricing.Data) > maxNewAPIPricingModels {
+		writeError(w, 400, "invalid_request", "too many models to sync")
 		return
 	}
 	tx, err := s.db.Begin(r.Context())
@@ -186,17 +219,24 @@ func (s *Service) syncNewAPIPricing(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback(r.Context())
 	synced := 0
 	for _, item := range pricing.Data {
-		if strings.TrimSpace(item.ModelName) == "" || item.QuotaType != 0 || item.ModelRatio < 0 || item.CompletionRatio < 0 {
+		model := strings.TrimSpace(item.ModelName)
+		if !validPricingModel(model) || item.QuotaType != 0 || !validNonNegativeFinite(item.ModelRatio) || !validNonNegativeFinite(item.CompletionRatio) {
+			continue
+		}
+		if item.CacheRatio != nil && !validNonNegativeFinite(*item.CacheRatio) {
 			continue
 		}
 		input := newAPIPricePerMillion(item.ModelRatio, in.PricePerQuotaUnit, status.Data.QuotaPerUnit)
 		output := input * item.CompletionRatio
 		cached := 0.0
-		if item.CacheRatio != nil && *item.CacheRatio >= 0 {
+		if item.CacheRatio != nil {
 			cached = input * *item.CacheRatio
 		}
+		if !validPricingRate(input) || !validPricingRate(cached) || !validPricingRate(output) {
+			continue
+		}
 		id, _ := randomID()
-		if _, err = tx.Exec(r.Context(), `insert into pricing_rules(id,model,input_per_million,cached_input_per_million,output_per_million,multiplier) values($1,$2,$3,$4,$5,1) on conflict(model) do update set input_per_million=excluded.input_per_million,cached_input_per_million=excluded.cached_input_per_million,output_per_million=excluded.output_per_million,updated_at=now()`, id, strings.TrimSpace(item.ModelName), input, cached, output); err != nil {
+		if _, err = tx.Exec(r.Context(), `insert into pricing_rules(id,model,input_per_million,cached_input_per_million,output_per_million,multiplier) values($1,$2,$3,$4,$5,1) on conflict(model) do update set input_per_million=excluded.input_per_million,cached_input_per_million=excluded.cached_input_per_million,output_per_million=excluded.output_per_million,updated_at=now()`, id, model, input, cached, output); err != nil {
 			writeError(w, 500, "internal_error", "could not save pricing rules")
 			return
 		}
@@ -298,8 +338,8 @@ func (s *Service) updateUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_request", "role must be user, operator, or admin")
 		return
 	}
-	if in.Password != nil && len(*in.Password) < 8 {
-		writeError(w, 400, "invalid_request", "password must be at least 8 characters")
+	if in.Password != nil && !validPasswordLength(*in.Password) {
+		writeError(w, 400, "invalid_request", "password must be between 8 and 72 characters")
 		return
 	}
 	if in.Permissions != nil {
@@ -312,13 +352,21 @@ func (s *Service) updateUser(w http.ResponseWriter, r *http.Request) {
 			seen[permission] = true
 		}
 	}
-	if in.Balance != nil && (math.IsNaN(*in.Balance) || math.IsInf(*in.Balance, 0) || *in.Balance < 0) {
-		writeError(w, 400, "invalid_request", "balance must be a non-negative number")
+	if in.Balance != nil && !validUserBalance(*in.Balance) {
+		writeError(w, 400, "invalid_request", "balance must be a non-negative number up to 1e9")
 		return
 	}
-	if in.Note != nil && in.Balance == nil {
-		writeError(w, 400, "invalid_request", "note can only be provided with balance")
-		return
+	if in.Note != nil {
+		note := strings.TrimSpace(*in.Note)
+		if in.Balance == nil {
+			writeError(w, 400, "invalid_request", "note can only be provided with balance")
+			return
+		}
+		if len(note) > maxWalletNoteLength {
+			writeError(w, 400, "invalid_request", "note must be at most 500 characters")
+			return
+		}
+		*in.Note = note
 	}
 	passwordHash := ""
 	if in.Password != nil {
@@ -373,16 +421,29 @@ func (s *Service) updateUser(w http.ResponseWriter, r *http.Request) {
 		changed["name"] = name
 	}
 	if in.Password != nil {
-		if _, err = tx.Exec(r.Context(), `update users set password_hash=$1 where id=$2`, passwordHash, userID); err != nil {
+		if _, err = tx.Exec(r.Context(), `update users set password_hash=$1, must_change_password=true where id=$2`, passwordHash, userID); err != nil {
 			writeError(w, 500, "internal_error", "could not update password")
 			return
 		}
+		if _, err = tx.Exec(r.Context(), `delete from user_sessions where user_id=$1`, userID); err != nil {
+			writeError(w, 500, "internal_error", "could not revoke sessions after password change")
+			return
+		}
 		changed["password"] = true
+		changed["must_change_password"] = true
+		changed["sessions_revoked"] = true
 	}
 	if in.Role != nil {
 		if _, err = tx.Exec(r.Context(), `update users set role=$1 where id=$2`, *in.Role, userID); err != nil {
 			writeError(w, 500, "internal_error", "could not update role")
 			return
+		}
+		if currentRole == "admin" && *in.Role != "admin" {
+			if _, err = tx.Exec(r.Context(), `delete from user_sessions where user_id=$1`, userID); err != nil {
+				writeError(w, 500, "internal_error", "could not revoke sessions after role change")
+				return
+			}
+			changed["sessions_revoked"] = true
 		}
 		changed["role"] = *in.Role
 	}
@@ -390,6 +451,18 @@ func (s *Service) updateUser(w http.ResponseWriter, r *http.Request) {
 		if _, err = tx.Exec(r.Context(), `update users set enabled=$1 where id=$2`, *in.Enabled, userID); err != nil {
 			writeError(w, 500, "internal_error", "could not update status")
 			return
+		}
+		if !*in.Enabled {
+			if _, err = tx.Exec(r.Context(), `delete from user_sessions where user_id=$1`, userID); err != nil {
+				writeError(w, 500, "internal_error", "could not revoke sessions after disable")
+				return
+			}
+			if _, err = tx.Exec(r.Context(), `update api_keys set revoked_at=coalesce(revoked_at, now()) where user_id=$1 and revoked_at is null`, userID); err != nil {
+				writeError(w, 500, "internal_error", "could not revoke API keys after disable")
+				return
+			}
+			changed["sessions_revoked"] = true
+			changed["api_keys_revoked"] = true
 		}
 		changed["enabled"] = *in.Enabled
 	}
@@ -588,31 +661,40 @@ func (s *Service) createGroup(w http.ResponseWriter, r *http.Request) {
 		Name       string  `json:"name"`
 		Multiplier float64 `json:"multiplier"`
 	}
-	if decode(r, &in) != nil || strings.TrimSpace(in.Name) == "" {
+	if decode(r, &in) != nil {
 		writeError(w, 400, "invalid_request", "name is required")
+		return
+	}
+	name := strings.TrimSpace(in.Name)
+	if !validGroupName(name) {
+		writeError(w, 400, "invalid_request", "name must be 1-100 characters")
 		return
 	}
 	if in.Multiplier == 0 {
 		in.Multiplier = 1
 	}
-	if in.Multiplier < 0 {
-		writeError(w, 400, "invalid_request", "multiplier must not be negative")
+	if !validGroupMultiplier(in.Multiplier) {
+		writeError(w, 400, "invalid_request", "multiplier must be between 0 and 1000")
 		return
 	}
 	id, _ := randomID()
-	_, err := s.db.Exec(r.Context(), `insert into groups(id,name,multiplier) values($1,$2,$3)`, id, strings.TrimSpace(in.Name), in.Multiplier)
+	_, err := s.db.Exec(r.Context(), `insert into groups(id,name,multiplier) values($1,$2,$3)`, id, name, in.Multiplier)
 	if err != nil {
 		writeError(w, 409, "conflict", "group name already exists")
 		return
 	}
-	s.audit(r, "group.created", "group", id, map[string]any{"name": in.Name, "multiplier": in.Multiplier})
-	writeJSON(w, 201, map[string]any{"id": id, "name": strings.TrimSpace(in.Name), "multiplier": in.Multiplier})
+	s.audit(r, "group.created", "group", id, map[string]any{"name": name, "multiplier": in.Multiplier})
+	writeJSON(w, 201, map[string]any{"id": id, "name": name, "multiplier": in.Multiplier})
 }
 
 func (s *Service) importGroups(w http.ResponseWriter, r *http.Request) {
 	var values map[string]float64
 	if decode(r, &values) != nil || len(values) == 0 {
 		writeError(w, 400, "invalid_request", "a non-empty name-to-multiplier object is required")
+		return
+	}
+	if len(values) > maxGroupImportCount {
+		writeError(w, 400, "invalid_request", "at most 500 groups can be imported at once")
 		return
 	}
 	tx, err := s.db.Begin(r.Context())
@@ -623,8 +705,8 @@ func (s *Service) importGroups(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback(r.Context())
 	for name, multiplier := range values {
 		name = strings.TrimSpace(name)
-		if name == "" || multiplier < 0 || math.IsNaN(multiplier) || math.IsInf(multiplier, 0) {
-			writeError(w, 400, "invalid_request", "group names must be non-empty and multipliers must not be negative")
+		if !validGroupName(name) || !validGroupMultiplier(multiplier) {
+			writeError(w, 400, "invalid_request", "group names must be 1-100 characters and multipliers must be between 0 and 1000")
 			return
 		}
 		id, _ := randomID()
@@ -645,8 +727,8 @@ func (s *Service) updateGroup(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Multiplier float64 `json:"multiplier"`
 	}
-	if decode(r, &in) != nil || in.Multiplier < 0 {
-		writeError(w, 400, "invalid_request", "multiplier must not be negative")
+	if decode(r, &in) != nil || !validGroupMultiplier(in.Multiplier) {
+		writeError(w, 400, "invalid_request", "multiplier must be between 0 and 1000")
 		return
 	}
 	result, err := s.db.Exec(r.Context(), `update groups set multiplier=$1 where id=$2`, in.Multiplier, r.PathValue("id"))
@@ -809,6 +891,167 @@ var availablePermissions = map[string]bool{
 	"system.manage": true,
 }
 
+func validFinite(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0)
+}
+
+func validNonNegativeFinite(value float64) bool {
+	return validFinite(value) && value >= 0
+}
+
+func validPositiveFinite(value float64) bool {
+	return validFinite(value) && value > 0
+}
+
+const maxGroupMultiplier = 1000.0
+const maxPricingMultiplier = 1000.0
+const maxPricingRate = 1_000_000.0
+const maxPricePerQuotaUnit = 1_000_000.0
+const maxNewAPIPricingModels = 5000
+const maxWalletAdjustAmount = 1_000_000_000.0
+const maxWalletNoteLength = 500
+const maxQuotaLimit = int64(1_000_000_000_000)
+
+func validPricePerQuotaUnit(value float64) bool {
+	return validNonNegativeFinite(value) && value <= maxPricePerQuotaUnit
+}
+
+func validGroupMultiplier(value float64) bool {
+	return validNonNegativeFinite(value) && value <= maxGroupMultiplier
+}
+
+func validWalletAdjustAmount(value float64) bool {
+	return validFinite(value) && value != 0 && value >= -maxWalletAdjustAmount && value <= maxWalletAdjustAmount
+}
+
+func validUserBalance(value float64) bool {
+	return validNonNegativeFinite(value) && value <= maxWalletAdjustAmount
+}
+
+func validQuotaLimit(value *int64) bool {
+	if value == nil {
+		return true
+	}
+	return *value >= 0 && *value <= maxQuotaLimit
+}
+
+func validPricingMultiplier(value float64) bool {
+	return validPositiveFinite(value) && value <= maxPricingMultiplier
+}
+
+func validPricingRate(value float64) bool {
+	return validNonNegativeFinite(value) && value <= maxPricingRate
+}
+
+func validPricingModel(model string) bool {
+	return validModelName(model)
+}
+
+func validModelName(model string) bool {
+	return len(model) > 0 && len(model) <= 200
+}
+
+func validChannelProvider(provider string) bool {
+	return map[string]bool{"openai": true, "ollama": true, "kimi": true, "opencode_go": true, "anthropic": true}[provider]
+}
+
+func validChannelPriority(priority int) bool {
+	return priority >= -10000 && priority <= 10000
+}
+
+const maxChannelModels = 500
+const maxGroupImportCount = 500
+
+func sanitizeChannelModels(models []string) ([]string, bool) {
+	if len(models) > maxChannelModels*2 {
+		return nil, false
+	}
+	out := make([]string, 0, len(models))
+	seen := map[string]bool{}
+	for _, model := range models {
+		model = strings.TrimSpace(model)
+		if model == "" || seen[model] {
+			continue
+		}
+		if len(model) > 200 {
+			return nil, false
+		}
+		seen[model] = true
+		out = append(out, model)
+		if len(out) > maxChannelModels {
+			return nil, false
+		}
+	}
+	if len(out) == 0 {
+		return nil, false
+	}
+	return out, true
+}
+
+func validGroupName(name string) bool {
+	return len(name) > 0 && len(name) <= 100
+}
+
+func validChannelName(name string) bool {
+	return len(name) > 0 && len(name) <= 100
+}
+
+const (
+	maxChannelAPIKeyLen  = 4096
+	maxChannelBaseURLLen = 2048
+)
+
+func validChannelAPIKey(value string) bool {
+	return len(value) > 0 && len(value) <= maxChannelAPIKeyLen
+}
+
+func validChannelBaseURL(value string) bool {
+	return len(value) > 0 && len(value) <= maxChannelBaseURLLen && validOutboundURL(value) == nil
+}
+
+func validAPIKeyName(name string) bool {
+	return len(name) > 0 && len(name) <= 100
+}
+
+func validProviderSlug(slug string) bool {
+	if len(slug) == 0 || len(slug) > 64 {
+		return false
+	}
+	for i, r := range slug {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
+			continue
+		}
+		if r == '-' && i > 0 && i < len(slug)-1 {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func redactDSN(dsn string) string {
+	if dsn == "" {
+		return ""
+	}
+	if u, err := url.Parse(dsn); err == nil && u.Scheme != "" && u.Host != "" {
+		if u.User != nil {
+			name := u.User.Username()
+			if name == "" {
+				name = "user"
+			}
+			u.User = url.UserPassword(name, "***")
+		}
+		return u.String()
+	}
+	if at := strings.LastIndex(dsn, "@"); at > 0 {
+		head := dsn[:at]
+		if colon := strings.Index(head, ":"); colon >= 0 {
+			return head[:colon+1] + "***" + dsn[at:]
+		}
+	}
+	return "[redacted-dsn]"
+}
+
 func (s *Service) setUserRole(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Role string `json:"role"`
@@ -823,13 +1066,35 @@ func (s *Service) setUserRole(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "cannot remove your own administrator role")
 		return
 	}
-	result, err := s.db.Exec(r.Context(), `update users set role=$1 where id=$2`, in.Role, userID)
-	if err != nil || result.RowsAffected() != 1 {
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not update role")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	var currentRole string
+	if err = tx.QueryRow(r.Context(), `select role from users where id=$1 for update`, userID).Scan(&currentRole); err != nil {
 		writeError(w, http.StatusNotFound, "not_found", "user not found")
 		return
 	}
-	s.audit(r, "user.role_changed", "user", userID, map[string]any{"role": in.Role})
-	writeJSON(w, http.StatusOK, map[string]string{"role": in.Role})
+	if _, err = tx.Exec(r.Context(), `update users set role=$1 where id=$2`, in.Role, userID); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not update role")
+		return
+	}
+	sessionsRevoked := false
+	if currentRole == "admin" && in.Role != "admin" {
+		if _, err = tx.Exec(r.Context(), `delete from user_sessions where user_id=$1`, userID); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "could not revoke sessions after role change")
+			return
+		}
+		sessionsRevoked = true
+	}
+	if err = tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not update role")
+		return
+	}
+	s.audit(r, "user.role_changed", "user", userID, map[string]any{"role": in.Role, "sessions_revoked": sessionsRevoked})
+	writeJSON(w, http.StatusOK, map[string]any{"role": in.Role, "sessions_revoked": sessionsRevoked})
 }
 
 func (s *Service) setUserPermissions(w http.ResponseWriter, r *http.Request) {
@@ -884,8 +1149,13 @@ func (s *Service) createKey(w http.ResponseWriter, r *http.Request) {
 		ExpiresAt string `json:"expires_at"`
 		GroupID   string `json:"group_id"`
 	}
-	if decode(r, &in) != nil || in.UserID == "" || in.Name == "" {
+	if decode(r, &in) != nil || strings.TrimSpace(in.UserID) == "" {
 		writeError(w, 400, "invalid_request", "user_id and name are required")
+		return
+	}
+	name := strings.TrimSpace(in.Name)
+	if !validAPIKeyName(name) {
+		writeError(w, 400, "invalid_request", "name must be 1-100 characters")
 		return
 	}
 	expires, err := parseExpiry(in.ExpiresAt)
@@ -904,13 +1174,13 @@ func (s *Service) createKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_request", "group must belong to user")
 		return
 	}
-	_, err = s.db.Exec(r.Context(), `insert into api_keys(id,user_id,name,key_prefix,secret_hash,expires_at,group_id) values($1,$2,$3,$4,$5,$6,$7)`, id, in.UserID, in.Name, secret[:12], hashSecret(secret), expires, groupID)
+	_, err = s.db.Exec(r.Context(), `insert into api_keys(id,user_id,name,key_prefix,secret_hash,expires_at,group_id) values($1,$2,$3,$4,$5,$6,$7)`, id, in.UserID, name, secret[:12], hashSecret(secret), expires, groupID)
 	if err != nil {
 		writeError(w, 400, "invalid_request", "unknown user")
 		return
 	}
-	s.audit(r, "api_key.created", "api_key", id, map[string]any{"user_id": in.UserID, "name": in.Name})
-	writeJSON(w, 201, map[string]any{"id": id, "name": in.Name, "key": secret, "expires_at": expires, "group_id": groupID})
+	s.audit(r, "api_key.created", "api_key", id, map[string]any{"user_id": in.UserID, "name": name})
+	writeJSON(w, 201, map[string]any{"id": id, "name": name, "key": secret, "expires_at": expires, "group_id": groupID})
 }
 func (s *Service) listKeys(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.db.Query(r.Context(), `select k.id,k.user_id,k.name,k.key_prefix,k.expires_at,k.revoked_at,k.last_used_at,k.created_at,coalesce(k.group_id::text,''),coalesce(g.name,'') from api_keys k left join groups g on g.id=k.group_id order by k.created_at desc`)
@@ -985,15 +1255,36 @@ func (s *Service) createChannel(w http.ResponseWriter, r *http.Request) {
 		Groups   []string `json:"groups"`
 		Provider string   `json:"provider"`
 	}
-	if decode(r, &in) != nil || in.Name == "" || in.APIKey == "" || len(in.Models) == 0 {
+	if decode(r, &in) != nil {
 		writeError(w, 400, "invalid_request", "name, api_key, and models are required")
 		return
 	}
+	name := strings.TrimSpace(in.Name)
+	if !validChannelName(name) {
+		writeError(w, 400, "invalid_request", "name must be 1-100 characters")
+		return
+	}
+	in.Name = name
+	in.APIKey = strings.TrimSpace(in.APIKey)
+	if !validChannelAPIKey(in.APIKey) {
+		writeError(w, 400, "invalid_request", "api_key must be 1-4096 characters")
+		return
+	}
+	modelsList, ok := sanitizeChannelModels(in.Models)
+	if !ok {
+		writeError(w, 400, "invalid_request", "at least one non-empty model name is required")
+		return
+	}
+	in.Models = modelsList
 	if in.Provider == "" {
 		in.Provider = "openai"
 	}
-	if !map[string]bool{"openai": true, "ollama": true, "kimi": true, "opencode_go": true, "anthropic": true}[in.Provider] {
+	if !validChannelProvider(in.Provider) {
 		writeError(w, 400, "invalid_request", "unsupported provider")
+		return
+	}
+	if !validChannelPriority(in.Priority) {
+		writeError(w, 400, "invalid_request", "priority must be between -10000 and 10000")
 		return
 	}
 	groupIDs := []string{}
@@ -1010,9 +1301,9 @@ func (s *Service) createChannel(w http.ResponseWriter, r *http.Request) {
 			groupIDs = append(groupIDs, groupID)
 		}
 	}
-	u, err := url.Parse(in.BaseURL)
-	if err != nil || u.Host == "" || (u.Scheme != "https" && !(u.Scheme == "http" && isLoopbackHost(u.Hostname()))) {
-		writeError(w, 400, "invalid_request", "base_url must use HTTPS, except for loopback HTTP services")
+	in.BaseURL = strings.TrimSpace(in.BaseURL)
+	if !validChannelBaseURL(in.BaseURL) {
+		writeError(w, 400, "invalid_request", "base_url must be 1-2048 characters and use HTTPS to a public host, or HTTP to loopback")
 		return
 	}
 	encrypted, err := crypt(s.cfg.EncryptionKey, in.APIKey, false)
@@ -1055,32 +1346,53 @@ func (s *Service) updateChannel(w http.ResponseWriter, r *http.Request) {
 		Priority int      `json:"priority"`
 		Provider string   `json:"provider"`
 	}
-	if decode(r, &in) != nil || strings.TrimSpace(in.Name) == "" || len(in.Models) == 0 {
+	if decode(r, &in) != nil {
 		writeError(w, 400, "invalid_request", "name and models are required")
 		return
 	}
+	name := strings.TrimSpace(in.Name)
+	if !validChannelName(name) {
+		writeError(w, 400, "invalid_request", "name must be 1-100 characters")
+		return
+	}
+	in.Name = name
+	modelsList, ok := sanitizeChannelModels(in.Models)
+	if !ok {
+		writeError(w, 400, "invalid_request", "at least one non-empty model name is required")
+		return
+	}
+	in.Models = modelsList
 	if in.Provider == "" {
 		in.Provider = "openai"
 	}
-	if !map[string]bool{"openai": true, "ollama": true, "kimi": true, "opencode_go": true, "anthropic": true}[in.Provider] {
+	if !validChannelProvider(in.Provider) {
 		writeError(w, 400, "invalid_request", "unsupported provider")
 		return
 	}
-	u, err := url.Parse(in.BaseURL)
-	if err != nil || u.Host == "" || (u.Scheme != "https" && !(u.Scheme == "http" && isLoopbackHost(u.Hostname()))) {
-		writeError(w, 400, "invalid_request", "base_url must use HTTPS, except for loopback HTTP services")
+	if !validChannelPriority(in.Priority) {
+		writeError(w, 400, "invalid_request", "priority must be between -10000 and 10000")
+		return
+	}
+	in.BaseURL = strings.TrimSpace(in.BaseURL)
+	if !validChannelBaseURL(in.BaseURL) {
+		writeError(w, 400, "invalid_request", "base_url must be 1-2048 characters and use HTTPS to a public host, or HTTP to loopback")
+		return
+	}
+	in.APIKey = strings.TrimSpace(in.APIKey)
+	if in.APIKey != "" && !validChannelAPIKey(in.APIKey) {
+		writeError(w, 400, "invalid_request", "api_key must be 1-4096 characters")
 		return
 	}
 	models, _ := json.Marshal(in.Models)
-	args := []any{strings.TrimSpace(in.Name), strings.TrimRight(in.BaseURL, "/"), models, in.Priority, in.Provider, r.PathValue("id")}
+	args := []any{in.Name, strings.TrimRight(in.BaseURL, "/"), models, in.Priority, in.Provider, r.PathValue("id")}
 	query := `update channels set name=$1,base_url=$2,models=$3,priority=$4,provider=$5,updated_at=now() where id=$6`
-	if strings.TrimSpace(in.APIKey) != "" {
+	if in.APIKey != "" {
 		encrypted, err := crypt(s.cfg.EncryptionKey, in.APIKey, false)
 		if err != nil {
 			writeError(w, 500, "internal_error", "credential encryption failed")
 			return
 		}
-		args = []any{strings.TrimSpace(in.Name), strings.TrimRight(in.BaseURL, "/"), encrypted, models, in.Priority, in.Provider, r.PathValue("id")}
+		args = []any{in.Name, strings.TrimRight(in.BaseURL, "/"), encrypted, models, in.Priority, in.Provider, r.PathValue("id")}
 		query = `update channels set name=$1,base_url=$2,api_key=$3,models=$4,priority=$5,provider=$6,updated_at=now() where id=$7`
 	}
 	result, err := s.db.Exec(r.Context(), query, args...)
@@ -1144,8 +1456,13 @@ func (s *Service) adjustBalance(w http.ResponseWriter, r *http.Request) {
 		Amount float64 `json:"amount"`
 		Note   string  `json:"note"`
 	}
-	if decode(r, &in) != nil || in.UserID == "" || in.Amount == 0 || in.Note == "" {
-		writeError(w, 400, "invalid_request", "user_id, non-zero amount, and note are required")
+	if decode(r, &in) != nil {
+		writeError(w, 400, "invalid_request", "user_id, non-zero finite amount, and note are required")
+		return
+	}
+	in.Note = strings.TrimSpace(in.Note)
+	if in.UserID == "" || !validWalletAdjustAmount(in.Amount) || in.Note == "" || len(in.Note) > maxWalletNoteLength {
+		writeError(w, 400, "invalid_request", "user_id, non-zero finite amount within ±1e9, and note (1-500 chars) are required")
 		return
 	}
 	tx, err := s.db.Begin(r.Context())
@@ -1208,12 +1525,27 @@ func (s *Service) createModelRoute(w http.ResponseWriter, r *http.Request) {
 		Priority      int    `json:"priority"`
 		Weight        int    `json:"weight"`
 	}
-	if decode(r, &in) != nil || in.PublicModel == "" || in.UpstreamModel == "" || in.ChannelID == "" {
+	if decode(r, &in) != nil {
 		writeError(w, 400, "invalid_request", "public_model, upstream_model, and channel_id are required")
 		return
 	}
-	if in.Weight <= 0 {
+	in.PublicModel = strings.TrimSpace(in.PublicModel)
+	in.UpstreamModel = strings.TrimSpace(in.UpstreamModel)
+	in.ChannelID = strings.TrimSpace(in.ChannelID)
+	if !validModelName(in.PublicModel) || !validModelName(in.UpstreamModel) || in.ChannelID == "" {
+		writeError(w, 400, "invalid_request", "public_model and upstream_model must be 1-200 characters; channel_id is required")
+		return
+	}
+	if in.Weight < 0 || in.Weight > 10000 {
+		writeError(w, 400, "invalid_request", "weight must be between 0 and 10000")
+		return
+	}
+	if in.Weight == 0 {
 		in.Weight = 100
+	}
+	if in.Priority < -10000 || in.Priority > 10000 {
+		writeError(w, 400, "invalid_request", "priority must be between -10000 and 10000")
+		return
 	}
 	id, _ := randomID()
 	_, err := s.db.Exec(r.Context(), `insert into model_routes(id,public_model,upstream_model,channel_id,priority,weight) values($1,$2,$3,$4,$5,$6)`, id, in.PublicModel, in.UpstreamModel, in.ChannelID, in.Priority, in.Weight)
@@ -1238,8 +1570,13 @@ func (s *Service) upsertQuota(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_request", "scope, window, and a limit are required")
 		return
 	}
-	if (in.MaxRequests != nil && *in.MaxRequests < 0) || (in.MaxTokens != nil && *in.MaxTokens < 0) {
-		writeError(w, 400, "invalid_request", "limits cannot be negative")
+	in.Model = strings.TrimSpace(in.Model)
+	if in.Model != "" && !validModelName(in.Model) {
+		writeError(w, 400, "invalid_request", "model must be 1-200 characters when set")
+		return
+	}
+	if !validQuotaLimit(in.MaxRequests) || !validQuotaLimit(in.MaxTokens) {
+		writeError(w, 400, "invalid_request", "limits must be between 0 and 1e12")
 		return
 	}
 	id, _ := randomID()
@@ -1287,7 +1624,7 @@ func (s *Service) runMigration(w http.ResponseWriter, r *http.Request) {
 	}
 	in.SourceDSN = strings.TrimPrefix(in.SourceDSN, "mysql://")
 
-	log.Printf("Migration requested: driver=%s source=%s target=%s", in.SourceDriver, in.SourceDSN, s.cfg.DatabaseURL)
+	log.Printf("Migration requested: driver=%s source=%s target=%s", in.SourceDriver, redactDSN(in.SourceDSN), redactDSN(s.cfg.DatabaseURL))
 
 	if !s.startMigration(in.SourceDSN, in.SourceDriver) {
 		writeError(w, 409, "migration_already_running", "A migration is already in progress")

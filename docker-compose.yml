@@ -6,20 +6,20 @@ services:
       target: router
     restart: unless-stopped
     environment:
-      DATABASE_URL: postgres://router:${POSTGRES_PASSWORD:-router-change-me}@postgres:5432/router?sslmode=disable
-      REDIS_URL: redis://redis:6379/0
-      # Replace this value in .env before using an existing database.
-      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-change-this-encryption-key-before-production-2026}
+      DATABASE_URL: postgres://router:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/router?sslmode=disable
+      REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD}@redis:6379/0}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?set ENCRYPTION_KEY in .env}
       LISTEN_ADDR: :8080
-      # Optional Geetest v4 CAPTCHA for login/register (leave empty to disable).
       GEETEST_CAPTCHA_ID: ${GEETEST_CAPTCHA_ID:-}
       GEETEST_CAPTCHA_KEY: ${GEETEST_CAPTCHA_KEY:-}
-      # Optional SMTP for registration email verification codes.
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-465}
       SMTP_USERNAME: ${SMTP_USERNAME:-}
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       SMTP_FROM: ${SMTP_FROM:-}
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-}
+      BOOTSTRAP_ADMIN_NAME: ${BOOTSTRAP_ADMIN_NAME:-}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -29,11 +29,8 @@ services:
       - "8080"
     ports:
       - "${ROUTER_PORT:-8080}:8080"
-    networks:
-      - default
-      - baota_net
     healthcheck:
-      test: ["CMD", "wget", "--spider", "--quiet", "http://127.0.0.1:8080/healthz"]
+      test: ["CMD", "wget", "--spider", "--quiet", "http://127.0.0.1:8080/readyz"]
       interval: 10s
       timeout: 5s
       retries: 6
@@ -67,9 +64,9 @@ services:
     environment:
       POSTGRES_DB: router
       POSTGRES_USER: router
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-router-change-me}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
     volumes:
-      - /mnt/data/AI-Router/postgres:/var/lib/postgresql/data
+      - ${POSTGRES_DATA_PATH:-/mnt/data/AI-Router/postgres}:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U router -d router"]
       interval: 5s
@@ -79,16 +76,18 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes"]
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --requirepass
+      - ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}
     volumes:
-      - /mnt/data/AI-Router/redis:/data
+      - ${REDIS_DATA_PATH:-/mnt/data/AI-Router/redis}:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
       interval: 5s
       timeout: 3s
       retries: 12
-
-networks:
-  baota_net:
-    external: true
-
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}

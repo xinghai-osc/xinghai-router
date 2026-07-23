@@ -5,11 +5,18 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+)
+
+const (
+	maxGatewayMaxTokens     = 200_000
+	defaultGatewayMaxTokens = 4096
+	maxUpstreamResponseBody = 16 << 20
 )
 
 type channel struct {
@@ -18,6 +25,20 @@ type channel struct {
 }
 
 type reservation struct{ amount float64 }
+
+func validGatewayMaxTokens(maxTokens int) bool {
+	return maxTokens > 0 && maxTokens <= maxGatewayMaxTokens
+}
+
+func resolveGatewayMaxTokens(maxTokens int) (int, bool) {
+	if maxTokens > maxGatewayMaxTokens {
+		return 0, false
+	}
+	if maxTokens <= 0 {
+		return defaultGatewayMaxTokens, true
+	}
+	return maxTokens, true
+}
 
 func (s *Service) groupMultiplier(r *http.Request, key keyContext) float64 {
 	if key.groupID == "" {
@@ -60,11 +81,21 @@ func (s *Service) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var request struct {
-		Model  string `json:"model"`
-		Stream bool   `json:"stream"`
+		Model     string `json:"model"`
+		Stream    bool   `json:"stream"`
+		MaxTokens int    `json:"max_tokens"`
 	}
-	if json.Unmarshal(body, &request) != nil || request.Model == "" {
+	if json.Unmarshal(body, &request) != nil {
 		writeError(w, 400, "invalid_request", "model is required")
+		return
+	}
+	request.Model = strings.TrimSpace(request.Model)
+	if !validModelName(request.Model) {
+		writeError(w, 400, "invalid_request", "model must be 1-200 characters")
+		return
+	}
+	if request.MaxTokens > maxGatewayMaxTokens {
+		writeError(w, 400, "invalid_request", "max_tokens must be at most 200000")
 		return
 	}
 	s.proxyChatCompletions(w, r, body, request.Model, request.Stream, nil, nil)
@@ -76,16 +107,37 @@ type streamTransform func(http.ResponseWriter, *http.Response) error
 func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, body []byte, model string, stream bool, transform responseTransform, streamFn streamTransform) {
 	started := time.Now()
 	key := r.Context().Value(contextKey{}).(keyContext)
+	var tokenReq struct {
+		MaxTokens int `json:"max_tokens"`
+	}
+	_ = json.Unmarshal(body, &tokenReq)
+	if tokenReq.MaxTokens > maxGatewayMaxTokens {
+		writeError(w, 400, "invalid_request", "max_tokens must be at most 200000")
+		return
+	}
 	if err := s.checkQuota(r, key, model); err != nil {
 		writeError(w, 429, "quota_exceeded", "request quota exceeded")
 		return
 	}
 	subscriptionAccess := s.subscriptionCoversModel(r.Context(), key.userID, model)
-	reserved, err := s.reserveUsage(r, key, model, body)
-	if err != nil {
-		if subscriptionAccess {
-			reserved = reservation{}
-		} else {
+	var reserved reservation
+	// Streaming responses are not settled; do not hold wallet reserved balance for them.
+	if subscriptionAccess || stream {
+		reserved = reservation{}
+		if !subscriptionAccess && stream {
+			if err := s.requireEnabledPricing(r, model); err != nil {
+				writeError(w, 402, "pricing_unavailable", "no enabled pricing rule for this model")
+				return
+			}
+		}
+	} else {
+		var err error
+		reserved, err = s.reserveUsage(r, key, model, body)
+		if err != nil {
+			if errors.Is(err, errPricingUnavailable) {
+				writeError(w, 402, "pricing_unavailable", "no enabled pricing rule for this model")
+				return
+			}
 			writeError(w, 402, "insufficient_quota", "insufficient balance for this request")
 			return
 		}
@@ -179,7 +231,7 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 		s.channelSucceeded(r, ch.id)
 		return
 	}
-	responseBody, err := io.ReadAll(resp.Body)
+	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, maxUpstreamResponseBody))
 	if err != nil {
 		writeError(w, 502, "upstream_error", "could not read upstream response")
 		return
@@ -195,7 +247,7 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 	s.logRequest(r, key, ch.id, model, resp.StatusCode, prompt, completion, total, time.Since(started), errorCode(resp.StatusCode))
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		if !subscriptionAccess {
-			s.settleUsage(r, key, reserved, model, prompt, completion)
+			reserved = s.settleUsage(r, key, reserved, model, prompt, completion)
 		}
 		s.channelSucceeded(r, ch.id)
 		if transform != nil {
@@ -211,21 +263,32 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 	w.Write(responseBody)
 }
 
+func (s *Service) requireEnabledPricing(r *http.Request, model string) error {
+	var input float64
+	if err := s.db.QueryRow(r.Context(), `select input_per_million from pricing_rules where model=$1 and enabled`, model).Scan(&input); err != nil {
+		return errPricingUnavailable
+	}
+	return nil
+}
+
 func (s *Service) reserveUsage(r *http.Request, key keyContext, model string, body []byte) (reservation, error) {
 	var request struct {
 		MaxTokens int `json:"max_tokens"`
 	}
 	_ = json.Unmarshal(body, &request)
-	if request.MaxTokens <= 0 {
-		request.MaxTokens = 4096
+	resolved, ok := resolveGatewayMaxTokens(request.MaxTokens)
+	if !ok {
+		return reservation{}, errInvalid
 	}
+	request.MaxTokens = resolved
 	var input, output, multiplier float64
 	if err := s.db.QueryRow(r.Context(), `select input_per_million,output_per_million,multiplier from pricing_rules where model=$1 and enabled`, model).Scan(&input, &output, &multiplier); err != nil {
-		return reservation{}, nil
+		return reservation{}, errPricingUnavailable
 	}
 	// Reserve the configured maximum output plus a conservative request-body estimate.
 	amount := (float64(len(body)/3)*input + float64(request.MaxTokens)*output) / 1000000 * multiplier * s.groupMultiplier(r, key)
 	if amount == 0 {
+		// Zero list prices are allowed only when an explicit enabled rule exists.
 		return reservation{}, nil
 	}
 	tx, err := s.db.Begin(r.Context())
@@ -250,40 +313,64 @@ func (s *Service) reserveUsage(r *http.Request, key keyContext, model string, bo
 	return reservation{amount: amount}, nil
 }
 
-func (s *Service) settleUsage(r *http.Request, key keyContext, held reservation, model string, prompt, completion int) {
+func usageCost(prompt, completion int, input, output, multiplier, groupMultiplier float64) float64 {
+	if multiplier <= 0 {
+		multiplier = 1
+	}
+	if groupMultiplier <= 0 {
+		groupMultiplier = 1
+	}
+	return (float64(prompt)*input + float64(completion)*output) / 1000000 * multiplier * groupMultiplier
+}
+
+func clampCostToHold(cost, held float64) float64 {
+	if cost < 0 {
+		return 0
+	}
+	if held > 0 && cost > held {
+		return held
+	}
+	return cost
+}
+
+func (s *Service) settleUsage(r *http.Request, key keyContext, held reservation, model string, prompt, completion int) reservation {
+	if held.amount == 0 && prompt == 0 && completion == 0 {
+		return held
+	}
 	tx, err := s.db.Begin(r.Context())
 	if err != nil {
-		return
+		return held
 	}
 	defer tx.Rollback(r.Context())
 	var input, cached, output, multiplier float64
 	_ = tx.QueryRow(r.Context(), `select input_per_million,cached_input_per_million,output_per_million,multiplier from pricing_rules where model=$1 and enabled`, model).Scan(&input, &cached, &output, &multiplier)
-	cost := (float64(prompt)*input + float64(completion)*output) / 1000000 * multiplier * s.groupMultiplier(r, key)
+	cost := clampCostToHold(usageCost(prompt, completion, input, output, multiplier, s.groupMultiplier(r, key)), held.amount)
 	var balance float64
 	if err = tx.QueryRow(r.Context(), `select balance from user_wallets where user_id=$1 for update`, key.userID).Scan(&balance); err != nil {
-		return
-	}
-	if cost > held.amount {
-		cost = held.amount
+		return held
 	}
 	id, _ := randomID()
 	requestID := requestID(r.Context())
-	if _, err = tx.Exec(r.Context(), `update user_wallets set balance=balance-$1,updated_at=now() where user_id=$2`, cost, key.userID); err != nil {
-		return
+	if _, err = tx.Exec(r.Context(), `update user_wallets set balance=balance-$1, reserved=greatest(0,reserved-$2), updated_at=now() where user_id=$3`, cost, held.amount, key.userID); err != nil {
+		return held
 	}
 	var after float64
 	if tx.QueryRow(r.Context(), `select balance from user_wallets where user_id=$1`, key.userID).Scan(&after) != nil {
-		return
+		return held
 	}
 	if _, err = tx.Exec(r.Context(), `insert into wallet_ledger(id,user_id,amount,balance_after,kind,request_id,note) values($1,$2,$3,$4,'charge',$5,$6)`, id, key.userID, -cost, after, requestID, model); err != nil {
-		return
+		return held
 	}
 	usageID, _ := randomID()
 	if _, err = tx.Exec(r.Context(), `insert into usage_records(id,request_id,user_id,api_key_id,model,prompt_tokens,completion_tokens,cost) values($1,$2,$3,$4,$5,$6,$7,$8) on conflict(request_id) do update set prompt_tokens=excluded.prompt_tokens,completion_tokens=excluded.completion_tokens,cost=excluded.cost`, usageID, requestID, key.userID, key.keyID, model, prompt, completion, cost); err != nil {
-		return
+		return held
 	}
-	_ = tx.Commit(r.Context())
+	if err = tx.Commit(r.Context()); err != nil {
+		return held
+	}
+	return reservation{}
 }
+
 func (s *Service) releaseReservation(r *http.Request, key keyContext, held reservation, model string) {
 	if held.amount == 0 {
 		return

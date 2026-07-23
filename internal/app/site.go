@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"net/http"
-	"net/url"
 	"strings"
 )
 
@@ -30,6 +29,9 @@ func (c systemConfig) emailVerificationEnabled() bool {
 
 func (s *Service) loadSystemConfig(ctx context.Context) systemConfig {
 	cfg := systemConfig{GeetestCaptchaID: s.cfg.GeetestCaptchaID, GeetestCaptchaKey: s.cfg.GeetestCaptchaKey, SMTPHost: s.cfg.SMTPHost, SMTPPort: s.cfg.SMTPPort, SMTPUsername: s.cfg.SMTPUsername, SMTPPassword: s.cfg.SMTPPassword, SMTPFrom: s.cfg.SMTPFrom}
+	if s.db == nil {
+		return cfg
+	}
 	var geetestID, geetestKeyEnc, smtpHost, smtpPort, smtpUser, smtpPassEnc, smtpFrom string
 	err := s.db.QueryRow(ctx, `select geetest_captcha_id,geetest_captcha_key_encrypted,smtp_host,smtp_port,smtp_username,smtp_password_encrypted,smtp_from from site_settings where id=true`).Scan(&geetestID, &geetestKeyEnc, &smtpHost, &smtpPort, &smtpUser, &smtpPassEnc, &smtpFrom)
 	if err != nil {
@@ -109,12 +111,37 @@ func (s *Service) updateSiteSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "site name must contain 1 to 100 characters")
 		return
 	}
-	if in.IconURL != "" {
-		u, err := url.Parse(in.IconURL)
-		if err != nil || u.Host == "" || (u.Scheme != "https" && !(u.Scheme == "http" && isLoopbackHost(u.Hostname()))) {
-			writeError(w, http.StatusBadRequest, "invalid_request", "icon_url must use HTTPS, except for loopback HTTP URLs")
+	if len(in.IconURL) > maxSiteIconURLLen {
+		writeError(w, http.StatusBadRequest, "invalid_request", "icon_url must be at most 2048 characters")
+		return
+	}
+	if in.IconURL != "" && !validIconURL(in.IconURL) {
+		writeError(w, http.StatusBadRequest, "invalid_request", "icon_url must use HTTPS, except for loopback HTTP URLs")
+		return
+	}
+	if in.GeetestCaptchaID != nil {
+		id := strings.TrimSpace(*in.GeetestCaptchaID)
+		if len(id) > maxGeetestFieldLen {
+			writeError(w, http.StatusBadRequest, "invalid_request", "geetest_captcha_id must be at most 256 characters")
 			return
 		}
+		*in.GeetestCaptchaID = id
+	}
+	if in.SMTPHost != nil {
+		host := strings.TrimSpace(*in.SMTPHost)
+		if len(host) > maxSMTPHostLen {
+			writeError(w, http.StatusBadRequest, "invalid_request", "smtp_host must be at most 255 characters")
+			return
+		}
+		*in.SMTPHost = host
+	}
+	if in.SMTPUsername != nil {
+		user := strings.TrimSpace(*in.SMTPUsername)
+		if len(user) > maxSMTPUsernameLen {
+			writeError(w, http.StatusBadRequest, "invalid_request", "smtp_username must be at most 255 characters")
+			return
+		}
+		*in.SMTPUsername = user
 	}
 	if in.SMTPPort != nil {
 		if port := strings.TrimSpace(*in.SMTPPort); port != "" && !validSMTPPort(port) {
@@ -130,6 +157,10 @@ func (s *Service) updateSiteSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	geetestKeyEnc, smtpPassEnc := "", ""
 	if key := strings.TrimSpace(in.GeetestCaptchaKey); key != "" {
+		if len(key) > maxGeetestFieldLen {
+			writeError(w, http.StatusBadRequest, "invalid_request", "geetest_captcha_key must be at most 256 characters")
+			return
+		}
 		encrypted, err := crypt(s.cfg.EncryptionKey, key, false)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "internal_error", "could not encrypt the captcha key")
@@ -138,6 +169,10 @@ func (s *Service) updateSiteSettings(w http.ResponseWriter, r *http.Request) {
 		geetestKeyEnc = encrypted
 	}
 	if password := strings.TrimSpace(in.SMTPPassword); password != "" {
+		if len(password) > maxSMTPPasswordLen {
+			writeError(w, http.StatusBadRequest, "invalid_request", "smtp_password must be at most 4096 characters")
+			return
+		}
 		encrypted, err := crypt(s.cfg.EncryptionKey, password, false)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "internal_error", "could not encrypt the smtp password")
@@ -173,6 +208,14 @@ func trimmedPtr(value *string) *string {
 	return &trimmed
 }
 
+const (
+	maxSiteIconURLLen  = 2048
+	maxGeetestFieldLen = 256
+	maxSMTPHostLen     = 255
+	maxSMTPUsernameLen = 255
+	maxSMTPPasswordLen = 4096
+)
+
 func validSMTPPort(port string) bool {
 	if len(port) == 0 || len(port) > 5 {
 		return false
@@ -185,4 +228,8 @@ func validSMTPPort(port string) bool {
 		n = n*10 + int(r-'0')
 	}
 	return n >= 1 && n <= 65535
+}
+
+func validIconURL(value string) bool {
+	return validOutboundURL(value) == nil
 }

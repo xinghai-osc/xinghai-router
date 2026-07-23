@@ -7,14 +7,14 @@
 - PostgreSQL migrations for users、哈希 API Key、加密渠道凭据、不可变钱包账本、用量、路由和审计记录。
 - 基于用户会话、管理员角色和细粒度权限保护的管理 API。
 - OpenAI-compatible `GET /v1/models`、`POST /v1/chat/completions`，以及 Anthropic-compatible `POST /v1/messages`。
-- 透明 SSE、上游超时、每 Key 每分钟基础限流、请求 ID、模型别名和同优先级权重路由。
+- 透明 SSE、上游超时、每 Key 每分钟基础限流、请求 ID、安全响应头、请求体大小限制、panic 恢复、模型别名和同优先级权重路由。
 - 对可重试上游错误自动切换备用渠道；连续失败三次的渠道冷却一分钟。管理员可在站点设置中开启故障渠道自动检测：系统会重试检测三次，全部失败后自动停用渠道。
 - “路由可靠性”分组支持独立的请求重试配置（重试次数 0-10、逗号分隔的状态码与包含性范围）、后台渠道健康检查（定时全量测试或仅被动恢复、可配置频率、渠道 ID 白名单、检查成功后自动恢复上线），以及自动禁用规则（测试失败禁用、慢响应秒数阈值、状态码和上游错误关键字匹配，关键字不区分大小写）。
 - 请求日志关联用户、Key、模型和最终渠道；非流式请求记录 token、按定价结算，并在上游调用前预留余额以避免并发透支。
 - 支持彩虹易支付兼容接口自助充值；管理员可配置平台并动态管理支付渠道，异步通知验签后幂等入账。
 - 套餐订阅系统：管理员可定义按月/年计费的套餐，支持赠送额度、模型白名单与每周期上限；订阅支付复用易支付，激活后自动发放额度并加入分组，订阅期内对白名单内模型的调用跳过钱包扣费。
 
-当前限流器仍是进程内实现，水平扩容前必须替换为 Redis 的滑动窗口。流式响应透明透传；由于不同上游的 SSE 用量事件不一致，流式请求目前不结算 token 费用，仅记录请求日志，不应据此执行生产计费。
+设置 `REDIS_URL` 后，API Key 限流使用 Redis 固定窗口计数（每 Key 每分钟），多实例共享；Redis 不可用时自动回退到进程内内存限流。未配置 `REDIS_URL` 时仅使用进程内限流。流式响应透明透传；由于不同上游的 SSE 用量事件不一致，流式请求目前不结算 token 费用，仅记录请求日志，不应据此执行生产计费。
 
 ## Run locally
 
@@ -26,14 +26,24 @@
 
 ## Docker deployment
 
-Copy `.env.example` to `.env`, replace `ENCRYPTION_KEY` and `POSTGRES_PASSWORD` with unique URL-safe secrets, then start the complete stack:
+Copy `.env.example` to `.env`, set unique values for `ENCRYPTION_KEY` (≥24 chars, not a docs placeholder), `POSTGRES_PASSWORD` (URL-safe), and `REDIS_PASSWORD`, then start the complete stack:
 
 ```sh
 cp .env.example .env
+# edit .env — compose refuses to start if required secrets are missing
 docker compose up -d --build
 ```
 
-The web console is available at `http://localhost:3000`; the OpenAI/Anthropic gateway is available at `http://localhost:8080`. PostgreSQL and Redis are internal-only and persist data in the `postgres-data` and `redis-data` volumes. Migrations run automatically when the router starts. Follow startup logs with `docker compose logs -f router` and stop the stack with `docker compose down` (use `docker compose down -v` only when intentionally deleting data).
+The web console is available at `http://localhost:3000`; the OpenAI/Anthropic gateway is available at `http://localhost:8080`. PostgreSQL and Redis are internal-only (no published ports). Data paths default to `/mnt/data/AI-Router/{postgres,redis}` and can be overridden with `POSTGRES_DATA_PATH` / `REDIS_DATA_PATH`. Redis requires a password (`REDIS_PASSWORD`); the router receives `REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0` by default. Migrations run automatically when the router starts; if no admin user exists, a bootstrap admin is created and its one-time password is printed in the router logs (`docker compose logs -f router`). Change that password after first login.
+
+For an external reverse-proxy network (e.g. Baota `baota_net`):
+
+```sh
+docker network create baota_net   # once
+docker compose -f docker-compose.yml -f docker-compose.baota.yml up -d --build
+```
+
+Stop the stack with `docker compose down` (use `docker compose down -v` only when intentionally deleting named volumes).
 
 ### Admin web console
 
@@ -45,9 +55,9 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:5173/auth` and create an account or sign in with email and password. The first registered account becomes an administrator; administrators can promote users or grant individual permissions. Browser sessions are retained only in session storage. Nuxt proxies browser requests from `/api/*` to `http://127.0.0.1:8080/*`, so this development setup does not require a CORS policy. `npm run generate` emits prerendered HTML for the public home and authentication pages; deploy the Nuxt `.output` directory for the full application.
+Open `http://localhost:5173/auth` and create an account or sign in with email and password. On first database initialization, when no administrator account exists, the router creates a bootstrap admin (`admin@localhost` by default, overridable with `BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_NAME`), logs a one-time random password, and recommends changing it immediately after login. Public registration always creates normal user accounts; administrators can promote users or grant individual permissions. Browser sessions are retained only in session storage. Nuxt proxies browser requests from `/api/*` to `http://127.0.0.1:8080/*`, so this development setup does not require a CORS policy. `npm run generate` emits prerendered HTML for the public home and authentication pages; deploy the Nuxt `.output` directory for the full application.
 
-The service performs migrations automatically at startup. `base_url` for a channel must be an HTTPS origin or path prefix without `/v1`; for example, `https://api.openai.com`. Loopback HTTP URLs are also accepted for local services such as Ollama, for example `http://127.0.0.1:11434`. Provider secrets are encrypted in the database using `ENCRYPTION_KEY`, so keep this value stable and securely backed up.
+The service performs migrations automatically at startup and seeds the bootstrap admin when needed. `base_url` for a channel must be an HTTPS origin or path prefix without `/v1`; for example, `https://api.openai.com`. Loopback HTTP URLs are also accepted for local services such as Ollama, for example `http://127.0.0.1:11434`. Provider secrets are encrypted in the database using `ENCRYPTION_KEY`, so keep this value stable and securely backed up.
 
 ### 易支付充值
 
@@ -254,6 +264,39 @@ OpenCode 配置示例：
 ```
 
 The router selects an enabled channel advertising the requested model. It tries the lowest numeric priority first, distributes equal-priority traffic by weight, and retries a different eligible channel for connection errors and responses matching the configured retry status codes (by default every status except `2xx`, `408`, and `504`, up to 3 retries). Upstream errors matching the configured auto-disable status codes or keywords disable the channel immediately, and the optional background health check probes channels on a schedule (`scheduled_all`) or only after automatic disabling (`passive_recovery`), bringing recovered channels back online when configured. Manage these options through `GET|PUT /admin/reliability-settings` (`system.manage`).
+
+## Production checklist
+
+Use this before exposing the stack on a public host.
+
+### Secrets and identity
+
+1. Copy `.env.example` to `.env` and set unique values for `ENCRYPTION_KEY` (≥24 characters, not a documented placeholder), `POSTGRES_PASSWORD` (URL-safe), and `REDIS_PASSWORD`. Compose and the router refuse insecure/missing secrets. **Never rotate `ENCRYPTION_KEY` without re-encrypting provider and payment secrets** — lost keys make ciphertext unrecoverable.
+2. On first start with an empty admin table, the router seeds a bootstrap admin (default email `admin@localhost`, overridable with `BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_NAME`) and prints a one-time random password in the router logs. The account is created with `must_change_password=true`: session-authenticated APIs except `/account/me`, `/account/password`, and `/auth/logout` return `403 password_change_required` until the password is changed under Profile → Change password (`PUT /account/password`).
+3. Prefer enabling Geetest and/or SMTP email verification for public registration (`GEETEST_*`, `SMTP_*` or admin site settings). Registration always creates `role=user`; only admins promote accounts.
+
+### Network and TLS
+
+1. Terminate TLS at a reverse proxy (Nginx, Caddy, cloud LB). Forward `X-Forwarded-Proto: https` so the router can emit HSTS on API responses. Set `TRUSTED_PROXIES` to the proxy CIDRs (or `loopback,private`) so auth rate limits and audit logs use the real client IP from `X-Forwarded-For` / `X-Real-IP`; leave it empty to ignore spoofable proxy headers.
+2. Expose only the web console and/or the gateway ports you need. Keep PostgreSQL and Redis off the public network (compose already binds them internally).
+3. Channel `base_url` values must be HTTPS (HTTP only for loopback). Payment `base_url` / `public_base_url` must be HTTPS in production.
+
+### Rate limiting and scale
+
+1. Compose requires `REDIS_PASSWORD` and injects `REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0` so API-key and auth rate limits are shared across router replicas. Without Redis the limiter is process-local.
+2. Horizontal scaling: run multiple router replicas behind the proxy only when Redis-backed limiting is enabled; wallet reservation already lives in PostgreSQL.
+	3. Auth endpoints are rate-limited by IP and email with stricter per-minute budgets than API keys: login 10, register 5, email-code 5 (API-key gateway still uses `RateLimitPerMinute`, default 60).
+
+### Operations
+
+1. Liveness: `GET /healthz` (process up). Readiness: `GET /readyz` (PostgreSQL ping). Compose healthchecks use `/readyz`.
+2. Back up PostgreSQL regularly. Redis AOF is enabled in compose for limiter state durability, but Postgres is the source of truth for accounts and billing.
+3. After deploy: `docker compose logs -f router` for bootstrap password / migration errors; `go test ./...` and `go vet ./...` in CI.
+
+### Known production limits
+
+- Streaming (SSE) responses are not settled against the wallet and do not hold wallet `reserved` balance; only non-stream requests reserve and bill tokens. Do not rely on stream traffic for metered revenue until upstream usage events are normalized.
+- Browser payment return URLs never credit balances; only the signed `epay/notify` callback does (idempotent on `order_no`).
 
 ## Verify
 

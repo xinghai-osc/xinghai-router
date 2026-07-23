@@ -1,8 +1,11 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -99,5 +102,61 @@ func TestAnthropicAPIKeyAndLoopback(t *testing.T) {
 	}
 	if isLoopbackHost("ollama.example.com") {
 		t.Fatal("unexpected loopback result")
+	}
+}
+
+func TestAnthropicMessagesRequiresVersionHeader(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"claude","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`))
+	req = req.WithContext(context.WithValue(req.Context(), contextKey{}, keyContext{userID: "1", keyID: "k"}))
+	(&Service{}).anthropicMessages(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "anthropic-version") {
+		t.Fatalf("status/body = %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAnthropicMessagesRejectsLongModel(t *testing.T) {
+	rec := httptest.NewRecorder()
+	body := `{"model":"` + strings.Repeat("m", 201) + `","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+	req.Header.Set("Anthropic-Version", "2023-06-01")
+	req = req.WithContext(context.WithValue(req.Context(), contextKey{}, keyContext{userID: "1", keyID: "k"}))
+	(&Service{}).anthropicMessages(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestAnthropicMessagesRejectsOversizeMaxTokens(t *testing.T) {
+	rec := httptest.NewRecorder()
+	body := `{"model":"claude","max_tokens":200001,"messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+	req.Header.Set("Anthropic-Version", "2023-06-01")
+	req = req.WithContext(context.WithValue(req.Context(), contextKey{}, keyContext{userID: "1", keyID: "k"}))
+	(&Service{}).anthropicMessages(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "max_tokens") {
+		t.Fatalf("status/body = %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAnthropicMessagesRejectsInvalidMaxTokensOrEmptyMessages(t *testing.T) {
+	bodies := []string{
+		`{"model":"claude","max_tokens":0,"messages":[{"role":"user","content":"hi"}]}`,
+		`{"model":"claude","max_tokens":-1,"messages":[{"role":"user","content":"hi"}]}`,
+		`{"model":"claude","max_tokens":16,"messages":[]}`,
+		`{"model":"claude","max_tokens":16}`,
+	}
+	for _, body := range bodies {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+		req.Header.Set("Anthropic-Version", "2023-06-01")
+		req = req.WithContext(context.WithValue(req.Context(), contextKey{}, keyContext{userID: "1", keyID: "k"}))
+		(&Service{}).anthropicMessages(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("body %s status = %d, want %d", body, rec.Code, http.StatusBadRequest)
+		}
+		if !strings.Contains(rec.Body.String(), "invalid_request") {
+			t.Fatalf("body %s response = %s", body, rec.Body.String())
+		}
 	}
 }
