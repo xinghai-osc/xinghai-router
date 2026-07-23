@@ -1200,6 +1200,10 @@ func (s *Service) listModelRoutes(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"data": data})
 }
 
+func validModelName(model string) bool {
+	return len(model) > 0 && len(model) <= 200
+}
+
 func (s *Service) createModelRoute(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		PublicModel   string `json:"public_model"`
@@ -1208,8 +1212,15 @@ func (s *Service) createModelRoute(w http.ResponseWriter, r *http.Request) {
 		Priority      int    `json:"priority"`
 		Weight        int    `json:"weight"`
 	}
-	if decode(r, &in) != nil || in.PublicModel == "" || in.UpstreamModel == "" || in.ChannelID == "" {
+	if decode(r, &in) != nil {
 		writeError(w, 400, "invalid_request", "public_model, upstream_model, and channel_id are required")
+		return
+	}
+	in.PublicModel = strings.TrimSpace(in.PublicModel)
+	in.UpstreamModel = strings.TrimSpace(in.UpstreamModel)
+	in.ChannelID = strings.TrimSpace(in.ChannelID)
+	if !validModelName(in.PublicModel) || !validModelName(in.UpstreamModel) || in.ChannelID == "" {
+		writeError(w, 400, "invalid_request", "public_model and upstream_model must be 1-200 characters; channel_id is required")
 		return
 	}
 	if in.Weight <= 0 {

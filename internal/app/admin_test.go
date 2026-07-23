@@ -82,3 +82,30 @@ func TestUpdateChannelRejectsInvalidRequestBeforeDatabaseAccess(t *testing.T) {
 		}
 	}
 }
+
+func TestValidModelName(t *testing.T) {
+	if !validModelName("m") || !validModelName(strings.Repeat("m", 200)) {
+		t.Fatal("boundary model names must be valid")
+	}
+	if validModelName("") || validModelName(strings.Repeat("m", 201)) {
+		t.Fatal("out-of-range model names must be invalid")
+	}
+}
+
+func TestCreateModelRouteRejectsLongNamesBeforeDatabaseAccess(t *testing.T) {
+	long := strings.Repeat("m", 201)
+	for _, body := range []string{
+		`{}`,
+		`{"public_model":"m","upstream_model":"u"}`,
+		`{"public_model":" ","upstream_model":"u","channel_id":"c"}`,
+		`{"public_model":"` + long + `","upstream_model":"u","channel_id":"c"}`,
+		`{"public_model":"m","upstream_model":"` + long + `","channel_id":"c"}`,
+	} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/admin/model-routes", strings.NewReader(body))
+		(&Service{}).createModelRoute(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("body %s status = %d", body, rec.Code)
+		}
+	}
+}
