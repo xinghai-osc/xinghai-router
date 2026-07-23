@@ -609,10 +609,17 @@ func (s *Service) createGroup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 201, map[string]any{"id": id, "name": strings.TrimSpace(in.Name), "multiplier": in.Multiplier})
 }
 
+const maxGroupImportCount = 500
+const maxChannelModels = 500
+
 func (s *Service) importGroups(w http.ResponseWriter, r *http.Request) {
 	var values map[string]float64
 	if decode(r, &values) != nil || len(values) == 0 {
 		writeError(w, 400, "invalid_request", "a non-empty name-to-multiplier object is required")
+		return
+	}
+	if len(values) > maxGroupImportCount {
+		writeError(w, 400, "invalid_request", "at most 500 groups can be imported at once")
 		return
 	}
 	tx, err := s.db.Begin(r.Context())
@@ -989,6 +996,10 @@ func (s *Service) createChannel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_request", "name, api_key, and models are required")
 		return
 	}
+	if len(in.Models) > maxChannelModels {
+		writeError(w, 400, "invalid_request", "at most 500 models are allowed per channel")
+		return
+	}
 	if in.Provider == "" {
 		in.Provider = "openai"
 	}
@@ -1057,6 +1068,10 @@ func (s *Service) updateChannel(w http.ResponseWriter, r *http.Request) {
 	}
 	if decode(r, &in) != nil || strings.TrimSpace(in.Name) == "" || len(in.Models) == 0 {
 		writeError(w, 400, "invalid_request", "name and models are required")
+		return
+	}
+	if len(in.Models) > maxChannelModels {
+		writeError(w, 400, "invalid_request", "at most 500 models are allowed per channel")
 		return
 	}
 	if in.Provider == "" {

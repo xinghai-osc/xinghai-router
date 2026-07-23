@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -80,5 +81,39 @@ func TestUpdateChannelRejectsInvalidRequestBeforeDatabaseAccess(t *testing.T) {
 		if recorder.Code != http.StatusBadRequest {
 			t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
 		}
+	}
+}
+
+func TestImportGroupsRejectsTooManyBeforeDatabase(t *testing.T) {
+	var b strings.Builder
+	b.WriteByte('{')
+	for i := 0; i <= maxGroupImportCount; i++ {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(`"g`)
+		b.WriteString(strconv.Itoa(i))
+		b.WriteString(`":1`)
+	}
+	b.WriteByte('}')
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/admin/groups/import", strings.NewReader(b.String()))
+	(&Service{}).importGroups(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestCreateChannelRejectsTooManyModelsBeforeDatabase(t *testing.T) {
+	models := make([]string, 0, maxChannelModels+1)
+	for i := 0; i <= maxChannelModels; i++ {
+		models = append(models, `"m`+strconv.Itoa(i)+`"`)
+	}
+	body := `{"name":"c","api_key":"sk","base_url":"https://api.example.com","models":[` + strings.Join(models, ",") + `]}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/admin/channels", strings.NewReader(body))
+	(&Service{}).createChannel(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
 }

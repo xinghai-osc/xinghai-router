@@ -1,7 +1,10 @@
 package app
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -61,6 +64,22 @@ func TestValidPaymentMethod(t *testing.T) {
 	for _, code := range []string{"", "bad code", "bad/code"} {
 		if validPaymentMethod(code, "Payment") {
 			t.Fatalf("expected %q to be invalid", code)
+		}
+	}
+}
+
+func TestUpdatePaymentSettingsRejectsOversizedFieldsBeforeDatabase(t *testing.T) {
+	cases := []string{
+		`{"enabled":false,"base_url":"https://` + strings.Repeat("a", 2040) + `.example.com","public_base_url":"https://app.example.com","merchant_id":"1"}`,
+		`{"enabled":false,"base_url":"https://pay.example.com","public_base_url":"https://app.example.com","merchant_id":"` + strings.Repeat("m", 129) + `"}`,
+		`{"enabled":false,"base_url":"https://pay.example.com","public_base_url":"https://app.example.com","merchant_id":"1","merchant_key":"` + strings.Repeat("k", 4097) + `"}`,
+	}
+	for _, body := range cases {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPut, "/admin/payment-settings", strings.NewReader(body))
+		(&Service{}).updatePaymentSettings(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want %d for oversized payment field", rec.Code, http.StatusBadRequest)
 		}
 	}
 }

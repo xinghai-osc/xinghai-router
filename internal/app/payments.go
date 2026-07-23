@@ -14,8 +14,11 @@ import (
 )
 
 const (
-	minPaymentCents int64 = 100
-	maxPaymentCents int64 = 10_000_000
+	minPaymentCents   int64 = 100
+	maxPaymentCents   int64 = 10_000_000
+	maxPaymentURLLen        = 2048
+	maxMerchantIDLen        = 128
+	maxMerchantKeyLen       = 4096
 )
 
 type paymentOrder struct {
@@ -105,6 +108,14 @@ func (s *Service) updatePaymentSettings(w http.ResponseWriter, r *http.Request) 
 	in.PublicBaseURL = strings.TrimRight(strings.TrimSpace(in.PublicBaseURL), "/")
 	in.MerchantID = strings.TrimSpace(in.MerchantID)
 	in.MerchantKey = strings.TrimSpace(in.MerchantKey)
+	if len(in.BaseURL) > maxPaymentURLLen || len(in.PublicBaseURL) > maxPaymentURLLen {
+		writeError(w, http.StatusBadRequest, "invalid_request", "payment URLs must be at most 2048 characters")
+		return
+	}
+	if len(in.MerchantID) > maxMerchantIDLen || len(in.MerchantKey) > maxMerchantKeyLen {
+		writeError(w, http.StatusBadRequest, "invalid_request", "merchant_id must be at most 128 characters and merchant_key at most 4096")
+		return
+	}
 	current, err := s.loadEpaySettings(r)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not load payment settings")
