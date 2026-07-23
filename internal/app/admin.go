@@ -877,6 +877,10 @@ func validPricingRate(value float64) bool {
 }
 
 func validPricingModel(model string) bool {
+	return validModelName(model)
+}
+
+func validModelName(model string) bool {
 	return len(model) > 0 && len(model) <= 200
 }
 
@@ -1422,8 +1426,8 @@ func (s *Service) createModelRoute(w http.ResponseWriter, r *http.Request) {
 	in.PublicModel = strings.TrimSpace(in.PublicModel)
 	in.UpstreamModel = strings.TrimSpace(in.UpstreamModel)
 	in.ChannelID = strings.TrimSpace(in.ChannelID)
-	if in.PublicModel == "" || in.UpstreamModel == "" || in.ChannelID == "" {
-		writeError(w, 400, "invalid_request", "public_model, upstream_model, and channel_id are required")
+	if !validModelName(in.PublicModel) || !validModelName(in.UpstreamModel) || in.ChannelID == "" {
+		writeError(w, 400, "invalid_request", "public_model and upstream_model must be 1-200 characters; channel_id is required")
 		return
 	}
 	if in.Weight < 0 || in.Weight > 10000 {

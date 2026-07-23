@@ -357,6 +357,7 @@ func TestSetUserRoleRejectsInvalidRoleBeforeDatabaseAccess(t *testing.T) {
 }
 
 func TestCreateModelRouteRejectsInvalidBeforeDatabaseAccess(t *testing.T) {
+	long := strings.Repeat("m", 201)
 	for _, body := range []string{
 		`{}`,
 		`{"public_model":"m","upstream_model":"u"}`,
@@ -364,6 +365,8 @@ func TestCreateModelRouteRejectsInvalidBeforeDatabaseAccess(t *testing.T) {
 		`{"public_model":"m","upstream_model":"u","channel_id":"c","weight":-1}`,
 		`{"public_model":"m","upstream_model":"u","channel_id":"c","weight":10001}`,
 		`{"public_model":"m","upstream_model":"u","channel_id":"c","priority":10001}`,
+		`{"public_model":"` + long + `","upstream_model":"u","channel_id":"c"}`,
+		`{"public_model":"m","upstream_model":"` + long + `","channel_id":"c"}`,
 	} {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, "/admin/model-routes", strings.NewReader(body))
@@ -371,6 +374,15 @@ func TestCreateModelRouteRejectsInvalidBeforeDatabaseAccess(t *testing.T) {
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("body %s status = %d, want %d", body, rec.Code, http.StatusBadRequest)
 		}
+	}
+}
+
+func TestValidModelName(t *testing.T) {
+	if !validModelName("m") || !validModelName(strings.Repeat("m", 200)) {
+		t.Fatal("boundary model names must be valid")
+	}
+	if validModelName("") || validModelName(strings.Repeat("m", 201)) {
+		t.Fatal("out-of-range model names must be invalid")
 	}
 }
 
