@@ -95,6 +95,10 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "email and password are required")
 		return
 	}
+	if !validPasswordLength(in.Password) {
+		writeError(w, http.StatusBadRequest, "invalid_request", "password must be between 8 and 72 characters")
+		return
+	}
 	if err := s.verifyGeetest(r.Context(), in.geetestPayload); err != nil {
 		writeError(w, http.StatusForbidden, "captcha_failed", err.Error())
 		return
@@ -441,9 +445,13 @@ func (s *Service) createSession(w http.ResponseWriter, r *http.Request, userID s
 	writeJSON(w, status, map[string]any{"token": token, "expires_at": expiresAt})
 }
 
+func validPasswordLength(password string) bool {
+	return len(password) >= 8 && len(password) <= 72
+}
+
 func validAccountInput(email, name, password string) bool {
 	parsed, err := mail.ParseAddress(strings.TrimSpace(email))
-	return err == nil && parsed.Address == strings.TrimSpace(email) && len(strings.TrimSpace(name)) > 0 && len(strings.TrimSpace(name)) <= 100 && len(password) >= 8 && len(password) <= 128
+	return err == nil && parsed.Address == strings.TrimSpace(email) && len(strings.TrimSpace(name)) > 0 && len(strings.TrimSpace(name)) <= 100 && validPasswordLength(password)
 }
 
 func validEmail(email string) bool {

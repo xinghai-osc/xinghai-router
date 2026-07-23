@@ -59,9 +59,21 @@ func TestValidAccountInput(t *testing.T) {
 		{"not-an-email", "Example User", "password1"},
 		{"user@example.com", "", "password1"},
 		{"user@example.com", "Example User", "short"},
+		{"user@example.com", "Example User", strings.Repeat("a", 73)},
 	} {
 		if validAccountInput(input.email, input.name, input.password) {
 			t.Fatalf("expected invalid account input: %#v", input)
 		}
+	}
+}
+func TestValidPasswordLength(t *testing.T) {
+	if !validPasswordLength("password1") || validPasswordLength("short") {
+		t.Fatal("unexpected password length bounds")
+	}
+	if validPasswordLength(strings.Repeat("a", 73)) {
+		t.Fatal("passwords over 72 bytes must be rejected (bcrypt limit)")
+	}
+	if !validPasswordLength(strings.Repeat("a", 72)) {
+		t.Fatal("72-byte password should be accepted")
 	}
 }
