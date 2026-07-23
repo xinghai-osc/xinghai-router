@@ -1,8 +1,11 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -99,5 +102,27 @@ func TestAnthropicAPIKeyAndLoopback(t *testing.T) {
 	}
 	if isLoopbackHost("ollama.example.com") {
 		t.Fatal("unexpected loopback result")
+	}
+}
+
+func TestAnthropicMessagesRejectsInvalidMaxTokensOrEmptyMessages(t *testing.T) {
+	bodies := []string{
+		`{"model":"claude","max_tokens":0,"messages":[{"role":"user","content":"hi"}]}`,
+		`{"model":"claude","max_tokens":-1,"messages":[{"role":"user","content":"hi"}]}`,
+		`{"model":"claude","max_tokens":16,"messages":[]}`,
+		`{"model":"claude","max_tokens":16}`,
+		`{"max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`,
+	}
+	for _, body := range bodies {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+		req = req.WithContext(context.WithValue(req.Context(), contextKey{}, keyContext{userID: "1", keyID: "k"}))
+		(&Service{}).anthropicMessages(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("body %s status = %d, want %d", body, rec.Code, http.StatusBadRequest)
+		}
+		if !strings.Contains(rec.Body.String(), "invalid_request") {
+			t.Fatalf("body %s response = %s", body, rec.Body.String())
+		}
 	}
 }
