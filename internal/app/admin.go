@@ -18,13 +18,23 @@ func (s *Service) fetchChannelModels(w http.ResponseWriter, r *http.Request) {
 		BaseURL string `json:"base_url"`
 		APIKey  string `json:"api_key"`
 	}
-	if decode(r, &in) != nil || strings.TrimSpace(in.BaseURL) == "" || strings.TrimSpace(in.APIKey) == "" {
+	if decode(r, &in) != nil {
 		writeError(w, 400, "invalid_request", "base_url and api_key are required")
 		return
 	}
-	baseURL, err := url.Parse(strings.TrimRight(strings.TrimSpace(in.BaseURL), "/"))
-	if err != nil || validOutboundURL(baseURL.String()) != nil {
-		writeError(w, 400, "invalid_request", "base_url must use HTTPS to a public host, or HTTP to loopback")
+	in.BaseURL = strings.TrimSpace(in.BaseURL)
+	in.APIKey = strings.TrimSpace(in.APIKey)
+	if !validChannelAPIKey(in.APIKey) {
+		writeError(w, 400, "invalid_request", "api_key must be 1-4096 characters")
+		return
+	}
+	if !validChannelBaseURL(in.BaseURL) {
+		writeError(w, 400, "invalid_request", "base_url must be 1-2048 characters and use HTTPS to a public host, or HTTP to loopback")
+		return
+	}
+	baseURL, err := url.Parse(strings.TrimRight(in.BaseURL, "/"))
+	if err != nil {
+		writeError(w, 400, "invalid_request", "invalid base_url")
 		return
 	}
 	baseURL.Path = strings.TrimRight(baseURL.Path, "/") + "/v1/models"
@@ -139,13 +149,23 @@ func (s *Service) syncNewAPIPricing(w http.ResponseWriter, r *http.Request) {
 		APIKey            string  `json:"api_key"`
 		PricePerQuotaUnit float64 `json:"price_per_quota_unit"`
 	}
-	if decode(r, &in) != nil || in.PricePerQuotaUnit < 0 {
+	if decode(r, &in) != nil || !validPricePerQuotaUnit(in.PricePerQuotaUnit) {
 		writeError(w, 400, "invalid_request", "invalid NewAPI pricing source")
 		return
 	}
-	baseURL, err := url.Parse(strings.TrimRight(strings.TrimSpace(in.BaseURL), "/"))
-	if err != nil || validOutboundURL(baseURL.String()) != nil {
-		writeError(w, 400, "invalid_request", "base_url must use HTTPS to a public host, or HTTP to loopback")
+	in.BaseURL = strings.TrimSpace(in.BaseURL)
+	in.APIKey = strings.TrimSpace(in.APIKey)
+	if !validChannelBaseURL(in.BaseURL) {
+		writeError(w, 400, "invalid_request", "base_url must be 1-2048 characters and use HTTPS to a public host, or HTTP to loopback")
+		return
+	}
+	if in.APIKey != "" && !validChannelAPIKey(in.APIKey) {
+		writeError(w, 400, "invalid_request", "api_key must be 1-4096 characters")
+		return
+	}
+	baseURL, err := url.Parse(strings.TrimRight(in.BaseURL, "/"))
+	if err != nil {
+		writeError(w, 400, "invalid_request", "invalid base_url")
 		return
 	}
 	fetch := func(path string, out any) error {
@@ -155,8 +175,8 @@ func (s *Service) syncNewAPIPricing(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
-		if strings.TrimSpace(in.APIKey) != "" {
-			request.Header.Set("Authorization", "Bearer "+strings.TrimSpace(in.APIKey))
+		if in.APIKey != "" {
+			request.Header.Set("Authorization", "Bearer "+in.APIKey)
 		}
 		response, err := s.httpClient.Do(request)
 		if err != nil {
@@ -179,12 +199,16 @@ func (s *Service) syncNewAPIPricing(w http.ResponseWriter, r *http.Request) {
 		Success bool            `json:"success"`
 		Data    []newAPIPricing `json:"data"`
 	}
-	if err := fetch("/api/status", &status); err != nil || !status.Success || status.Data.QuotaPerUnit <= 0 {
+	if err := fetch("/api/status", &status); err != nil || !status.Success || !validPositiveFinite(status.Data.QuotaPerUnit) {
 		writeError(w, 502, "upstream_error", "could not read NewAPI quota configuration")
 		return
 	}
 	if err := fetch("/api/pricing", &pricing); err != nil || !pricing.Success {
 		writeError(w, 502, "upstream_error", "could not read NewAPI pricing")
+		return
+	}
+	if len(pricing.Data) > maxNewAPIPricingModels {
+		writeError(w, 400, "invalid_request", "too many models to sync")
 		return
 	}
 	tx, err := s.db.Begin(r.Context())
@@ -195,17 +219,24 @@ func (s *Service) syncNewAPIPricing(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback(r.Context())
 	synced := 0
 	for _, item := range pricing.Data {
-		if strings.TrimSpace(item.ModelName) == "" || item.QuotaType != 0 || item.ModelRatio < 0 || item.CompletionRatio < 0 {
+		model := strings.TrimSpace(item.ModelName)
+		if !validPricingModel(model) || item.QuotaType != 0 || !validNonNegativeFinite(item.ModelRatio) || !validNonNegativeFinite(item.CompletionRatio) {
+			continue
+		}
+		if item.CacheRatio != nil && !validNonNegativeFinite(*item.CacheRatio) {
 			continue
 		}
 		input := newAPIPricePerMillion(item.ModelRatio, in.PricePerQuotaUnit, status.Data.QuotaPerUnit)
 		output := input * item.CompletionRatio
 		cached := 0.0
-		if item.CacheRatio != nil && *item.CacheRatio >= 0 {
+		if item.CacheRatio != nil {
 			cached = input * *item.CacheRatio
 		}
+		if !validPricingRate(input) || !validPricingRate(cached) || !validPricingRate(output) {
+			continue
+		}
 		id, _ := randomID()
-		if _, err = tx.Exec(r.Context(), `insert into pricing_rules(id,model,input_per_million,cached_input_per_million,output_per_million,multiplier) values($1,$2,$3,$4,$5,1) on conflict(model) do update set input_per_million=excluded.input_per_million,cached_input_per_million=excluded.cached_input_per_million,output_per_million=excluded.output_per_million,updated_at=now()`, id, strings.TrimSpace(item.ModelName), input, cached, output); err != nil {
+		if _, err = tx.Exec(r.Context(), `insert into pricing_rules(id,model,input_per_million,cached_input_per_million,output_per_million,multiplier) values($1,$2,$3,$4,$5,1) on conflict(model) do update set input_per_million=excluded.input_per_million,cached_input_per_million=excluded.cached_input_per_million,output_per_million=excluded.output_per_million,updated_at=now()`, id, model, input, cached, output); err != nil {
 			writeError(w, 500, "internal_error", "could not save pricing rules")
 			return
 		}
@@ -875,9 +906,15 @@ func validPositiveFinite(value float64) bool {
 const maxGroupMultiplier = 1000.0
 const maxPricingMultiplier = 1000.0
 const maxPricingRate = 1_000_000.0
+const maxPricePerQuotaUnit = 1_000_000.0
+const maxNewAPIPricingModels = 5000
 const maxWalletAdjustAmount = 1_000_000_000.0
 const maxWalletNoteLength = 500
 const maxQuotaLimit = int64(1_000_000_000_000)
+
+func validPricePerQuotaUnit(value float64) bool {
+	return validNonNegativeFinite(value) && value <= maxPricePerQuotaUnit
+}
 
 func validGroupMultiplier(value float64) bool {
 	return validNonNegativeFinite(value) && value <= maxGroupMultiplier

@@ -11,13 +11,55 @@ import (
 )
 
 func TestSyncNewAPIPricingRejectsInvalidSourceBeforeNetworkOrDatabaseAccess(t *testing.T) {
-	for _, body := range []string{"{}", `{"base_url":"http://example.com","price_per_quota_unit":1}`, `{"base_url":"https://example.com","price_per_quota_unit":-1}`} {
+	for _, body := range []string{
+		`{}`,
+		`{"base_url":"http://example.com","price_per_quota_unit":1}`,
+		`{"base_url":"https://example.com","price_per_quota_unit":-1}`,
+		`{"base_url":"https://example.com","price_per_quota_unit":"nan"}`,
+		`{"base_url":"https://example.com","price_per_quota_unit":"inf"}`,
+		`{"base_url":"https://example.com","price_per_quota_unit":1000000.01}`,
+		`{"base_url":"https://` + strings.Repeat("a", 2040) + `.example.com","price_per_quota_unit":1}`,
+		`{"base_url":"https://example.com","api_key":"` + strings.Repeat("k", 4097) + `","price_per_quota_unit":1}`,
+		`{"base_url":"","price_per_quota_unit":1}`,
+		`{"base_url":"https://10.0.0.1","price_per_quota_unit":1}`,
+	} {
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodPost, "/admin/pricing/newapi/sync", strings.NewReader(body))
 		(&Service{}).syncNewAPIPricing(recorder, request)
 		if recorder.Code != http.StatusBadRequest {
-			t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
+			t.Fatalf("body %s status = %d, want %d", body, recorder.Code, http.StatusBadRequest)
 		}
+	}
+}
+
+func TestFetchChannelModelsRejectsInvalidRequestBeforeNetworkAccess(t *testing.T) {
+	for _, body := range []string{
+		`{}`,
+		`{"base_url":"","api_key":"sk"}`,
+		`{"base_url":"https://api.example.com","api_key":""}`,
+		`{"base_url":"http://api.example.com","api_key":"sk"}`,
+		`{"base_url":"https://10.0.0.1","api_key":"sk"}`,
+		`{"base_url":"https://api.example.com","api_key":"` + strings.Repeat("k", 4097) + `"}`,
+		`{"base_url":"https://` + strings.Repeat("a", 2040) + `.example.com","api_key":"sk"}`,
+	} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/admin/channels/models", strings.NewReader(body))
+		(&Service{}).fetchChannelModels(recorder, request)
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("body %s status = %d, want %d", body, recorder.Code, http.StatusBadRequest)
+		}
+	}
+}
+
+func TestValidPricePerQuotaUnit(t *testing.T) {
+	if !validPricePerQuotaUnit(0) || !validPricePerQuotaUnit(maxPricePerQuotaUnit) {
+		t.Fatal("boundary price_per_quota_unit must be valid")
+	}
+	if validPricePerQuotaUnit(-0.01) || validPricePerQuotaUnit(maxPricePerQuotaUnit+0.01) {
+		t.Fatal("out-of-range price_per_quota_unit must be invalid")
+	}
+	if validPricePerQuotaUnit(math.NaN()) || validPricePerQuotaUnit(math.Inf(1)) || validPricePerQuotaUnit(math.Inf(-1)) {
+		t.Fatal("non-finite price_per_quota_unit must be invalid")
 	}
 }
 
@@ -191,6 +233,21 @@ func TestSyncNewAPIPricingRejectsPrivateBaseURL(t *testing.T) {
 	(&Service{}).syncNewAPIPricing(recorder, request)
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+}
+
+func TestNewAPIPricePerMillionRejectsNonFiniteResults(t *testing.T) {
+	input := newAPIPricePerMillion(math.Inf(1), 1, 500000)
+	if validPricingRate(input) {
+		t.Fatal("infinite converted price must fail validPricingRate")
+	}
+	input = newAPIPricePerMillion(math.NaN(), 1, 500000)
+	if validPricingRate(input) {
+		t.Fatal("NaN converted price must fail validPricingRate")
+	}
+	input = newAPIPricePerMillion(maxPricingRate, 2, 1)
+	if validPricingRate(input) {
+		t.Fatal("oversized converted price must fail validPricingRate")
 	}
 }
 
