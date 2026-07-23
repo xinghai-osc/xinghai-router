@@ -82,3 +82,37 @@ func TestUpdateChannelRejectsInvalidRequestBeforeDatabaseAccess(t *testing.T) {
 		}
 	}
 }
+
+func TestValidGroupMultiplier(t *testing.T) {
+	if !validGroupMultiplier(0) || !validGroupMultiplier(maxGroupMultiplier) {
+		t.Fatal("boundary group multipliers must be valid")
+	}
+	if validGroupMultiplier(-0.01) || validGroupMultiplier(maxGroupMultiplier+0.01) {
+		t.Fatal("out-of-range group multipliers must be invalid")
+	}
+}
+
+func TestCreateAndUpdateGroupRejectOutOfRangeMultipliers(t *testing.T) {
+	for _, body := range []string{
+		`{"name":"g","multiplier":-1}`,
+		`{"name":"g","multiplier":1000.01}`,
+	} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/admin/groups", strings.NewReader(body))
+		(&Service{}).createGroup(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("createGroup body %s status = %d", body, rec.Code)
+		}
+	}
+	for _, body := range []string{
+		`{"multiplier":-1}`,
+		`{"multiplier":1001}`,
+	} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPut, "/admin/groups/group-id", strings.NewReader(body))
+		(&Service{}).updateGroup(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("updateGroup body %s status = %d", body, rec.Code)
+		}
+	}
+}

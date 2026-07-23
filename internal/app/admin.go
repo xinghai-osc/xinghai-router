@@ -583,6 +583,12 @@ func (s *Service) myGroups(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"data": names, "user_groups": names, "user_group": firstGroup(names)})
 }
 
+const maxGroupMultiplier = 1000.0
+
+func validGroupMultiplier(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0) && value >= 0 && value <= maxGroupMultiplier
+}
+
 func (s *Service) createGroup(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Name       string  `json:"name"`
@@ -595,8 +601,8 @@ func (s *Service) createGroup(w http.ResponseWriter, r *http.Request) {
 	if in.Multiplier == 0 {
 		in.Multiplier = 1
 	}
-	if in.Multiplier < 0 {
-		writeError(w, 400, "invalid_request", "multiplier must not be negative")
+	if !validGroupMultiplier(in.Multiplier) {
+		writeError(w, 400, "invalid_request", "multiplier must be between 0 and 1000")
 		return
 	}
 	id, _ := randomID()
@@ -623,8 +629,8 @@ func (s *Service) importGroups(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback(r.Context())
 	for name, multiplier := range values {
 		name = strings.TrimSpace(name)
-		if name == "" || multiplier < 0 || math.IsNaN(multiplier) || math.IsInf(multiplier, 0) {
-			writeError(w, 400, "invalid_request", "group names must be non-empty and multipliers must not be negative")
+		if name == "" || !validGroupMultiplier(multiplier) {
+			writeError(w, 400, "invalid_request", "group names must be non-empty and multipliers must be between 0 and 1000")
 			return
 		}
 		id, _ := randomID()
@@ -645,8 +651,8 @@ func (s *Service) updateGroup(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Multiplier float64 `json:"multiplier"`
 	}
-	if decode(r, &in) != nil || in.Multiplier < 0 {
-		writeError(w, 400, "invalid_request", "multiplier must not be negative")
+	if decode(r, &in) != nil || !validGroupMultiplier(in.Multiplier) {
+		writeError(w, 400, "invalid_request", "multiplier must be between 0 and 1000")
 		return
 	}
 	result, err := s.db.Exec(r.Context(), `update groups set multiplier=$1 where id=$2`, in.Multiplier, r.PathValue("id"))
