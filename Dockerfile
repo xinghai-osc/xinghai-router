@@ -7,8 +7,7 @@ FROM golang:1.26-alpine AS router-build
 WORKDIR /src
 
 COPY go.mod go.sum ./
-
-COPY vendor ./vendor
+RUN go mod download
 
 COPY . .
 
@@ -16,7 +15,6 @@ RUN CGO_ENABLED=0 \
     GOOS=linux \
     GOARCH=amd64 \
     go build \
-    -mod=vendor \
     -trimpath \
     -ldflags="-s -w" \
     -o /out/xinghai-router \
@@ -29,7 +27,7 @@ RUN CGO_ENABLED=0 \
 FROM alpine:3.22 AS router
 
 
-RUN apk add --no-cache ca-certificates tzdata \
+RUN apk add --no-cache ca-certificates tzdata wget \
     && addgroup -S router \
     && adduser -S -G router router
 
