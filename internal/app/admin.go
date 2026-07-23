@@ -975,6 +975,28 @@ func (s *Service) revokeKey(w http.ResponseWriter, r *http.Request) {
 	s.audit(r, "api_key.revoked", "api_key", r.PathValue("id"), nil)
 	w.WriteHeader(http.StatusNoContent)
 }
+const (
+	maxChannelAPIKeyLen  = 4096
+	maxChannelBaseURLLen = 2048
+	maxGatewayModelLen   = 200
+)
+
+func validChannelAPIKey(value string) bool {
+	return len(value) > 0 && len(value) <= maxChannelAPIKeyLen
+}
+
+func validChannelBaseURLLength(value string) bool {
+	if len(value) == 0 || len(value) > maxChannelBaseURLLen {
+		return false
+	}
+	u, err := url.Parse(value)
+	return err == nil && u.Host != "" && (u.Scheme == "https" || (u.Scheme == "http" && isLoopbackHost(u.Hostname())))
+}
+
+func validGatewayModelName(model string) bool {
+	return len(model) > 0 && len(model) <= maxGatewayModelLen
+}
+
 func (s *Service) createChannel(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Name     string   `json:"name"`
@@ -985,8 +1007,15 @@ func (s *Service) createChannel(w http.ResponseWriter, r *http.Request) {
 		Groups   []string `json:"groups"`
 		Provider string   `json:"provider"`
 	}
-	if decode(r, &in) != nil || in.Name == "" || in.APIKey == "" || len(in.Models) == 0 {
+	if decode(r, &in) != nil {
 		writeError(w, 400, "invalid_request", "name, api_key, and models are required")
+		return
+	}
+	in.Name = strings.TrimSpace(in.Name)
+	in.APIKey = strings.TrimSpace(in.APIKey)
+	in.BaseURL = strings.TrimSpace(in.BaseURL)
+	if in.Name == "" || !validChannelAPIKey(in.APIKey) || len(in.Models) == 0 {
+		writeError(w, 400, "invalid_request", "name, api_key (1-4096 chars), and models are required")
 		return
 	}
 	if in.Provider == "" {
@@ -1010,9 +1039,8 @@ func (s *Service) createChannel(w http.ResponseWriter, r *http.Request) {
 			groupIDs = append(groupIDs, groupID)
 		}
 	}
-	u, err := url.Parse(in.BaseURL)
-	if err != nil || u.Host == "" || (u.Scheme != "https" && !(u.Scheme == "http" && isLoopbackHost(u.Hostname()))) {
-		writeError(w, 400, "invalid_request", "base_url must use HTTPS, except for loopback HTTP services")
+	if !validChannelBaseURLLength(in.BaseURL) {
+		writeError(w, 400, "invalid_request", "base_url must be 1-2048 characters and use HTTPS, except for loopback HTTP services")
 		return
 	}
 	encrypted, err := crypt(s.cfg.EncryptionKey, in.APIKey, false)
@@ -1055,7 +1083,14 @@ func (s *Service) updateChannel(w http.ResponseWriter, r *http.Request) {
 		Priority int      `json:"priority"`
 		Provider string   `json:"provider"`
 	}
-	if decode(r, &in) != nil || strings.TrimSpace(in.Name) == "" || len(in.Models) == 0 {
+	if decode(r, &in) != nil {
+		writeError(w, 400, "invalid_request", "name and models are required")
+		return
+	}
+	in.Name = strings.TrimSpace(in.Name)
+	in.BaseURL = strings.TrimSpace(in.BaseURL)
+	in.APIKey = strings.TrimSpace(in.APIKey)
+	if in.Name == "" || len(in.Models) == 0 {
 		writeError(w, 400, "invalid_request", "name and models are required")
 		return
 	}
@@ -1066,21 +1101,24 @@ func (s *Service) updateChannel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_request", "unsupported provider")
 		return
 	}
-	u, err := url.Parse(in.BaseURL)
-	if err != nil || u.Host == "" || (u.Scheme != "https" && !(u.Scheme == "http" && isLoopbackHost(u.Hostname()))) {
-		writeError(w, 400, "invalid_request", "base_url must use HTTPS, except for loopback HTTP services")
+	if !validChannelBaseURLLength(in.BaseURL) {
+		writeError(w, 400, "invalid_request", "base_url must be 1-2048 characters and use HTTPS, except for loopback HTTP services")
+		return
+	}
+	if in.APIKey != "" && !validChannelAPIKey(in.APIKey) {
+		writeError(w, 400, "invalid_request", "api_key must be 1-4096 characters")
 		return
 	}
 	models, _ := json.Marshal(in.Models)
-	args := []any{strings.TrimSpace(in.Name), strings.TrimRight(in.BaseURL, "/"), models, in.Priority, in.Provider, r.PathValue("id")}
+	args := []any{in.Name, strings.TrimRight(in.BaseURL, "/"), models, in.Priority, in.Provider, r.PathValue("id")}
 	query := `update channels set name=$1,base_url=$2,models=$3,priority=$4,provider=$5,updated_at=now() where id=$6`
-	if strings.TrimSpace(in.APIKey) != "" {
+	if in.APIKey != "" {
 		encrypted, err := crypt(s.cfg.EncryptionKey, in.APIKey, false)
 		if err != nil {
 			writeError(w, 500, "internal_error", "credential encryption failed")
 			return
 		}
-		args = []any{strings.TrimSpace(in.Name), strings.TrimRight(in.BaseURL, "/"), encrypted, models, in.Priority, in.Provider, r.PathValue("id")}
+		args = []any{in.Name, strings.TrimRight(in.BaseURL, "/"), encrypted, models, in.Priority, in.Provider, r.PathValue("id")}
 		query = `update channels set name=$1,base_url=$2,api_key=$3,models=$4,priority=$5,provider=$6,updated_at=now() where id=$7`
 	}
 	result, err := s.db.Exec(r.Context(), query, args...)

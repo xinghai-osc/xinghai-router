@@ -63,8 +63,13 @@ func (s *Service) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		Model  string `json:"model"`
 		Stream bool   `json:"stream"`
 	}
-	if json.Unmarshal(body, &request) != nil || request.Model == "" {
+	if json.Unmarshal(body, &request) != nil {
 		writeError(w, 400, "invalid_request", "model is required")
+		return
+	}
+	request.Model = strings.TrimSpace(request.Model)
+	if !validGatewayModelName(request.Model) {
+		writeError(w, 400, "invalid_request", "model must be 1-200 characters")
 		return
 	}
 	s.proxyChatCompletions(w, r, body, request.Model, request.Stream, nil, nil)

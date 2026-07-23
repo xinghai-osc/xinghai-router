@@ -82,3 +82,52 @@ func TestUpdateChannelRejectsInvalidRequestBeforeDatabaseAccess(t *testing.T) {
 		}
 	}
 }
+
+func TestValidChannelAPIKeyAndBaseURLLength(t *testing.T) {
+	if !validChannelAPIKey("sk") || !validChannelAPIKey(strings.Repeat("k", maxChannelAPIKeyLen)) {
+		t.Fatal("boundary api keys must be valid")
+	}
+	if validChannelAPIKey("") || validChannelAPIKey(strings.Repeat("k", maxChannelAPIKeyLen+1)) {
+		t.Fatal("out-of-range api keys must be invalid")
+	}
+	if !validChannelBaseURLLength("https://api.example.com") || !validChannelBaseURLLength("http://127.0.0.1:11434") {
+		t.Fatal("expected valid base URLs")
+	}
+	if validChannelBaseURLLength("") || validChannelBaseURLLength("http://api.example.com") || validChannelBaseURLLength("https://"+strings.Repeat("a", 2040)+".example.com") {
+		t.Fatal("expected invalid base URLs")
+	}
+}
+
+func TestValidGatewayModelName(t *testing.T) {
+	if !validGatewayModelName("m") || !validGatewayModelName(strings.Repeat("m", maxGatewayModelLen)) {
+		t.Fatal("boundary model names must be valid")
+	}
+	if validGatewayModelName("") || validGatewayModelName(strings.Repeat("m", maxGatewayModelLen+1)) {
+		t.Fatal("out-of-range model names must be invalid")
+	}
+}
+
+func TestCreateChannelRejectsOverlongSecretsBeforeDatabase(t *testing.T) {
+	for _, body := range []string{
+		`{"name":"c","api_key":"","base_url":"https://api.example.com","models":["m"]}`,
+		`{"name":"c","api_key":"` + strings.Repeat("k", 4097) + `","base_url":"https://api.example.com","models":["m"]}`,
+		`{"name":"c","api_key":"sk","base_url":"https://` + strings.Repeat("a", 2040) + `.example.com","models":["m"]}`,
+	} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/admin/channels", strings.NewReader(body))
+		(&Service{}).createChannel(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("body status = %d, want %d", rec.Code, http.StatusBadRequest)
+		}
+	}
+}
+
+func TestChatCompletionsRejectsLongModel(t *testing.T) {
+	body := `{"model":"` + strings.Repeat("m", 201) + `"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	(&Service{}).chatCompletions(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
