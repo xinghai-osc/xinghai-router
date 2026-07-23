@@ -295,7 +295,7 @@ Use this before exposing the stack on a public host.
 
 ### Known production limits
 
-- Streaming (SSE) responses are not settled against the wallet and do not hold wallet `reserved` balance; only non-stream requests reserve and bill tokens. Do not rely on stream traffic for metered revenue until upstream usage events are normalized.
+- Streaming (SSE) responses are not settled against the wallet (no charge). Non-subscription stream requests still reserve balance for the stream duration and release it afterward; subscription-covered models skip reserve. Only non-stream requests bill tokens. Do not rely on stream traffic for metered revenue until upstream usage events are normalized.
 - Browser payment return URLs never credit balances; only the signed `epay/notify` callback does (idempotent on `order_no`).
 
 ## Verify
