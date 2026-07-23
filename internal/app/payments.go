@@ -14,8 +14,11 @@ import (
 )
 
 const (
-	minPaymentCents int64 = 100
-	maxPaymentCents int64 = 10_000_000
+	minPaymentCents   int64 = 100
+	maxPaymentCents   int64 = 10_000_000
+	maxPaymentURLLen        = 2048
+	maxMerchantIDLen        = 128
+	maxMerchantKeyLen       = 4096
 )
 
 type paymentOrder struct {
@@ -105,6 +108,20 @@ func (s *Service) updatePaymentSettings(w http.ResponseWriter, r *http.Request) 
 	in.PublicBaseURL = strings.TrimRight(strings.TrimSpace(in.PublicBaseURL), "/")
 	in.MerchantID = strings.TrimSpace(in.MerchantID)
 	in.MerchantKey = strings.TrimSpace(in.MerchantKey)
+	if len(in.BaseURL) > maxPaymentURLLen || len(in.PublicBaseURL) > maxPaymentURLLen {
+		writeError(w, http.StatusBadRequest, "invalid_request", "payment URLs must be at most 2048 characters")
+		return
+	}
+	if len(in.MerchantID) > maxMerchantIDLen || len(in.MerchantKey) > maxMerchantKeyLen {
+		writeError(w, http.StatusBadRequest, "invalid_request", "merchant_id must be at most 128 characters and merchant_key at most 4096")
+		return
+	}
+	if in.Enabled {
+		if validPublicURL(in.BaseURL) != nil || validPublicURL(in.PublicBaseURL) != nil || in.MerchantID == "" {
+			writeError(w, http.StatusBadRequest, "invalid_request", "enabled payment requires valid URLs and merchant credentials")
+			return
+		}
+	}
 	current, err := s.loadEpaySettings(r)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not load payment settings")
@@ -114,11 +131,9 @@ func (s *Service) updatePaymentSettings(w http.ResponseWriter, r *http.Request) 
 	if merchantKey == "" {
 		merchantKey = current.MerchantKey
 	}
-	if in.Enabled {
-		if validPublicURL(in.BaseURL) != nil || validPublicURL(in.PublicBaseURL) != nil || in.MerchantID == "" || merchantKey == "" {
-			writeError(w, http.StatusBadRequest, "invalid_request", "enabled payment requires valid URLs and merchant credentials")
-			return
-		}
+	if in.Enabled && merchantKey == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "enabled payment requires valid URLs and merchant credentials")
+		return
 	}
 	encryptedKey := ""
 	if merchantKey != "" {
@@ -223,7 +238,7 @@ func (s *Service) createAccountPayment(w http.ResponseWriter, r *http.Request) {
 	}
 	cents, amount, ok := parsePaymentAmount(in.Amount)
 	paymentType := strings.ToLower(strings.TrimSpace(in.Type))
-	if !ok || cents < minPaymentCents || cents > maxPaymentCents || !methodEnabled(settings.Methods, paymentType) {
+	if !ok || !paymentAmountInBounds(cents) || !methodEnabled(settings.Methods, paymentType) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "invalid amount or payment type")
 		return
 	}
@@ -406,11 +421,14 @@ func methodEnabled(methods []paymentMethod, target string) bool {
 }
 
 func validPublicURL(value string) error {
-	u, err := url.Parse(value)
-	if err != nil || u.Host == "" || (u.Scheme != "https" && !(u.Scheme == "http" && (u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1"))) {
+	if err := validOutboundURL(value); err != nil {
 		return fmt.Errorf("must be an HTTPS URL (HTTP is allowed for localhost)")
 	}
 	return nil
+}
+
+func paymentAmountInBounds(cents int64) bool {
+	return cents >= minPaymentCents && cents <= maxPaymentCents
 }
 
 func parsePaymentAmount(value string) (int64, string, bool) {

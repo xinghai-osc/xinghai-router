@@ -2,6 +2,7 @@ package app
 
 import (
 	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -62,5 +63,61 @@ func TestValidPaymentMethod(t *testing.T) {
 		if validPaymentMethod(code, "Payment") {
 			t.Fatalf("expected %q to be invalid", code)
 		}
+	}
+}
+
+func TestPaymentAmountInBounds(t *testing.T) {
+	if !paymentAmountInBounds(minPaymentCents) || !paymentAmountInBounds(maxPaymentCents) {
+		t.Fatal("min and max cents must be allowed")
+	}
+	if paymentAmountInBounds(minPaymentCents - 1) || paymentAmountInBounds(maxPaymentCents+1) || paymentAmountInBounds(0) {
+		t.Fatal("out-of-range amounts must be rejected")
+	}
+}
+
+func TestEpaySettingsReady(t *testing.T) {
+	ready := epaySettings{
+		Enabled:       true,
+		BaseURL:       "https://pay.example.com",
+		MerchantID:    "1001",
+		MerchantKey:   "secret",
+		PublicBaseURL: "https://app.example.com",
+	}
+	if !ready.ready() {
+		t.Fatal("fully configured settings must be ready")
+	}
+	cases := []epaySettings{
+		{},
+		{Enabled: false, BaseURL: ready.BaseURL, MerchantID: ready.MerchantID, MerchantKey: ready.MerchantKey, PublicBaseURL: ready.PublicBaseURL},
+		{Enabled: true, BaseURL: "", MerchantID: ready.MerchantID, MerchantKey: ready.MerchantKey, PublicBaseURL: ready.PublicBaseURL},
+		{Enabled: true, BaseURL: ready.BaseURL, MerchantID: "", MerchantKey: ready.MerchantKey, PublicBaseURL: ready.PublicBaseURL},
+		{Enabled: true, BaseURL: ready.BaseURL, MerchantID: ready.MerchantID, MerchantKey: "", PublicBaseURL: ready.PublicBaseURL},
+		{Enabled: true, BaseURL: ready.BaseURL, MerchantID: ready.MerchantID, MerchantKey: ready.MerchantKey, PublicBaseURL: ""},
+	}
+	for i, settings := range cases {
+		if settings.ready() {
+			t.Fatalf("case %d must not be ready: %#v", i, settings)
+		}
+	}
+}
+
+func TestEpayNotifySignatureCompare(t *testing.T) {
+	values := url.Values{
+		"pid":          {"1001"},
+		"type":         {"alipay"},
+		"out_trade_no": {"xh123"},
+		"money":        {"10.00"},
+		"name":         {"Top up"},
+	}
+	sig := epaySign(values, "secret")
+	if !equalSecret(strings.ToLower(strings.ToUpper(sig)), sig) {
+		t.Fatal("case-normalized sign should match")
+	}
+	if equalSecret(sig, epaySign(values, "wrong-secret")) {
+		t.Fatal("wrong merchant key must not verify")
+	}
+	values.Set("money", "10.01")
+	if equalSecret(sig, epaySign(values, "secret")) {
+		t.Fatal("mutated payload must not verify")
 	}
 }

@@ -51,8 +51,7 @@ func (s *Service) verifyGeetest(ctx context.Context, payload geetestPayload) err
 		return fmt.Errorf("captcha verification unavailable")
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := newHTTPClient(10 * time.Second).Do(req)
 	if err != nil {
 		return fmt.Errorf("captcha verification unavailable")
 	}

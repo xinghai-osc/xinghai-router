@@ -60,24 +60,32 @@ func (s *Service) saveProvider(w http.ResponseWriter, r *http.Request) {
 		Prefixes []string `json:"prefixes"`
 		Priority int      `json:"priority"`
 	}
-	if decode(r, &in) != nil || strings.TrimSpace(in.Name) == "" || strings.TrimSpace(in.Slug) == "" || len(in.Prefixes) == 0 {
+	if decode(r, &in) != nil {
+		writeError(w, 400, "invalid_request", "name, slug, and prefixes are required")
+		return
+	}
+	name := strings.TrimSpace(in.Name)
+	slug := strings.ToLower(strings.TrimSpace(in.Slug))
+	if name == "" || len(name) > 100 || !validProviderSlug(slug) || len(in.Prefixes) == 0 {
 		writeError(w, 400, "invalid_request", "name, slug, and prefixes are required")
 		return
 	}
 	for i := range in.Prefixes {
 		in.Prefixes[i] = strings.ToLower(strings.TrimSpace(in.Prefixes[i]))
-		if in.Prefixes[i] == "" {
+		if in.Prefixes[i] == "" || len(in.Prefixes[i]) > 64 {
 			writeError(w, 400, "invalid_request", "prefixes cannot be empty")
 			return
 		}
 	}
-	if in.Priority < 0 {
-		writeError(w, 400, "invalid_request", "priority cannot be negative")
+	if in.Priority < 0 || in.Priority > 10000 {
+		writeError(w, 400, "invalid_request", "priority must be between 0 and 10000")
 		return
 	}
+	in.Name = name
+	in.Slug = slug
 	prefixes, _ := json.Marshal(in.Prefixes)
 	if strings.TrimSpace(in.ID) != "" {
-		result, err := s.db.Exec(r.Context(), `update model_providers set name=$1,slug=$2,prefixes=$3,priority=$4,updated_at=now() where id=$5`, strings.TrimSpace(in.Name), strings.TrimSpace(in.Slug), prefixes, in.Priority, strings.TrimSpace(in.ID))
+		result, err := s.db.Exec(r.Context(), `update model_providers set name=$1,slug=$2,prefixes=$3,priority=$4,updated_at=now() where id=$5`, in.Name, in.Slug, prefixes, in.Priority, strings.TrimSpace(in.ID))
 		if err != nil {
 			writeError(w, 409, "conflict", "provider name or slug already exists")
 			return
@@ -86,14 +94,14 @@ func (s *Service) saveProvider(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 404, "not_found", "provider not found")
 			return
 		}
-		item := modelProvider{ID: strings.TrimSpace(in.ID), Name: strings.TrimSpace(in.Name), Slug: strings.TrimSpace(in.Slug), Prefixes: in.Prefixes, Priority: in.Priority}
+		item := modelProvider{ID: strings.TrimSpace(in.ID), Name: in.Name, Slug: in.Slug, Prefixes: in.Prefixes, Priority: in.Priority}
 		s.audit(r, "provider.saved", "model_provider", item.ID, map[string]any{"name": item.Name})
 		writeJSON(w, 200, item)
 		return
 	}
 	var item modelProvider
 	var raw []byte
-	err := s.db.QueryRow(r.Context(), `insert into model_providers(name,slug,prefixes,priority,updated_at) values($1,$2,$3,$4,now()) on conflict (slug) do update set name=excluded.name,prefixes=excluded.prefixes,priority=excluded.priority,updated_at=now() returning id::text,name,slug,prefixes,priority`, strings.TrimSpace(in.Name), strings.TrimSpace(in.Slug), prefixes, in.Priority).Scan(&item.ID, &item.Name, &item.Slug, &raw, &item.Priority)
+	err := s.db.QueryRow(r.Context(), `insert into model_providers(name,slug,prefixes,priority,updated_at) values($1,$2,$3,$4,now()) on conflict (slug) do update set name=excluded.name,prefixes=excluded.prefixes,priority=excluded.priority,updated_at=now() returning id::text,name,slug,prefixes,priority`, in.Name, in.Slug, prefixes, in.Priority).Scan(&item.ID, &item.Name, &item.Slug, &raw, &item.Priority)
 	if err != nil {
 		writeError(w, 409, "conflict", "provider name or slug already exists")
 		return

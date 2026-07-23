@@ -4,7 +4,7 @@ Guidance for AI coding agents (opencode, Claude Code, etc.) working in this repo
 
 ## Project overview
 
-Xinghai Router is an LLM gateway and operations console. The Go service (`cmd/router`) exposes an OpenAI-compatible gateway (`/v1/*`), an Anthropic-compatible gateway (`/v1/messages`), account APIs (`/auth/*`, `/account/*`), public APIs (`/rankings`, `/subscription-plans`, `/model-catalog`, `/site-settings`), and admin APIs (`/admin/*`). A Nuxt 3 console in `web/` proxies `/api/*` to the Go service. PostgreSQL is the source of truth; Redis is provisioned in `docker-compose.yml` but not yet wired in (in-process limiter only). Provider credentials are encrypted at rest with `ENCRYPTION_KEY`.
+Xinghai Router is an LLM gateway and operations console. The Go service (`cmd/router`) exposes an OpenAI-compatible gateway (`/v1/*`), an Anthropic-compatible gateway (`/v1/messages`), account APIs (`/auth/*`, `/account/*`), public APIs (`/rankings`, `/subscription-plans`, `/model-catalog`, `/site-settings`), and admin APIs (`/admin/*`). A Nuxt 3 console in `web/` proxies `/api/*` to the Go service. PostgreSQL is the source of truth; Redis is used for shared API-key rate limiting when `REDIS_URL` is set (memory fallback otherwise). Provider credentials are encrypted at rest with `ENCRYPTION_KEY`.
 
 The repository is bilingual: README and user-facing copy are in Chinese and English. Match the language of the surrounding content when editing; do not translate existing strings unless asked.
 
@@ -110,7 +110,7 @@ There is no web test script. No `vue-tsc` typecheck or Prettier is wired in yet.
 
 ### Known limits (do not "fix" silently)
 
-- The rate limiter is in-process (`internal/app/limiter.go`). Horizontal scaling requires replacing it with a Redis sliding window — `REDIS_URL` is already passed through compose for this.
+- The rate limiter uses Redis fixed-window counters when `REDIS_URL` is set (`internal/app/redis_limiter.go`), with automatic fallback to the in-process limiter (`internal/app/limiter.go`) if Redis is unreachable.
 - Streaming (SSE) responses are passed through transparently and are **not** settled against the wallet; only non-stream requests record tokens and bill. Do not introduce streaming billing without solving inconsistent upstream SSE usage events.
 - Balance reservation happens before the upstream call to prevent concurrent overspend; releases/refunds must go through the wallet ledger (`internal/app/gateway.go`).
 

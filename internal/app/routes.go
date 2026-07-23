@@ -15,9 +15,8 @@ type contextKey struct{}
 
 func (s *Service) routes() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-	})
+	mux.HandleFunc("GET /healthz", s.healthz)
+	mux.HandleFunc("GET /readyz", s.readyz)
 	mux.HandleFunc("POST /auth/register", s.register)
 	mux.HandleFunc("POST /auth/login", s.login)
 	mux.HandleFunc("POST /auth/email-code", s.sendEmailCode)
@@ -27,11 +26,13 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("POST /auth/logout", s.account(s.logout))
 	mux.Handle("GET /account/me", s.account(s.accountMe))
 	mux.Handle("PUT /account/profile", s.account(s.updateAccountProfile))
+	mux.Handle("PUT /account/password", s.account(s.changeAccountPassword))
 	mux.Handle("PUT /account/preferences", s.account(s.updateAccountPreferences))
 	mux.Handle("GET /account/keys", s.account(s.accountKeys))
 	mux.Handle("POST /account/keys", s.account(s.createAccountKey))
 	mux.Handle("PUT /account/keys/{id}", s.account(s.updateAccountKey))
 	mux.Handle("PUT /account/keys/{id}/group", s.account(s.setAccountKeyGroup))
+	mux.Handle("POST /account/keys/{id}/revoke", s.account(s.revokeAccountKey))
 	mux.Handle("GET /account/usage", s.account(s.accountUsage))
 	mux.Handle("GET /account/ledger", s.account(s.accountLedger))
 	mux.Handle("GET /account/payments", s.account(s.listAccountPayments))
@@ -104,7 +105,7 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("GET /v1/models", s.api(s.models))
 	mux.Handle("POST /v1/chat/completions", s.api(s.chatCompletions))
 	mux.Handle("POST /v1/messages", s.api(s.anthropicMessages))
-	return s.requestID(mux)
+	return recoverPanic(securityHeaders(maxBodyBytes(2<<20, s.requestID(mux))))
 }
 func (s *Service) requestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -138,6 +139,7 @@ func (s *Service) api(next http.HandlerFunc) http.Handler {
 			writeError(w, 429, "rate_limit_exceeded", "too many requests")
 			return
 		}
+		_, _ = s.db.Exec(r.Context(), `update api_keys set last_used_at=now() where id=$1`, k.keyID)
 		next(w, r.WithContext(context.WithValue(r.Context(), contextKey{}, k)))
 	})
 }
@@ -230,7 +232,10 @@ func decode(r *http.Request, target any) error {
 	return d.Decode(target)
 }
 
-var errInvalid = errors.New("invalid request")
+var (
+	errInvalid            = errors.New("invalid request")
+	errPricingUnavailable = errors.New("pricing unavailable")
+)
 
 func parseExpiry(value string) (*time.Time, error) {
 	if value == "" {

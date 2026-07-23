@@ -201,6 +201,10 @@ func readSubscriptionPlanInput(r *http.Request, s *Service, existingID string) (
 	if in.Name == "" || len(in.Name) > 100 {
 		return subscriptionPlan{}, fmt.Errorf("name must be 1-100 characters")
 	}
+	in.Description = strings.TrimSpace(in.Description)
+	if len(in.Description) > maxPlanDescriptionLength {
+		return subscriptionPlan{}, fmt.Errorf("description must be at most 2000 characters")
+	}
 	in.BillingPeriod = strings.ToLower(strings.TrimSpace(in.BillingPeriod))
 	if in.BillingPeriod != "month" && in.BillingPeriod != "year" {
 		return subscriptionPlan{}, fmt.Errorf("billing_period must be month or year")
@@ -213,12 +217,18 @@ func readSubscriptionPlanInput(r *http.Request, s *Service, existingID string) (
 		return subscriptionPlan{}, fmt.Errorf("currency code too long")
 	}
 	priceCents, _, ok := parsePaymentAmount(in.Price)
-	if !ok || priceCents < 0 {
-		return subscriptionPlan{}, fmt.Errorf("price must be a non-negative decimal")
+	if !ok || priceCents < 0 || priceCents > maxPlanPriceCents {
+		return subscriptionPlan{}, fmt.Errorf("price must be a non-negative decimal up to 100000.00")
 	}
 	credit, ok := parseCreditAmount(in.CreditAmount)
-	if !ok || credit < 0 {
-		return subscriptionPlan{}, fmt.Errorf("credit_amount must be a non-negative decimal")
+	if !ok || credit < 0 || credit > maxPlanCreditAmount {
+		return subscriptionPlan{}, fmt.Errorf("credit_amount must be a non-negative decimal up to 1000000")
+	}
+	if in.SortOrder < minPlanSortOrder || in.SortOrder > maxPlanSortOrder {
+		return subscriptionPlan{}, fmt.Errorf("sort_order must be between -10000 and 10000")
+	}
+	if !validQuotaLimit(in.MaxRequests) || !validQuotaLimit(in.MaxTokens) {
+		return subscriptionPlan{}, fmt.Errorf("period limits must be between 0 and 1e12")
 	}
 	groupRef := strings.TrimSpace(in.GroupID)
 	if groupRef != "" {
@@ -246,7 +256,7 @@ func readSubscriptionPlanInput(r *http.Request, s *Service, existingID string) (
 	}
 	return subscriptionPlan{
 		Name:               in.Name,
-		Description:        strings.TrimSpace(in.Description),
+		Description:        in.Description,
 		Price:              formatAmount(priceCents),
 		Currency:           in.Currency,
 		BillingPeriod:      in.BillingPeriod,
@@ -259,6 +269,14 @@ func readSubscriptionPlanInput(r *http.Request, s *Service, existingID string) (
 		Enabled:            enabled,
 	}, nil
 }
+
+const (
+	maxPlanDescriptionLength = 2000
+	maxPlanPriceCents        = maxPaymentCents
+	maxPlanCreditAmount      = 1_000_000.0
+	minPlanSortOrder         = -10000
+	maxPlanSortOrder         = 10000
+)
 
 func nullableGroupRef(ref string) any {
 	if ref == "" {
