@@ -4,6 +4,9 @@
 
 FROM golang:1.26-alpine AS router-build
 
+ARG GOPROXY
+ENV GOPROXY=${GOPROXY:-https://proxy.golang.org,direct}
+
 WORKDIR /src
 
 COPY go.mod go.sum ./

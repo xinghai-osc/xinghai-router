@@ -78,6 +78,8 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("POST /admin/channels/{id}/status", s.permission("channels.manage", s.setChannelStatus))
 	mux.Handle("PUT /admin/channels/{id}/groups", s.permission("channels.manage", s.setChannelGroups))
 	mux.Handle("GET /admin/request-logs", s.permission("logs.read", s.listLogs))
+	mux.Handle("GET /admin/usage-logs", s.permission("logs.read", s.listUsageLogs))
+	mux.Handle("GET /admin/usage-stats", s.permission("logs.read", s.usageStats))
 	mux.Handle("GET /admin/pricing", s.permission("pricing.read", s.listPricing))
 	mux.Handle("POST /admin/pricing", s.permission("pricing.manage", s.upsertPricing))
 	mux.Handle("GET /admin/site-settings", s.permission("system.manage", s.adminSiteSettings))

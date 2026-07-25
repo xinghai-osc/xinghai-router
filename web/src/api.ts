@@ -23,6 +23,47 @@ export interface SiteSettings { name: string; icon_url: string; auto_disable_fai
 export interface AdminSiteSettings { name: string; icon_url: string; auto_disable_failed_channels: boolean; geetest_captcha_id: string; has_geetest_captcha_key: boolean; smtp_host: string; smtp_port: string; smtp_username: string; has_smtp_password: boolean; smtp_from: string }
 export interface ReliabilitySettings { retry_count: number; retry_status_codes: string; health_check_mode: 'off' | 'scheduled_all' | 'passive_recovery'; health_check_interval_minutes: number; health_check_auto_recover: boolean; health_check_channel_ids: string; auto_disable_on_test_failure: boolean; auto_disable_slow_seconds: number; auto_disable_status_codes: string; auto_disable_keywords: string }
 
+export interface UsageLog {
+  request_id: string
+  user_id: string | null
+  user_name: string
+  api_key_id: string | null
+  channel_id: string | null
+  channel_name: string
+  group_id: string
+  group_name: string
+  model: string
+  status_code: number
+  prompt_tokens: number | null
+  completion_tokens: number | null
+  total_tokens: number | null
+  duration_ms: number
+  error_code: string | null
+  cost: number
+  created_at: string
+}
+
+export interface UsageStats {
+  total_requests: number
+  success_count: number
+  error_count: number
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  total_cost: number
+  avg_duration_ms: number
+  breakdown?: UsageStatBreakdown[]
+}
+
+export interface UsageStatBreakdown {
+  period: string
+  requests: number
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  cost: number
+}
+
 export interface SubscriptionPlan {
   id: string
   name: string
@@ -244,4 +285,7 @@ export const endpoints = {
   batchExtendSubscriptions: (planId: string, days: number) => post<{ affected: number }>('/admin/subscriptions/extend', { plan_id: planId, days }),
   runMigration: (form: MigrateForm) => post<MigrateResult>('/admin/migrate', form),
   getMigrationStatus: () => get<MigrationStatus>('/admin/migrate'),
+
+  getUsageLogs: (query = '') => get<{ data: UsageLog[]; total: number; page: number; page_size: number }>(`/admin/usage-logs${query}`),
+  getUsageStats: (query = '') => get<UsageStats>(`/admin/usage-stats${query}`),
 }

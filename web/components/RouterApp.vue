@@ -239,7 +239,7 @@ const VIEW_LOADERS: Partial<Record<View, (() => Promise<void>)[]>> = {
   wallet: [loadPersonal],
   ledger: [loadPersonal],
   subscriptions: [loadPersonal],
-  usage: [loadPersonal, loadUsersAndGroups],
+  usage: [loadUsersAndGroups],
   users: [loadUsersAndGroups],
   groups: [loadUsersAndGroups],
   keys: [loadAdminKeys, loadUsersAndGroups],

@@ -601,7 +601,7 @@ func migrateChannels(ctx context.Context, src *sql.DB, target *pgxpool.Pool, gro
 		}
 
 		weight := 100
-		if c.Weight != nil {
+		if c.Weight != nil && int(*c.Weight) > 0 {
 			weight = int(*c.Weight)
 		}
 
