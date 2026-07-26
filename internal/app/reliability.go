@@ -183,14 +183,24 @@ func parseIDList(input string) map[string]bool {
 	return ids
 }
 
+// reliabilitySettings is read on every proxied request, so it is cached for a few
+// seconds. updateReliabilitySettings invalidates the cache on write.
 func (s *Service) reliabilitySettings(ctx context.Context) reliabilitySettings {
+	settings, err := s.reliabilityData.get(ctx, struct{}{}, s.loadReliabilitySettings)
+	if err != nil {
+		return defaultReliabilitySettings()
+	}
+	return settings
+}
+
+func (s *Service) loadReliabilitySettings(ctx context.Context) (reliabilitySettings, error) {
 	settings := defaultReliabilitySettings()
 	var retryCount, interval, slowSeconds int
 	var retryCodes, mode, channelIDs, disableCodes, keywords string
 	var autoRecover, autoDisableOnFailure bool
 	err := s.db.QueryRow(ctx, `select retry_count,retry_status_codes,health_check_mode,health_check_interval_minutes,health_check_auto_recover,health_check_channel_ids,auto_disable_on_test_failure,auto_disable_slow_seconds,auto_disable_status_codes,auto_disable_keywords from site_settings where id=true`).Scan(&retryCount, &retryCodes, &mode, &interval, &autoRecover, &channelIDs, &autoDisableOnFailure, &slowSeconds, &disableCodes, &keywords)
 	if err != nil {
-		return settings
+		return settings, err
 	}
 	settings.RetryCount = retryCount
 	settings.RetryStatusCodes = retryCodes
@@ -203,11 +213,16 @@ func (s *Service) reliabilitySettings(ctx context.Context) reliabilitySettings {
 	settings.AutoDisableStatusCodes = disableCodes
 	settings.AutoDisableKeywords = keywords
 	settings.compile()
-	return settings
+	return settings, nil
 }
 
+// getReliabilitySettings bypasses the cache so the console always shows persisted values.
 func (s *Service) getReliabilitySettings(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.reliabilitySettings(r.Context()))
+	settings, err := s.loadReliabilitySettings(r.Context())
+	if err != nil {
+		settings = defaultReliabilitySettings()
+	}
+	writeJSON(w, http.StatusOK, settings)
 }
 
 func (s *Service) updateReliabilitySettings(w http.ResponseWriter, r *http.Request) {
@@ -251,7 +266,10 @@ func (s *Service) updateReliabilitySettings(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "invalid_request", "auto_disable_status_codes must be comma-separated status codes or inclusive ranges between 100 and 599")
 		return
 	}
-	current := s.reliabilitySettings(r.Context())
+	current, err := s.loadReliabilitySettings(r.Context())
+	if err != nil {
+		current = defaultReliabilitySettings()
+	}
 	if in.RetryCount != nil {
 		current.RetryCount = *in.RetryCount
 	}
@@ -282,11 +300,12 @@ func (s *Service) updateReliabilitySettings(w http.ResponseWriter, r *http.Reque
 	if in.AutoDisableKeywords != nil {
 		current.AutoDisableKeywords = strings.TrimRight(*in.AutoDisableKeywords, "\n")
 	}
-	_, err := s.db.Exec(r.Context(), `update site_settings set retry_count=$1,retry_status_codes=$2,health_check_mode=$3,health_check_interval_minutes=$4,health_check_auto_recover=$5,health_check_channel_ids=$6,auto_disable_on_test_failure=$7,auto_disable_slow_seconds=$8,auto_disable_status_codes=$9,auto_disable_keywords=$10,updated_at=now() where id=true`, current.RetryCount, current.RetryStatusCodes, current.HealthCheckMode, current.HealthCheckIntervalMinutes, current.HealthCheckAutoRecover, current.HealthCheckChannelIDs, current.AutoDisableOnTestFailure, current.AutoDisableSlowSeconds, current.AutoDisableStatusCodes, current.AutoDisableKeywords)
+	_, err = s.db.Exec(r.Context(), `update site_settings set retry_count=$1,retry_status_codes=$2,health_check_mode=$3,health_check_interval_minutes=$4,health_check_auto_recover=$5,health_check_channel_ids=$6,auto_disable_on_test_failure=$7,auto_disable_slow_seconds=$8,auto_disable_status_codes=$9,auto_disable_keywords=$10,updated_at=now() where id=true`, current.RetryCount, current.RetryStatusCodes, current.HealthCheckMode, current.HealthCheckIntervalMinutes, current.HealthCheckAutoRecover, current.HealthCheckChannelIDs, current.AutoDisableOnTestFailure, current.AutoDisableSlowSeconds, current.AutoDisableStatusCodes, current.AutoDisableKeywords)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not save reliability settings")
 		return
 	}
+	s.reliabilityData.clear()
 	s.audit(r, "reliability.updated", "site_settings", "reliability", map[string]any{"retry_count": current.RetryCount, "health_check_mode": current.HealthCheckMode})
 	writeJSON(w, http.StatusOK, s.reliabilitySettings(r.Context()))
 }

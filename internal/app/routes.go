@@ -142,8 +142,20 @@ func (s *Service) api(next http.HandlerFunc) http.Handler {
 			writeError(w, 429, "rate_limit_exceeded", "too many requests")
 			return
 		}
-		_, _ = s.db.Exec(r.Context(), `update api_keys set last_used_at=now() where id=$1`, k.keyID)
+		s.touchAPIKey(k.keyID)
 		next(w, r.WithContext(context.WithValue(r.Context(), contextKey{}, k)))
+	})
+}
+
+// touchAPIKey refreshes api_keys.last_used_at at most once per keyTouchInterval per key,
+// in the background. Writing it on every request turned a single row into a contended
+// write hotspot for busy keys; the stamp may now trail real usage by that interval.
+func (s *Service) touchAPIKey(keyID string) {
+	if !s.keyTouchCache.storeOnce(keyID, struct{}{}) {
+		return
+	}
+	s.background.submit(func(ctx context.Context) {
+		_, _ = s.db.Exec(ctx, `update api_keys set last_used_at=now() where id=$1`, keyID)
 	})
 }
 

@@ -476,8 +476,11 @@ func (s *Service) account(next http.HandlerFunc) http.Handler {
 			writeError(w, http.StatusUnauthorized, "unauthorized", "account session required")
 			return
 		}
+		// Session lookup and permission load are one query: every console request pays
+		// this cost, and the permissions are a cheap correlated aggregate.
 		var account accountContext
-		err := s.db.QueryRow(r.Context(), `select s.user_id,u.role,u.must_change_password from user_sessions s join users u on u.id=s.user_id where s.token_hash=$1 and s.expires_at>now() and u.enabled`, hashSecret(token)).Scan(&account.userID, &account.role, &account.mustChangePassword)
+		var granted []string
+		err := s.db.QueryRow(r.Context(), `select s.user_id,u.role,u.must_change_password,coalesce((select array_agg(p.permission) from user_permissions p where p.user_id=u.id),'{}'::text[]) from user_sessions s join users u on u.id=s.user_id where s.token_hash=$1 and s.expires_at>now() and u.enabled`, hashSecret(token)).Scan(&account.userID, &account.role, &account.mustChangePassword, &granted)
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, "unauthorized", "invalid or expired session")
 			return
@@ -486,19 +489,12 @@ func (s *Service) account(next http.HandlerFunc) http.Handler {
 			writeError(w, http.StatusForbidden, "password_change_required", "password change required before continuing")
 			return
 		}
-		account.permissions = map[string]bool{}
+		account.permissions = make(map[string]bool, len(granted))
+		// Admins bypass the permission map entirely; leave it empty as before so
+		// /account/me keeps reporting an implicit rather than an enumerated grant.
 		if account.role != "admin" {
-			rows, queryErr := s.db.Query(r.Context(), `select permission from user_permissions where user_id=$1`, account.userID)
-			if queryErr != nil {
-				writeError(w, http.StatusInternalServerError, "internal_error", "could not load permissions")
-				return
-			}
-			defer rows.Close()
-			for rows.Next() {
-				var permission string
-				if rows.Scan(&permission) == nil {
-					account.permissions[permission] = true
-				}
+			for _, permission := range granted {
+				account.permissions[permission] = true
 			}
 		}
 		next(w, r.WithContext(context.WithValue(r.Context(), accountContextKey{}, account)))

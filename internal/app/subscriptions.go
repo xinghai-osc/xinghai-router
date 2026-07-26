@@ -606,39 +606,27 @@ func (s *Service) activateSubscriptionOrderTx(ctx context.Context, tx pgx.Tx, or
 // subscriptionCoversModel reports whether the user has an active subscription whose plan
 // whitelists the requested model (empty whitelist = all models) and whose per-period
 // request/token limits have not been reached.
+// It runs on every proxied request, so whitelist matching and the per-period usage
+// aggregate are pushed into a single query. The lateral aggregate is only evaluated for
+// plans that actually declare a request or token cap.
 func (s *Service) subscriptionCoversModel(ctx context.Context, userID, model string) bool {
-	rows, err := s.db.Query(ctx, `select us.id, p.model_whitelist, p.max_requests_per_period, p.max_tokens_per_period from user_subscriptions us join subscription_plans p on p.id=us.plan_id where us.user_id=$1 and us.status='active' and us.current_period_end > now()`, userID)
+	var covered bool
+	err := s.db.QueryRow(ctx, `select exists(
+		select 1
+		from user_subscriptions us
+		join subscription_plans p on p.id=us.plan_id
+		left join lateral (
+			select count(*) as requests, coalesce(sum(rl.total_tokens),0) as tokens
+			from request_logs rl
+			where rl.user_id=us.user_id and rl.created_at >= us.current_period_start
+		) agg on p.max_requests_per_period is not null or p.max_tokens_per_period is not null
+		where us.user_id=$1 and us.status='active' and us.current_period_end > now()
+		  and (coalesce(array_length(p.model_whitelist,1),0)=0 or $2 = any(p.model_whitelist))
+		  and (p.max_requests_per_period is null or agg.requests < p.max_requests_per_period)
+		  and (p.max_tokens_per_period is null or agg.tokens < p.max_tokens_per_period)
+	)`, userID, model).Scan(&covered)
 	if err != nil {
 		return false
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var subID string
-		var whitelist []string
-		var maxReq, maxTok *int64
-		if err := rows.Scan(&subID, &whitelist, &maxReq, &maxTok); err != nil {
-			continue
-		}
-		covered := len(whitelist) == 0
-		if !covered {
-			for _, m := range whitelist {
-				if m == model {
-					covered = true
-					break
-				}
-			}
-		}
-		if !covered {
-			continue
-		}
-		if maxReq == nil && maxTok == nil {
-			return true
-		}
-		var count, tokens int64
-		_ = s.db.QueryRow(ctx, `select count(*), coalesce(sum(total_tokens),0) from request_logs where user_id=$1 and created_at >= (select current_period_start from user_subscriptions where id=$2)`, userID, subID).Scan(&count, &tokens)
-		if (maxReq == nil || count < *maxReq) && (maxTok == nil || tokens < *maxTok) {
-			return true
-		}
-	}
-	return false
+	return covered
 }

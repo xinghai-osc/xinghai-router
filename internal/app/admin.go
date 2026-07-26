@@ -127,6 +127,7 @@ func (s *Service) upsertPricing(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_request", "could not save pricing rule")
 		return
 	}
+	s.pricingCache.invalidate(in.Model)
 	s.audit(r, "pricing.updated", "pricing", in.Model, map[string]any{"input": in.Input, "cached": in.Cached, "output": in.Output})
 	writeJSON(w, 200, map[string]any{"model": in.Model})
 }
@@ -246,6 +247,7 @@ func (s *Service) syncNewAPIPricing(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "internal_error", "could not save pricing rules")
 		return
 	}
+	s.pricingCache.clear()
 	s.audit(r, "pricing.newapi_synced", "pricing", "newapi", map[string]any{"count": synced, "quota_per_unit": status.Data.QuotaPerUnit})
 	writeJSON(w, 200, map[string]any{"synced": synced, "skipped": len(pricing.Data) - synced})
 }
@@ -719,6 +721,7 @@ func (s *Service) importGroups(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "internal_error", "could not import groups")
 		return
 	}
+	s.groupCache.clear()
 	s.audit(r, "groups.imported", "group", "bulk", map[string]any{"count": len(values)})
 	writeJSON(w, 200, map[string]any{"count": len(values)})
 }
@@ -736,6 +739,7 @@ func (s *Service) updateGroup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "not_found", "group not found")
 		return
 	}
+	s.groupCache.invalidate(r.PathValue("id"))
 	s.audit(r, "group.updated", "group", r.PathValue("id"), map[string]any{"multiplier": in.Multiplier})
 	writeJSON(w, 200, map[string]any{"id": r.PathValue("id"), "multiplier": in.Multiplier})
 }
