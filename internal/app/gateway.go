@@ -52,7 +52,7 @@ func resolveGatewayMaxTokens(maxTokens int) (int, bool) {
 
 func (s *Service) models(w http.ResponseWriter, r *http.Request) {
 	key := r.Context().Value(contextKey{}).(keyContext)
-	rows, err := s.db.Query(r.Context(), `select model from (select jsonb_array_elements_text(c.models) as model from channels c where c.enabled and (not exists(select 1 from channel_groups cg where cg.channel_id=c.id) or ($2<>'' and exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($2,'')::uuid)) or ($2='' and exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$1))) union select m.public_model as model from model_routes m join channels c on c.id=m.channel_id where m.enabled and c.enabled and (not exists(select 1 from channel_groups cg where cg.channel_id=c.id) or ($2<>'' and exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($2,'')::uuid)) or ($2='' and exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$1)))) available order by model`, key.userID, key.groupID)
+	rows, err := s.db.Query(r.Context(), `select model from (select jsonb_array_elements_text(c.models) as model from channels c where c.enabled and (not exists(select 1 from channel_groups cg where cg.channel_id=c.id) or ($2<>'' and exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($2,'')::uuid)) or ($2='' and exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$1))) union select m.public_model as model from model_routes m join channels c on c.id=m.channel_id where m.enabled and not m.hidden and c.enabled and (not exists(select 1 from channel_groups cg where cg.channel_id=c.id) or ($2<>'' and exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($2,'')::uuid)) or ($2='' and exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$1)))) available order by model`, key.userID, key.groupID)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
@@ -397,13 +397,14 @@ func (s *Service) channelsForModel(ctx context.Context, key keyContext, model st
 	}
 	defer rows.Close()
 	var result []channel
+	seed := sha256.Sum256([]byte(requestID(ctx)))
 	for rows.Next() {
 		var ch channel
 		var encrypted string
 		if err := rows.Scan(&ch.id, &ch.baseURL, &encrypted, &ch.priority, &ch.weight, &ch.upstreamModel, &ch.provider); err != nil {
 			return nil, err
 		}
-		ch.apiKey, err = crypt(s.cfg.EncryptionKey, encrypted, true)
+		ch.apiKey, err = s.selectChannelKey(ctx, ch.id, encrypted, seed[:])
 		if err != nil {
 			continue
 		}
@@ -422,7 +423,6 @@ func (s *Service) channelsForModel(ctx context.Context, key keyContext, model st
 		for _, ch := range result[:end] {
 			sum += ch.weight
 		}
-		seed := sha256.Sum256([]byte(requestID(ctx)))
 		pick := int(seed[0])<<8 | int(seed[1])
 		pick %= sum
 		selected := 0
@@ -436,6 +436,34 @@ func (s *Service) channelsForModel(ctx context.Context, key keyContext, model st
 		result[0], result[selected] = result[selected], result[0]
 	}
 	return result, nil
+}
+
+func (s *Service) selectChannelKey(ctx context.Context, channelID, fallbackEncrypted string, seed []byte) (string, error) {
+	krows, err := s.db.Query(ctx, `select key_encrypted from channel_api_keys where channel_id=$1 and enabled order by created_at`, channelID)
+	if err != nil {
+		return "", err
+	}
+	defer krows.Close()
+	var keys []string
+	for krows.Next() {
+		var enc string
+		if krows.Scan(&enc) != nil {
+			continue
+		}
+		key, err := crypt(s.cfg.EncryptionKey, enc, true)
+		if err != nil {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	if len(keys) > 0 {
+		pick := int(seed[0]) % len(keys)
+		return keys[pick], nil
+	}
+	if fallbackEncrypted != "" {
+		return crypt(s.cfg.EncryptionKey, fallbackEncrypted, true)
+	}
+	return "", errInvalid
 }
 
 // channelSucceeded clears failure bookkeeping in the background. The WHERE clause makes
@@ -463,7 +491,8 @@ func (s *Service) testFailedChannel(id string) {
 	if err := s.db.QueryRow(ctx, `select c.base_url,c.api_key,c.provider,c.enabled,ss.auto_disable_failed_channels from channels c cross join site_settings ss where c.id=$1 and ss.id=true`, id).Scan(&baseURL, &encrypted, &provider, &enabled, &autoDisable); err != nil || !enabled || !autoDisable {
 		return
 	}
-	apiKey, err := crypt(s.cfg.EncryptionKey, encrypted, true)
+	seed := sha256.Sum256([]byte(id + "test"))
+	apiKey, err := s.selectChannelKey(ctx, id, encrypted, seed[:])
 	if err != nil {
 		s.disableFailedChannel(ctx, id, "credential_decryption_failed")
 		return

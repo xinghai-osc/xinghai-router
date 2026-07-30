@@ -460,22 +460,26 @@ func (s *Service) cancelSubscription(w http.ResponseWriter, r *http.Request) {
 // ---- Admin: view all subscriptions ----
 
 func (s *Service) adminListSubscriptions(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query(r.Context(), `select us.id,us.user_id,u.email,u.name,us.plan_id,p.name,us.status,us.current_period_start,us.current_period_end,us.auto_renew,us.cancelled_at,us.created_at,us.updated_at from user_subscriptions us join users u on u.id=us.user_id join subscription_plans p on p.id=us.plan_id order by us.created_at desc limit 200`)
+	rows, err := s.db.Query(r.Context(), `select us.id::text,us.user_id::text,u.email,u.name,us.plan_id::text,p.name,us.status,to_char(us.current_period_start,'YYYY-MM-DD"T"HH24:MI:SS"Z"'),to_char(us.current_period_end,'YYYY-MM-DD"T"HH24:MI:SS"Z"'),us.auto_renew,to_char(us.cancelled_at,'YYYY-MM-DD"T"HH24:MI:SS"Z"'),to_char(us.created_at,'YYYY-MM-DD"T"HH24:MI:SS"Z"'),to_char(us.updated_at,'YYYY-MM-DD"T"HH24:MI:SS"Z"') from user_subscriptions us join users u on u.id=us.user_id join subscription_plans p on p.id=us.plan_id order by us.created_at desc limit 200`)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "could not load subscriptions")
+		writeError(w, http.StatusInternalServerError, "internal_error", fmt.Sprintf("query: %v", err))
 		return
 	}
 	defer rows.Close()
 	data := []map[string]any{}
 	for rows.Next() {
 		var id, userID, email, name, planID, planName, status string
+		var start, end, cancelled, created, updated *string
 		var autoRenew bool
-		var start, end, cancelled, created, updated any
 		if err = rows.Scan(&id, &userID, &email, &name, &planID, &planName, &status, &start, &end, &autoRenew, &cancelled, &created, &updated); err != nil {
-			writeError(w, http.StatusInternalServerError, "internal_error", "could not load subscriptions")
+			writeError(w, http.StatusInternalServerError, "internal_error", fmt.Sprintf("scan: %v", err))
 			return
 		}
 		data = append(data, map[string]any{"id": id, "user_id": userID, "email": email, "user_name": name, "plan_id": planID, "plan_name": planName, "status": status, "current_period_start": start, "current_period_end": end, "auto_renew": autoRenew, "cancelled_at": cancelled, "created_at": created, "updated_at": updated})
+	}
+	if err = rows.Err(); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", fmt.Sprintf("rows: %v", err))
+		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": data})
 }
@@ -506,13 +510,14 @@ func (s *Service) batchExtendSubscriptions(w http.ResponseWriter, r *http.Reques
 	const ext = `update user_subscriptions set current_period_end = case when current_period_end is null or current_period_end <= now() then now() + ($1 || ' days')::interval else current_period_end + ($1 || ' days')::interval end, updated_at = now() where status='active'`
 	var result pgconn.CommandTag
 	var err error
+	days := fmt.Sprintf("%d days", in.Days)
 	if planID != "" {
-		result, err = s.db.Exec(r.Context(), ext+` and plan_id=$2`, in.Days, planID)
+		result, err = s.db.Exec(r.Context(), ext+` and plan_id=$2`, days, planID)
 	} else {
-		result, err = s.db.Exec(r.Context(), ext, in.Days)
+		result, err = s.db.Exec(r.Context(), ext, days)
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "could not extend subscriptions")
+		writeError(w, http.StatusInternalServerError, "internal_error", fmt.Sprintf("could not extend subscriptions: %v", err))
 		return
 	}
 	affected := result.RowsAffected()

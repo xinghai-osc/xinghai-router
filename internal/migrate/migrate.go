@@ -944,13 +944,24 @@ func migrateSubscriptionOrders(ctx context.Context, src *sql.DB, target *pgxpool
 			paidAt = &tm
 		}
 
+		if o.Money <= 0 {
+			continue
+		}
+
 		createdAt := time.Unix(o.CreateTime, 0)
 
+		var subscriptionID *string
+		if o.UpgradeSubscriptionID > 0 {
+			if sid, ok := subMap[o.UpgradeSubscriptionID]; ok {
+				subscriptionID = &sid
+			}
+		}
+
 		_, err = target.Exec(ctx, `insert into subscription_orders(id,order_no,user_id,plan_id,
-			provider,payment_type,amount,status,provider_trade_no,paid_at,created_at,updated_at)
-			values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) on conflict (order_no) do nothing`,
+			subscription_id,provider,payment_type,amount,status,period_kind,provider_trade_no,paid_at,created_at,updated_at)
+			values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) on conflict (order_no) do nothing`,
 			id, o.TradeNo, targetUserID, targetPlanID,
-			"epay", o.PaymentMethod, o.Money, status, o.TradeNo, paidAt, createdAt, createdAt)
+			subscriptionID, "epay", o.PaymentMethod, o.Money, status, "new", o.TradeNo, paidAt, createdAt, createdAt)
 		if err != nil {
 			return 0, fmt.Errorf("insert subscription order %d: %w", o.ID, err)
 		}
