@@ -1349,6 +1349,7 @@ func (s *Service) updateChannel(w http.ResponseWriter, r *http.Request) {
 		Models   []string `json:"models"`
 		Priority int      `json:"priority"`
 		Provider string   `json:"provider"`
+		Groups   []string `json:"groups"`
 	}
 	if decode(r, &in) != nil {
 		writeError(w, 400, "invalid_request", "name and models are required")
