@@ -117,8 +117,16 @@ func (s *Service) updatePaymentSettings(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if in.Enabled {
-		if validPublicURL(in.BaseURL) != nil || validPublicURL(in.PublicBaseURL) != nil || in.MerchantID == "" {
-			writeError(w, http.StatusBadRequest, "invalid_request", "enabled payment requires valid URLs and merchant credentials")
+		if validOutboundURL(in.BaseURL) != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", "base_url must be an HTTPS URL targeting a public host")
+			return
+		}
+		if in.PublicBaseURL == "" || validOutboundURL(in.PublicBaseURL) != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", "public_base_url must be a valid URL (HTTPS required for non-loopback hosts)")
+			return
+		}
+		if in.MerchantID == "" {
+			writeError(w, http.StatusBadRequest, "invalid_request", "merchant_id is required")
 			return
 		}
 	}
@@ -132,7 +140,7 @@ func (s *Service) updatePaymentSettings(w http.ResponseWriter, r *http.Request) 
 		merchantKey = current.MerchantKey
 	}
 	if in.Enabled && merchantKey == "" {
-		writeError(w, http.StatusBadRequest, "invalid_request", "enabled payment requires valid URLs and merchant credentials")
+		writeError(w, http.StatusBadRequest, "invalid_request", "merchant_key is required when payment is enabled")
 		return
 	}
 	encryptedKey := ""
@@ -418,13 +426,6 @@ func methodEnabled(methods []paymentMethod, target string) bool {
 		}
 	}
 	return false
-}
-
-func validPublicURL(value string) error {
-	if err := validOutboundURL(value); err != nil {
-		return fmt.Errorf("must be an HTTPS URL (HTTP is allowed for localhost)")
-	}
-	return nil
 }
 
 func paymentAmountInBounds(cents int64) bool {
