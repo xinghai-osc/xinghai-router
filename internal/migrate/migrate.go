@@ -748,7 +748,7 @@ func migrateUserGroups(ctx context.Context, src *sql.DB, target *pgxpool.Pool, u
 }
 
 func migrateSubscriptionPlans(ctx context.Context, src *sql.DB, target *pgxpool.Pool, groupMap map[string]string) (map[int]string, error) {
-	rows, err := src.QueryContext(ctx, `select id,title,COALESCE(description,''),price_amount,
+	rows, err := src.QueryContext(ctx, `select id,title,COALESCE(subtitle,''),price_amount,
 		COALESCE(currency,'CNY'),duration_unit,duration_value,COALESCE(custom_seconds,0),
 		enabled,COALESCE(sort_order,0),COALESCE(max_purchase_per_user,0),
 		COALESCE(upgrade_group,''),COALESCE(downgrade_group,''),

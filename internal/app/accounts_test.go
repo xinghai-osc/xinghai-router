@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/jackc/pgx/v5"
 )
 
 func TestOptionalAccountAllowsAnonymousRequest(t *testing.T) {
@@ -47,6 +49,49 @@ func TestValidatePasswordChange(t *testing.T) {
 		if msg := validatePasswordChange(tc.current, tc.next); msg == "" {
 			t.Fatalf("expected rejection for current=%q next=%q", tc.current, tc.next)
 		}
+	}
+}
+
+type registrationRoleRow struct {
+	role string
+	err  error
+}
+
+func (r registrationRoleRow) Scan(dest ...any) error {
+	if r.err != nil {
+		return r.err
+	}
+	*(dest[0].(*string)) = r.role
+	return nil
+}
+
+type registrationRoleQuerierStub struct {
+	row pgx.Row
+}
+
+func (q registrationRoleQuerierStub) QueryRow(context.Context, string, ...any) pgx.Row {
+	return q.row
+}
+
+func TestRegistrationRole(t *testing.T) {
+	cases := []struct {
+		name string
+		row  pgx.Row
+		want string
+	}{
+		{name: "empty users", row: registrationRoleRow{role: "admin"}, want: "admin"},
+		{name: "existing users", row: registrationRoleRow{role: "user"}, want: "user"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := registrationRole(context.Background(), registrationRoleQuerierStub{row: tc.row})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Fatalf("role = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

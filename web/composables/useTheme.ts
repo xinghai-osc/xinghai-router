@@ -1,71 +1,70 @@
-import { readonly, ref } from 'vue'
+export type ThemeMode = 'light' | 'dark'
+export type ThemePreset = 'default' | 'cool' | 'galaxy'
 
-export type ThemeMode = 'light' | 'dark' | 'system'
-export type ThemeColor = 'neutral' | 'blue' | 'green' | 'orange' | 'rose' | 'violet'
-export type ThemeRadius = 'none' | 'small' | 'medium' | 'large'
-export type ThemePreset = 'custom' | 'a-site'
+export const MODE_STORAGE_KEY = 'xinghai.theme'
+export const PRESET_STORAGE_KEY = 'xinghai.preset'
 
-const STORAGE_KEY = 'xinghai-router-theme-config'
-const mode = ref<ThemeMode>('system')
-const color = ref<ThemeColor>('neutral')
-const radius = ref<ThemeRadius>('medium')
-const preset = ref<ThemePreset>('custom')
-let mediaQuery: MediaQueryList | undefined
-let initialized = false
+/**
+ * Labels live in the `theme` i18n namespace, keyed as `theme.<value>Label`.
+ *
+ * The swatches are the only hard-coded colours in the app: they preview a theme
+ * that is not currently applied, so they cannot come from CSS variables. Keep
+ * them in sync with `assets/css/themes/<value>.css`.
+ */
+export const THEME_PRESETS: { value: ThemePreset; swatch: string[] }[] = [
+  { value: 'default', swatch: ['#faf9f5', '#c96442', '#141413'] },
+  { value: 'cool', swatch: ['#08090f', '#7c7cff', '#2fd3a5'] },
+  { value: 'galaxy', swatch: ['#0a0a18', '#a78bfa', '#4f82f6'] },
+]
 
-function resolvedMode() {
-  return mode.value === 'system' ? mediaQuery?.matches ? 'dark' : 'light' : mode.value
-}
+const PRESET_VALUES = THEME_PRESETS.map(preset => preset.value)
 
-function applyTheme() {
+const mode = ref<ThemeMode>('light')
+const preset = ref<ThemePreset>('default')
+
+function apply() {
   if (!import.meta.client) return
-  const root = document.documentElement
-  root.dataset.theme = resolvedMode()
-  root.dataset.themeMode = mode.value
-  root.dataset.themeColor = color.value
-  root.dataset.themeRadius = radius.value
-  root.dataset.themePreset = preset.value
-  root.style.colorScheme = resolvedMode()
+  document.documentElement.dataset.theme = mode.value
+  document.documentElement.dataset.preset = preset.value
 }
-
-function persist() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({ mode: mode.value, color: color.value, radius: radius.value, preset: preset.value }))
-}
-
-function initializeTheme() {
-  if (!import.meta.client || initialized) return
-  initialized = true
-  mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
-  const legacyMode = localStorage.getItem('xinghai-router-theme')
-  try {
-    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}')
-    if (['light', 'dark', 'system'].includes(saved.mode)) mode.value = saved.mode
-    else if (legacyMode === 'light' || legacyMode === 'dark') mode.value = legacyMode
-    if (['neutral', 'blue', 'green', 'orange', 'rose', 'violet'].includes(saved.color)) color.value = saved.color
-    if (['none', 'small', 'medium', 'large'].includes(saved.radius)) radius.value = saved.radius
-    if (['custom', 'a-site'].includes(saved.preset)) preset.value = saved.preset
-  } catch {
-    if (legacyMode === 'light' || legacyMode === 'dark') mode.value = legacyMode
-  }
-  mediaQuery.addEventListener('change', applyTheme)
-  applyTheme()
-}
-
-function setMode(value: ThemeMode) { mode.value = value; applyTheme(); persist() }
-function setColor(value: ThemeColor) { color.value = value; preset.value = 'custom'; applyTheme(); persist() }
-function setRadius(value: ThemeRadius) { radius.value = value; preset.value = 'custom'; applyTheme(); persist() }
-function setPreset(value: ThemePreset) {
-  preset.value = value
-  if (value === 'a-site') {
-    mode.value = 'light'
-    color.value = 'orange'
-    radius.value = 'large'
-  }
-  applyTheme()
-  persist()
-}
-function resetTheme() { mode.value = 'system'; color.value = 'neutral'; radius.value = 'medium'; preset.value = 'custom'; applyTheme(); persist() }
 
 export function useTheme() {
-  return { mode: readonly(mode), color: readonly(color), radius: readonly(radius), preset: readonly(preset), initializeTheme, setMode, setColor, setRadius, setPreset, resetTheme }
+  function setMode(next: ThemeMode) {
+    mode.value = next
+    apply()
+    if (import.meta.client) localStorage.setItem(MODE_STORAGE_KEY, next)
+  }
+
+  function toggleMode() {
+    setMode(mode.value === 'dark' ? 'light' : 'dark')
+  }
+
+  function setPreset(next: ThemePreset) {
+    preset.value = next
+    apply()
+    if (import.meta.client) localStorage.setItem(PRESET_STORAGE_KEY, next)
+  }
+
+  function initializeTheme() {
+    if (!import.meta.client) return
+    const storedMode = localStorage.getItem(MODE_STORAGE_KEY)
+    mode.value = storedMode === 'light' || storedMode === 'dark'
+      ? storedMode
+      : window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+
+    const storedPreset = localStorage.getItem(PRESET_STORAGE_KEY) as ThemePreset | null
+    preset.value = storedPreset && PRESET_VALUES.includes(storedPreset) ? storedPreset : 'default'
+
+    apply()
+  }
+
+  return {
+    mode: readonly(mode),
+    preset: readonly(preset),
+    presets: THEME_PRESETS,
+    setMode,
+    toggleMode,
+    setPreset,
+    initializeTheme,
+  }
 }

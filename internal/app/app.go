@@ -80,10 +80,6 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 		db.Close()
 		return nil, err
 	}
-	if err := ensureBootstrapAdmin(ctx, db); err != nil {
-		db.Close()
-		return nil, err
-	}
 	if err := setTrustedProxies(cfg.TrustedProxies); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("trusted proxies: %w", err)

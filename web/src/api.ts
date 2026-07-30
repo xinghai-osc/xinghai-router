@@ -1,6 +1,7 @@
 export interface User { id: string; email: string; name: string; role: string; enabled: boolean; balance: number; reserved: number; permissions: string[]; groups: string[]; created_at: string }
 export interface ApiKey { id: string; user_id: string; name: string; key_prefix: string; group_id: string; group_name: string; expires_at: string | null; revoked_at: string | null; last_used_at: string | null; created_at: string }
-export interface Channel { id: string; name: string; base_url: string; provider: 'openai' | 'ollama' | 'kimi' | 'opencode_go' | 'anthropic'; models: string[]; enabled: boolean; auto_disabled: boolean; disabled_reason: string; priority: number; groups: string[]; created_at: string }
+/** `groups` holds group ids, not names — resolve them through /admin/groups. */
+export interface Channel { id: string; name: string; base_url: string; provider: 'openai' | 'ollama' | 'kimi' | 'opencode_go' | 'anthropic'; models: string[]; enabled: boolean; auto_disabled: boolean; disabled_reason: string; priority: number; groups: string[]; created_at: string; updated_at: string }
 export interface Group { id: string; name: string; multiplier: number; created_at: string }
 export interface RequestLog { request_id: string; user_id: string | null; api_key_id: string | null; channel_id: string | null; model: string; status_code: number; prompt_tokens: number | null; completion_tokens: number | null; total_tokens: number | null; duration_ms: number; error_code: string | null; created_at: string }
 export interface Account { id: string; email: string; name: string; role: string; avatar_url: string; permissions: string[]; balance: number; reserved: number; leaderboard_opt_in: boolean; leaderboard_mask_name: boolean; must_change_password?: boolean }
@@ -8,11 +9,11 @@ export interface Pricing { id: string; model: string; input_per_million: number;
 export interface CatalogGroup { id: string; name: string; multiplier: number }
 export interface CatalogModel { id: string; model: string; provider: string; provider_slug: string; input_per_million: number | null; cached_input_per_million: number | null; output_per_million: number | null; multiplier: number | null; groups: CatalogGroup[] }
 export interface ModelProvider { id: string; name: string; slug: string; prefixes: string[]; priority: number }
-export interface UsageRecord { request_id: string; model: string; prompt_tokens: number; cached_prompt_tokens: number; completion_tokens: number; cost: number; status: string; created_at: string }
+export interface UsageRecord { request_id: string; model: string; prompt_tokens: number; cached_prompt_tokens: number; completion_tokens: number; cost: string; status: string; created_at: string }
 export interface ActivityLog { id: string; type: 'request' | 'login' | 'register' | 'logout' | 'topup' | 'operation'; action: string; user_id: string; user_name: string; model: string; group_id: string; group_name: string; status_code: number | null; duration_ms: number | null; prompt_tokens: number; completion_tokens: number; total_tokens: number; cost: number; details: Record<string, unknown>; created_at: string }
-export interface LedgerEntry { id: string; amount: number; balance_after: number; kind: string; request_id: string | null; note: string | null; created_at: string }
+export interface LedgerEntry { id: string; amount: string; balance_after: string; kind: string; request_id: string | null; note: string | null; created_at: string }
 export interface PaymentOrder { order_no: string; payment_type: string; amount: string; status: 'pending' | 'paid' | 'failed' | 'expired'; provider_trade_no?: string; paid_at: string | null; created_at: string }
-export interface PaymentMethod { id: string; code: string; name: string; enabled: boolean; created_at: string }
+export interface PaymentMethod { id: string; code: string; name: string; enabled: boolean; created_at: string | null }
 export interface PaymentSettings { enabled: boolean; base_url: string; merchant_id: string; has_merchant_key: boolean; public_base_url: string; methods: PaymentMethod[] }
 export interface ModelRanking { rank: number; previous_rank?: number; model_name: string; vendor: string; total_tokens: number; share: number; growth_pct: number }
 export interface VendorRanking { rank: number; vendor: string; total_tokens: number; share: number; growth_pct: number; models_count: number; top_model: string }
@@ -22,6 +23,10 @@ export interface Rankings { period: string; models: ModelRanking[]; vendors: Ven
 export interface SiteSettings { name: string; icon_url: string; auto_disable_failed_channels: boolean; geetest_enabled?: boolean; geetest_captcha_id?: string; email_verification_enabled?: boolean }
 export interface AdminSiteSettings { name: string; icon_url: string; auto_disable_failed_channels: boolean; geetest_captcha_id: string; has_geetest_captcha_key: boolean; smtp_host: string; smtp_port: string; smtp_username: string; has_smtp_password: boolean; smtp_from: string }
 export interface ReliabilitySettings { retry_count: number; retry_status_codes: string; health_check_mode: 'off' | 'scheduled_all' | 'passive_recovery'; health_check_interval_minutes: number; health_check_auto_recover: boolean; health_check_channel_ids: string; auto_disable_on_test_failure: boolean; auto_disable_slow_seconds: number; auto_disable_status_codes: string; auto_disable_keywords: string }
+
+export interface PaymentRedirect { order_no: string; amount: string; status: 'pending'; pay_url: string }
+
+export interface AccountGroups { data: string[]; groups: Group[]; user_groups: string[]; user_group: string }
 
 export interface UsageLog {
   request_id: string
@@ -39,7 +44,7 @@ export interface UsageLog {
   total_tokens: number | null
   duration_ms: number
   error_code: string | null
-  cost: number
+  cost: string
   created_at: string
 }
 
@@ -50,7 +55,7 @@ export interface UsageStats {
   prompt_tokens: number
   completion_tokens: number
   total_tokens: number
-  total_cost: number
+  total_cost: string
   avg_duration_ms: number
   breakdown?: UsageStatBreakdown[]
 }
@@ -61,7 +66,7 @@ export interface UsageStatBreakdown {
   prompt_tokens: number
   completion_tokens: number
   total_tokens: number
-  cost: number
+  cost: string
 }
 
 export interface SubscriptionPlan {
@@ -150,6 +155,42 @@ export interface AdminSubscription {
   updated_at: string
 }
 
+export interface AuditLog {
+  id: string
+  action: string
+  actor: string
+  entity_type: string
+  entity_id: string
+  details: Record<string, unknown> | null
+  client_ip: string
+  forwarded_for: string
+  user_agent: string
+  browser: string
+  browser_version: string
+  operating_system: string
+  operating_system_version: string
+  device_type: string
+  is_bot: boolean
+  request_method: string
+  request_path: string
+  request_id: string
+  created_at: string
+}
+
+export interface MigrationRequest {
+  id: string
+  status: 'idle' | 'running' | 'completed' | 'failed'
+  source_driver: string
+  step: string
+  current: number
+  total: number
+  detail: string
+  error: string
+  started_at: string | null
+  finished_at: string | null
+  created_at: string
+}
+
 const TOKEN_COOKIE = 'xinghai.admin-token'
 const TOKEN_MAX_AGE = 60 * 60 * 24 * 7
 
@@ -205,16 +246,30 @@ export interface SubscriptionPlanForm { name: string; description: string; price
 export interface UserUpdate { name?: string; email?: string; role?: string; enabled?: boolean; password?: string; balance?: number | null; note?: string; permissions?: string[]; groups?: string[] }
 export interface MigrateForm { source_dsn: string; source_driver: string }
 export interface MigrateResult { message: string }
+/**
+ * `status` is the Go zero value ('') until the first migration runs, and the
+ * timestamps are always present as the Go zero time ('0001-01-01T00:00:00Z')
+ * rather than omitted — `omitempty` has no effect on time.Time.
+ */
 export interface MigrationStatus {
-  status: 'idle' | 'running' | 'completed' | 'failed'
+  id: string
+  status: '' | 'idle' | 'running' | 'completed' | 'failed'
   step: string
   current: number
   total: number
   detail?: string
   error?: string
   started_at: string
-  finished_at?: string
+  finished_at: string
 }
+
+/**
+ * PUT /admin/site-settings rejects unknown fields, so the read-only `has_*`
+ * indicators must not be echoed back in the update body.
+ */
+export type SiteSettingsForm =
+  Omit<AdminSiteSettings, 'has_geetest_captcha_key' | 'has_smtp_password'>
+  & { geetest_captcha_key: string; smtp_password: string }
 
 export const endpoints = {
   getSiteSettings: () => get<SiteSettings>('/site-settings'),
@@ -222,12 +277,12 @@ export const endpoints = {
   getAccountKeys: () => get<{ data: ApiKey[] }>('/account/keys'),
   getAccountUsage: () => get<{ data: UsageRecord[] }>('/account/usage'),
   getAccountLedger: () => get<{ data: LedgerEntry[] }>('/account/ledger'),
-  getAccountGroups: () => get<{ data: string[]; groups: Group[] }>('/account/groups'),
+  getAccountGroups: () => get<AccountGroups>('/account/groups'),
   getAccountPayments: () => get<{ enabled: boolean; payment_methods: PaymentMethod[]; data: PaymentOrder[] }>('/account/payments'),
   getAccountPayment: (orderNo: string) => get<PaymentOrder>(`/account/payments/${encodeURIComponent(orderNo)}`),
-  createAccountPayment: (amount: string, type: string) => post<{ pay_url: string }>('/account/payments', { amount, type }),
+  createAccountPayment: (amount: string, type: string) => post<PaymentRedirect>('/account/payments', { amount, type }),
   getAccountSubscriptions: () => get<{ data: UserSubscription[] }>('/account/subscriptions'),
-  createAccountSubscription: (planId: string, paymentType: string, autoRenew: boolean) => post<{ pay_url: string }>('/account/subscriptions', { plan_id: planId, payment_type: paymentType, auto_renew: autoRenew }),
+  createAccountSubscription: (planId: string, paymentType: string, autoRenew: boolean) => post<PaymentRedirect>('/account/subscriptions', { plan_id: planId, payment_type: paymentType, auto_renew: autoRenew }),
   cancelAccountSubscription: (id: string) => send(`/account/subscriptions/${encodeURIComponent(id)}/cancel`, 'POST'),
   getAccountSubscriptionOrders: () => get<{ data: SubscriptionOrder[] }>('/account/subscription-orders'),
   getAccountSubscriptionOrder: (orderNo: string) => get<SubscriptionOrder>(`/account/subscription-orders/${encodeURIComponent(orderNo)}`),
@@ -267,11 +322,11 @@ export const endpoints = {
   removeProvider: (id: string) => send(`/admin/providers/${encodeURIComponent(id)}`, 'DELETE'),
   getAdminPricing: () => get<{ data: Pricing[] }>('/admin/pricing'),
   savePricing: (form: PricingForm) => send('/admin/pricing', 'POST', form),
-  syncNewApiPricing: (form: NewApiPricingForm) => post<{ synced: number }>('/admin/pricing/newapi/sync', form),
+  syncNewApiPricing: (form: NewApiPricingForm) => post<{ synced: number; skipped: number }>('/admin/pricing/newapi/sync', form),
   getAdminReliabilitySettings: () => get<ReliabilitySettings>('/admin/reliability-settings'),
   updateReliabilitySettings: (form: ReliabilitySettings) => put<ReliabilitySettings>('/admin/reliability-settings', form),
   getAdminSiteSettings: () => get<AdminSiteSettings>('/admin/site-settings'),
-  updateAdminSiteSettings: (form: AdminSiteSettings & { geetest_captcha_key: string; smtp_password: string }) => put<AdminSiteSettings>('/admin/site-settings', form),
+  updateAdminSiteSettings: (form: SiteSettingsForm) => put<AdminSiteSettings>('/admin/site-settings', form),
   getAdminPaymentSettings: () => get<PaymentSettings>('/admin/payment-settings'),
   updateAdminPaymentSettings: (form: PaymentSettingsForm) => put<PaymentSettings>('/admin/payment-settings', form),
   createPaymentMethod: (form: PaymentMethodForm) => send('/admin/payment-methods', 'POST', form),
@@ -288,4 +343,15 @@ export const endpoints = {
 
   getUsageLogs: (query = '') => get<{ data: UsageLog[]; total: number; page: number; page_size: number }>(`/admin/usage-logs${query}`),
   getUsageStats: (query = '') => get<UsageStats>(`/admin/usage-stats${query}`),
+
+  getRequestLogs: () => get<{ data: RequestLog[] }>('/admin/request-logs'),
+  getAuditLogs: () => get<{ data: AuditLog[] }>('/admin/audit-logs'),
+  getGroupNames: () => get<{ data: string[] }>('/group'),
+  setAccountKeyGroup: (id: string, groupId: string) => send(`/account/keys/${encodeURIComponent(id)}/group`, 'PUT', { group_id: groupId }),
+  setKeyGroup: (id: string, groupId: string) => send(`/admin/keys/${encodeURIComponent(id)}/group`, 'PUT', { group_id: groupId }),
+  setUserRole: (id: string, role: string) => send(`/admin/users/${encodeURIComponent(id)}/role`, 'POST', { role }),
+  setUserPermissions: (id: string, permissions: string[]) => send(`/admin/users/${encodeURIComponent(id)}/permissions`, 'PUT', { permissions }),
+  setUserGroups: (id: string, groups: string[]) => send(`/admin/users/${encodeURIComponent(id)}/groups`, 'PUT', { groups }),
+  adjustBalance: (userId: string, amount: number, note: string) => send('/admin/wallets/adjustments', 'POST', { user_id: userId, amount, note }),
+  getMigrationRequests: () => get<{ data: MigrationRequest[] }>('/admin/migrate/requests'),
 }

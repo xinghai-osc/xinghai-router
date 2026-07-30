@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 type accountContext struct {
@@ -17,6 +19,18 @@ type accountContext struct {
 	mustChangePassword bool
 }
 type accountContextKey struct{}
+
+type registrationRoleQuerier interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+func registrationRole(ctx context.Context, q registrationRoleQuerier) (string, error) {
+	var role string
+	if err := q.QueryRow(ctx, `select case when exists(select 1 from users) then 'user' else 'admin' end`).Scan(&role); err != nil {
+		return "", err
+	}
+	return role, nil
+}
 
 func (s *Service) register(w http.ResponseWriter, r *http.Request) {
 	var in struct {
@@ -66,8 +80,13 @@ func (s *Service) register(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not create account")
 		return
 	}
+	role, err := registrationRole(r.Context(), tx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not create account")
+		return
+	}
 	var id string
-	err = tx.QueryRow(r.Context(), `insert into users(email,name,role,password_hash) values($1,$2,'user',$3) returning id`, email, strings.TrimSpace(in.Name), passwordHash).Scan(&id)
+	err = tx.QueryRow(r.Context(), `insert into users(email,name,role,password_hash) values($1,$2,$3,$4) returning id`, email, strings.TrimSpace(in.Name), role, passwordHash).Scan(&id)
 	if err != nil {
 		writeError(w, http.StatusConflict, "conflict", "email already exists")
 		return
