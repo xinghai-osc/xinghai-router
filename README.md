@@ -34,7 +34,7 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-The web console is available at `http://localhost:3000`; the OpenAI/Anthropic gateway is available at `http://localhost:8080`. PostgreSQL and Redis are internal-only (no published ports). Data paths default to `/mnt/data/AI-Router/{postgres,redis}` and can be overridden with `POSTGRES_DATA_PATH` / `REDIS_DATA_PATH`. Redis requires a password (`REDIS_PASSWORD`); the router receives `REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0` by default. Migrations run automatically when the router starts; if no admin user exists, a bootstrap admin is created and its one-time password is printed in the router logs (`docker compose logs -f router`). Change that password after first login.
+The web console is available at `http://localhost:3000`; the OpenAI/Anthropic gateway is available at `http://localhost:8080`. PostgreSQL and Redis are internal-only (no published ports). Data paths default to `/mnt/data/AI-Router/{postgres,redis}` and can be overridden with `POSTGRES_DATA_PATH` / `REDIS_DATA_PATH`. Redis requires a password (`REDIS_PASSWORD`); the router receives `REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0` by default. Migrations run automatically when the router starts. Register the first account from the web console; that account becomes the administrator.
 
 For an external reverse-proxy network (e.g. Baota `baota_net`):
 
@@ -55,9 +55,9 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:5173/auth` and create an account or sign in with email and password. On first database initialization, when no administrator account exists, the router creates a bootstrap admin (`admin@localhost` by default, overridable with `BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_NAME`), logs a one-time random password, and recommends changing it immediately after login. Public registration always creates normal user accounts; administrators can promote users or grant individual permissions. Browser sessions are retained only in session storage. Nuxt proxies browser requests from `/api/*` to `http://127.0.0.1:8080/*`, so this development setup does not require a CORS policy. `npm run generate` emits prerendered HTML for the public home and authentication pages; deploy the Nuxt `.output` directory for the full application.
+Open `http://localhost:5173/auth` and create an account or sign in with email and password. On first database initialization, the first registered account becomes the administrator. Later public registrations create normal user accounts; administrators can promote users or grant individual permissions. Browser sessions are retained only in session storage. Nuxt proxies browser requests from `/api/*` to `http://127.0.0.1:8080/*`, so this development setup does not require a CORS policy. `npm run generate` emits prerendered HTML for the public home and authentication pages; deploy the Nuxt `.output` directory for the full application.
 
-The service performs migrations automatically at startup and seeds the bootstrap admin when needed. `base_url` for a channel must be an HTTPS origin or path prefix without `/v1`; for example, `https://api.openai.com`. Loopback HTTP URLs are also accepted for local services such as Ollama, for example `http://127.0.0.1:11434`. Provider secrets are encrypted in the database using `ENCRYPTION_KEY`, so keep this value stable and securely backed up.
+The service performs migrations automatically at startup. `base_url` for a channel must be an HTTPS origin or path prefix without `/v1`; for example, `https://api.openai.com`. Loopback HTTP URLs are also accepted for local services such as Ollama, for example `http://127.0.0.1:11434`. Provider secrets are encrypted in the database using `ENCRYPTION_KEY`, so keep this value stable and securely backed up.
 
 ### 易支付充值
 
@@ -272,8 +272,8 @@ Use this before exposing the stack on a public host.
 ### Secrets and identity
 
 1. Copy `.env.example` to `.env` and set unique values for `ENCRYPTION_KEY` (≥24 characters, not a documented placeholder), `POSTGRES_PASSWORD` (URL-safe), and `REDIS_PASSWORD`. Compose and the router refuse insecure/missing secrets. **Never rotate `ENCRYPTION_KEY` without re-encrypting provider and payment secrets** — lost keys make ciphertext unrecoverable.
-2. On first start with an empty admin table, the router seeds a bootstrap admin (default email `admin@localhost`, overridable with `BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_NAME`) and prints a one-time random password in the router logs. The account is created with `must_change_password=true`: session-authenticated APIs except `/account/me`, `/account/password`, and `/auth/logout` return `403 password_change_required` until the password is changed under Profile → Change password (`PUT /account/password`).
-3. Prefer enabling Geetest and/or SMTP email verification for public registration (`GEETEST_*`, `SMTP_*` or admin site settings). Registration always creates `role=user`; only admins promote accounts.
+2. Register the first account from the web console immediately after deployment; it becomes the administrator. Later registrations create `role=user` accounts unless an administrator promotes them.
+3. Prefer enabling Geetest and/or SMTP email verification for public registration (`GEETEST_*`, `SMTP_*` or admin site settings).
 
 ### Network and TLS
 
@@ -291,7 +291,7 @@ Use this before exposing the stack on a public host.
 
 1. Liveness: `GET /healthz` (process up). Readiness: `GET /readyz` (PostgreSQL ping). Compose healthchecks use `/readyz`.
 2. Back up PostgreSQL regularly. Redis AOF is enabled in compose for limiter state durability, but Postgres is the source of truth for accounts and billing.
-3. After deploy: `docker compose logs -f router` for bootstrap password / migration errors; `go test ./...` and `go vet ./...` in CI.
+3. After deploy: register the first web-console account as administrator and check `docker compose logs -f router` for migration errors; run `go test ./...` and `go vet ./...` in CI.
 
 ### Known production limits
 

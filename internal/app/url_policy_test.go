@@ -31,8 +31,8 @@ func TestValidPublicURL(t *testing.T) {
 		"http://127.0.0.1:8080",
 		"http://[::1]:3000",
 	} {
-		if err := validPublicURL(value); err != nil {
-			t.Fatalf("validPublicURL(%q) = %v", value, err)
+		if err := validOutboundURL(value); err != nil {
+			t.Fatalf("validOutboundURL(%q) = %v", value, err)
 		}
 	}
 	for _, value := range []string{
@@ -47,8 +47,8 @@ func TestValidPublicURL(t *testing.T) {
 		"https://127.0.0.1/secret",
 		"https://192.168.1.1/",
 	} {
-		if err := validPublicURL(value); err == nil {
-			t.Fatalf("validPublicURL(%q) expected error", value)
+		if err := validOutboundURL(value); err == nil {
+			t.Fatalf("validOutboundURL(%q) expected error", value)
 		}
 	}
 }

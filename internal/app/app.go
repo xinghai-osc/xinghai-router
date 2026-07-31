@@ -3,12 +3,16 @@ package app
 import (
 	"context"
 	"embed"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"runtime"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -19,15 +23,54 @@ type Service struct {
 	cfg             Config
 	db              *pgxpool.Pool
 	httpClient      *http.Client
+	streamClient    *http.Client
 	limiter         rateLimiter
 	ipLimiter       rateLimiter
+	background      *backgroundWriter
+	pricingCache    *ttlCache[string, pricingRule]
+	groupCache      *ttlCache[string, float64]
+	groupConcurrencyCache *ttlCache[string, int]
+	groupLimiter    *GroupLimiter
+	reliabilityData *ttlCache[struct{}, reliabilitySettings]
+	keyTouchCache   *ttlCache[string, struct{}]
 	scheduler       context.CancelFunc
 	migration       migrationStatus
 	migrationCancel context.CancelFunc
 }
 
+func isNoRows(err error) bool { return errors.Is(err, pgx.ErrNoRows) }
+
+// newPool sizes the connection pool for gateway traffic: the stdlib default of
+// max(4, NumCPU) conns serialises the several statements each proxied request issues.
+func newPool(ctx context.Context, cfg Config) (*pgxpool.Pool, error) {
+	poolCfg, err := pgxpool.ParseConfig(cfg.DatabaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse database url: %w", err)
+	}
+	// An explicit pool_max_conns in DATABASE_URL always wins; DB_MAX_CONNS is the
+	// env override; otherwise scale with the CPU count.
+	if maxConns := cfg.DBMaxConns; maxConns > 0 {
+		poolCfg.MaxConns = int32(maxConns)
+	} else if !strings.Contains(cfg.DatabaseURL, "pool_max_conns") {
+		maxConns = 8 * runtime.GOMAXPROCS(0)
+		if maxConns < 16 {
+			maxConns = 16
+		}
+		if maxConns > 64 {
+			maxConns = 64
+		}
+		poolCfg.MaxConns = int32(maxConns)
+	}
+	poolCfg.MinConns = 2
+	poolCfg.MaxConnLifetime = 30 * time.Minute
+	poolCfg.MaxConnLifetimeJitter = 5 * time.Minute
+	poolCfg.MaxConnIdleTime = 5 * time.Minute
+	poolCfg.HealthCheckPeriod = time.Minute
+	return pgxpool.NewWithConfig(ctx, poolCfg)
+}
+
 func New(ctx context.Context, cfg Config) (*Service, error) {
-	db, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	db, err := newPool(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("connect database: %w", err)
 	}
@@ -36,10 +79,6 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 		return nil, fmt.Errorf("ping database: %w", err)
 	}
 	if err := migrate(ctx, db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := ensureBootstrapAdmin(ctx, db); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -57,7 +96,22 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 	} else {
 		log.Printf("rate limiter backend: memory")
 	}
-	s := &Service{cfg: cfg, db: db, httpClient: newHTTPClient(cfg.RequestTimeout), limiter: limiter, ipLimiter: ipLimiter, migration: migrationStatus{mu: &sync.Mutex{}}}
+	s := &Service{
+		cfg:             cfg,
+		db:              db,
+		httpClient:      newHTTPClient(cfg.RequestTimeout),
+		streamClient:    newStreamClient(cfg.RequestTimeout),
+		limiter:         limiter,
+		ipLimiter:       ipLimiter,
+		background:      newBackgroundWriter(),
+		pricingCache:    newTTLCache[string, pricingRule](pricingCacheTTL),
+		groupCache:      newTTLCache[string, float64](groupCacheTTL),
+		groupConcurrencyCache: newTTLCache[string, int](groupCacheTTL),
+		groupLimiter:    NewGroupLimiter(),
+		reliabilityData: newTTLCache[struct{}, reliabilitySettings](reliabilityCacheTTL),
+		keyTouchCache:   newTTLCache[string, struct{}](keyTouchInterval),
+		migration:       migrationStatus{mu: &sync.Mutex{}},
+	}
 	schedulerCtx, cancel := context.WithCancel(context.Background())
 	s.scheduler = cancel
 	s.startHealthCheckScheduler(schedulerCtx)
@@ -82,6 +136,7 @@ func (s *Service) Close() {
 	if s.scheduler != nil {
 		s.scheduler()
 	}
+	s.background.close()
 	if s.limiter != nil {
 		s.limiter.close()
 	}

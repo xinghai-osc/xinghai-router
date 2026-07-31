@@ -20,9 +20,12 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("POST /auth/register", s.ipRateLimit(s.register))
 	mux.Handle("POST /auth/login", s.ipRateLimit(s.login))
 	mux.Handle("POST /auth/email-code", s.ipRateLimit(s.sendEmailCode))
+	mux.HandleFunc("GET /auth/oauth/{provider}", s.oauthAuthorize)
+	mux.HandleFunc("GET /auth/oauth/{provider}/callback", s.oauthCallback)
 	mux.Handle("GET /model-catalog", s.optionalAccount(s.modelCatalog))
 	mux.HandleFunc("GET /site-settings", s.siteSettings)
 	mux.HandleFunc("GET /rankings", s.rankings)
+	mux.HandleFunc("GET /public/activity", s.publicActivity)
 	mux.Handle("POST /auth/logout", s.account(s.logout))
 	mux.Handle("GET /account/me", s.account(s.accountMe))
 	mux.Handle("PUT /account/profile", s.account(s.updateAccountProfile))
@@ -39,6 +42,8 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("POST /account/payments", s.account(s.createAccountPayment))
 	mux.Handle("GET /account/payments/{order_no}", s.account(s.getAccountPayment))
 	mux.Handle("GET /account/groups", s.account(s.accountGroups))
+	mux.Handle("GET /account/oauth/connections", s.account(s.listOAuthConnections))
+	mux.Handle("POST /account/oauth/{provider}/unlink", s.account(s.unlinkOAuthConnection))
 	mux.HandleFunc("GET /payments/epay/notify", s.epayNotify)
 	mux.HandleFunc("POST /payments/epay/notify", s.epayNotify)
 	mux.Handle("GET /activity-logs", s.account(s.listActivityLogs))
@@ -75,6 +80,7 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("GET /admin/providers", s.permission("system.manage", s.listProviders))
 	mux.Handle("POST /admin/providers", s.permission("system.manage", s.saveProvider))
 	mux.Handle("DELETE /admin/providers/{id}", s.permission("system.manage", s.deleteProvider))
+	mux.Handle("POST /admin/channels/batch-status", s.permission("channels.manage", s.batchSetChannelStatus))
 	mux.Handle("POST /admin/channels/{id}/status", s.permission("channels.manage", s.setChannelStatus))
 	mux.Handle("PUT /admin/channels/{id}/groups", s.permission("channels.manage", s.setChannelGroups))
 	mux.Handle("GET /admin/request-logs", s.permission("logs.read", s.listLogs))
@@ -96,10 +102,23 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("POST /admin/wallets/adjustments", s.permission("wallets.manage", s.adjustBalance))
 	mux.Handle("GET /admin/model-routes", s.permission("routes.manage", s.listModelRoutes))
 	mux.Handle("POST /admin/model-routes", s.permission("routes.manage", s.createModelRoute))
+	mux.Handle("PUT /admin/model-routes/{id}", s.permission("routes.manage", s.updateModelRoute))
+	mux.Handle("GET /admin/channels/{id}/keys", s.permission("channels.read", s.listChannelKeys))
+	mux.Handle("POST /admin/channels/{id}/keys", s.permission("channels.manage", s.createChannelKey))
+	mux.Handle("DELETE /admin/channels/{id}/keys/{keyId}", s.permission("channels.manage", s.deleteChannelKey))
+	mux.Handle("POST /admin/channels/{id}/keys/{keyId}/status", s.permission("channels.manage", s.setChannelKeyStatus))
+	mux.Handle("POST /admin/channels/{id}/keys/migrate", s.permission("channels.manage", s.migrateChannelKeys))
+	mux.Handle("GET /admin/channels/{id}/routes", s.permission("routes.manage", s.listChannelRoutes))
+	mux.Handle("POST /admin/channels/{id}/routes", s.permission("routes.manage", s.createChannelRoute))
+	mux.Handle("PUT /admin/channels/{id}/routes/{routeId}", s.permission("routes.manage", s.updateChannelRoute))
+	mux.Handle("DELETE /admin/channels/{id}/routes/{routeId}", s.permission("routes.manage", s.deleteChannelRoute))
 	mux.Handle("POST /admin/quota-limits", s.permission("quotas.manage", s.upsertQuota))
 	mux.Handle("POST /admin/migrate", s.permission("system.manage", s.runMigration))
 	mux.Handle("GET /admin/migrate", s.permission("system.manage", s.getMigrationStatus))
 	mux.Handle("GET /admin/migrate/requests", s.permission("system.manage", s.listMigrationRequests))
+	mux.Handle("GET /admin/oauth/providers", s.permission("system.manage", s.listOAuthProviders))
+	mux.Handle("POST /admin/oauth/providers/{provider}", s.permission("system.manage", s.upsertOAuthProvider))
+	mux.Handle("DELETE /admin/oauth/providers/{provider}", s.permission("system.manage", s.deleteOAuthProvider))
 	mux.Handle("GET /me", s.api(s.me))
 	mux.Handle("GET /me/keys", s.api(s.myKeys))
 	mux.Handle("GET /me/usage", s.api(s.myUsage))
@@ -133,7 +152,7 @@ func (s *Service) api(next http.HandlerFunc) http.Handler {
 			return
 		}
 		var k keyContext
-		err := s.db.QueryRow(r.Context(), `select k.user_id,k.id,coalesce(k.group_id::text,'') from api_keys k join users u on u.id=k.user_id where k.secret_hash=$1 and k.revoked_at is null and (k.expires_at is null or k.expires_at>now()) and u.enabled and (k.group_id is null or exists(select 1 from user_groups ug where ug.user_id=k.user_id and ug.group_id=k.group_id))`, hashSecret(token)).Scan(&k.userID, &k.keyID, &k.groupID)
+		err := s.db.QueryRow(r.Context(), `select k.user_id,k.id,coalesce(k.group_id::text,'') from api_keys k join users u on u.id=k.user_id where k.secret_hash=$1 and k.revoked_at is null and (k.expires_at is null or k.expires_at>now()) and u.enabled and (k.group_id is null or exists(select 1 from groups g where g.id=k.group_id and g."public") or exists(select 1 from user_groups ug where ug.user_id=k.user_id and ug.group_id=k.group_id))`, hashSecret(token)).Scan(&k.userID, &k.keyID, &k.groupID)
 		if err != nil {
 			writeError(w, 401, "invalid_api_key", "invalid or expired API key")
 			return
@@ -142,8 +161,20 @@ func (s *Service) api(next http.HandlerFunc) http.Handler {
 			writeError(w, 429, "rate_limit_exceeded", "too many requests")
 			return
 		}
-		_, _ = s.db.Exec(r.Context(), `update api_keys set last_used_at=now() where id=$1`, k.keyID)
+		s.touchAPIKey(k.keyID)
 		next(w, r.WithContext(context.WithValue(r.Context(), contextKey{}, k)))
+	})
+}
+
+// touchAPIKey refreshes api_keys.last_used_at at most once per keyTouchInterval per key,
+// in the background. Writing it on every request turned a single row into a contended
+// write hotspot for busy keys; the stamp may now trail real usage by that interval.
+func (s *Service) touchAPIKey(keyID string) {
+	if !s.keyTouchCache.storeOnce(keyID, struct{}{}) {
+		return
+	}
+	s.background.submit(func(ctx context.Context) {
+		_, _ = s.db.Exec(ctx, `update api_keys set last_used_at=now() where id=$1`, keyID)
 	})
 }
 

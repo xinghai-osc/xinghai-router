@@ -225,7 +225,7 @@ type step struct {
 	action func() (string, error)
 }
 
-func Run(ctx context.Context, sourceDSN, sourceDriver, targetDSN string, progress ProgressFunc) error {
+func Run(ctx context.Context, sourceDSN, sourceDriver, targetDSN, encryptionKey string, progress ProgressFunc) error {
 	if progress != nil {
 		progress(Progress{Step: "connect", Detail: "Connecting to source and target databases"})
 	}
@@ -285,8 +285,12 @@ func Run(ctx context.Context, sourceDSN, sourceDriver, targetDSN string, progres
 		}},
 		{"channels", func() (string, error) {
 			var err error
-			channelMap, err = migrateChannels(ctx, src, target, groupMap)
+			channelMap, err = migrateChannels(ctx, src, target, groupMap, encryptionKey)
 			return fmt.Sprintf("%d channels", len(channelMap)), err
+		}},
+		{"model_routes", func() (string, error) {
+			n, err := migrateModelRoutes(ctx, src, target, channelMap)
+			return fmt.Sprintf("%d model routes", n), err
 		}},
 		{"subscription_plans", func() (string, error) {
 			var err error
@@ -525,31 +529,41 @@ func migrateGroups(ctx context.Context, src *sql.DB, target *pgxpool.Pool, userM
 
 	groupMap := make(map[string]string)
 	for name := range groupNames {
-		id, err := newUUID()
+		var gid string
+		err := target.QueryRow(ctx, `select id from groups where name=$1`, name).Scan(&gid)
 		if err != nil {
-			return nil, fmt.Errorf("generate uuid: %w", err)
+			id, err := newUUID()
+			if err != nil {
+				return nil, fmt.Errorf("generate uuid: %w", err)
+			}
+			_, err = target.Exec(ctx, `insert into groups(id,name) values($1,$2) on conflict (name) do nothing`,
+				id, name)
+			if err != nil {
+				return nil, fmt.Errorf("insert group %s: %w", name, err)
+			}
+			gid = id
 		}
-		_, err = target.Exec(ctx, `insert into groups(id,name) values($1,$2) on conflict (name) do nothing`,
-			id, name)
-		if err != nil {
-			return nil, fmt.Errorf("insert group %s: %w", name, err)
-		}
-		groupMap[name] = id
+		groupMap[name] = gid
 	}
 
-	if err := target.QueryRow(ctx, `select id from groups where name='default'`).Scan(new(string)); err != nil {
-		id, err := newUUID()
-		if err == nil {
-			target.Exec(ctx, `insert into groups(id,name) values($1,'default') on conflict (name) do nothing`, id)
-			groupMap["default"] = id
+	if _, ok := groupMap["default"]; !ok {
+		var gid string
+		err := target.QueryRow(ctx, `select id from groups where name='default'`).Scan(&gid)
+		if err != nil {
+			id, err := newUUID()
+			if err == nil {
+				target.Exec(ctx, `insert into groups(id,name) values($1,'default') on conflict (name) do nothing`, id)
+				gid = id
+			}
 		}
+		groupMap["default"] = gid
 	}
 
 	log.Printf("  groups: %d unique names", len(groupMap))
 	return groupMap, nil
 }
 
-func migrateChannels(ctx context.Context, src *sql.DB, target *pgxpool.Pool, groupMap map[string]string) (map[int]string, error) {
+func migrateChannels(ctx context.Context, src *sql.DB, target *pgxpool.Pool, groupMap map[string]string, encryptionKey string) (map[int]string, error) {
 	rows, err := src.QueryContext(ctx, `select id,type,`+"`key`"+`,name,status,base_url,models,
 		`+"`group`"+`,priority,weight,created_time,model_mapping from channels`)
 	if err != nil {
@@ -607,13 +621,48 @@ func migrateChannels(ctx context.Context, src *sql.DB, target *pgxpool.Pool, gro
 
 		createdAt := time.Unix(c.CreatedTime, 0)
 
-		_, err = target.Exec(ctx, `insert into channels(id,name,base_url,api_key,models,enabled,priority,weight,provider,created_at,updated_at)
+		keyStr := strings.ReplaceAll(c.Key, "\r\n", "\n")
+		firstKey := keyStr
+		if strings.Contains(keyStr, "\n") {
+			parts := strings.SplitN(keyStr, "\n", 2)
+			firstKey = strings.TrimSpace(parts[0])
+		}
+		if firstKey != "" {
+			firstKey, err = encryptIfNeeded(encryptionKey, firstKey)
+			if err != nil {
+				return nil, fmt.Errorf("encrypt channel key for %d: %w", c.ID, err)
+			}
+		}
+
+		err = target.QueryRow(ctx, `insert into channels(id,name,base_url,api_key,models,enabled,priority,weight,provider,created_at,updated_at)
 			values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10) on conflict (name) do update set
 			base_url=excluded.base_url,models=excluded.models,enabled=excluded.enabled,
-			priority=excluded.priority,weight=excluded.weight`,
-			id, c.Name, baseURL, c.Key, modelsJSON, enabled, priority, weight, provider, createdAt)
+			priority=excluded.priority,weight=excluded.weight returning id`,
+			id, c.Name, baseURL, firstKey, modelsJSON, enabled, priority, weight, provider, createdAt).Scan(&id)
 		if err != nil {
 			return nil, fmt.Errorf("insert channel %d: %w", c.ID, err)
+		}
+
+		if keyStr != "" {
+			for ki, k := range strings.Split(keyStr, "\n") {
+				k = strings.TrimSpace(k)
+				if k == "" {
+					continue
+				}
+				k, err = encryptIfNeeded(encryptionKey, k)
+				if err != nil {
+					return nil, fmt.Errorf("encrypt channel api key for %d: %w", c.ID, err)
+				}
+				kid, kerr := newUUID()
+				if kerr != nil {
+					continue
+				}
+				name := "default"
+				if ki > 0 {
+					name = fmt.Sprintf("key-%d", ki+1)
+				}
+				target.Exec(ctx, `insert into channel_api_keys(id,channel_id,name,key_encrypted,enabled) select $1,$2,$3,$4,true where not exists(select 1 from channel_api_keys where channel_id=$2 and key_encrypted=$4)`, kid, id, name, k)
+			}
 		}
 
 		channelMap[c.ID] = id
@@ -630,6 +679,21 @@ func migrateChannels(ctx context.Context, src *sql.DB, target *pgxpool.Pool, gro
 			target.Exec(ctx, `insert into channel_groups(channel_id,group_id) values($1,$2) on conflict do nothing`, id, gid)
 		}
 
+		if c.ModelMapping != nil && *c.ModelMapping != "" {
+			var mapping map[string]string
+			if json.Unmarshal([]byte(*c.ModelMapping), &mapping) == nil {
+				for publicModel, upstreamModel := range mapping {
+					rid, rerr := newUUID()
+					if rerr != nil {
+						continue
+					}
+					target.Exec(ctx, `insert into model_routes(id,public_model,upstream_model,channel_id,priority,weight,enabled,created_at)
+						values($1,$2,$3,$4,100,100,true,now()) on conflict (public_model,channel_id) do nothing`,
+						rid, publicModel, upstreamModel, id)
+				}
+			}
+		}
+
 		count++
 	}
 
@@ -639,6 +703,53 @@ func migrateChannels(ctx context.Context, src *sql.DB, target *pgxpool.Pool, gro
 
 	log.Printf("  channels: %d rows processed", count)
 	return channelMap, nil
+}
+
+func migrateModelRoutes(ctx context.Context, src *sql.DB, target *pgxpool.Pool, channelMap map[int]string) (int, error) {
+	rows, err := src.QueryContext(ctx, `select `+"`group`"+`,model,channel_id,enabled,COALESCE(priority,0),COALESCE(weight,0),COALESCE(tag,'') from abilities`)
+	if err != nil {
+		return 0, fmt.Errorf("query abilities: %w", err)
+	}
+	defer rows.Close()
+
+	var count int
+	for rows.Next() {
+		var group, model, tag string
+		var channelID int
+		var enabled bool
+		var priority int64
+		var weight uint
+		if err := rows.Scan(&group, &model, &channelID, &enabled, &priority, &weight, &tag); err != nil {
+			continue
+		}
+		targetChannelID, ok := channelMap[channelID]
+		if !ok {
+			continue
+		}
+		if model == "" {
+			continue
+		}
+		upstreamModel := model
+		if tag != "" {
+			upstreamModel = tag
+		}
+		id, err := newUUID()
+		if err != nil {
+			continue
+		}
+		_, err = target.Exec(ctx, `insert into model_routes(id,public_model,upstream_model,channel_id,priority,weight,enabled,created_at)
+			values($1,$2,$3,$4,$5,$6,$7,now()) on conflict (public_model,channel_id) do update set
+			priority=excluded.priority,weight=excluded.weight,enabled=excluded.enabled,upstream_model=excluded.upstream_model`,
+			id, model, upstreamModel, targetChannelID, priority, weight, enabled)
+		if err == nil {
+			count++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("rows iteration: %w", err)
+	}
+	log.Printf("  model routes: %d rows processed", count)
+	return count, nil
 }
 
 func migrateOptions(ctx context.Context, src *sql.DB, target *pgxpool.Pool) (int, error) {
@@ -748,7 +859,7 @@ func migrateUserGroups(ctx context.Context, src *sql.DB, target *pgxpool.Pool, u
 }
 
 func migrateSubscriptionPlans(ctx context.Context, src *sql.DB, target *pgxpool.Pool, groupMap map[string]string) (map[int]string, error) {
-	rows, err := src.QueryContext(ctx, `select id,title,COALESCE(description,''),price_amount,
+	rows, err := src.QueryContext(ctx, `select id,title,COALESCE(subtitle,''),price_amount,
 		COALESCE(currency,'CNY'),duration_unit,duration_value,COALESCE(custom_seconds,0),
 		enabled,COALESCE(sort_order,0),COALESCE(max_purchase_per_user,0),
 		COALESCE(upgrade_group,''),COALESCE(downgrade_group,''),
@@ -796,16 +907,21 @@ func migrateSubscriptionPlans(ctx context.Context, src *sql.DB, target *pgxpool.
 		createdAt := time.Unix(p.CreatedAt, 0)
 		updatedAt := time.Unix(p.UpdatedAt, 0)
 
-		_, err = target.Exec(ctx, `insert into subscription_plans(id,name,description,price,currency,billing_period,
-			credit_amount,group_id,sort_order,enabled,created_at,updated_at)
-			values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) on conflict (name) do nothing`,
-			id, p.Title, p.Description, p.PriceAmount, p.Currency, billingPeriod,
-			creditAmount, groupID, p.SortOrder, p.Enabled, createdAt, updatedAt)
+		var existingID string
+		err = target.QueryRow(ctx, `select id from subscription_plans where name=$1`, p.Title).Scan(&existingID)
 		if err != nil {
-			return nil, fmt.Errorf("insert subscription plan %d: %w", p.ID, err)
+			_, err = target.Exec(ctx, `insert into subscription_plans(id,name,description,price,currency,billing_period,
+				credit_amount,group_id,sort_order,enabled,created_at,updated_at)
+				values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) on conflict (name) do nothing`,
+				id, p.Title, p.Description, p.PriceAmount, p.Currency, billingPeriod,
+				creditAmount, groupID, p.SortOrder, p.Enabled, createdAt, updatedAt)
+			if err != nil {
+				return nil, fmt.Errorf("insert subscription plan %d: %w", p.ID, err)
+			}
+			existingID = id
 		}
 
-		planMap[p.ID] = id
+		planMap[p.ID] = existingID
 		count++
 	}
 
@@ -944,13 +1060,24 @@ func migrateSubscriptionOrders(ctx context.Context, src *sql.DB, target *pgxpool
 			paidAt = &tm
 		}
 
+		if o.Money <= 0 {
+			continue
+		}
+
 		createdAt := time.Unix(o.CreateTime, 0)
 
+		var subscriptionID *string
+		if o.UpgradeSubscriptionID > 0 {
+			if sid, ok := subMap[o.UpgradeSubscriptionID]; ok {
+				subscriptionID = &sid
+			}
+		}
+
 		_, err = target.Exec(ctx, `insert into subscription_orders(id,order_no,user_id,plan_id,
-			provider,payment_type,amount,status,provider_trade_no,paid_at,created_at,updated_at)
-			values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) on conflict (order_no) do nothing`,
+			subscription_id,provider,payment_type,amount,status,period_kind,provider_trade_no,paid_at,created_at,updated_at)
+			values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) on conflict (order_no) do nothing`,
 			id, o.TradeNo, targetUserID, targetPlanID,
-			"epay", o.PaymentMethod, o.Money, status, o.TradeNo, paidAt, createdAt, createdAt)
+			subscriptionID, "epay", o.PaymentMethod, o.Money, status, "new", o.TradeNo, paidAt, createdAt, createdAt)
 		if err != nil {
 			return 0, fmt.Errorf("insert subscription order %d: %w", o.ID, err)
 		}

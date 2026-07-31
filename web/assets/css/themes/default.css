@@ -1,0 +1,56 @@
+/* 默认 — 暖纸底色 + 陶土强调，参考 Claude 的克制质感。 */
+
+:root,
+:root[data-preset='default'] {
+  --paper: #faf9f5;
+  --surface: #ffffff;
+  --sunken: #f2f0e9;
+  --ink: #141413;
+  --muted: #6b6862;
+  --faint: #94918a;
+  --line: #e7e4da;
+  --line-strong: #d8d4c8;
+
+  --clay: #c96442;
+  --clay-hover: #b4553a;
+  --clay-soft: #f7eee9;
+  --clay-ink: #ffffff;
+
+  --success: #3f8f5e;
+  --success-soft: #e9f3ec;
+  --warn: #b0821f;
+  --warn-soft: #f8f1de;
+  --danger: #c0453b;
+  --danger-soft: #fbeceb;
+
+  --overlay: rgb(20 20 19 / 0.32);
+  --shadow-pop: 0 1px 2px rgb(20 20 19 / 0.04), 0 12px 32px -8px rgb(20 20 19 / 0.14);
+  --shadow-glow: none;
+  --page-glow: none;
+}
+
+:root[data-preset='default'][data-theme='dark'] {
+  --paper: #1f1e1d;
+  --surface: #262624;
+  --sunken: #1a1918;
+  --ink: #f5f4ef;
+  --muted: #a5a29a;
+  --faint: #7d7a73;
+  --line: #3a3a37;
+  --line-strong: #4a4945;
+
+  --clay: #d97757;
+  --clay-hover: #e28a6d;
+  --clay-soft: #3a2a23;
+  --clay-ink: #1f1e1d;
+
+  --success: #5aad78;
+  --success-soft: #212c25;
+  --warn: #d0a03f;
+  --warn-soft: #302818;
+  --danger: #dd6459;
+  --danger-soft: #331e1c;
+
+  --overlay: rgb(0 0 0 / 0.55);
+  --shadow-pop: 0 1px 2px rgb(0 0 0 / 0.3), 0 12px 32px -8px rgb(0 0 0 / 0.5);
+}

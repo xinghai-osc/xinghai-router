@@ -5,21 +5,64 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"runtime"
 	"strings"
+	"sync"
 	"time"
 )
 
 const maxRedirects = 5
 
+// upstreamTransport is shared by every outbound client so keep-alive connections
+// to provider endpoints are reused across requests. The stdlib default only keeps
+// two idle connections per host, which forces a TCP+TLS handshake on almost every
+// concurrent gateway request.
+var upstreamTransport = sync.OnceValue(func() *http.Transport {
+	idlePerHost := 32 * runtime.GOMAXPROCS(0)
+	if idlePerHost < 64 {
+		idlePerHost = 64
+	}
+	return &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   10 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          8 * idlePerHost,
+		MaxIdleConnsPerHost:   idlePerHost,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: time.Second,
+		ReadBufferSize:        64 << 10,
+		WriteBufferSize:       64 << 10,
+	}
+})
+
+func checkUpstreamRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= maxRedirects {
+		return fmt.Errorf("stopped after %d redirects", maxRedirects)
+	}
+	return validateRedirectURL(req.URL)
+}
+
 func newHTTPClient(timeout time.Duration) *http.Client {
 	return &http.Client{
-		Timeout: timeout,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= maxRedirects {
-				return fmt.Errorf("stopped after %d redirects", maxRedirects)
-			}
-			return validateRedirectURL(req.URL)
-		},
+		Transport:     upstreamTransport(),
+		Timeout:       timeout,
+		CheckRedirect: checkUpstreamRedirect,
+	}
+}
+
+// newStreamClient has no overall deadline because an SSE response legitimately stays
+// open far longer than RequestTimeout; the upstream must still send response headers
+// within headerTimeout, and the request context still bounds the whole exchange.
+func newStreamClient(headerTimeout time.Duration) *http.Client {
+	base := upstreamTransport().Clone()
+	base.ResponseHeaderTimeout = headerTimeout
+	return &http.Client{
+		Transport:     base,
+		CheckRedirect: checkUpstreamRedirect,
 	}
 }
 

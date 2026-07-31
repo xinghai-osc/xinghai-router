@@ -1,9 +1,163 @@
 <script setup lang="ts">
-import RouterApp from '~/components/RouterApp.vue'
+import { Activity, Coins, KeyRound, Lock, Wallet } from 'lucide-vue-next'
+import { endpoints, type UsageRecord } from '~/src/api'
+import { formatCompact, formatMoney, formatNumber } from '~/src/format'
 
-definePageMeta({ middleware: 'console-auth' })
+definePageMeta({ layout: 'console', middleware: 'console-auth' })
+
+interface TokenPoint { key: string; label: string; value: number }
+
+const CHART_DAYS = 14
+
+const { t } = useI18n()
+const { account } = useAccount()
+const { settings } = useSiteSettings()
+
+useHead({ title: () => `${t('nav.overview')} · ${settings.value.name}` })
+
+const { data: usage, pending, error } = useResource(
+  () => endpoints.getAccountUsage(),
+  { data: [] as UsageRecord[] },
+)
+
+const endpointUrl = `${useRequestURL().origin}/api/v1`
+
+function dayKey(date: Date): string {
+  return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`
+}
+
+const periodStart = computed(() => {
+  const now = new Date()
+  return new Date(now.getFullYear(), now.getMonth(), 1).getTime()
+})
+
+const periodRecords = computed(() =>
+  usage.value.data.filter(record => new Date(record.created_at).getTime() >= periodStart.value))
+
+const totals = computed(() => periodRecords.value.reduce(
+  (sum, record) => ({
+    requests: sum.requests + 1,
+    tokens: sum.tokens + record.prompt_tokens + record.completion_tokens,
+    cost: sum.cost + Number(record.cost ?? 0),
+  }),
+  { requests: 0, tokens: 0, cost: 0 },
+))
+
+const daily = computed<TokenPoint[]>(() => {
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+
+  const buckets = new Map<string, number>()
+  const points: TokenPoint[] = []
+  for (let offset = CHART_DAYS - 1; offset >= 0; offset -= 1) {
+    const day = new Date(today)
+    day.setDate(today.getDate() - offset)
+    const key = dayKey(day)
+    buckets.set(key, 0)
+    points.push({ key, label: `${day.getMonth() + 1}/${day.getDate()}`, value: 0 })
+  }
+
+  for (const record of usage.value.data) {
+    const key = dayKey(new Date(record.created_at))
+    const current = buckets.get(key)
+    if (current !== undefined) {
+      buckets.set(key, current + record.prompt_tokens + record.completion_tokens)
+    }
+  }
+
+  return points.map(point => ({ ...point, value: buckets.get(point.key) ?? 0 }))
+})
+
+const hasUsage = computed(() => daily.value.some(point => point.value > 0))
+
+const quickLinks = computed(() => [
+  { to: '/console/keys?create=1', icon: KeyRound, title: t('console.quickCreateKey'), hint: t('console.quickCreateKeyHint') },
+  { to: '/console/wallet', icon: Wallet, title: t('console.quickTopUp'), hint: t('console.quickTopUpHint') },
+  { to: '/console/usage', icon: Activity, title: t('console.quickUsage'), hint: t('console.quickUsageHint') },
+])
 </script>
 
 <template>
-  <RouterApp />
+  <div class="space-y-4">
+    <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+      <ConsoleUserStatCard
+        :label="t('console.balance')"
+        :value="formatMoney(account?.balance ?? 0)"
+        :hint="t('console.balanceHint')"
+        :icon="Wallet"
+        :loading="!account"
+      />
+      <ConsoleUserStatCard
+        :label="t('console.reserved')"
+        :value="formatMoney(account?.reserved ?? 0)"
+        :hint="t('console.reservedHint')"
+        :icon="Lock"
+        :loading="!account"
+      />
+      <ConsoleUserStatCard
+        :label="t('console.periodRequests')"
+        :value="formatNumber(totals.requests)"
+        :icon="Activity"
+        :loading="pending"
+      />
+      <ConsoleUserStatCard
+        :label="t('console.periodTokens')"
+        :value="formatCompact(totals.tokens)"
+        :icon="Coins"
+        :loading="pending"
+      />
+      <ConsoleUserStatCard
+        :label="t('console.periodSpend')"
+        :value="formatMoney(totals.cost)"
+        :icon="Coins"
+        :loading="pending"
+      />
+    </div>
+
+    <p class="text-[13px] text-faint">{{ t('console.usageWindowNote') }}</p>
+
+    <UiCard :title="t('console.dailyTokens')" :description="t('console.dailyTokensHint')">
+      <ConsoleUserDataState
+        :pending="pending"
+        :error="error"
+        :empty="!hasUsage"
+        :rows="5"
+        :empty-icon="Activity"
+        :empty-title="t('console.chartEmptyTitle')"
+        :empty-description="t('console.chartEmptyBody')"
+      >
+        <ConsoleUserTokenChart :points="daily" />
+      </ConsoleUserDataState>
+    </UiCard>
+
+    <div class="grid gap-4 lg:grid-cols-2">
+      <UiCard :title="t('console.apiEndpoint')" :description="t('console.apiEndpointHint')">
+        <div class="flex flex-wrap items-center gap-2">
+          <code class="min-w-0 flex-1 truncate rounded-control bg-sunken px-3 py-2 font-mono text-[13px] text-ink">
+            {{ endpointUrl }}
+          </code>
+          <ConsoleUserCopyButton :value="endpointUrl" :success-message="t('console.endpointCopied')" />
+        </div>
+      </UiCard>
+
+      <UiCard :title="t('console.quickActions')" flush>
+        <ul class="divide-y divide-line">
+          <li v-for="link in quickLinks" :key="link.to">
+            <NuxtLink
+              :to="link.to"
+              class="flex items-center gap-3 px-5 py-3.5 transition-colors duration-150 hover:bg-sunken"
+            >
+              <span class="flex size-9 shrink-0 items-center justify-center rounded-control bg-clay-soft text-clay">
+                <component :is="link.icon" class="size-4" />
+              </span>
+              <span class="min-w-0">
+                <span class="block truncate text-sm font-medium text-ink">{{ link.title }}</span>
+                <span class="block truncate text-[13px] text-muted">{{ link.hint }}</span>
+              </span>
+            </NuxtLink>
+          </li>
+        </ul>
+      </UiCard>
+    </div>
+  </div>
 </template>

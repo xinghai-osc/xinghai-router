@@ -3,11 +3,15 @@ package app
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"net/http"
 	"net/mail"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 type accountContext struct {
@@ -17,6 +21,18 @@ type accountContext struct {
 	mustChangePassword bool
 }
 type accountContextKey struct{}
+
+type registrationRoleQuerier interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+func registrationRole(ctx context.Context, q registrationRoleQuerier) (string, error) {
+	var role string
+	if err := q.QueryRow(ctx, `select case when exists(select 1 from users) then 'user' else 'admin' end`).Scan(&role); err != nil {
+		return "", err
+	}
+	return role, nil
+}
 
 func (s *Service) register(w http.ResponseWriter, r *http.Request) {
 	var in struct {
@@ -66,10 +82,24 @@ func (s *Service) register(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not create account")
 		return
 	}
-	var id string
-	err = tx.QueryRow(r.Context(), `insert into users(email,name,role,password_hash) values($1,$2,'user',$3) returning id`, email, strings.TrimSpace(in.Name), passwordHash).Scan(&id)
+	role, err := registrationRole(r.Context(), tx)
 	if err != nil {
-		writeError(w, http.StatusConflict, "conflict", "email already exists")
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not create account")
+		return
+	}
+	var id string
+	err = tx.QueryRow(r.Context(), `insert into users(email,name,role,password_hash) values($1,$2,$3,$4) returning id`, email, strings.TrimSpace(in.Name), role, passwordHash).Scan(&id)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			if pgErr.ConstraintName == "users_name_key" {
+				writeError(w, http.StatusConflict, "conflict", "username already exists")
+			} else {
+				writeError(w, http.StatusConflict, "conflict", "email already exists")
+			}
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not create account")
 		return
 	}
 	if _, err = tx.Exec(r.Context(), `insert into user_wallets(user_id) values($1) on conflict do nothing`, id); err != nil {
@@ -91,17 +121,23 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 		geetestPayload
 	}
 	if decode(r, &in) != nil || strings.TrimSpace(in.Email) == "" || in.Password == "" {
-		writeError(w, http.StatusBadRequest, "invalid_request", "email and password are required")
+		writeError(w, http.StatusBadRequest, "invalid_request", "email or username and password are required")
 		return
 	}
 	if !validPasswordLength(in.Password) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "password must be between 8 and 72 characters")
 		return
 	}
-	email := strings.ToLower(strings.TrimSpace(in.Email))
+	identifier := strings.TrimSpace(in.Email)
+	isEmail := strings.Contains(identifier, "@")
+	rateLimitKey := identifier
+	if isEmail {
+		identifier = strings.ToLower(identifier)
+		rateLimitKey = identifier
+	}
 	clientIP := requestMetadata(r).clientIP
 	if s.limiter != nil {
-		if !s.limiter.allowN("auth:login:ip:"+clientIP, authLoginPerMinute) || !s.limiter.allowN("auth:login:email:"+email, authLoginPerMinute) {
+		if !s.limiter.allowN("auth:login:ip:"+clientIP, authLoginPerMinute) || !s.limiter.allowN("auth:login:email:"+rateLimitKey, authLoginPerMinute) {
 			writeError(w, http.StatusTooManyRequests, "rate_limit_exceeded", "too many login attempts")
 			return
 		}
@@ -111,15 +147,21 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var userID, passwordHash string
-	err := s.db.QueryRow(r.Context(), `select id,password_hash from users where email=$1 and enabled and password_hash is not null`, email).Scan(&userID, &passwordHash)
+	var query string
+	if isEmail {
+		query = `select id,password_hash from users where email=$1 and enabled and password_hash is not null`
+	} else {
+		query = `select id,password_hash from users where name=$1 and enabled and password_hash is not null`
+	}
+	err := s.db.QueryRow(r.Context(), query, identifier).Scan(&userID, &passwordHash)
 	if err != nil {
 		// Spend comparable time to a real bcrypt check so missing users are not free to probe.
 		_ = passwordMatches(dummyPasswordHash, in.Password)
-		writeError(w, http.StatusUnauthorized, "invalid_credentials", "invalid email or password")
+		writeError(w, http.StatusUnauthorized, "invalid_credentials", "invalid email or username or password")
 		return
 	}
 	if !passwordMatches(passwordHash, in.Password) {
-		writeError(w, http.StatusUnauthorized, "invalid_credentials", "invalid email or password")
+		writeError(w, http.StatusUnauthorized, "invalid_credentials", "invalid email or username or password")
 		return
 	}
 	s.auditActor(r, userID, "account.logged_in", "user", userID, nil)
@@ -476,8 +518,11 @@ func (s *Service) account(next http.HandlerFunc) http.Handler {
 			writeError(w, http.StatusUnauthorized, "unauthorized", "account session required")
 			return
 		}
+		// Session lookup and permission load are one query: every console request pays
+		// this cost, and the permissions are a cheap correlated aggregate.
 		var account accountContext
-		err := s.db.QueryRow(r.Context(), `select s.user_id,u.role,u.must_change_password from user_sessions s join users u on u.id=s.user_id where s.token_hash=$1 and s.expires_at>now() and u.enabled`, hashSecret(token)).Scan(&account.userID, &account.role, &account.mustChangePassword)
+		var granted []string
+		err := s.db.QueryRow(r.Context(), `select s.user_id,u.role,u.must_change_password,coalesce((select array_agg(p.permission) from user_permissions p where p.user_id=u.id),'{}'::text[]) from user_sessions s join users u on u.id=s.user_id where s.token_hash=$1 and s.expires_at>now() and u.enabled`, hashSecret(token)).Scan(&account.userID, &account.role, &account.mustChangePassword, &granted)
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, "unauthorized", "invalid or expired session")
 			return
@@ -486,19 +531,12 @@ func (s *Service) account(next http.HandlerFunc) http.Handler {
 			writeError(w, http.StatusForbidden, "password_change_required", "password change required before continuing")
 			return
 		}
-		account.permissions = map[string]bool{}
+		account.permissions = make(map[string]bool, len(granted))
+		// Admins bypass the permission map entirely; leave it empty as before so
+		// /account/me keeps reporting an implicit rather than an enumerated grant.
 		if account.role != "admin" {
-			rows, queryErr := s.db.Query(r.Context(), `select permission from user_permissions where user_id=$1`, account.userID)
-			if queryErr != nil {
-				writeError(w, http.StatusInternalServerError, "internal_error", "could not load permissions")
-				return
-			}
-			defer rows.Close()
-			for rows.Next() {
-				var permission string
-				if rows.Scan(&permission) == nil {
-					account.permissions[permission] = true
-				}
+			for _, permission := range granted {
+				account.permissions[permission] = true
 			}
 		}
 		next(w, r.WithContext(context.WithValue(r.Context(), accountContextKey{}, account)))

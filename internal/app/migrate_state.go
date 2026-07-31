@@ -50,7 +50,7 @@ func (s *Service) migrationSnapshot() migrationStatus {
 }
 
 func (s *Service) runMigrationAsync(ctx context.Context, sourceDSN, sourceDriver string) {
-	err := xinghaimigrate.Run(ctx, sourceDSN, sourceDriver, s.cfg.DatabaseURL, func(p xinghaimigrate.Progress) {
+	err := xinghaimigrate.Run(ctx, sourceDSN, sourceDriver, s.cfg.DatabaseURL, s.cfg.EncryptionKey, func(p xinghaimigrate.Progress) {
 		s.migration.mu.Lock()
 		s.migration.Step = p.Step
 		s.migration.Current = p.Current

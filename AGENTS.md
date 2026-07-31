@@ -15,12 +15,14 @@ cmd/router/        Go entrypoint (main.go)
 internal/app/      All Go application code (single package `app`)
   migrations/      Embedded SQL migrations, applied at startup (sorted by filename)
   *.go             HTTP handlers, gateway proxy, providers, reliability, payments, subscriptions
-web/               Nuxt 3 + Vue 3 management console
-  pages/           File-based routes (auth.vue, console/*, index.vue, rankings.vue, ...)
-  components/      console/* (admin/user UI), marketplace/* (model square)
-  composables/     useConsoleStore, useTheme, useI18n
+web/               Nuxt 3 + Vue 3 management console (see web/AGENTS.md)
+  assets/css/      tokens.css, base.css, utilities.css, themes/*.css
+  components/      ui/* (design-system primitives), site/*, console/*, marketplace/*
+  composables/     useI18n, useTheme, useAccount, useToast, useResource, useSiteSettings
+  layouts/         default.vue (public), console.vue (signed-in)
+  pages/           File-based routes (index, models, rankings, pricing, auth, console/*)
   server/api/      [...path].ts proxies /api/* to the Go service
-  src/             api.ts (typed API client + interfaces), views.ts, marketplace.ts, style.css
+  src/             api.ts (typed API client + interfaces), locales/, nav.ts, format.ts, marketplace.ts
 docker-compose.yml PostgreSQL 17, Redis 7, router, web
 Dockerfile         Multi-stage build for router (Go) and web (Nuxt)
 .env.example       Required env vars; copy to .env and replace secrets
@@ -29,7 +31,7 @@ Dockerfile         Multi-stage build for router (Go) and web (Nuxt)
 ## Tech stack and key libraries
 
 - Go 1.26, module `github.com/xinghai-osc/xinghai-router`. Only stdlib plus `github.com/jackc/pgx/v5` (pgxpool) and `golang.org/x/crypto` (bcrypt). Do not introduce new dependencies without strong reason.
-- Web: Nuxt 3 (`nuxt`), Vue 3, TypeScript, Tailwind CSS v4 (via `@tailwindcss/vite`), shadcn-vue (reka-ui + `class-variance-authority` + `clsx` + `tailwind-merge`), `lucide-vue-next`, `@lobehub/icons-static-svg`. ESLint is configured via flat config (`web/eslint.config.mjs` wrapping `@nuxt/eslint`); no test runner is configured for the web app.
+- Web: Nuxt 3 (`nuxt`), Vue 3, TypeScript, Tailwind CSS v4 (via `@tailwindcss/vite`), `reka-ui` (headless primitives), `lucide-vue-next`, `clsx` + `tailwind-merge`, `@vueuse/core`. Package manager is pnpm. ESLint is configured via flat config (`web/eslint.config.mjs` wrapping `@nuxt/eslint`); no test runner is configured for the web app.
 - DB: PostgreSQL 17. Migrations are plain `.sql` files embedded with `//go:embed migrations/*.sql` and applied idempotently by `internal/app/migrate.go`.
 
 ## Build and run
@@ -52,7 +54,7 @@ cp .env.example .env && docker compose up -d --build
 Web console dev server (run the Go service first):
 
 ```sh
-cd web && npm install && npm run dev   # http://localhost:5173, proxies /api/* to :8080
+cd web && pnpm install && pnpm run dev   # http://localhost:5173, proxies /api/* to :8080
 ```
 
 ## Verification commands
@@ -65,11 +67,11 @@ go vet ./...
 go test ./...
 ```
 
-From `web/`, `npm run build` validates the Nuxt app and `npm run generate` emits prerendered pages. Lint is configured via ESLint flat config (`web/eslint.config.mjs`, wrapping `@nuxt/eslint`); run it before considering web work done:
+From `web/`, `pnpm run build` validates the Nuxt app and `pnpm run generate` emits prerendered pages. Lint is configured via ESLint flat config (`web/eslint.config.mjs`, wrapping `@nuxt/eslint`); run it before considering web work done:
 
 ```sh
-cd web && npm run lint        # eslint .  (errors fail, warnings do not)
-cd web && npm run lint:fix    # auto-fix stylistic rules (html-self-closing, etc.)
+cd web && pnpm run lint        # nuxt prepare && eslint .
+cd web && pnpm run lint:fix    # auto-fix stylistic rules
 ```
 
 There is no web test script. No `vue-tsc` typecheck or Prettier is wired in yet.
@@ -90,13 +92,18 @@ There is no web test script. No `vue-tsc` typecheck or Prettier is wired in yet.
 
 ### Web (Nuxt / Vue / TypeScript)
 
-- File-based routing under `web/pages`; admin/user console lives under `web/pages/console` with the active view selected by `[view].vue` and dedicated routes for `subscriptions`, `subscription-plans`, `admin-subscriptions`.
-- Console state is in `composables/useConsoleStore.ts`; theming in `composables/useTheme.ts`; i18n in `composables/useI18n.ts`. Reuse these rather than introducing global state.
+**`web/AGENTS.md` is the authoritative guide for this directory — read it before touching any file under `web/`.** The essentials:
+
+- File-based routing under `web/pages`; each console view is its own file under `web/pages/console/`, and each declares `definePageMeta({ layout: 'console', middleware: 'console-auth' })`.
+- Global state is per-concern composables — `useAccount`, `useTheme`, `useI18n`, `useToast`, `useSiteSettings`, `useCatalog`, `usePlans`. Views fetch their own data with `useResource` and mutate with `useAction`. There is no single console store.
 - Typed API client and DTOs live in `web/src/api.ts`. When adding/changing a backend endpoint, update the interfaces there to match the Go response JSON exactly.
 - Browser requests go through `/api/*` and are proxied to the Go service by `web/server/api/[...path].ts` (Nuxt) — do not hardcode `http://127.0.0.1:8080` in client code.
-- CSS is a single global stylesheet at `web/src/style.css`, imported via `nuxt.config.ts` `css`. It loads Tailwind v4 (`@import "tailwindcss"`) + `tw-animate-css` and exposes the shadcn-vue token system through an `@theme inline` block, so `bg-background`/`text-foreground`/`bg-primary`/`border-border`/`ring-ring` utilities resolve to the HSL `--background`/`--foreground`/... variables defined on `:root`. Dark mode is driven by `data-theme="dark"` on `<html>` (set by `composables/useTheme.ts` + a no-flash inline script in `app.vue`); Tailwind's `dark:` variant is routed to that attribute via `@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *))`. Multi-color / multi-radius / `a-site` preset switching still works through `:root[data-theme-color="..."]`, `:root[data-theme-radius="..."]`, `:root[data-theme-preset="a-site"]` overriding the same tokens.
-- shadcn-vue base components live in `web/components/ui/<name>/` (added via the `shadcn-vue` CLI, config in `web/components.json`). They import `cn` from `@/lib/utils` (which resolves to `web/lib/utils.ts` through Nuxt's default `@` alias). Prefer composing these primitives + Tailwind utilities for new UI rather than extending the hand-rolled classes in `style.css`. The legacy hand-rolled classes (`.button`, `.panel`, `.state`, `.msq-*`, ...) still work because they consume the same HSL tokens, and are intended to be incrementally replaced by shadcn-vue primitives.
-- `cn` helper is `web/lib/utils.ts` (not `src/lib/`) — `clsx` + `tailwind-merge`. Use it for class composition in new components.
+- CSS lives in `web/assets/css/`: `tokens.css` (Tailwind `@theme inline` mapping + non-colour tokens), `themes/{default,cool,galaxy}.css` (colour presets), `base.css`, `utilities.css`. Colour is addressed only through semantic utilities — `bg-paper`, `bg-surface`, `bg-sunken`, `text-ink`, `text-muted`, `text-faint`, `border-line`, `bg-clay`, and the `success`/`warn`/`danger` tokens. Never hardcode a hex or a stock Tailwind colour.
+- Theming has two axes on `<html>`: `data-theme="light|dark"` and `data-preset="default|cool|galaxy"`, both set by `composables/useTheme.ts` plus a no-flash inline script in `app.vue`. Every preset defines its own light and dark values, so `dark:` variants are not needed for colour.
+- UI primitives are hand-rolled in `web/components/ui/` (one component per file, auto-imported as `<UiButton>`, `<UiCard>`, …) over `reka-ui` headless primitives. Compose these plus Tailwind utilities; add a new primitive only when three or more views need it.
+- `cn` helper is `web/lib/utils.ts` — `clsx` + `tailwind-merge`. Use it for class composition.
+- **i18n is mandatory.** Every user-visible string, including `aria-label`/`placeholder`/`title`, goes through `t()` from `useI18n()`. Messages live in `web/src/locales/{zh,en}/<namespace>.ts` (`common`, `nav`, `site`, `auth`, `console`, `admin`, `system`, `theme`); the two locales must stay in sync key-for-key. Data returned by the API is passed through untranslated.
+- Console navigation and its permission gates are declared in `web/src/nav.ts`, not in the sidebar component.
 - Prerendered public routes are declared in `nuxt.config.ts` (`nitro.prerender.routes` and `routeRules`); update both when adding prerendered pages.
 
 ### Security

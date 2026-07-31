@@ -73,7 +73,18 @@ func (s *Service) siteSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sys := s.loadSystemConfig(r.Context())
-	writeJSON(w, http.StatusOK, map[string]any{"name": name, "icon_url": iconURL, "auto_disable_failed_channels": autoDisableFailedChannels, "geetest_enabled": sys.geetestEnabled(), "geetest_captcha_id": sys.GeetestCaptchaID, "email_verification_enabled": sys.emailVerificationEnabled()})
+	var oauthProviders []string
+	rows, err := s.db.Query(r.Context(), `select id from oauth_providers where enabled`)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var id string
+			if rows.Scan(&id) == nil {
+				oauthProviders = append(oauthProviders, id)
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"name": name, "icon_url": iconURL, "auto_disable_failed_channels": autoDisableFailedChannels, "geetest_enabled": sys.geetestEnabled(), "geetest_captcha_id": sys.GeetestCaptchaID, "email_verification_enabled": sys.emailVerificationEnabled(), "oauth_providers": oauthProviders})
 }
 
 func (s *Service) adminSiteSettings(w http.ResponseWriter, r *http.Request) {

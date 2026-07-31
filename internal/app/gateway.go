@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -17,7 +18,16 @@ const (
 	maxGatewayMaxTokens     = 200_000
 	defaultGatewayMaxTokens = 4096
 	maxUpstreamResponseBody = 16 << 20
+	// settlementTimeout bounds the detached wallet/log writes that must complete even
+	// after the client has disconnected.
+	settlementTimeout = 15 * time.Second
 )
+
+// streamBufferPool recycles the copy buffers used to relay SSE responses.
+var streamBufferPool = sync.Pool{New: func() any {
+	buf := make([]byte, 32*1024)
+	return &buf
+}}
 
 type channel struct {
 	id, baseURL, apiKey, upstreamModel, provider string
@@ -40,20 +50,23 @@ func resolveGatewayMaxTokens(maxTokens int) (int, bool) {
 	return maxTokens, true
 }
 
-func (s *Service) groupMultiplier(r *http.Request, key keyContext) float64 {
-	if key.groupID == "" {
-		return 1
-	}
-	var multiplier float64
-	if err := s.db.QueryRow(r.Context(), `select multiplier from groups where id=$1`, key.groupID).Scan(&multiplier); err != nil || multiplier <= 0 {
-		return 1
-	}
-	return multiplier
-}
-
 func (s *Service) models(w http.ResponseWriter, r *http.Request) {
 	key := r.Context().Value(contextKey{}).(keyContext)
-	rows, err := s.db.Query(r.Context(), `select model from (select jsonb_array_elements_text(c.models) as model from channels c where c.enabled and (not exists(select 1 from channel_groups cg where cg.channel_id=c.id) or ($2<>'' and exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($2,'')::uuid)) or ($2='' and exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$1))) union select m.public_model as model from model_routes m join channels c on c.id=m.channel_id where m.enabled and c.enabled and (not exists(select 1 from channel_groups cg where cg.channel_id=c.id) or ($2<>'' and exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($2,'')::uuid)) or ($2='' and exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$1)))) available order by model`, key.userID, key.groupID)
+	rows, err := s.db.Query(r.Context(), `select model from (
+		select jsonb_array_elements_text(c.models) as model from channels c where c.enabled and (
+			not exists(select 1 from channel_groups cg where cg.channel_id=c.id)
+			or exists(select 1 from channel_groups cg join groups g on g.id=cg.group_id where cg.channel_id=c.id and g."public")
+			or ($2<>'' and exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($2,'')::uuid))
+			or ($2='' and exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$1))
+		)
+		union
+		select m.public_model as model from model_routes m join channels c on c.id=m.channel_id where m.enabled and not m.hidden and c.enabled and (
+			not exists(select 1 from channel_groups cg where cg.channel_id=c.id)
+			or exists(select 1 from channel_groups cg join groups g on g.id=cg.group_id where cg.channel_id=c.id and g."public")
+			or ($2<>'' and exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($2,'')::uuid))
+			or ($2='' and exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$1))
+		)
+	) available order by model`, key.userID, key.groupID)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
@@ -98,41 +111,39 @@ func (s *Service) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_request", "max_tokens must be at most 200000")
 		return
 	}
-	s.proxyChatCompletions(w, r, body, request.Model, request.Stream, nil, nil)
+	s.proxyChatCompletions(w, r, body, request.Model, request.Stream, request.MaxTokens, nil, nil)
 }
 
 type responseTransform func([]byte) ([]byte, error)
 type streamTransform func(http.ResponseWriter, *http.Response) error
 
-func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, body []byte, model string, stream bool, transform responseTransform, streamFn streamTransform) {
+func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, body []byte, model string, stream bool, maxTokens int, transform responseTransform, streamFn streamTransform) {
 	started := time.Now()
-	key := r.Context().Value(contextKey{}).(keyContext)
-	var tokenReq struct {
-		MaxTokens int `json:"max_tokens"`
-	}
-	_ = json.Unmarshal(body, &tokenReq)
-	if tokenReq.MaxTokens > maxGatewayMaxTokens {
+	ctx := r.Context()
+	key := ctx.Value(contextKey{}).(keyContext)
+	if maxTokens > maxGatewayMaxTokens {
 		writeError(w, 400, "invalid_request", "max_tokens must be at most 200000")
 		return
 	}
-	if err := s.checkQuota(r, key, model); err != nil {
+	if err := s.checkQuota(ctx, key, model); err != nil {
 		writeError(w, 429, "quota_exceeded", "request quota exceeded")
 		return
 	}
-	subscriptionAccess := s.subscriptionCoversModel(r.Context(), key.userID, model)
+	// Pricing and the group multiplier are read once and reused by reservation and
+	// settlement, which previously repeated the same two lookups.
+	pricing := s.pricingFor(ctx, model)
+	groupMultiplier := s.groupMultiplierFor(ctx, key.groupID)
+	subscriptionAccess := s.subscriptionCoversModel(ctx, key.userID, model)
 	var reserved reservation
 	// Streaming responses are not settled; do not hold wallet reserved balance for them.
 	if subscriptionAccess || stream {
-		reserved = reservation{}
-		if !subscriptionAccess && stream {
-			if err := s.requireEnabledPricing(r, model); err != nil {
-				writeError(w, 402, "pricing_unavailable", "no enabled pricing rule for this model")
-				return
-			}
+		if !subscriptionAccess && stream && !pricing.found {
+			writeError(w, 402, "pricing_unavailable", "no enabled pricing rule for this model")
+			return
 		}
 	} else {
 		var err error
-		reserved, err = s.reserveUsage(r, key, model, body)
+		reserved, err = s.reserveUsage(ctx, key, model, len(body), maxTokens, pricing, groupMultiplier)
 		if err != nil {
 			if errors.Is(err, errPricingUnavailable) {
 				writeError(w, 402, "pricing_unavailable", "no enabled pricing rule for this model")
@@ -142,17 +153,42 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 			return
 		}
 	}
-	defer func() { s.releaseReservation(r, key, reserved, model) }()
-	channels, err := s.channelsForModel(r, model)
+	defer func() { s.releaseReservation(ctx, key, reserved) }()
+	// Group concurrency limit: reject when the group's limit is reached,
+	// preventing a single group from saturating all its channels.
+	maxConcurrency := 0
+	if key.groupID != "" {
+		maxConcurrency = s.groupConcurrencyLimitFor(ctx, key.groupID)
+	}
+	if maxConcurrency > 0 && !s.groupLimiter.acquire(key.groupID, maxConcurrency) {
+		s.logRequest(ctx, key, "", model, 429, 0, 0, 0, time.Since(started), "group_concurrency_limit")
+		s.releaseReservation(ctx, key, reserved)
+		writeError(w, 429, "group_concurrency_exceeded", "group concurrency limit exceeded")
+		return
+	}
+	defer func() {
+		if key.groupID != "" && maxConcurrency > 0 {
+			s.groupLimiter.release(key.groupID)
+		}
+	}()
+	channels, err := s.channelsForModel(ctx, key, model)
 	if err != nil {
-		s.logRequest(r, key, "", model, 503, 0, 0, 0, time.Since(started), "no_channel")
+		s.logRequest(ctx, key, "", model, 503, 0, 0, 0, time.Since(started), "no_channel")
 		writeError(w, 503, "model_unavailable", "no enabled channel supports this model")
 		return
 	}
-	reliability := s.reliabilitySettings(r.Context())
+	reliability := s.reliabilitySettings(ctx)
 	maxAttempts := reliability.RetryCount + 1
 	if maxAttempts > len(channels) {
 		maxAttempts = len(channels)
+	}
+	client := s.httpClient
+	if stream && s.streamClient != nil {
+		client = s.streamClient
+	}
+	accept := "application/json"
+	if stream {
+		accept = "text/event-stream"
 	}
 	var resp *http.Response
 	var ch channel
@@ -190,8 +226,8 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 			upstreamReq.Header.Set("Authorization", "Bearer "+ch.apiKey)
 		}
 		upstreamReq.Header.Set("Content-Type", "application/json")
-		upstreamReq.Header.Set("Accept", map[bool]string{true: "text/event-stream", false: "application/json"}[stream])
-		resp, err = s.httpClient.Do(upstreamReq)
+		upstreamReq.Header.Set("Accept", accept)
+		resp, err = client.Do(upstreamReq)
 		if err == nil && !reliability.retryable(resp.StatusCode) {
 			break
 		}
@@ -203,18 +239,18 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 			resp.Body.Close()
 			if readErr == nil {
 				if reliability.autoDisableStatus(resp.StatusCode) || reliability.autoDisableKeyword(string(bodyPeek)) {
-					s.autoDisableChannel(r.Context(), ch.id, failureReason)
+					s.autoDisableChannel(ctx, ch.id, failureReason)
 				}
 			}
 			resp = nil
 		}
-		s.channelFailed(r, ch.id, failureReason)
+		s.channelFailed(ctx, ch.id, failureReason)
 		if attempts >= maxAttempts {
 			break
 		}
 	}
 	if resp == nil {
-		s.logRequest(r, key, ch.id, model, 502, 0, 0, 0, time.Since(started), "upstream_unreachable")
+		s.logRequest(ctx, key, ch.id, model, 502, 0, 0, 0, time.Since(started), "upstream_unreachable")
 		writeError(w, 502, "upstream_error", "all upstream channels failed")
 		return
 	}
@@ -227,8 +263,8 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 		} else {
 			s.streamResponse(w, resp)
 		}
-		s.logRequest(r, key, ch.id, model, resp.StatusCode, 0, 0, 0, time.Since(started), "")
-		s.channelSucceeded(r, ch.id)
+		s.logRequest(ctx, key, ch.id, model, resp.StatusCode, 0, 0, 0, time.Since(started), "")
+		s.channelSucceeded(ctx, ch.id)
 		return
 	}
 	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, maxUpstreamResponseBody))
@@ -244,12 +280,12 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 		}
 	}
 	prompt, completion, total := usage(responseBody)
-	s.logRequest(r, key, ch.id, model, resp.StatusCode, prompt, completion, total, time.Since(started), errorCode(resp.StatusCode))
+	s.logRequest(ctx, key, ch.id, model, resp.StatusCode, prompt, completion, total, time.Since(started), errorCode(resp.StatusCode))
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		if !subscriptionAccess {
-			reserved = s.settleUsage(r, key, reserved, model, prompt, completion)
+			reserved = s.settleUsage(ctx, key, reserved, model, prompt, completion, pricing, groupMultiplier)
 		}
-		s.channelSucceeded(r, ch.id)
+		s.channelSucceeded(ctx, ch.id)
 		if transform != nil {
 			responseBody, err = transform(responseBody)
 			if err != nil {
@@ -263,52 +299,37 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 	w.Write(responseBody)
 }
 
-func (s *Service) requireEnabledPricing(r *http.Request, model string) error {
-	var input float64
-	if err := s.db.QueryRow(r.Context(), `select input_per_million from pricing_rules where model=$1 and enabled`, model).Scan(&input); err != nil {
-		return errPricingUnavailable
-	}
-	return nil
-}
-
-func (s *Service) reserveUsage(r *http.Request, key keyContext, model string, body []byte) (reservation, error) {
-	var request struct {
-		MaxTokens int `json:"max_tokens"`
-	}
-	_ = json.Unmarshal(body, &request)
-	resolved, ok := resolveGatewayMaxTokens(request.MaxTokens)
+// reserveUsage holds the worst-case cost of a request before it is proxied. The whole
+// hold — balance check, reserve update and ledger entry — is a single atomic statement:
+// PostgreSQL re-evaluates the WHERE clause after taking the row lock, so concurrent
+// requests for the same wallet still cannot overspend.
+func (s *Service) reserveUsage(ctx context.Context, key keyContext, model string, bodyLen, maxTokens int, pricing pricingRule, groupMultiplier float64) (reservation, error) {
+	resolved, ok := resolveGatewayMaxTokens(maxTokens)
 	if !ok {
 		return reservation{}, errInvalid
 	}
-	request.MaxTokens = resolved
-	var input, output, multiplier float64
-	if err := s.db.QueryRow(r.Context(), `select input_per_million,output_per_million,multiplier from pricing_rules where model=$1 and enabled`, model).Scan(&input, &output, &multiplier); err != nil {
+	if !pricing.found {
 		return reservation{}, errPricingUnavailable
 	}
 	// Reserve the configured maximum output plus a conservative request-body estimate.
-	amount := (float64(len(body)/3)*input + float64(request.MaxTokens)*output) / 1000000 * multiplier * s.groupMultiplier(r, key)
+	amount := (float64(bodyLen/3)*pricing.input + float64(resolved)*pricing.output) / 1000000 * pricing.multiplier * groupMultiplier
 	if amount == 0 {
 		// Zero list prices are allowed only when an explicit enabled rule exists.
 		return reservation{}, nil
 	}
-	tx, err := s.db.Begin(r.Context())
+	id, _ := randomID()
+	tag, err := s.db.Exec(ctx, `with held as (
+		update user_wallets set reserved=reserved+$1,updated_at=now()
+		where user_id=$2 and balance-reserved >= $1
+		returning balance
+	)
+	insert into wallet_ledger(id,user_id,amount,balance_after,kind,request_id,note)
+	select $3::uuid,$2,-$1,balance,'reservation',$4::text,$5::text from held`, amount, key.userID, id, requestID(ctx), model)
 	if err != nil {
 		return reservation{}, err
 	}
-	defer tx.Rollback(r.Context())
-	var balance, held float64
-	if err = tx.QueryRow(r.Context(), `select balance,reserved from user_wallets where user_id=$1 for update`, key.userID).Scan(&balance, &held); err != nil || balance-held < amount {
+	if tag.RowsAffected() == 0 {
 		return reservation{}, errInvalid
-	}
-	if _, err = tx.Exec(r.Context(), `update user_wallets set reserved=reserved+$1,updated_at=now() where user_id=$2`, amount, key.userID); err != nil {
-		return reservation{}, err
-	}
-	id, _ := randomID()
-	if _, err = tx.Exec(r.Context(), `insert into wallet_ledger(id,user_id,amount,balance_after,kind,request_id,note) values($1,$2,$3,$4,'reservation',$5,$6)`, id, key.userID, -amount, balance, requestID(r.Context()), model); err != nil {
-		return reservation{}, err
-	}
-	if err = tx.Commit(r.Context()); err != nil {
-		return reservation{}, err
 	}
 	return reservation{amount: amount}, nil
 }
@@ -333,66 +354,65 @@ func clampCostToHold(cost, held float64) float64 {
 	return cost
 }
 
-func (s *Service) settleUsage(r *http.Request, key keyContext, held reservation, model string, prompt, completion int) reservation {
+// settleUsage charges the actual cost and releases the hold. Balance update, ledger
+// entry and usage record are one statement so they commit or fail together, without the
+// five extra round trips an explicit transaction needed.
+func (s *Service) settleUsage(ctx context.Context, key keyContext, held reservation, model string, prompt, completion int, pricing pricingRule, groupMultiplier float64) reservation {
 	if held.amount == 0 && prompt == 0 && completion == 0 {
 		return held
 	}
-	tx, err := s.db.Begin(r.Context())
-	if err != nil {
-		return held
-	}
-	defer tx.Rollback(r.Context())
-	var input, cached, output, multiplier float64
-	_ = tx.QueryRow(r.Context(), `select input_per_million,cached_input_per_million,output_per_million,multiplier from pricing_rules where model=$1 and enabled`, model).Scan(&input, &cached, &output, &multiplier)
-	cost := clampCostToHold(usageCost(prompt, completion, input, output, multiplier, s.groupMultiplier(r, key)), held.amount)
-	var balance float64
-	if err = tx.QueryRow(r.Context(), `select balance from user_wallets where user_id=$1 for update`, key.userID).Scan(&balance); err != nil {
-		return held
-	}
-	id, _ := randomID()
-	requestID := requestID(r.Context())
-	if _, err = tx.Exec(r.Context(), `update user_wallets set balance=balance-$1, reserved=greatest(0,reserved-$2), updated_at=now() where user_id=$3`, cost, held.amount, key.userID); err != nil {
-		return held
-	}
-	var after float64
-	if tx.QueryRow(r.Context(), `select balance from user_wallets where user_id=$1`, key.userID).Scan(&after) != nil {
-		return held
-	}
-	if _, err = tx.Exec(r.Context(), `insert into wallet_ledger(id,user_id,amount,balance_after,kind,request_id,note) values($1,$2,$3,$4,'charge',$5,$6)`, id, key.userID, -cost, after, requestID, model); err != nil {
-		return held
-	}
+	cost := clampCostToHold(usageCost(prompt, completion, pricing.input, pricing.output, pricing.multiplier, groupMultiplier), held.amount)
+	ledgerID, _ := randomID()
 	usageID, _ := randomID()
-	if _, err = tx.Exec(r.Context(), `insert into usage_records(id,request_id,user_id,api_key_id,model,prompt_tokens,completion_tokens,cost) values($1,$2,$3,$4,$5,$6,$7,$8) on conflict(request_id) do update set prompt_tokens=excluded.prompt_tokens,completion_tokens=excluded.completion_tokens,cost=excluded.cost`, usageID, requestID, key.userID, key.keyID, model, prompt, completion, cost); err != nil {
-		return held
-	}
-	if err = tx.Commit(r.Context()); err != nil {
+	settleCtx, cancel := detach(ctx, settlementTimeout)
+	defer cancel()
+	tag, err := s.db.Exec(settleCtx, `with settled as (
+		update user_wallets set balance=balance-$1, reserved=greatest(0,reserved-$2), updated_at=now()
+		where user_id=$3
+		returning balance
+	), ledger as (
+		insert into wallet_ledger(id,user_id,amount,balance_after,kind,request_id,note)
+		select $4::uuid,$3,-$1,balance,'charge',$5::text,$6::text from settled
+	)
+	insert into usage_records(id,request_id,user_id,api_key_id,model,prompt_tokens,completion_tokens,cost)
+	select $7::uuid,$5::text,$3,$8::uuid,$6::text,$9::int,$10::int,$1 from settled
+	on conflict(request_id) do update set prompt_tokens=excluded.prompt_tokens,completion_tokens=excluded.completion_tokens,cost=excluded.cost`,
+		cost, held.amount, key.userID, ledgerID, requestID(ctx), model, usageID, key.keyID, prompt, completion)
+	if err != nil || tag.RowsAffected() == 0 {
 		return held
 	}
 	return reservation{}
 }
 
-func (s *Service) releaseReservation(r *http.Request, key keyContext, held reservation, model string) {
+func (s *Service) releaseReservation(ctx context.Context, key keyContext, held reservation) {
 	if held.amount == 0 {
 		return
 	}
-	_, _ = s.db.Exec(r.Context(), `update user_wallets set reserved=greatest(0,reserved-$1),updated_at=now() where user_id=$2`, held.amount, key.userID)
+	// The client may already have hung up; the hold must be released regardless.
+	releaseCtx, cancel := detach(ctx, settlementTimeout)
+	defer cancel()
+	_, _ = s.db.Exec(releaseCtx, `update user_wallets set reserved=greatest(0,reserved-$1),updated_at=now() where user_id=$2`, held.amount, key.userID)
 }
 
-func (s *Service) checkQuota(r *http.Request, key keyContext, model string) error {
-	rows, err := s.db.Query(r.Context(), `select "window",max_requests,max_tokens from quota_limits where (user_id=$1 or user_id is null) and (api_key_id=$2 or api_key_id is null) and (model=$3 or model is null) and (max_requests is not null or max_tokens is not null)`, key.userID, key.keyID, model)
+// checkQuota evaluates every matching quota row in one query. Each row's usage window is
+// aggregated by a lateral join instead of a follow-up query per row.
+func (s *Service) checkQuota(ctx context.Context, key keyContext, model string) error {
+	rows, err := s.db.Query(ctx, `select q.max_requests,q.max_tokens,agg.requests,agg.tokens
+	from quota_limits q
+	cross join lateral (
+		select count(*) as requests, coalesce(sum(rl.total_tokens),0) as tokens
+		from request_logs rl
+		where rl.api_key_id=$2 and rl.created_at >= now() - ('1 '||q."window")::interval
+	) agg
+	where (q.user_id=$1 or q.user_id is null) and (q.api_key_id=$2 or q.api_key_id is null) and (q.model=$3 or q.model is null) and (q.max_requests is not null or q.max_tokens is not null)`, key.userID, key.keyID, model)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var window string
 		var maxRequests, maxTokens *int64
-		if rows.Scan(&window, &maxRequests, &maxTokens) != nil {
-			return errInvalid
-		}
-		interval := map[string]string{"minute": "1 minute", "day": "1 day", "month": "1 month"}[window]
 		var count, tokens int64
-		if s.db.QueryRow(r.Context(), `select count(*),coalesce(sum(total_tokens),0) from request_logs where api_key_id=$1 and created_at >= now() - $2::interval`, key.keyID, interval).Scan(&count, &tokens) != nil {
+		if rows.Scan(&maxRequests, &maxTokens, &count, &tokens) != nil {
 			return errInvalid
 		}
 		if (maxRequests != nil && count >= *maxRequests) || (maxTokens != nil && tokens >= *maxTokens) {
@@ -401,21 +421,21 @@ func (s *Service) checkQuota(r *http.Request, key keyContext, model string) erro
 	}
 	return rows.Err()
 }
-func (s *Service) channelsForModel(r *http.Request, model string) ([]channel, error) {
-	key := r.Context().Value(contextKey{}).(keyContext)
-	rows, err := s.db.Query(r.Context(), `select c.id,c.base_url,c.api_key,coalesce(m.priority,c.priority),coalesce(m.weight,c.weight),coalesce(m.upstream_model,''),c.provider from channels c left join model_routes m on m.channel_id=c.id and m.public_model=$1 and m.enabled where c.enabled and (c.cooldown_until is null or c.cooldown_until<=now()) and (c.models ? $1 or m.public_model is not null) and (not exists(select 1 from channel_groups cg where cg.channel_id=c.id) or ($3<>'' and exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($3,'')::uuid)) or ($3='' and exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$2))) order by coalesce(m.priority,c.priority), c.priority, c.id`, model, key.userID, key.groupID)
+func (s *Service) channelsForModel(ctx context.Context, key keyContext, model string) ([]channel, error) {
+	rows, err := s.db.Query(ctx, `select c.id,c.base_url,c.api_key,coalesce(m.priority,c.priority),coalesce(m.weight,c.weight),coalesce(m.upstream_model,''),c.provider from channels c left join model_routes m on m.channel_id=c.id and m.public_model=$1 and m.enabled where c.enabled and (c.cooldown_until is null or c.cooldown_until<=now()) and (c.models ? $1 or m.public_model is not null) and (not exists(select 1 from channel_groups cg where cg.channel_id=c.id) or exists(select 1 from channel_groups cg join groups g on g.id=cg.group_id where cg.channel_id=c.id and g."public") or ($3<>'' and exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($3,'')::uuid)) or ($3='' and exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$2))) order by coalesce(m.priority,c.priority), c.priority, c.id`, model, key.userID, key.groupID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var result []channel
+	seed := sha256.Sum256([]byte(requestID(ctx)))
 	for rows.Next() {
 		var ch channel
 		var encrypted string
 		if err := rows.Scan(&ch.id, &ch.baseURL, &encrypted, &ch.priority, &ch.weight, &ch.upstreamModel, &ch.provider); err != nil {
 			return nil, err
 		}
-		ch.apiKey, err = crypt(s.cfg.EncryptionKey, encrypted, true)
+		ch.apiKey, err = s.selectChannelKey(ctx, ch.id, encrypted, seed[:])
 		if err != nil {
 			continue
 		}
@@ -434,7 +454,6 @@ func (s *Service) channelsForModel(r *http.Request, model string) ([]channel, er
 		for _, ch := range result[:end] {
 			sum += ch.weight
 		}
-		seed := sha256.Sum256([]byte(requestID(r.Context())))
 		pick := int(seed[0])<<8 | int(seed[1])
 		pick %= sum
 		selected := 0
@@ -449,12 +468,46 @@ func (s *Service) channelsForModel(r *http.Request, model string) ([]channel, er
 	}
 	return result, nil
 }
-func (s *Service) channelSucceeded(r *http.Request, id string) {
-	_, _ = s.db.Exec(r.Context(), `update channels set failure_count=0,cooldown_until=null,last_error=null,last_checked_at=now(),updated_at=now() where id=$1`, id)
+
+func (s *Service) selectChannelKey(ctx context.Context, channelID, fallbackEncrypted string, seed []byte) (string, error) {
+	krows, err := s.db.Query(ctx, `select key_encrypted from channel_api_keys where channel_id=$1 and enabled order by created_at`, channelID)
+	if err != nil {
+		return "", err
+	}
+	defer krows.Close()
+	var keys []string
+	for krows.Next() {
+		var enc string
+		if krows.Scan(&enc) != nil {
+			continue
+		}
+		key, err := crypt(s.cfg.EncryptionKey, enc, true)
+		if err != nil {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	if len(keys) > 0 {
+		pick := int(seed[0]) % len(keys)
+		return keys[pick], nil
+	}
+	if fallbackEncrypted != "" {
+		return crypt(s.cfg.EncryptionKey, fallbackEncrypted, true)
+	}
+	return "", errInvalid
 }
-func (s *Service) channelFailed(r *http.Request, id, reason string) {
+
+// channelSucceeded clears failure bookkeeping in the background. The WHERE clause makes
+// the common case (an already-healthy channel checked recently) touch no rows, which
+// keeps a shared channel row from becoming a write hotspot under concurrent traffic.
+func (s *Service) channelSucceeded(ctx context.Context, id string) {
+	s.background.submit(func(ctx context.Context) {
+		_, _ = s.db.Exec(ctx, `update channels set failure_count=0,cooldown_until=null,last_error=null,last_checked_at=now(),updated_at=now() where id=$1 and (failure_count<>0 or cooldown_until is not null or last_error is not null or last_checked_at is null or last_checked_at < now()-interval '30 seconds')`, id)
+	})
+}
+func (s *Service) channelFailed(ctx context.Context, id, reason string) {
 	var failureCount int
-	err := s.db.QueryRow(r.Context(), `update channels set failure_count=failure_count+1,cooldown_until=case when failure_count+1 >= 3 then now()+interval '1 minute' else cooldown_until end,last_error=$2,last_checked_at=now(),updated_at=now() where id=$1 returning failure_count`, id, reason).Scan(&failureCount)
+	err := s.db.QueryRow(ctx, `update channels set failure_count=failure_count+1,cooldown_until=case when failure_count+1 >= 3 then now()+interval '1 minute' else cooldown_until end,last_error=$2,last_checked_at=now(),updated_at=now() where id=$1 returning failure_count`, id, reason).Scan(&failureCount)
 	if err == nil && failureCount == 3 {
 		go s.testFailedChannel(id)
 	}
@@ -469,7 +522,8 @@ func (s *Service) testFailedChannel(id string) {
 	if err := s.db.QueryRow(ctx, `select c.base_url,c.api_key,c.provider,c.enabled,ss.auto_disable_failed_channels from channels c cross join site_settings ss where c.id=$1 and ss.id=true`, id).Scan(&baseURL, &encrypted, &provider, &enabled, &autoDisable); err != nil || !enabled || !autoDisable {
 		return
 	}
-	apiKey, err := crypt(s.cfg.EncryptionKey, encrypted, true)
+	seed := sha256.Sum256([]byte(id + "test"))
+	apiKey, err := s.selectChannelKey(ctx, id, encrypted, seed[:])
 	if err != nil {
 		s.disableFailedChannel(ctx, id, "credential_decryption_failed")
 		return
@@ -521,11 +575,12 @@ func (s *Service) streamResponse(w http.ResponseWriter, resp *http.Response) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(resp.StatusCode)
-	buf := make([]byte, 32*1024)
+	buf := streamBufferPool.Get().(*[]byte)
+	defer streamBufferPool.Put(buf)
 	for {
-		n, err := resp.Body.Read(buf)
+		n, err := resp.Body.Read(*buf)
 		if n > 0 {
-			if _, writeErr := w.Write(buf[:n]); writeErr != nil {
+			if _, writeErr := w.Write((*buf)[:n]); writeErr != nil {
 				return
 			}
 			flusher.Flush()
@@ -538,10 +593,17 @@ func (s *Service) streamResponse(w http.ResponseWriter, resp *http.Response) {
 		}
 	}
 }
-func (s *Service) logRequest(r *http.Request, key keyContext, channelID, model string, status, prompt, completion, total int, d time.Duration, errorCode string) {
+
+// logRequest writes the audit/quota trail. It stays synchronous because usage_records
+// has a foreign key onto request_logs, but runs on a detached context so a client that
+// hangs up mid-stream does not silently lose its log row (and its quota accounting).
+// The api_keys.last_used_at stamp it used to duplicate is now handled by the api
+// middleware.
+func (s *Service) logRequest(ctx context.Context, key keyContext, channelID, model string, status, prompt, completion, total int, d time.Duration, errorCode string) {
 	id, _ := randomID()
-	_, _ = s.db.Exec(r.Context(), `insert into request_logs(id,request_id,user_id,api_key_id,channel_id,group_id,model,status_code,prompt_tokens,completion_tokens,total_tokens,duration_ms,error_code) values($1,$2,$3,$4,nullif($5,'')::uuid,nullif($6,'')::uuid,$7,$8,$9,$10,$11,$12,nullif($13,''))`, id, requestID(r.Context()), key.userID, key.keyID, channelID, key.groupID, model, status, prompt, completion, total, d.Milliseconds(), errorCode)
-	_, _ = s.db.Exec(r.Context(), `update api_keys set last_used_at=now() where id=$1`, key.keyID)
+	logCtx, cancel := detach(ctx, settlementTimeout)
+	defer cancel()
+	_, _ = s.db.Exec(logCtx, `insert into request_logs(id,request_id,user_id,api_key_id,channel_id,group_id,model,status_code,prompt_tokens,completion_tokens,total_tokens,duration_ms,error_code) values($1,$2,$3,$4,nullif($5,'')::uuid,nullif($6,'')::uuid,$7,$8,$9,$10,$11,$12,nullif($13,''))`, id, requestID(ctx), key.userID, key.keyID, channelID, key.groupID, model, status, prompt, completion, total, d.Milliseconds(), errorCode)
 }
 func usage(body []byte) (int, int, int) {
 	var v struct {
