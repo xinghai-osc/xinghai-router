@@ -166,6 +166,7 @@ export default {
   noRoutes: 'No model routes yet',
   routesEmptyHint: 'Add a route to map a public model name to a different upstream model on this channel.',
   routeCount: 'Routes',
+  weightInvalid: 'Weight must be a whole number between 0 and 10000',
 
   providersLead: 'Group models into vendors by model-name prefix for the model square.',
   providersEmptyTitle: 'No providers yet',

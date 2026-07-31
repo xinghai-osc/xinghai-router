@@ -1498,6 +1498,25 @@ func (s *Service) updateChannel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_request", "base_url must be 1-2048 characters and use HTTPS to a public host, or HTTP to loopback")
 		return
 	}
+	for i := range in.ModelRoutes {
+		in.ModelRoutes[i].PublicModel = strings.TrimSpace(in.ModelRoutes[i].PublicModel)
+		in.ModelRoutes[i].UpstreamModel = strings.TrimSpace(in.ModelRoutes[i].UpstreamModel)
+		if !validModelName(in.ModelRoutes[i].PublicModel) || !validModelName(in.ModelRoutes[i].UpstreamModel) {
+			writeError(w, 400, "invalid_request", "public_model and upstream_model must be 1-200 characters")
+			return
+		}
+		if in.ModelRoutes[i].Weight < 0 || in.ModelRoutes[i].Weight > 10000 {
+			writeError(w, 400, "invalid_request", "weight must be between 0 and 10000")
+			return
+		}
+		if in.ModelRoutes[i].Priority < -10000 || in.ModelRoutes[i].Priority > 10000 {
+			writeError(w, 400, "invalid_request", "priority must be between -10000 and 10000")
+			return
+		}
+		if in.ModelRoutes[i].Weight == 0 {
+			in.ModelRoutes[i].Weight = 100
+		}
+	}
 	channelID := r.PathValue("id")
 	models, _ := json.Marshal(in.Models)
 	query := `update channels set name=$1,base_url=$2,models=$3,priority=$4,provider=$5`

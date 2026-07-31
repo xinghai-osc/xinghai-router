@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { Server, KeyRound, Play } from 'lucide-vue-next'
-import { endpoints, type Channel, type ChannelForm, type ChannelKey, type ChannelKeyTestResult, type Group } from '~/src/api'
+import { Server, KeyRound, Play, ArrowRightLeft } from 'lucide-vue-next'
+import { endpoints, type Channel, type ChannelForm, type ChannelKey, type ChannelKeyTestResult, type Group, type ModelRoute, type ModelRouteForm } from '~/src/api'
 import { formatNumber } from '~/src/format'
 
 definePageMeta({ layout: 'console', middleware: 'console-auth' })
@@ -94,6 +94,21 @@ const keysDialogOpen = ref(false)
 const keysChannelId = ref('')
 const keysChannelName = ref('')
 const channelKeys = useResource(() => Promise.resolve({ data: [] as ChannelKey[] }), { data: [] as ChannelKey[] })
+
+const routesDialogOpen = ref(false)
+const routesChannelId = ref('')
+const routesChannelName = ref('')
+const channelRoutes = useResource(() => Promise.resolve({ data: [] as ModelRoute[] }), { data: [] as ModelRoute[] })
+const routeDialogOpen = ref(false)
+const editingRouteId = ref('')
+const routeFormError = ref('')
+const routeForm = reactive({
+  public_model: '',
+  upstream_model: '',
+  priority: '0',
+  weight: '100',
+  hidden: false,
+})
 
 function openCreate() {
   editingId.value = ''
@@ -273,6 +288,100 @@ async function testKey(key: ChannelKey) {
   channelKeys.data.value.data = refreshed.data
   await channels.refresh()
 }
+
+function resetRouteForm() {
+  routeFormError.value = ''
+  routeForm.public_model = ''
+  routeForm.upstream_model = ''
+  routeForm.priority = '0'
+  routeForm.weight = '100'
+  routeForm.hidden = false
+}
+
+function openRoutes(channel: Channel) {
+  routesChannelId.value = channel.id
+  routesChannelName.value = channel.name
+  channelRoutes.data.value.data = channel.model_routes ?? []
+  routesDialogOpen.value = true
+}
+
+async function refreshRoutes() {
+  if (!routesChannelId.value) return
+  const result = await endpoints.getChannelRoutes(routesChannelId.value)
+  channelRoutes.data.value.data = result.data
+  await channels.refresh()
+}
+
+function openCreateRoute() {
+  editingRouteId.value = ''
+  resetRouteForm()
+  routeDialogOpen.value = true
+}
+
+function openEditRoute(route: ModelRoute) {
+  editingRouteId.value = route.id
+  routeFormError.value = ''
+  routeForm.public_model = route.public_model
+  routeForm.upstream_model = route.upstream_model
+  routeForm.priority = String(route.priority)
+  routeForm.weight = String(route.weight)
+  routeForm.hidden = route.hidden
+  routeDialogOpen.value = true
+}
+
+async function saveRoute() {
+  routeFormError.value = ''
+  const publicModel = routeForm.public_model.trim()
+  const upstreamModel = routeForm.upstream_model.trim()
+  if (!publicModel || !upstreamModel) {
+    routeFormError.value = t('admin.modelRequired')
+    return
+  }
+  const priority = Number(routeForm.priority)
+  const weight = Number(routeForm.weight)
+  if (!Number.isInteger(priority) || priority < -10000 || priority > 10000) {
+    routeFormError.value = t('admin.priorityInvalid')
+    return
+  }
+  if (!Number.isInteger(weight) || weight < 0 || weight > 10000) {
+    routeFormError.value = t('admin.weightInvalid')
+    return
+  }
+
+  const payload: ModelRouteForm = {
+    public_model: publicModel,
+    upstream_model: upstreamModel,
+    priority,
+    weight,
+    hidden: routeForm.hidden,
+  }
+
+  const ok = await run(async () => {
+    if (!editingRouteId.value) {
+      await endpoints.createChannelRoute(routesChannelId.value, payload)
+    } else {
+      await endpoints.updateChannelRoute(routesChannelId.value, editingRouteId.value, payload)
+    }
+  })
+  if (!ok) { toast.error(t('common.actionFailed')); return }
+  toast.success(t('admin.modelRouteSaved'))
+  routeDialogOpen.value = false
+  await refreshRoutes()
+}
+
+async function toggleRouteHidden(route: ModelRoute) {
+  const ok = await run(() => endpoints.updateChannelRoute(routesChannelId.value, route.id, { hidden: !route.hidden }))
+  if (!ok) { toast.error(t('common.actionFailed')); return }
+  await refreshRoutes()
+}
+
+async function deleteRoute(route: ModelRoute) {
+  if (!confirm(t('admin.confirmDeleteModelRoute'))) return
+  const ok = await run(() => endpoints.deleteChannelRoute(routesChannelId.value, route.id))
+  if (!ok) { toast.error(t('common.actionFailed')); return }
+  toast.success(t('admin.modelRouteDeleted'))
+  await refreshRoutes()
+}
 </script>
 
 <template>
@@ -319,6 +428,7 @@ async function testKey(key: ChannelKey) {
             <th class="num">{{ t('admin.modelCount') }}</th>
             <th class="num">{{ t('admin.keyCount') }}</th>
             <th>{{ t('admin.keyType') }}</th>
+            <th class="num">{{ t('admin.routeCount') }}</th>
             <th class="num">{{ t('admin.priority') }}</th>
             <th>{{ t('admin.groups') }}</th>
             <th>{{ t('common.status') }}</th>
@@ -345,6 +455,7 @@ async function testKey(key: ChannelKey) {
                 {{ channel.key_type === 'multi' ? t('admin.multiKey') : t('admin.singleKey') }}
               </UiBadge>
             </td>
+            <td class="num">{{ formatNumber((channel.model_routes ?? []).length) }}</td>
             <td class="num">{{ channel.priority }}</td>
             <td>
               <div v-if="channel.groups.length" class="flex flex-wrap gap-1">
@@ -370,6 +481,9 @@ async function testKey(key: ChannelKey) {
                 <UiButton variant="ghost" size="sm" @click="openEdit(channel)">{{ t('common.edit') }}</UiButton>
                 <UiButton variant="ghost" size="sm" @click="openKeys(channel)">
                   <KeyRound class="h-4 w-4" />
+                </UiButton>
+                <UiButton variant="ghost" size="sm" @click="openRoutes(channel)">
+                  <ArrowRightLeft class="h-4 w-4" />
                 </UiButton>
               </div>
             </td>
@@ -469,6 +583,94 @@ async function testKey(key: ChannelKey) {
 
       <template #footer>
         <UiButton variant="secondary" @click="keysDialogOpen = false">{{ t('common.close') }}</UiButton>
+      </template>
+    </UiSlidePanel>
+
+    <UiSlidePanel
+      v-model:open="routesDialogOpen"
+      size="md"
+      :title="t('admin.modelRoutes')"
+    >
+      <p class="text-sm text-muted mb-4">{{ routesChannelName }}</p>
+
+      <div v-if="!channelRoutes.data.value.data.length" class="py-4 text-center text-muted text-sm">
+        <p>{{ t('admin.noRoutes') }}</p>
+        <p class="mt-1">{{ t('admin.routesEmptyHint') }}</p>
+      </div>
+
+      <div v-else class="space-y-2">
+        <div
+          v-for="route in channelRoutes.data.value.data" :key="route.id"
+          class="flex items-center justify-between rounded-control border border-line px-3 py-2"
+        >
+          <div class="flex items-center gap-2 min-w-0">
+            <ArrowRightLeft class="h-4 w-4 text-faint shrink-0" />
+            <div class="flex flex-col min-w-0">
+              <span class="text-sm font-medium text-ink truncate">{{ route.public_model }}</span>
+              <span class="text-xs text-muted truncate">{{ route.upstream_model }}</span>
+            </div>
+            <UiBadge v-if="!route.enabled" tone="danger" class="shrink-0">{{ t('common.disabled') }}</UiBadge>
+            <UiBadge v-if="route.hidden" tone="outline" class="shrink-0">{{ t('admin.hidden') }}</UiBadge>
+          </div>
+          <div class="flex items-center gap-1 shrink-0">
+            <UiSwitch
+              :model-value="route.hidden"
+              size="sm"
+              :disabled="busy"
+              @update:model-value="toggleRouteHidden(route)"
+            />
+            <UiButton variant="ghost" size="sm" :disabled="busy" @click="openEditRoute(route)">
+              {{ t('common.edit') }}
+            </UiButton>
+            <UiButton variant="danger" size="sm" :disabled="busy" @click="deleteRoute(route)">
+              {{ t('common.delete') }}
+            </UiButton>
+          </div>
+        </div>
+      </div>
+
+      <div class="mt-4">
+        <UiButton size="sm" @click="openCreateRoute">{{ t('admin.createModelRoute') }}</UiButton>
+      </div>
+
+      <template #footer>
+        <UiButton variant="secondary" @click="routesDialogOpen = false">{{ t('common.close') }}</UiButton>
+      </template>
+    </UiSlidePanel>
+
+    <UiSlidePanel
+      v-model:open="routeDialogOpen"
+      size="sm"
+      :title="editingRouteId ? t('admin.editModelRoute') : t('admin.createModelRoute')"
+    >
+      <div class="space-y-4">
+        <UiAlert v-if="routeFormError" tone="danger">{{ routeFormError }}</UiAlert>
+
+        <UiField :label="t('admin.publicModel')" required>
+          <UiInput v-model="routeForm.public_model" mono />
+        </UiField>
+
+        <UiField :label="t('admin.upstreamModel')" required>
+          <UiInput v-model="routeForm.upstream_model" mono />
+        </UiField>
+
+        <div class="grid gap-4 sm:grid-cols-2">
+          <UiField :label="t('admin.priority')">
+            <UiInput v-model="routeForm.priority" type="number" mono />
+          </UiField>
+          <UiField :label="t('admin.weight')">
+            <UiInput v-model="routeForm.weight" type="number" mono />
+          </UiField>
+        </div>
+
+        <UiField :label="t('admin.hidden')" :hint="t('admin.hiddenHint')">
+          <UiSwitch v-model="routeForm.hidden" />
+        </UiField>
+      </div>
+
+      <template #footer>
+        <UiButton variant="secondary" @click="routeDialogOpen = false">{{ t('common.cancel') }}</UiButton>
+        <UiButton :loading="busy" @click="saveRoute">{{ t('common.save') }}</UiButton>
       </template>
     </UiSlidePanel>
 

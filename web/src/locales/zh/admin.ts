@@ -165,6 +165,7 @@ export default {
   noRoutes: '尚无模型路由',
   routesEmptyHint: '添加路由后，可将公共模型名映射到该渠道上的不同上游模型。',
   routeCount: '路由数',
+  weightInvalid: '权重必须是 0 到 10000 之间的整数',
 
   providersLead: '按模型名前缀把模型归类到供应商，用于模型广场展示。',
   providersEmptyTitle: '还没有供应商',
