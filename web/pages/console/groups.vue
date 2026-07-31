@@ -16,11 +16,13 @@ const canManage = computed(() => can('system.manage'))
 const groups = useResource(() => endpoints.getAdminGroups(), { data: [] as Group[] })
 
 const drafts = reactive<Record<string, string>>({})
+const concurrencyDrafts = reactive<Record<string, string>>({})
 const publicDrafts = reactive<Record<string, boolean>>({})
 
 watch(() => groups.data.value.data, (list) => {
   for (const group of list) {
     drafts[group.id] = String(group.multiplier)
+    concurrencyDrafts[group.id] = group.max_concurrency ? String(group.max_concurrency) : ''
     publicDrafts[group.id] = group.public
   }
 }, { immediate: true })
@@ -29,11 +31,21 @@ function isDirty(group: Group) {
   const draft = drafts[group.id]
   const publicChanged = publicDrafts[group.id] !== group.public
   const multiplierChanged = draft !== undefined && draft.trim() !== '' && Number(draft) !== group.multiplier
-  return multiplierChanged || publicChanged
+  const concurrencyChanged = concurrencyDrafts[group.id] !== undefined && concurrencyDraftValue(group) !== group.max_concurrency
+  return multiplierChanged || publicChanged || concurrencyChanged
+}
+
+function concurrencyDraftValue(group: Group) {
+  const raw = (concurrencyDrafts[group.id] ?? '').trim()
+  return raw === '' ? null : Number(raw)
 }
 
 function validMultiplier(value: number) {
   return Number.isFinite(value) && value > 0 && value <= 1000
+}
+
+function validConcurrency(value: number | null) {
+  return value === null || (Number.isInteger(value) && value > 0 && value <= 10000)
 }
 
 const savingId = ref('')
@@ -41,9 +53,11 @@ const savingId = ref('')
 async function saveGroup(group: Group) {
   const value = Number(drafts[group.id])
   if (!validMultiplier(value)) { toast.error(t('admin.multiplierInvalid')); return }
+  const concurrency = concurrencyDraftValue(group)
+  if (!validConcurrency(concurrency)) { toast.error(t('admin.concurrencyInvalid')); return }
   savingId.value = group.id
   const publicValue = publicDrafts[group.id] ?? group.public
-  const ok = await run(() => endpoints.updateGroup(group.id, value, null, publicValue))
+  const ok = await run(() => endpoints.updateGroup(group.id, value, concurrency, publicValue))
   savingId.value = ''
   if (!ok) { toast.error(t('common.actionFailed')); return }
   toast.success(t('admin.groupUpdated'))
@@ -52,12 +66,13 @@ async function saveGroup(group: Group) {
 
 const createOpen = ref(false)
 const createError = ref('')
-const createForm = reactive({ name: '', multiplier: '1', public: false })
+const createForm = reactive({ name: '', multiplier: '1', maxConcurrency: '', public: false })
 
 function openCreate() {
   createError.value = ''
   createForm.name = ''
   createForm.multiplier = '1'
+  createForm.maxConcurrency = ''
   createForm.public = false
   createOpen.value = true
 }
@@ -68,8 +83,11 @@ async function create() {
   if (!name) { createError.value = t('admin.groupNameRequired'); return }
   const multiplier = Number(createForm.multiplier)
   if (!validMultiplier(multiplier)) { createError.value = t('admin.multiplierInvalid'); return }
+  const rawConcurrency = createForm.maxConcurrency.trim()
+  const concurrency = rawConcurrency === '' ? null : Number(rawConcurrency)
+  if (!validConcurrency(concurrency)) { createError.value = t('admin.concurrencyInvalid'); return }
 
-  const ok = await run(() => endpoints.createGroup(name, multiplier, null, createForm.public))
+  const ok = await run(() => endpoints.createGroup(name, multiplier, concurrency, createForm.public))
   if (!ok) { toast.error(t('common.actionFailed')); return }
   toast.success(t('admin.groupCreated'))
   createOpen.value = false
@@ -156,6 +174,7 @@ async function runImport() {
           <tr>
             <th>{{ t('admin.groupName') }}</th>
             <th class="num">{{ t('admin.multiplier') }}</th>
+            <th class="num">{{ t('admin.maxConcurrency') }}</th>
             <th class="text-center">{{ t('admin.groupPublic') }}</th>
             <th>{{ t('common.createdAt') }}</th>
             <th v-if="canManage">{{ t('common.actions') }}</th>
@@ -175,6 +194,19 @@ async function runImport() {
                 />
               </div>
               <span v-else>{{ group.multiplier }}</span>
+            </td>
+            <td class="num">
+              <div v-if="canManage" class="flex justify-end">
+                <UiInput
+                  v-model="concurrencyDrafts[group.id]"
+                  type="number"
+                  mono
+                  class="w-28"
+                  :placeholder="t('admin.concurrencyPlaceholder')"
+                  :aria-label="t('admin.maxConcurrency')"
+                />
+              </div>
+              <span v-else>{{ group.max_concurrency ?? '—' }}</span>
             </td>
             <td class="text-center">
               <UiSwitch
@@ -210,6 +242,10 @@ async function runImport() {
         </UiField>
         <UiField :label="t('admin.multiplier')" required>
           <UiInput v-model="createForm.multiplier" type="number" mono />
+        </UiField>
+
+        <UiField :label="t('admin.maxConcurrency')" :hint="t('admin.maxConcurrencyHint')">
+          <UiInput v-model="createForm.maxConcurrency" type="number" mono :placeholder="t('admin.concurrencyPlaceholder')" />
         </UiField>
 
         <UiField :label="t('admin.groupPublic')" :hint="t('admin.groupPublicHint')">
