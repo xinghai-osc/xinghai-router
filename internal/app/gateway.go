@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -603,7 +604,10 @@ func (s *Service) logRequest(ctx context.Context, key keyContext, channelID, mod
 	id, _ := randomID()
 	logCtx, cancel := detach(ctx, settlementTimeout)
 	defer cancel()
-	_, _ = s.db.Exec(logCtx, `insert into request_logs(id,request_id,user_id,api_key_id,channel_id,group_id,model,status_code,prompt_tokens,completion_tokens,total_tokens,duration_ms,error_code) values($1,$2,$3,$4,nullif($5,'')::uuid,nullif($6,'')::uuid,$7,$8,$9,$10,$11,$12,nullif($13,''))`, id, requestID(ctx), key.userID, key.keyID, channelID, key.groupID, model, status, prompt, completion, total, d.Milliseconds(), errorCode)
+	_, err := s.db.Exec(logCtx, `insert into request_logs(id,request_id,user_id,api_key_id,channel_id,group_id,model,status_code,prompt_tokens,completion_tokens,total_tokens,duration_ms,error_code) values($1::uuid,$2::text,$3::bigint,$4::uuid,nullif($5,'')::uuid,nullif($6,'')::uuid,$7,$8::int,$9::int,$10::int,$11::int,$12::int,nullif($13,''))`, id, requestID(ctx), key.userID, key.keyID, channelID, key.groupID, model, status, prompt, completion, total, d.Milliseconds(), errorCode)
+	if err != nil {
+		log.Printf("logRequest failed: %v", err)
+	}
 }
 func usage(body []byte) (int, int, int) {
 	var v struct {
