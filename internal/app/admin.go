@@ -1626,7 +1626,7 @@ func (s *Service) replaceChannelAPIKeys(ctx context.Context, channelID string, k
 	return tx.Commit(ctx)
 }
 func (s *Service) listChannels(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query(r.Context(), `select c.id,c.name,c.base_url,c.models,c.enabled,c.auto_disabled,c.disabled_reason,c.priority,c.created_at,c.updated_at,coalesce((select array_agg(cg.group_id order by cg.group_id) from channel_groups cg where cg.channel_id=c.id), '{}'),c.provider,(select count(*) from channel_api_keys ak where ak.channel_id=c.id and ak.enabled) from channels c order by c.priority,c.id`)
+	rows, err := s.db.Query(r.Context(), `select c.id,c.name,c.base_url,c.models,c.enabled,c.auto_disabled,c.disabled_reason,c.priority,c.created_at,c.updated_at,coalesce((select array_agg(cg.group_id order by cg.group_id) from channel_groups cg where cg.channel_id=c.id), '{}'),c.provider,c.key_type,(select count(*) from channel_api_keys ak where ak.channel_id=c.id and ak.enabled) from channels c order by c.priority,c.id`)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
@@ -1641,15 +1641,15 @@ func (s *Service) listChannels(w http.ResponseWriter, r *http.Request) {
 		var priority int
 		var created, updated any
 		var groups []string
-		var provider string
+		var provider, keyType string
 		var keyCount int
-		if rows.Scan(&id, &name, &base, &models, &enabled, &autoDisabled, &disabledReason, &priority, &created, &updated, &groups, &provider, &keyCount) != nil {
+		if rows.Scan(&id, &name, &base, &models, &enabled, &autoDisabled, &disabledReason, &priority, &created, &updated, &groups, &provider, &keyType, &keyCount) != nil {
 			continue
 		}
 		var list []string
 		json.Unmarshal(models, &list)
 		routes := s.getChannelRoutes(r.Context(), id)
-		data = append(data, map[string]any{"id": id, "name": name, "base_url": base, "models": list, "provider": provider, "enabled": enabled, "auto_disabled": autoDisabled, "disabled_reason": disabledReason, "priority": priority, "groups": groups, "key_count": keyCount, "created_at": created, "updated_at": updated, "model_routes": routes})
+		data = append(data, map[string]any{"id": id, "name": name, "base_url": base, "models": list, "provider": provider, "key_type": keyType, "enabled": enabled, "auto_disabled": autoDisabled, "disabled_reason": disabledReason, "priority": priority, "groups": groups, "key_count": keyCount, "created_at": created, "updated_at": updated, "model_routes": routes})
 	}
 	writeJSON(w, 200, map[string]any{"data": data})
 }
