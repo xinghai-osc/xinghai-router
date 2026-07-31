@@ -496,8 +496,8 @@ func (s *Service) batchExtendSubscriptions(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "invalid_request", "invalid payload")
 		return
 	}
-	if in.Days <= 0 || in.Days > 3650 {
-		writeError(w, http.StatusBadRequest, "invalid_request", "days must be between 1 and 3650")
+	if in.Days == 0 || in.Days < -3650 || in.Days > 3650 {
+		writeError(w, http.StatusBadRequest, "invalid_request", "days must be between -3650 and 3650, excluding 0")
 		return
 	}
 	if in.Status == "" {

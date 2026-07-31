@@ -73,7 +73,7 @@ const extendStatusOptions = computed(() => [
 
 async function runExtend() {
   const days = Number(extendDays.value.trim())
-  if (!Number.isInteger(days) || days < 1 || days > 3650) {
+  if (!Number.isInteger(days) || days === 0 || Math.abs(days) > 3650) {
     toast.error(t('system.extendDaysInvalid'))
     return
   }

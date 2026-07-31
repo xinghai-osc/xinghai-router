@@ -123,7 +123,7 @@ func TestBatchExtendSubscriptionsRejectsInvalidDaysBeforeDatabase(t *testing.T) 
 	for _, body := range []string{
 		`not-json`,
 		`{"plan_id":"p1","days":0}`,
-		`{"plan_id":"p1","days":-1}`,
+		`{"plan_id":"p1","days":-3651}`,
 		`{"plan_id":"p1","days":3651}`,
 		`{"plan_id":"p1","days":30,"status":"paused"}`,
 	} {
