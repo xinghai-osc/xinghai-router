@@ -83,10 +83,10 @@ func TestGroupLimiterConcurrent(t *testing.T) {
 						peak = held
 					}
 					mu.Unlock()
-					gl.release("g1")
 					mu.Lock()
 					held--
 					mu.Unlock()
+					gl.release("g1")
 				}
 			}
 		}()
