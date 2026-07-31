@@ -1372,18 +1372,18 @@ func (s *Service) createChannel(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	for _, rt := range in.ModelRoutes {
-		rt.PublicModel = strings.TrimSpace(rt.PublicModel)
-		rt.UpstreamModel = strings.TrimSpace(rt.UpstreamModel)
-		if !validModelName(rt.PublicModel) || !validModelName(rt.UpstreamModel) {
+	for i := range in.ModelRoutes {
+		in.ModelRoutes[i].PublicModel = strings.TrimSpace(in.ModelRoutes[i].PublicModel)
+		in.ModelRoutes[i].UpstreamModel = strings.TrimSpace(in.ModelRoutes[i].UpstreamModel)
+		if !validModelName(in.ModelRoutes[i].PublicModel) || !validModelName(in.ModelRoutes[i].UpstreamModel) {
 			writeError(w, 400, "invalid_request", "public_model and upstream_model must be 1-200 characters")
 			return
 		}
-		if rt.Weight < 0 || rt.Weight > 10000 {
+		if in.ModelRoutes[i].Weight < 0 || in.ModelRoutes[i].Weight > 10000 {
 			writeError(w, 400, "invalid_request", "weight must be between 0 and 10000")
 			return
 		}
-		if rt.Priority < -10000 || rt.Priority > 10000 {
+		if in.ModelRoutes[i].Priority < -10000 || in.ModelRoutes[i].Priority > 10000 {
 			writeError(w, 400, "invalid_request", "priority must be between -10000 and 10000")
 			return
 		}
