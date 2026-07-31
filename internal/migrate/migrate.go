@@ -623,9 +623,19 @@ func migrateChannels(ctx context.Context, src *sql.DB, target *pgxpool.Pool, gro
 
 		keyStr := strings.ReplaceAll(c.Key, "\r\n", "\n")
 		firstKey := keyStr
+		keyCount := 0
 		if strings.Contains(keyStr, "\n") {
 			parts := strings.SplitN(keyStr, "\n", 2)
 			firstKey = strings.TrimSpace(parts[0])
+		}
+		for _, k := range strings.Split(keyStr, "\n") {
+			if strings.TrimSpace(k) != "" {
+				keyCount++
+			}
+		}
+		keyType := "single"
+		if keyCount > 1 {
+			keyType = "multi"
 		}
 		if firstKey != "" {
 			firstKey, err = encryptIfNeeded(encryptionKey, firstKey)
@@ -634,11 +644,11 @@ func migrateChannels(ctx context.Context, src *sql.DB, target *pgxpool.Pool, gro
 			}
 		}
 
-		err = target.QueryRow(ctx, `insert into channels(id,name,base_url,api_key,models,enabled,priority,weight,provider,created_at,updated_at)
-			values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10) on conflict (name) do update set
+		err = target.QueryRow(ctx, `insert into channels(id,name,base_url,api_key,models,enabled,priority,weight,provider,key_type,created_at,updated_at)
+			values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11) on conflict (name) do update set
 			base_url=excluded.base_url,models=excluded.models,enabled=excluded.enabled,
-			priority=excluded.priority,weight=excluded.weight returning id`,
-			id, c.Name, baseURL, firstKey, modelsJSON, enabled, priority, weight, provider, createdAt).Scan(&id)
+			priority=excluded.priority,weight=excluded.weight,key_type=excluded.key_type returning id`,
+			id, c.Name, baseURL, firstKey, modelsJSON, enabled, priority, weight, provider, keyType, createdAt).Scan(&id)
 		if err != nil {
 			return nil, fmt.Errorf("insert channel %d: %w", c.ID, err)
 		}

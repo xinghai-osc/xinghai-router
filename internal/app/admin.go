@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 func (s *Service) fetchChannelModels(w http.ResponseWriter, r *http.Request) {
@@ -1713,7 +1714,7 @@ func (s *Service) setChannelStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) listChannelKeys(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query(r.Context(), `select id,name,enabled,created_at from channel_api_keys where channel_id=$1 order by created_at`, r.PathValue("id"))
+	rows, err := s.db.Query(r.Context(), `select id,name,enabled,last_checked_at,last_error,created_at from channel_api_keys where channel_id=$1 order by created_at`, r.PathValue("id"))
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
@@ -1723,9 +1724,10 @@ func (s *Service) listChannelKeys(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var id, name string
 		var enabled bool
+		var lastChecked, lastError any
 		var created any
-		if rows.Scan(&id, &name, &enabled, &created) == nil {
-			data = append(data, map[string]any{"id": id, "name": name, "enabled": enabled, "created_at": created})
+		if rows.Scan(&id, &name, &enabled, &lastChecked, &lastError, &created) == nil {
+			data = append(data, map[string]any{"id": id, "name": name, "enabled": enabled, "last_checked_at": lastChecked, "last_error": lastError, "created_at": created})
 		}
 	}
 	writeJSON(w, 200, map[string]any{"data": data})
@@ -1792,6 +1794,63 @@ func (s *Service) setChannelKeyStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	s.audit(r, "channel_key.status_changed", "channel_api_key", r.PathValue("keyId"), map[string]any{"enabled": in.Enabled})
 	writeJSON(w, 200, map[string]bool{"enabled": in.Enabled})
+}
+
+func (s *Service) testChannelKey(w http.ResponseWriter, r *http.Request) {
+	channelID := r.PathValue("id")
+	keyID := r.PathValue("keyId")
+
+	var baseURL, provider string
+	if err := s.db.QueryRow(r.Context(), `select base_url,provider from channels where id=$1`, channelID).Scan(&baseURL, &provider); err != nil {
+		writeError(w, http.StatusNotFound, "not_found", "channel not found")
+		return
+	}
+
+	var encrypted string
+	if err := s.db.QueryRow(r.Context(), `select key_encrypted from channel_api_keys where id=$1 and channel_id=$2`, keyID, channelID).Scan(&encrypted); err != nil {
+		writeError(w, http.StatusNotFound, "not_found", "channel API key not found")
+		return
+	}
+
+	apiKey, err := crypt(s.cfg.EncryptionKey, encrypted, true)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not decrypt key")
+		return
+	}
+
+	settings := s.reliabilitySettings(r.Context())
+	status, body, latency, testErr := s.testChannel(r.Context(), baseURL, apiKey, provider)
+	success := testErr == nil && status >= 200 && status < 300
+	reason := healthFailureReason(status, testErr)
+
+	if success && settings.AutoDisableSlowSeconds > 0 && latency > time.Duration(settings.AutoDisableSlowSeconds)*time.Second {
+		success = false
+		reason = "health_check_slow_response"
+	}
+	if !success && settings.autoDisableKeyword(string(body)) {
+		reason = "health_check_keyword_match"
+	}
+
+	result := map[string]any{
+		"success":     success,
+		"status_code": status,
+		"latency_ms":  latency.Milliseconds(),
+	}
+
+	if success {
+		_, _ = s.db.Exec(r.Context(), `update channel_api_keys set last_checked_at=now(),last_error=null where id=$1 and channel_id=$2`, keyID, channelID)
+		_, _ = s.db.Exec(r.Context(), `update channels set last_checked_at=now(),last_error=null,updated_at=now() where id=$1`, channelID)
+		result["auto_disabled"] = false
+		writeJSON(w, http.StatusOK, result)
+		return
+	}
+
+	result["reason"] = reason
+	_, _ = s.db.Exec(r.Context(), `update channel_api_keys set enabled=false,last_checked_at=now(),last_error=$1 where id=$2 and channel_id=$3`, reason, keyID, channelID)
+	_, _ = s.db.Exec(r.Context(), `update channels set last_checked_at=now(),last_error=$1,updated_at=now() where id=$2`, reason, channelID)
+	result["auto_disabled"] = true
+	s.audit(r, "channel_key.auto_disabled", "channel_api_key", keyID, map[string]any{"channel_id": channelID, "reason": reason})
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Service) migrateChannelKeys(w http.ResponseWriter, r *http.Request) {

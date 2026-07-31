@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { Server, KeyRound } from 'lucide-vue-next'
-import { endpoints, type Channel, type ChannelForm, type ChannelKey, type Group } from '~/src/api'
+import { Server, KeyRound, Play } from 'lucide-vue-next'
+import { endpoints, type Channel, type ChannelForm, type ChannelKey, type ChannelKeyTestResult, type Group } from '~/src/api'
 import { formatNumber } from '~/src/format'
 
 definePageMeta({ layout: 'console', middleware: 'console-auth' })
@@ -14,6 +14,10 @@ const allowed = computed(() => can('channels.read'))
 const canManage = computed(() => can('channels.manage'))
 
 const PROVIDERS = ['openai', 'ollama', 'kimi', 'opencode_go', 'anthropic']
+const KEY_TYPES = [
+  { value: 'single', label: t('admin.singleKey') },
+  { value: 'multi', label: t('admin.multiKey') },
+]
 
 const channels = useResource(() => endpoints.getAdminChannels(), { data: [] as Channel[] })
 const groups = useResource(
@@ -34,6 +38,7 @@ function toggleSelected(id: string) {
 const groupOptions = computed(() => groups.data.value.data)
 const groupNames = computed(() => new Map(groupOptions.value.map(group => [group.id, group.name])))
 const providerOptions = computed(() => PROVIDERS.map(value => ({ value, label: value })))
+const keyTypeOptions = computed(() => KEY_TYPES)
 
 const filtered = computed(() => {
   const term = search.value.trim().toLowerCase()
@@ -78,7 +83,7 @@ const form = reactive({
   name: '',
   provider: 'openai',
   base_url: '',
-  api_key: '',
+  key_type: 'single' as 'single' | 'multi',
   api_keys: '',
   models: '',
   priority: '0',
@@ -89,10 +94,6 @@ const keysDialogOpen = ref(false)
 const keysChannelId = ref('')
 const keysChannelName = ref('')
 const channelKeys = useResource(() => Promise.resolve({ data: [] as ChannelKey[] }), { data: [] as ChannelKey[] })
-const addKeyDialogOpen = ref(false)
-const newKeyName = ref('')
-const newKeyValue = ref('')
-const migrating = ref(false)
 
 function openCreate() {
   editingId.value = ''
@@ -100,7 +101,7 @@ function openCreate() {
   form.name = ''
   form.provider = 'openai'
   form.base_url = ''
-  form.api_key = ''
+  form.key_type = 'single'
   form.api_keys = ''
   form.models = ''
   form.priority = '0'
@@ -114,7 +115,7 @@ function openEdit(channel: Channel) {
   form.name = channel.name
   form.provider = channel.provider
   form.base_url = channel.base_url
-  form.api_key = ''
+  form.key_type = channel.key_type
   form.api_keys = ''
   form.models = channel.models.join('\n')
   form.priority = String(channel.priority)
@@ -164,7 +165,7 @@ function validateBaseUrl(value: string): string {
 
 async function fetchModels() {
   const baseUrl = form.base_url.trim()
-  const apiKey = form.api_key.trim() || parseApiKeys(form.api_keys)[0] || ''
+  const apiKey = parseApiKeys(form.api_keys)[0] || ''
   formError.value = ''
   if (!baseUrl || !apiKey) { formError.value = t('admin.fetchModelsNeedInput'); return }
   const urlError = validateBaseUrl(baseUrl)
@@ -195,8 +196,13 @@ async function save() {
   if (!models.length) { formError.value = t('admin.modelsRequired'); return }
 
   const apiKeys = parseApiKeys(form.api_keys)
-  const apiKey = form.api_key.trim()
-  if (!editingId.value && !apiKey && !apiKeys.length) { formError.value = t('admin.apiKeyRequired'); return }
+  if (!editingId.value && !apiKeys.length) { formError.value = t('admin.apiKeyRequired'); return }
+  if (apiKeys.length) {
+    if (form.key_type === 'single' && apiKeys.length > 1) {
+      formError.value = t('admin.singleKeyOnlyOne')
+      return
+    }
+  }
 
   const priority = Number(form.priority)
   if (!Number.isInteger(priority) || priority < -10000 || priority > 10000) {
@@ -208,17 +214,14 @@ async function save() {
     name,
     provider: form.provider,
     base_url: baseUrl,
-    api_key: apiKey,
-    api_keys: apiKeys.length ? apiKeys : undefined,
+    key_type: form.key_type,
+    api_keys: apiKeys.join('\n'),
     models,
     priority,
     groups: [...form.groups],
   }
-  if (!apiKey && !apiKeys.length) {
-    delete payload.api_keys
-  }
-  if (!apiKey) {
-    delete payload.api_key
+  if (!apiKeys.length) {
+    delete (payload as Partial<ChannelForm>).api_keys
   }
 
   const id = editingId.value
@@ -253,44 +256,21 @@ async function openKeys(channel: Channel) {
   if (ok) keysDialogOpen.value = true
 }
 
-async function addKey() {
-  const key = newKeyValue.value.trim()
-  if (!key) { return }
-  const ok = await run(() => endpoints.createChannelKey(keysChannelId.value, { name: newKeyName.value.trim() || 'key', api_key: key }))
-  if (!ok) { toast.error(t('common.actionFailed')); return }
-  toast.success(t('admin.keyCreated'))
-  newKeyName.value = ''
-  newKeyValue.value = ''
-  addKeyDialogOpen.value = false
-  const result = await endpoints.getChannelKeys(keysChannelId.value)
-  channelKeys.data.value.data = result.data
-}
-
-async function deleteKey(keyId: string) {
-  const ok = await run(() => endpoints.deleteChannelKey(keysChannelId.value, keyId))
-  if (!ok) { toast.error(t('common.actionFailed')); return }
-  toast.success(t('admin.keyDeleted'))
-  const result = await endpoints.getChannelKeys(keysChannelId.value)
-  channelKeys.data.value.data = result.data
-  await channels.refresh()
-}
-
-async function toggleKey(key: ChannelKey, enabled: boolean) {
-  const ok = await run(() => endpoints.toggleChannelKey(keysChannelId.value, key.id, enabled))
-  if (!ok) { toast.error(t('common.actionFailed')); return }
-  toast.success(enabled ? t('admin.keyEnabled') : t('admin.keyDisabled'))
-  const result = await endpoints.getChannelKeys(keysChannelId.value)
-  channelKeys.data.value.data = result.data
-}
-
-async function migrateKeys() {
-  migrating.value = true
-  const ok = await run(() => endpoints.migrateChannelKeys(keysChannelId.value))
-  migrating.value = false
-  if (!ok) { toast.error(t('common.actionFailed')); return }
-  toast.success(t('admin.keyMigrated'))
-  const result = await endpoints.getChannelKeys(keysChannelId.value)
-  channelKeys.data.value.data = result.data
+async function testKey(key: ChannelKey) {
+  let result: ChannelKeyTestResult | undefined
+  const ok = await run(async () => {
+    result = await endpoints.testChannelKey(keysChannelId.value, key.id)
+  })
+  if (!ok || !result) { toast.error(t('common.actionFailed')); return }
+  if (result.success) {
+    toast.success(t('admin.keyTestSuccess', { status_code: result.status_code, latency_ms: result.latency_ms }))
+  } else if (result.auto_disabled) {
+    toast.error(t('admin.keyTestFailedAndDisabled', { reason: result.reason ?? '' }))
+  } else {
+    toast.error(t('admin.keyTestFailed', { status_code: result.status_code, reason: result.reason ?? '' }))
+  }
+  const refreshed = await endpoints.getChannelKeys(keysChannelId.value)
+  channelKeys.data.value.data = refreshed.data
   await channels.refresh()
 }
 </script>
@@ -338,6 +318,7 @@ async function migrateKeys() {
             <th>{{ t('admin.baseUrl') }}</th>
             <th class="num">{{ t('admin.modelCount') }}</th>
             <th class="num">{{ t('admin.keyCount') }}</th>
+            <th>{{ t('admin.keyType') }}</th>
             <th class="num">{{ t('admin.priority') }}</th>
             <th>{{ t('admin.groups') }}</th>
             <th>{{ t('common.status') }}</th>
@@ -353,13 +334,17 @@ async function migrateKeys() {
             <td class="font-medium text-ink">
               <div class="flex items-center gap-2">
                 {{ channel.name }}
-                <UiBadge v-if="channel.key_count > 1" tone="warn" class="shrink-0">{{ t('admin.multiKey') }}</UiBadge>
               </div>
             </td>
             <td><UiBadge tone="outline">{{ channel.provider }}</UiBadge></td>
             <td class="max-w-64 truncate font-mono text-[13px] text-muted">{{ channel.base_url }}</td>
             <td class="num">{{ formatNumber(channel.models.length) }}</td>
             <td class="num">{{ channel.key_count }}</td>
+            <td>
+              <UiBadge tone="outline" :class="channel.key_type === 'multi' ? 'text-warn' : ''">
+                {{ channel.key_type === 'multi' ? t('admin.multiKey') : t('admin.singleKey') }}
+              </UiBadge>
+            </td>
             <td class="num">{{ channel.priority }}</td>
             <td>
               <div v-if="channel.groups.length" class="flex flex-wrap gap-1">
@@ -414,16 +399,21 @@ async function migrateKeys() {
           <UiInput v-model="form.base_url" mono :placeholder="t('admin.baseUrlPlaceholder')" />
         </UiField>
 
+        <div class="grid gap-4 sm:grid-cols-2">
+          <UiField :label="t('admin.keyType')" required>
+            <UiSelect v-model="form.key_type" :options="keyTypeOptions" />
+          </UiField>
+          <UiField :label="t('admin.priority')">
+            <UiInput v-model="form.priority" type="number" mono />
+          </UiField>
+        </div>
+
         <UiField
           :label="t('admin.apiKey')"
-          :hint="t('admin.apiKeyHintCreate')"
+          :hint="editingId ? t('admin.apiKeyHintEdit') : t('admin.apiKeyHintCreate')"
           :required="!editingId"
         >
-          <UiInput v-model="form.api_key" type="password" mono autocomplete="off" />
-        </UiField>
-
-        <UiField :label="t('admin.apiKeys')" :hint="t('admin.apiKeysHint')">
-          <UiTextarea v-model="form.api_keys" mono :rows="3" placeholder="sk-xxx1&#10;sk-xxx2" />
+          <UiTextarea v-model="form.api_keys" mono :rows="3" :placeholder="t('admin.apiKeysPlaceholder')" />
         </UiField>
 
         <UiField :label="t('admin.models')" :hint="t('admin.modelsHint')" required>
@@ -433,10 +423,6 @@ async function migrateKeys() {
               {{ t('admin.fetchModels') }}
             </UiButton>
           </div>
-        </UiField>
-
-        <UiField :label="t('admin.priority')">
-          <UiInput v-model="form.priority" type="number" mono />
         </UiField>
 
         <UiField :label="t('admin.groups')" :hint="t('admin.groupsHint')">
@@ -459,55 +445,30 @@ async function migrateKeys() {
 
       <div v-if="!channelKeys.data.value.data.length" class="py-4 text-center text-muted text-sm">
         <p>{{ t('admin.noKeys') }}</p>
-        <p class="mt-1">{{ t('admin.keysEmptyHint') }}</p>
       </div>
 
       <div v-else class="space-y-2">
         <div
-v-for="key in channelKeys.data.value.data" :key="key.id"
-          class="flex items-center justify-between rounded-control border border-line px-3 py-2">
-          <div class="flex items-center gap-2">
-            <KeyRound class="h-4 w-4 text-faint" />
-            <span class="text-sm font-medium text-ink">{{ key.name }}</span>
-            <UiSwitch
-              :model-value="key.enabled"
-              size="sm"
-              :disabled="busy"
-              @update:model-value="toggleKey(key, $event)"
-            />
+          v-for="key in channelKeys.data.value.data" :key="key.id"
+          class="flex items-center justify-between rounded-control border border-line px-3 py-2"
+        >
+          <div class="flex items-center gap-2 min-w-0">
+            <KeyRound class="h-4 w-4 text-faint shrink-0" />
+            <span class="text-sm font-medium text-ink truncate">{{ key.name }}</span>
+            <UiBadge v-if="!key.enabled" tone="danger" class="shrink-0">{{ t('common.disabled') }}</UiBadge>
+            <UiTooltip v-else-if="key.last_error" :content="key.last_error">
+              <UiBadge tone="warn" class="shrink-0">{{ t('admin.lastTestFailed') }}</UiBadge>
+            </UiTooltip>
           </div>
-          <UiButton variant="danger" size="sm" :disabled="busy" @click="deleteKey(key.id)">
-            {{ t('common.delete') }}
+          <UiButton variant="secondary" size="sm" :loading="busy" :disabled="busy" @click="testKey(key)">
+            <Play class="h-4 w-4" />
+            <span class="ml-1">{{ t('admin.testKey') }}</span>
           </UiButton>
         </div>
       </div>
 
-      <div class="mt-4 flex flex-wrap gap-2">
-        <UiButton size="sm" @click="addKeyDialogOpen = true">{{ t('admin.addKey') }}</UiButton>
-        <UiButton variant="secondary" size="sm" :loading="migrating" @click="migrateKeys">{{ t('admin.migrateKeys') }}</UiButton>
-      </div>
-
       <template #footer>
         <UiButton variant="secondary" @click="keysDialogOpen = false">{{ t('common.close') }}</UiButton>
-      </template>
-    </UiSlidePanel>
-
-    <UiSlidePanel
-      v-model:open="addKeyDialogOpen"
-      size="sm"
-      :title="t('admin.addKey')"
-    >
-      <div class="space-y-4">
-        <UiField :label="t('admin.keyName')">
-          <UiInput v-model="newKeyName" :placeholder="t('admin.keyNamePlaceholder')" />
-        </UiField>
-        <UiField :label="t('admin.apiKey')" required>
-          <UiInput v-model="newKeyValue" type="password" mono autocomplete="off" />
-        </UiField>
-      </div>
-      <template #footer>
-        <UiButton variant="secondary" @click="addKeyDialogOpen = false">{{ t('common.cancel') }}</UiButton>
-        <UiButton :loading="busy" @click="addKey">{{ t('common.save') }}</UiButton>
       </template>
     </UiSlidePanel>
 

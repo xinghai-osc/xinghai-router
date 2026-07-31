@@ -322,10 +322,10 @@ func (s *Service) autoDisableChannel(ctx context.Context, id, reason string) {
 }
 
 // testChannel probes a channel with GET /v1/models and returns the status code and latency.
-func (s *Service) testChannel(ctx context.Context, baseURL, apiKey, provider string) (int, time.Duration, error) {
+func (s *Service) testChannel(ctx context.Context, baseURL, apiKey, provider string) (int, []byte, time.Duration, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/v1/models", nil)
 	if err != nil {
-		return 0, 0, err
+		return 0, nil, 0, err
 	}
 	if provider == "anthropic" {
 		request.Header.Set("X-API-Key", apiKey)
@@ -337,11 +337,11 @@ func (s *Service) testChannel(ctx context.Context, baseURL, apiKey, provider str
 	response, err := s.httpClient.Do(request)
 	latency := time.Since(started)
 	if err != nil {
-		return 0, latency, err
+		return 0, nil, latency, err
 	}
 	defer response.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64*1024))
-	return response.StatusCode, latency, nil
+	body, _ := io.ReadAll(io.LimitReader(response.Body, 64*1024))
+	return response.StatusCode, body, latency, nil
 }
 
 // runHealthChecks tests channels according to the configured mode.
@@ -395,8 +395,8 @@ func (s *Service) runHealthChecks(ctx context.Context) {
 		if err != nil {
 			continue
 		}
-		status, latency, testErr := s.testChannel(ctx, t.baseURL, apiKey, t.provider)
-		success := testErr == nil && status >= 200 && status < 300
+	status, _, latency, testErr := s.testChannel(ctx, t.baseURL, apiKey, t.provider)
+	success := testErr == nil && status >= 200 && status < 300
 		if success {
 			if settings.HealthCheckAutoRecover {
 				_, _ = s.db.Exec(ctx, `update channels set enabled=true,auto_disabled=false,disabled_reason='',failure_count=0,cooldown_until=null,last_error=null,last_checked_at=now(),updated_at=now() where id=$1`, t.id)

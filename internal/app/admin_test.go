@@ -133,17 +133,20 @@ func TestUpdateChannelRejectsInvalidRequestBeforeDatabaseAccess(t *testing.T) {
 func TestCreateChannelRejectsInvalidRequestBeforeDatabaseAccess(t *testing.T) {
 	for _, body := range []string{
 		`{}`,
-		`{"name":"channel","api_key":"sk","base_url":"https://api.example.com","models":[]}`,
-		`{"name":"channel","api_key":"sk","base_url":"http://api.example.com","models":["model"]}`,
-		`{"name":"channel","api_key":"sk","base_url":"https://api.example.com","models":["model"],"provider":"unknown"}`,
-		`{"name":"","api_key":"sk","base_url":"https://api.example.com","models":["model"]}`,
-		`{"name":"channel","api_key":"sk","base_url":"https://169.254.169.254","models":["model"]}`,
-		`{"name":"channel","api_key":"sk","base_url":"https://10.0.0.8","models":["model"]}`,
-		`{"name":"channel","api_key":"sk","base_url":"https://api.example.com","models":["model"],"priority":10001}`,
-		`{"name":"channel","api_key":"sk","base_url":"https://api.example.com","models":["model"],"priority":-10001}`,
-		`{"name":"channel","api_key":"","base_url":"https://api.example.com","models":["model"]}`,
-		`{"name":"channel","api_key":"` + strings.Repeat("k", 4097) + `","base_url":"https://api.example.com","models":["model"]}`,
-		`{"name":"channel","api_key":"sk","base_url":"https://` + strings.Repeat("a", 2040) + `.example.com","models":["model"]}`,
+		`{"name":"channel","key_type":"single","api_keys":"sk","base_url":"https://api.example.com","models":[]}`,
+		`{"name":"channel","key_type":"single","api_keys":"sk","base_url":"http://api.example.com","models":["model"]}`,
+		`{"name":"channel","key_type":"single","api_keys":"sk","base_url":"https://api.example.com","models":["model"],"provider":"unknown"}`,
+		`{"name":"","key_type":"single","api_keys":"sk","base_url":"https://api.example.com","models":["model"]}`,
+		`{"name":"channel","key_type":"single","api_keys":"sk","base_url":"https://169.254.169.254","models":["model"]}`,
+		`{"name":"channel","key_type":"single","api_keys":"sk","base_url":"https://10.0.0.8","models":["model"]}`,
+		`{"name":"channel","key_type":"single","api_keys":"sk","base_url":"https://api.example.com","models":["model"],"priority":10001}`,
+		`{"name":"channel","key_type":"single","api_keys":"sk","base_url":"https://api.example.com","models":["model"],"priority":-10001}`,
+		`{"name":"channel","key_type":"single","api_keys":"","base_url":"https://api.example.com","models":["model"]}`,
+		`{"name":"channel","key_type":"single","api_keys":"` + strings.Repeat("k", 4097) + `","base_url":"https://api.example.com","models":["model"]}`,
+		`{"name":"channel","key_type":"multi","api_keys":"sk1\nsk2","base_url":"https://api.example.com","models":["model"],"provider":"unknown"}`,
+		`{"name":"channel","key_type":"single","api_keys":"sk1\nsk2","base_url":"https://api.example.com","models":["model"]}`,
+		`{"name":"channel","key_type":"unknown","api_keys":"sk","base_url":"https://api.example.com","models":["model"]}`,
+		`{"name":"channel","key_type":"single","api_keys":"sk","base_url":"https://` + strings.Repeat("a", 2040) + `.example.com","models":["model"]}`,
 	} {
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodPost, "/admin/channels", strings.NewReader(body))
@@ -184,6 +187,16 @@ func TestValidChannelProviderAndPriority(t *testing.T) {
 	if validChannelPriority(-10001) || validChannelPriority(10001) {
 		t.Fatal("out-of-range priority must be invalid")
 	}
+	if !validChannelKeyType("single") || !validChannelKeyType("multi") {
+		t.Fatal("expected valid channel key types")
+	}
+	if validChannelKeyType("unknown") || validChannelKeyType("") {
+		t.Fatal("unknown key type must be invalid")
+	}
+	keys := parseChannelAPIKeys("sk1\nsk2\n\nsk1")
+	if len(keys) != 2 || keys[0] != "sk1" || keys[1] != "sk2" {
+		t.Fatalf("parseChannelAPIKeys = %#v", keys)
+	}
 }
 
 func TestSanitizeChannelModels(t *testing.T) {
@@ -203,7 +216,7 @@ func TestSanitizeChannelModels(t *testing.T) {
 }
 
 func TestCreateChannelRejectsEmptyModelsAfterSanitize(t *testing.T) {
-	body := `{"name":"channel","api_key":"sk","base_url":"https://api.example.com","models":[" ","\t"]}`
+	body := `{"name":"channel","key_type":"single","api_keys":"sk","base_url":"https://api.example.com","models":[" ","\t"]}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/admin/channels", strings.NewReader(body))
 	(&Service{}).createChannel(rec, req)
@@ -572,7 +585,7 @@ func TestValidChannelName(t *testing.T) {
 }
 
 func TestCreateChannelRejectsOverlongNameBeforeDatabase(t *testing.T) {
-	body := `{"name":"` + strings.Repeat("n", 101) + `","api_key":"sk","base_url":"https://api.example.com","models":["m"]}`
+	body := `{"name":"` + strings.Repeat("n", 101) + `","key_type":"single","api_keys":"sk","base_url":"https://api.example.com","models":["m"]}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/admin/channels", strings.NewReader(body))
 	(&Service{}).createChannel(rec, req)

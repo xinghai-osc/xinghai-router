@@ -106,6 +106,7 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("GET /admin/channels/{id}/keys", s.permission("channels.read", s.listChannelKeys))
 	mux.Handle("POST /admin/channels/{id}/keys", s.permission("channels.manage", s.createChannelKey))
 	mux.Handle("DELETE /admin/channels/{id}/keys/{keyId}", s.permission("channels.manage", s.deleteChannelKey))
+	mux.Handle("POST /admin/channels/{id}/keys/{keyId}/test", s.permission("channels.manage", s.testChannelKey))
 	mux.Handle("POST /admin/channels/{id}/keys/{keyId}/status", s.permission("channels.manage", s.setChannelKeyStatus))
 	mux.Handle("POST /admin/channels/{id}/keys/migrate", s.permission("channels.manage", s.migrateChannelKeys))
 	mux.Handle("GET /admin/channels/{id}/routes", s.permission("routes.manage", s.listChannelRoutes))
