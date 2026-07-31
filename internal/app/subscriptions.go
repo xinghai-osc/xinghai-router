@@ -490,6 +490,7 @@ func (s *Service) batchExtendSubscriptions(w http.ResponseWriter, r *http.Reques
 	var in struct {
 		PlanID string `json:"plan_id"`
 		Days   int    `json:"days"`
+		Status string `json:"status"`
 	}
 	if decode(r, &in) != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", "invalid payload")
@@ -497,6 +498,15 @@ func (s *Service) batchExtendSubscriptions(w http.ResponseWriter, r *http.Reques
 	}
 	if in.Days <= 0 || in.Days > 3650 {
 		writeError(w, http.StatusBadRequest, "invalid_request", "days must be between 1 and 3650")
+		return
+	}
+	if in.Status == "" {
+		in.Status = "active"
+	}
+	switch in.Status {
+	case "active", "inactive", "all":
+	default:
+		writeError(w, http.StatusBadRequest, "invalid_request", "status must be one of active, inactive, all")
 		return
 	}
 	planID := strings.TrimSpace(in.PlanID)
@@ -507,7 +517,13 @@ func (s *Service) batchExtendSubscriptions(w http.ResponseWriter, r *http.Reques
 			return
 		}
 	}
-	const ext = `update user_subscriptions set current_period_end = case when current_period_end is null or current_period_end <= now() then now() + $1::interval else current_period_end + $1::interval end, updated_at = now() where status='active'`
+	statusClause := `status='active'`
+	if in.Status == "inactive" {
+		statusClause = `status in ('pending','expired','cancelled')`
+	} else if in.Status == "all" {
+		statusClause = `status in ('pending','active','expired','cancelled')`
+	}
+	ext := `update user_subscriptions set current_period_end = case when current_period_end is null or current_period_end <= now() then now() + $1::interval else current_period_end + $1::interval end, updated_at = now() where ` + statusClause
 	var result pgconn.CommandTag
 	var err error
 	days := fmt.Sprintf("%d days", in.Days)
@@ -521,7 +537,7 @@ func (s *Service) batchExtendSubscriptions(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	affected := result.RowsAffected()
-	s.audit(r, "subscription.batch_extended", "subscription_plan", planID, map[string]any{"days": in.Days, "affected": affected})
+	s.audit(r, "subscription.batch_extended", "subscription_plan", planID, map[string]any{"days": in.Days, "status": in.Status, "affected": affected})
 	writeJSON(w, http.StatusOK, map[string]any{"affected": affected})
 }
 

@@ -383,7 +383,7 @@ export const endpoints = {
   updateSubscriptionPlan: (id: string, form: SubscriptionPlanForm) => send(`/admin/subscription-plans/${encodeURIComponent(id)}`, 'PUT', form),
   deleteSubscriptionPlan: (id: string) => send(`/admin/subscription-plans/${encodeURIComponent(id)}`, 'DELETE'),
   getAdminSubscriptions: () => get<{ data: AdminSubscription[] }>('/admin/subscriptions'),
-  batchExtendSubscriptions: (planId: string, days: number) => post<{ affected: number }>('/admin/subscriptions/extend', { plan_id: planId, days }),
+  batchExtendSubscriptions: (planId: string, days: number, status: 'active' | 'inactive' | 'all') => post<{ affected: number }>('/admin/subscriptions/extend', { plan_id: planId, days, status }),
   runMigration: (form: MigrateForm) => post<MigrateResult>('/admin/migrate', form),
   getMigrationStatus: () => get<MigrationStatus>('/admin/migrate'),
 

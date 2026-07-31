@@ -58,10 +58,17 @@ const canManage = computed(() => can('system.manage'))
 
 const extendPlanId = ref('all')
 const extendDays = ref('30')
+const extendStatus = ref<'active' | 'inactive' | 'all'>('active')
 
 const extendPlanOptions = computed(() => [
   { value: 'all', label: t('system.batchExtendAllPlans') },
   ...plansData.value.data.map(plan => ({ value: plan.id, label: plan.name })),
+])
+
+const extendStatusOptions = computed(() => [
+  { value: 'active', label: t('system.batchExtendStatusActive') },
+  { value: 'inactive', label: t('system.batchExtendStatusInactive') },
+  { value: 'all', label: t('system.batchExtendStatusAll') },
 ])
 
 async function runExtend() {
@@ -75,6 +82,7 @@ async function runExtend() {
     const result = await endpoints.batchExtendSubscriptions(
       extendPlanId.value === 'all' ? '' : extendPlanId.value,
       days,
+      extendStatus.value,
     )
     affected = result.affected
   })
@@ -97,13 +105,21 @@ async function runExtend() {
       </div>
 
       <UiCard v-if="canManage" :title="t('system.batchExtend')" :description="t('system.batchExtendLead')">
-        <div class="grid items-end gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+        <div class="grid items-end gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto]">
           <UiField :label="t('system.batchExtendPlan')" for="extend-plan">
             <UiSelect
               id="extend-plan"
               v-model="extendPlanId"
               :options="extendPlanOptions"
               :placeholder="t('common.selectPlaceholder')"
+            />
+          </UiField>
+
+          <UiField :label="t('system.batchExtendStatus')" for="extend-status">
+            <UiSelect
+              id="extend-status"
+              v-model="extendStatus"
+              :options="extendStatusOptions"
             />
           </UiField>
 
