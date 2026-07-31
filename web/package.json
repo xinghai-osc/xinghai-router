@@ -12,6 +12,7 @@
     "lint:fix": "nuxt prepare && eslint . --fix"
   },
   "dependencies": {
+    "@lobehub/icons": "^5.15.0",
     "@nuxt/eslint": "^1.16.0",
     "@tailwindcss/vite": "^4.1.6",
     "@vueuse/core": "^14.3.0",
