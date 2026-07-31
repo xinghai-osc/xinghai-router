@@ -10,14 +10,14 @@ ENV GOPROXY=${GOPROXY:-https://proxy.golang.org,direct}
 WORKDIR /src
 
 COPY go.mod go.sum ./
-RUN go mod download
-
+COPY vendor ./vendor
 COPY . .
 
 RUN CGO_ENABLED=0 \
     GOOS=linux \
     GOARCH=amd64 \
     go build \
+    -mod=vendor \
     -trimpath \
     -ldflags="-s -w" \
     -o /out/xinghai-router \

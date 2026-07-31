@@ -567,7 +567,7 @@ func (s *Service) updateUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) listGroups(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query(r.Context(), `select id,name,multiplier,created_at from groups order by name`)
+	rows, err := s.db.Query(r.Context(), `select id,name,multiplier,max_concurrency,"public",created_at from groups order by name`)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
@@ -576,9 +576,10 @@ func (s *Service) listGroups(w http.ResponseWriter, r *http.Request) {
 	data := []map[string]any{}
 	for rows.Next() {
 		var id, name string
-		var multiplier, created any
-		if rows.Scan(&id, &name, &multiplier, &created) == nil {
-			data = append(data, map[string]any{"id": id, "name": name, "multiplier": multiplier, "created_at": created})
+		var multiplier, maxConcurrency, created any
+		var public bool
+		if rows.Scan(&id, &name, &multiplier, &maxConcurrency, &public, &created) == nil {
+			data = append(data, map[string]any{"id": id, "name": name, "multiplier": multiplier, "max_concurrency": maxConcurrency, "public": public, "created_at": created})
 		}
 	}
 	writeJSON(w, 200, map[string]any{"data": data})
@@ -627,26 +628,33 @@ func firstGroup(groups []string) string {
 
 func (s *Service) accountGroups(w http.ResponseWriter, r *http.Request) {
 	account := accountFromContext(r)
-	names, err := s.groupNamesForUser(r.Context(), account.userID)
+	userGroups, err := s.groupNamesForUser(r.Context(), account.userID)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
 	}
-	rows, err := s.db.Query(r.Context(), `select g.id,g.name,g.multiplier,g.created_at from groups g join user_groups ug on ug.group_id=g.id where ug.user_id=$1 order by g.name`, account.userID)
+	rows, err := s.db.Query(r.Context(), `
+		select g.id,g.name,g.multiplier,g."public",g.created_at from groups g
+		left join user_groups ug on ug.group_id=g.id and ug.user_id=$1
+		where g."public" or ug.user_id is not null
+		order by g.name`, account.userID)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
 	}
 	defer rows.Close()
 	groups := []map[string]any{}
+	names := []string{}
 	for rows.Next() {
 		var id, name string
 		var multiplier, created any
-		if rows.Scan(&id, &name, &multiplier, &created) == nil {
-			groups = append(groups, map[string]any{"id": id, "name": name, "multiplier": multiplier, "created_at": created})
+		var public bool
+		if rows.Scan(&id, &name, &multiplier, &public, &created) == nil {
+			groups = append(groups, map[string]any{"id": id, "name": name, "multiplier": multiplier, "public": public, "created_at": created})
+			names = append(names, name)
 		}
 	}
-	writeJSON(w, 200, map[string]any{"data": names, "groups": groups, "user_groups": names, "user_group": firstGroup(names)})
+	writeJSON(w, 200, map[string]any{"data": names, "groups": groups, "user_groups": userGroups, "user_group": firstGroup(userGroups)})
 }
 
 func (s *Service) myGroups(w http.ResponseWriter, r *http.Request) {
@@ -661,8 +669,10 @@ func (s *Service) myGroups(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) createGroup(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Name       string  `json:"name"`
-		Multiplier float64 `json:"multiplier"`
+		Name           string  `json:"name"`
+		Multiplier     float64 `json:"multiplier"`
+		MaxConcurrency int     `json:"max_concurrency"`
+		Public         bool    `json:"public"`
 	}
 	if decode(r, &in) != nil {
 		writeError(w, 400, "invalid_request", "name is required")
@@ -681,13 +691,13 @@ func (s *Service) createGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, _ := randomID()
-	_, err := s.db.Exec(r.Context(), `insert into groups(id,name,multiplier) values($1,$2,$3)`, id, name, in.Multiplier)
+	_, err := s.db.Exec(r.Context(), `insert into groups(id,name,multiplier,max_concurrency,"public") values($1,$2,$3,$4,$5)`, id, name, in.Multiplier, in.MaxConcurrency, in.Public)
 	if err != nil {
 		writeError(w, 409, "conflict", "group name already exists")
 		return
 	}
-	s.audit(r, "group.created", "group", id, map[string]any{"name": name, "multiplier": in.Multiplier})
-	writeJSON(w, 201, map[string]any{"id": id, "name": name, "multiplier": in.Multiplier})
+	s.audit(r, "group.created", "group", id, map[string]any{"name": name, "multiplier": in.Multiplier, "max_concurrency": in.MaxConcurrency, "public": in.Public})
+	writeJSON(w, 201, map[string]any{"id": id, "name": name, "multiplier": in.Multiplier, "max_concurrency": in.MaxConcurrency, "public": in.Public})
 }
 
 func (s *Service) importGroups(w http.ResponseWriter, r *http.Request) {
@@ -729,20 +739,23 @@ func (s *Service) importGroups(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) updateGroup(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Multiplier float64 `json:"multiplier"`
+		Multiplier     float64 `json:"multiplier"`
+		MaxConcurrency int     `json:"max_concurrency"`
+		Public         bool    `json:"public"`
 	}
 	if decode(r, &in) != nil || !validGroupMultiplier(in.Multiplier) {
 		writeError(w, 400, "invalid_request", "multiplier must be between 0 and 1000")
 		return
 	}
-	result, err := s.db.Exec(r.Context(), `update groups set multiplier=$1 where id=$2`, in.Multiplier, r.PathValue("id"))
+	result, err := s.db.Exec(r.Context(), `update groups set multiplier=$1, max_concurrency=$2, "public"=$3 where id=$4`, in.Multiplier, in.MaxConcurrency, in.Public, r.PathValue("id"))
 	if err != nil || result.RowsAffected() == 0 {
 		writeError(w, 404, "not_found", "group not found")
 		return
 	}
 	s.groupCache.invalidate(r.PathValue("id"))
-	s.audit(r, "group.updated", "group", r.PathValue("id"), map[string]any{"multiplier": in.Multiplier})
-	writeJSON(w, 200, map[string]any{"id": r.PathValue("id"), "multiplier": in.Multiplier})
+	s.groupConcurrencyCache.invalidate(r.PathValue("id"))
+	s.audit(r, "group.updated", "group", r.PathValue("id"), map[string]any{"multiplier": in.Multiplier, "max_concurrency": in.MaxConcurrency, "public": in.Public})
+	writeJSON(w, 200, map[string]any{"id": r.PathValue("id"), "multiplier": in.Multiplier, "max_concurrency": in.MaxConcurrency, "public": in.Public})
 }
 
 func (s *Service) modelCatalog(w http.ResponseWriter, r *http.Request) {
@@ -757,13 +770,14 @@ func (s *Service) modelCatalog(w http.ResponseWriter, r *http.Request) {
 			where m.enabled and not m.hidden and c.enabled
 		), catalog as (
 			select distinct a.model, coalesce(g.id::text, '__public') as group_id,
-				coalesce(g.name, '公共') as group_name, coalesce(g.multiplier, 1) as group_multiplier
+				coalesce(g.name, '公共') as group_name, coalesce(g.multiplier, 1) as group_multiplier,
+				coalesce(g."public", false) as group_public
 			from available a
 			left join channel_groups cg on cg.channel_id=a.channel_id
 			left join groups g on g.id=cg.group_id
-			where g.id is null or exists(select 1 from user_groups ug where ug.user_id=nullif($1, '')::bigint and ug.group_id=g.id)
+			where g.id is null or g."public" or exists(select 1 from user_groups ug where ug.user_id=nullif($1, '')::bigint and ug.group_id=g.id)
 		)
-		select c.model,c.group_id,c.group_name,c.group_multiplier,
+		select c.model,c.group_id,c.group_name,c.group_multiplier,c.group_public,
 			p.id,p.input_per_million,p.cached_input_per_million,p.output_per_million,p.multiplier
 		from catalog c left join pricing_rules p on p.model=c.model and p.enabled
 		order by c.model,c.group_name`, account.userID)
@@ -783,12 +797,13 @@ func (s *Service) modelCatalog(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var model, groupID, groupName string
 		var groupMultiplier any
+		var groupPublic bool
 		var priceID *string
 		var input, cached, output, modelMultiplier any
-		if rows.Scan(&model, &groupID, &groupName, &groupMultiplier, &priceID, &input, &cached, &output, &modelMultiplier) != nil {
+		if rows.Scan(&model, &groupID, &groupName, &groupMultiplier, &groupPublic, &priceID, &input, &cached, &output, &modelMultiplier) != nil {
 			continue
 		}
-		group := map[string]any{"id": groupID, "name": groupName, "multiplier": groupMultiplier}
+		group := map[string]any{"id": groupID, "name": groupName, "multiplier": groupMultiplier, "public": groupPublic}
 		groups[groupID] = group
 		item := models[model]
 		if item == nil {
@@ -960,6 +975,10 @@ func validChannelProvider(provider string) bool {
 	return map[string]bool{"openai": true, "ollama": true, "kimi": true, "opencode_go": true, "anthropic": true}[provider]
 }
 
+func validChannelKeyType(keyType string) bool {
+	return keyType == "single" || keyType == "multi"
+}
+
 func validChannelPriority(priority int) bool {
 	return priority >= -10000 && priority <= 10000
 }
@@ -1008,6 +1027,20 @@ const (
 
 func validChannelAPIKey(value string) bool {
 	return len(value) > 0 && len(value) <= maxChannelAPIKeyLen
+}
+
+func parseChannelAPIKeys(value string) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, line := range strings.Split(value, "\n") {
+		key := strings.TrimSpace(line)
+		if key == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, key)
+	}
+	return out
 }
 
 func validChannelBaseURL(value string) bool {
@@ -1211,7 +1244,7 @@ func (s *Service) validKeyGroup(ctx context.Context, userID, groupRef string) (a
 		return nil, nil
 	}
 	var groupID string
-	err := s.db.QueryRow(ctx, `select g.id from groups g join user_groups ug on ug.group_id=g.id where ug.user_id=$1 and (g.id::text=$2 or g.name=$2)`, userID, groupRef).Scan(&groupID)
+	err := s.db.QueryRow(ctx, `select g.id from groups g where (g."public" or exists(select 1 from user_groups ug where ug.user_id=$1 and ug.group_id=g.id)) and (g.id::text=$2 or g.name=$2)`, userID, groupRef).Scan(&groupID)
 	return groupID, err
 }
 
@@ -1251,18 +1284,26 @@ func (s *Service) revokeKey(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 func (s *Service) createChannel(w http.ResponseWriter, r *http.Request) {
+	type routeInput struct {
+		PublicModel   string `json:"public_model"`
+		UpstreamModel string `json:"upstream_model"`
+		Priority      int    `json:"priority"`
+		Weight        int    `json:"weight"`
+		Hidden        bool   `json:"hidden"`
+	}
 	var in struct {
-		Name     string   `json:"name"`
-		BaseURL  string   `json:"base_url"`
-		APIKey   string   `json:"api_key"`
-		APIKeys  []string `json:"api_keys"`
-		Models   []string `json:"models"`
-		Priority int      `json:"priority"`
-		Groups   []string `json:"groups"`
-		Provider string   `json:"provider"`
+		Name        string       `json:"name"`
+		BaseURL     string       `json:"base_url"`
+		KeyType     string       `json:"key_type"`
+		APIKeys     string       `json:"api_keys"`
+		Models      []string     `json:"models"`
+		Priority    int          `json:"priority"`
+		Groups      []string     `json:"groups"`
+		Provider    string       `json:"provider"`
+		ModelRoutes []routeInput `json:"model_routes"`
 	}
 	if decode(r, &in) != nil {
-		writeError(w, 400, "invalid_request", "name, api_key, and models are required")
+		writeError(w, 400, "invalid_request", "name, key_type, api_keys, and models are required")
 		return
 	}
 	name := strings.TrimSpace(in.Name)
@@ -1271,6 +1312,14 @@ func (s *Service) createChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.Name = name
+	in.KeyType = strings.TrimSpace(in.KeyType)
+	if in.KeyType == "" {
+		in.KeyType = "single"
+	}
+	if !validChannelKeyType(in.KeyType) {
+		writeError(w, 400, "invalid_request", "key_type must be single or multi")
+		return
+	}
 	modelsList, ok := sanitizeChannelModels(in.Models)
 	if !ok {
 		writeError(w, 400, "invalid_request", "at least one non-empty model name is required")
@@ -1307,17 +1356,34 @@ func (s *Service) createChannel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_request", "base_url must be 1-2048 characters and use HTTPS to a public host, or HTTP to loopback")
 		return
 	}
-	keys := in.APIKeys
-	if in.APIKey != "" {
-		keys = append(keys, in.APIKey)
-	}
+	keys := parseChannelAPIKeys(in.APIKeys)
 	if len(keys) == 0 {
 		writeError(w, 400, "invalid_request", "at least one api_key is required")
 		return
 	}
+	if in.KeyType == "single" && len(keys) > 1 {
+		writeError(w, 400, "invalid_request", "single-key channels accept only one key")
+		return
+	}
 	for _, key := range keys {
-		if !validChannelAPIKey(strings.TrimSpace(key)) {
+		if !validChannelAPIKey(key) {
 			writeError(w, 400, "invalid_request", "api_key must be 1-4096 characters")
+			return
+		}
+	}
+	for _, rt := range in.ModelRoutes {
+		rt.PublicModel = strings.TrimSpace(rt.PublicModel)
+		rt.UpstreamModel = strings.TrimSpace(rt.UpstreamModel)
+		if !validModelName(rt.PublicModel) || !validModelName(rt.UpstreamModel) {
+			writeError(w, 400, "invalid_request", "public_model and upstream_model must be 1-200 characters")
+			return
+		}
+		if rt.Weight < 0 || rt.Weight > 10000 {
+			writeError(w, 400, "invalid_request", "weight must be between 0 and 10000")
+			return
+		}
+		if rt.Priority < -10000 || rt.Priority > 10000 {
+			writeError(w, 400, "invalid_request", "priority must be between -10000 and 10000")
 			return
 		}
 	}
@@ -1329,19 +1395,19 @@ func (s *Service) createChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(r.Context())
-	encrypted, err := crypt(s.cfg.EncryptionKey, keys[0], false)
+	firstEncrypted, err := crypt(s.cfg.EncryptionKey, keys[0], false)
 	if err != nil {
 		writeError(w, 500, "internal_error", "credential encryption failed")
 		return
 	}
-	_, err = tx.Exec(r.Context(), `insert into channels(id,name,base_url,api_key,models,priority,provider) values($1,$2,$3,$4,$5,$6,$7)`, id, in.Name, strings.TrimRight(in.BaseURL, "/"), encrypted, models, in.Priority, in.Provider)
+	_, err = tx.Exec(r.Context(), `insert into channels(id,name,base_url,api_key,models,priority,provider,key_type) values($1,$2,$3,$4,$5,$6,$7,$8)`, id, in.Name, strings.TrimRight(in.BaseURL, "/"), firstEncrypted, models, in.Priority, in.Provider, in.KeyType)
 	if err != nil {
 		writeError(w, 409, "conflict", "channel name already exists")
 		return
 	}
 	for i, rawKey := range keys {
 		keyName := "key_" + strconv.Itoa(i+1)
-		enc, kerr := crypt(s.cfg.EncryptionKey, strings.TrimSpace(rawKey), false)
+		enc, kerr := crypt(s.cfg.EncryptionKey, rawKey, false)
 		if kerr != nil {
 			writeError(w, 500, "internal_error", "credential encryption failed")
 			return
@@ -1358,23 +1424,41 @@ func (s *Service) createChannel(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	for _, rt := range in.ModelRoutes {
+		if rt.Weight == 0 {
+			rt.Weight = 100
+		}
+		rid, _ := randomID()
+		if _, err = tx.Exec(r.Context(), `insert into model_routes(id,public_model,upstream_model,channel_id,priority,weight,hidden) values($1,$2,$3,$4,$5,$6,$7)`, rid, rt.PublicModel, rt.UpstreamModel, id, rt.Priority, rt.Weight, rt.Hidden); err != nil {
+			writeError(w, 400, "invalid_request", "could not create model route")
+			return
+		}
+	}
 	if err = tx.Commit(r.Context()); err != nil {
 		writeError(w, 500, "internal_error", "could not create channel")
 		return
 	}
-	s.audit(r, "channel.created", "channel", id, map[string]any{"name": in.Name, "models": in.Models, "provider": in.Provider, "key_count": len(keys)})
-	writeJSON(w, 201, map[string]any{"id": id, "name": in.Name, "models": in.Models, "provider": in.Provider, "enabled": true})
+	s.audit(r, "channel.created", "channel", id, map[string]any{"name": in.Name, "models": in.Models, "provider": in.Provider, "key_type": in.KeyType, "key_count": len(keys)})
+	writeJSON(w, 201, map[string]any{"id": id, "name": in.Name, "models": in.Models, "provider": in.Provider, "key_type": in.KeyType, "enabled": true})
 }
 func (s *Service) updateChannel(w http.ResponseWriter, r *http.Request) {
+	type routeInput struct {
+		PublicModel   string `json:"public_model"`
+		UpstreamModel string `json:"upstream_model"`
+		Priority      int    `json:"priority"`
+		Weight        int    `json:"weight"`
+		Hidden        bool   `json:"hidden"`
+	}
 	var in struct {
-		Name     string   `json:"name"`
-		BaseURL  string   `json:"base_url"`
-		APIKey   string   `json:"api_key"`
-		APIKeys  []string `json:"api_keys"`
-		Models   []string `json:"models"`
-		Priority int      `json:"priority"`
-		Provider string   `json:"provider"`
-		Groups   []string `json:"groups"`
+		Name        string       `json:"name"`
+		BaseURL     string       `json:"base_url"`
+		KeyType     string       `json:"key_type"`
+		APIKeys     string       `json:"api_keys"`
+		Models      []string     `json:"models"`
+		Priority    int          `json:"priority"`
+		Provider    string       `json:"provider"`
+		Groups      []string     `json:"groups"`
+		ModelRoutes []routeInput `json:"model_routes"`
 	}
 	if decode(r, &in) != nil {
 		writeError(w, 400, "invalid_request", "name and models are required")
@@ -1386,6 +1470,11 @@ func (s *Service) updateChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.Name = name
+	in.KeyType = strings.TrimSpace(in.KeyType)
+	if in.KeyType != "" && !validChannelKeyType(in.KeyType) {
+		writeError(w, 400, "invalid_request", "key_type must be single or multi")
+		return
+	}
 	modelsList, ok := sanitizeChannelModels(in.Models)
 	if !ok {
 		writeError(w, 400, "invalid_request", "at least one non-empty model name is required")
@@ -1408,31 +1497,62 @@ func (s *Service) updateChannel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_request", "base_url must be 1-2048 characters and use HTTPS to a public host, or HTTP to loopback")
 		return
 	}
-	in.APIKey = strings.TrimSpace(in.APIKey)
-	if in.APIKey != "" && !validChannelAPIKey(in.APIKey) {
-		writeError(w, 400, "invalid_request", "api_key must be 1-4096 characters")
-		return
-	}
-	if in.APIKeys != nil {
-		for _, k := range in.APIKeys {
-			if !validChannelAPIKey(strings.TrimSpace(k)) {
+	channelID := r.PathValue("id")
+	models, _ := json.Marshal(in.Models)
+	query := `update channels set name=$1,base_url=$2,models=$3,priority=$4,provider=$5`
+	args := []any{in.Name, strings.TrimRight(in.BaseURL, "/"), models, in.Priority, in.Provider}
+	argIdx := 6
+	keys := parseChannelAPIKeys(in.APIKeys)
+	if in.KeyType != "" || in.APIKeys != "" {
+		var currentKeyType string
+		if err := s.db.QueryRow(r.Context(), `select key_type from channels where id=$1`, channelID).Scan(&currentKeyType); err != nil {
+			writeError(w, 500, "internal_error", "could not read channel key state")
+			return
+		}
+		if in.KeyType == "" {
+			if len(keys) == 1 {
+				in.KeyType = "single"
+			} else if len(keys) > 1 {
+				in.KeyType = "multi"
+			} else {
+				in.KeyType = currentKeyType
+			}
+		}
+		if len(keys) == 0 {
+			keys, _ = s.channelAPIKeys(r.Context(), channelID)
+		}
+		if in.KeyType == "single" && len(keys) > 1 {
+			keys = keys[:1]
+		}
+		if len(keys) == 0 {
+			writeError(w, 400, "invalid_request", "at least one api_key is required")
+			return
+		}
+		if in.KeyType == "single" && len(keys) > 1 {
+			writeError(w, 400, "invalid_request", "single-key channels accept only one key")
+			return
+		}
+		for _, key := range keys {
+			if !validChannelAPIKey(key) {
 				writeError(w, 400, "invalid_request", "api_key must be 1-4096 characters")
 				return
 			}
 		}
-	}
-	models, _ := json.Marshal(in.Models)
-	args := []any{in.Name, strings.TrimRight(in.BaseURL, "/"), models, in.Priority, in.Provider, r.PathValue("id")}
-	query := `update channels set name=$1,base_url=$2,models=$3,priority=$4,provider=$5,updated_at=now() where id=$6`
-	if in.APIKey != "" {
-		encrypted, err := crypt(s.cfg.EncryptionKey, in.APIKey, false)
+		firstEncrypted, err := crypt(s.cfg.EncryptionKey, keys[0], false)
 		if err != nil {
 			writeError(w, 500, "internal_error", "credential encryption failed")
 			return
 		}
-		args = []any{in.Name, strings.TrimRight(in.BaseURL, "/"), encrypted, models, in.Priority, in.Provider, r.PathValue("id")}
-		query = `update channels set name=$1,base_url=$2,api_key=$3,models=$4,priority=$5,provider=$6,updated_at=now() where id=$7`
+		query += `,key_type=$` + strconv.Itoa(argIdx) + `,api_key=$` + strconv.Itoa(argIdx+1)
+		args = append(args, in.KeyType, firstEncrypted)
+		argIdx += 2
+		if err = s.replaceChannelAPIKeys(r.Context(), channelID, keys); err != nil {
+			writeError(w, 500, "internal_error", "could not update api keys")
+			return
+		}
 	}
+	query += `,updated_at=now() where id=$` + strconv.Itoa(argIdx)
+	args = append(args, channelID)
 	result, err := s.db.Exec(r.Context(), query, args...)
 	if err != nil {
 		writeError(w, 409, "conflict", "channel name already exists")
@@ -1442,28 +1562,68 @@ func (s *Service) updateChannel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "not_found", "channel not found")
 		return
 	}
-	if len(in.APIKeys) > 0 {
-		channelID := r.PathValue("id")
-		if _, derr := s.db.Exec(r.Context(), `delete from channel_api_keys where channel_id=$1`, channelID); derr != nil {
-			writeError(w, 500, "internal_error", "could not update api keys")
+	if in.ModelRoutes != nil {
+		if _, derr := s.db.Exec(r.Context(), `delete from model_routes where channel_id=$1`, channelID); derr != nil {
+			writeError(w, 500, "internal_error", "could not update model routes")
 			return
 		}
-		for i, rawKey := range in.APIKeys {
-			keyName := "key_" + strconv.Itoa(i+1)
-			enc, kerr := crypt(s.cfg.EncryptionKey, strings.TrimSpace(rawKey), false)
-			if kerr != nil {
-				writeError(w, 500, "internal_error", "credential encryption failed")
-				return
+		for _, rt := range in.ModelRoutes {
+			if rt.Weight == 0 {
+				rt.Weight = 100
 			}
-			kid, _ := randomID()
-			if _, kerr = s.db.Exec(r.Context(), `insert into channel_api_keys(id,channel_id,name,key_encrypted,enabled) values($1,$2,$3,$4,true)`, kid, channelID, keyName, enc); kerr != nil {
-				writeError(w, 500, "internal_error", "could not save api key")
+			rid, _ := randomID()
+			if _, err = s.db.Exec(r.Context(), `insert into model_routes(id,public_model,upstream_model,channel_id,priority,weight,hidden) values($1,$2,$3,$4,$5,$6,$7)`, rid, rt.PublicModel, rt.UpstreamModel, channelID, rt.Priority, rt.Weight, rt.Hidden); err != nil {
+				writeError(w, 400, "invalid_request", "could not create model route")
 				return
 			}
 		}
 	}
-	s.audit(r, "channel.updated", "channel", r.PathValue("id"), map[string]any{"name": in.Name, "models": in.Models, "provider": in.Provider})
+	s.audit(r, "channel.updated", "channel", channelID, map[string]any{"name": in.Name, "models": in.Models, "provider": in.Provider, "key_type": in.KeyType})
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Service) channelAPIKeys(ctx context.Context, channelID string) ([]string, error) {
+	rows, err := s.db.Query(ctx, `select key_encrypted from channel_api_keys where channel_id=$1 and enabled order by created_at`, channelID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var enc string
+		if err := rows.Scan(&enc); err != nil {
+			continue
+		}
+		key, err := crypt(s.cfg.EncryptionKey, enc, true)
+		if err != nil {
+			continue
+		}
+		out = append(out, key)
+	}
+	return out, rows.Err()
+}
+
+func (s *Service) replaceChannelAPIKeys(ctx context.Context, channelID string, keys []string) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `delete from channel_api_keys where channel_id=$1`, channelID); err != nil {
+		return err
+	}
+	for i, key := range keys {
+		enc, err := crypt(s.cfg.EncryptionKey, key, false)
+		if err != nil {
+			return err
+		}
+		id, _ := randomID()
+		keyName := "key_" + strconv.Itoa(i+1)
+		if _, err := tx.Exec(ctx, `insert into channel_api_keys(id,channel_id,name,key_encrypted,enabled) values($1,$2,$3,$4,true)`, id, channelID, keyName, enc); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }
 func (s *Service) listChannels(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.db.Query(r.Context(), `select c.id,c.name,c.base_url,c.models,c.enabled,c.auto_disabled,c.disabled_reason,c.priority,c.created_at,c.updated_at,coalesce((select array_agg(cg.group_id order by cg.group_id) from channel_groups cg where cg.channel_id=c.id), '{}'),c.provider,(select count(*) from channel_api_keys ak where ak.channel_id=c.id and ak.enabled) from channels c order by c.priority,c.id`)
@@ -1488,9 +1648,29 @@ func (s *Service) listChannels(w http.ResponseWriter, r *http.Request) {
 		}
 		var list []string
 		json.Unmarshal(models, &list)
-		data = append(data, map[string]any{"id": id, "name": name, "base_url": base, "models": list, "provider": provider, "enabled": enabled, "auto_disabled": autoDisabled, "disabled_reason": disabledReason, "priority": priority, "groups": groups, "key_count": keyCount, "created_at": created, "updated_at": updated})
+		routes := s.getChannelRoutes(r.Context(), id)
+		data = append(data, map[string]any{"id": id, "name": name, "base_url": base, "models": list, "provider": provider, "enabled": enabled, "auto_disabled": autoDisabled, "disabled_reason": disabledReason, "priority": priority, "groups": groups, "key_count": keyCount, "created_at": created, "updated_at": updated, "model_routes": routes})
 	}
 	writeJSON(w, 200, map[string]any{"data": data})
+}
+
+func (s *Service) getChannelRoutes(ctx context.Context, channelID string) []map[string]any {
+	rows, err := s.db.Query(ctx, `select id,public_model,upstream_model,priority,weight,enabled,hidden,created_at from model_routes where channel_id=$1 order by public_model,priority`, channelID)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var routes []map[string]any
+	for rows.Next() {
+		var id, public, upstream string
+		var priority, weight int
+		var enabled, hidden bool
+		var created any
+		if rows.Scan(&id, &public, &upstream, &priority, &weight, &enabled, &hidden, &created) == nil {
+			routes = append(routes, map[string]any{"id": id, "public_model": public, "upstream_model": upstream, "priority": priority, "weight": weight, "enabled": enabled, "hidden": hidden, "created_at": created})
+		}
+	}
+	return routes
 }
 func (s *Service) batchSetChannelStatus(w http.ResponseWriter, r *http.Request) {
 	var in struct {
@@ -1808,6 +1988,153 @@ func (s *Service) updateModelRoute(w http.ResponseWriter, r *http.Request) {
 	}
 	s.audit(r, "model_route.updated", "model_route", routeID, changed)
 	writeJSON(w, 200, map[string]any{"id": routeID, "updated": changed})
+}
+
+func (s *Service) listChannelRoutes(w http.ResponseWriter, r *http.Request) {
+	channelID := r.PathValue("id")
+	rows, err := s.db.Query(r.Context(), `select id,public_model,upstream_model,priority,weight,enabled,hidden,created_at from model_routes where channel_id=$1 order by public_model,priority`, channelID)
+	if err != nil {
+		writeError(w, 500, "internal_error", "query failed")
+		return
+	}
+	defer rows.Close()
+	data := []map[string]any{}
+	for rows.Next() {
+		var id, public, upstream string
+		var priority, weight int
+		var enabled, hidden bool
+		var created any
+		if rows.Scan(&id, &public, &upstream, &priority, &weight, &enabled, &hidden, &created) == nil {
+			data = append(data, map[string]any{"id": id, "public_model": public, "upstream_model": upstream, "priority": priority, "weight": weight, "enabled": enabled, "hidden": hidden, "created_at": created})
+		}
+	}
+	writeJSON(w, 200, map[string]any{"data": data})
+}
+
+func (s *Service) createChannelRoute(w http.ResponseWriter, r *http.Request) {
+	channelID := r.PathValue("id")
+	var in struct {
+		PublicModel   string `json:"public_model"`
+		UpstreamModel string `json:"upstream_model"`
+		Priority      int    `json:"priority"`
+		Weight        int    `json:"weight"`
+		Hidden        bool   `json:"hidden"`
+	}
+	if decode(r, &in) != nil {
+		writeError(w, 400, "invalid_request", "public_model, upstream_model are required")
+		return
+	}
+	in.PublicModel = strings.TrimSpace(in.PublicModel)
+	in.UpstreamModel = strings.TrimSpace(in.UpstreamModel)
+	if !validModelName(in.PublicModel) || !validModelName(in.UpstreamModel) {
+		writeError(w, 400, "invalid_request", "public_model and upstream_model must be 1-200 characters")
+		return
+	}
+	if in.Weight < 0 || in.Weight > 10000 {
+		writeError(w, 400, "invalid_request", "weight must be between 0 and 10000")
+		return
+	}
+	if in.Weight == 0 {
+		in.Weight = 100
+	}
+	if in.Priority < -10000 || in.Priority > 10000 {
+		writeError(w, 400, "invalid_request", "priority must be between -10000 and 10000")
+		return
+	}
+	routeID, _ := randomID()
+	_, err := s.db.Exec(r.Context(), `insert into model_routes(id,public_model,upstream_model,channel_id,priority,weight,hidden) values($1,$2,$3,$4,$5,$6,$7)`, routeID, in.PublicModel, in.UpstreamModel, channelID, in.Priority, in.Weight, in.Hidden)
+	if err != nil {
+		writeError(w, 400, "invalid_request", "could not create model route")
+		return
+	}
+	s.audit(r, "model_route.created", "model_route", routeID, map[string]any{"public_model": in.PublicModel, "channel_id": channelID, "hidden": in.Hidden})
+	writeJSON(w, 201, map[string]any{"id": routeID})
+}
+
+func (s *Service) updateChannelRoute(w http.ResponseWriter, r *http.Request) {
+	channelID := r.PathValue("id")
+	routeID := r.PathValue("routeId")
+	var rowChannelID string
+	if err := s.db.QueryRow(r.Context(), `select channel_id from model_routes where id=$1`, routeID).Scan(&rowChannelID); err != nil || rowChannelID != channelID {
+		writeError(w, 404, "not_found", "model route not found")
+		return
+	}
+	var in struct {
+		PublicModel   *string `json:"public_model"`
+		UpstreamModel *string `json:"upstream_model"`
+		Priority      *int    `json:"priority"`
+		Weight        *int    `json:"weight"`
+		Enabled       *bool   `json:"enabled"`
+		Hidden        *bool   `json:"hidden"`
+	}
+	if decode(r, &in) != nil {
+		writeError(w, 400, "invalid_request", "invalid model route update")
+		return
+	}
+	if in.PublicModel != nil {
+		*in.PublicModel = strings.TrimSpace(*in.PublicModel)
+		if !validModelName(*in.PublicModel) {
+			writeError(w, 400, "invalid_request", "public_model must be 1-200 characters")
+			return
+		}
+	}
+	if in.UpstreamModel != nil {
+		*in.UpstreamModel = strings.TrimSpace(*in.UpstreamModel)
+		if !validModelName(*in.UpstreamModel) {
+			writeError(w, 400, "invalid_request", "upstream_model must be 1-200 characters")
+			return
+		}
+	}
+	if in.Weight != nil && (*in.Weight < 0 || *in.Weight > 10000) {
+		writeError(w, 400, "invalid_request", "weight must be between 0 and 10000")
+		return
+	}
+	if in.Priority != nil && (*in.Priority < -10000 || *in.Priority > 10000) {
+		writeError(w, 400, "invalid_request", "priority must be between -10000 and 10000")
+		return
+	}
+	result, err := s.db.Exec(r.Context(), `update model_routes set public_model=coalesce($1,public_model),upstream_model=coalesce($2,upstream_model),priority=coalesce($3,priority),weight=coalesce($4,weight),enabled=coalesce($5,enabled),hidden=coalesce($6,hidden) where id=$7`, in.PublicModel, in.UpstreamModel, in.Priority, in.Weight, in.Enabled, in.Hidden, routeID)
+	if err != nil || result.RowsAffected() != 1 {
+		writeError(w, 404, "not_found", "model route not found or could not be updated")
+		return
+	}
+	changed := map[string]any{}
+	if in.PublicModel != nil {
+		changed["public_model"] = *in.PublicModel
+	}
+	if in.UpstreamModel != nil {
+		changed["upstream_model"] = *in.UpstreamModel
+	}
+	if in.Priority != nil {
+		changed["priority"] = *in.Priority
+	}
+	if in.Weight != nil {
+		changed["weight"] = *in.Weight
+	}
+	if in.Enabled != nil {
+		changed["enabled"] = *in.Enabled
+	}
+	if in.Hidden != nil {
+		changed["hidden"] = *in.Hidden
+	}
+	s.audit(r, "model_route.updated", "model_route", routeID, changed)
+	writeJSON(w, 200, map[string]any{"id": routeID, "updated": changed})
+}
+
+func (s *Service) deleteChannelRoute(w http.ResponseWriter, r *http.Request) {
+	channelID := r.PathValue("id")
+	routeID := r.PathValue("routeId")
+	result, err := s.db.Exec(r.Context(), `delete from model_routes where id=$1 and channel_id=$2`, routeID, channelID)
+	if err != nil {
+		writeError(w, 500, "internal_error", "could not delete model route")
+		return
+	}
+	if result.RowsAffected() != 1 {
+		writeError(w, 404, "not_found", "model route not found")
+		return
+	}
+	s.audit(r, "model_route.deleted", "model_route", routeID, map[string]any{"channel_id": channelID})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Service) upsertQuota(w http.ResponseWriter, r *http.Request) {

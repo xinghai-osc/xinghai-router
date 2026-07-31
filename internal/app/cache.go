@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"database/sql"
 	"sync"
 	"time"
 )
@@ -161,4 +162,24 @@ func (s *Service) groupMultiplierFor(ctx context.Context, groupID string) float6
 		return 1
 	}
 	return multiplier
+}
+
+func (s *Service) groupConcurrencyLimitFor(ctx context.Context, groupID string) int {
+	limit, err := s.groupConcurrencyCache.get(ctx, groupID, func(ctx context.Context) (int, error) {
+		var limit sql.NullInt64
+		if err := s.db.QueryRow(ctx, `select max_concurrency from groups where id=$1`, groupID).Scan(&limit); err != nil {
+			if isNoRows(err) {
+				return 0, nil
+			}
+			return 0, err
+		}
+		if !limit.Valid || limit.Int64 <= 0 {
+			return 0, nil
+		}
+		return int(limit.Int64), nil
+	})
+	if err != nil {
+		return 0
+	}
+	return limit
 }

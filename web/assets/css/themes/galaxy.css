@@ -1,0 +1,62 @@
+/* 银河 — 深空靛蓝 + 星云紫，暗色为主场，页面底覆盖极淡的星云渐变。 */
+
+:root[data-preset='galaxy'] {
+  --paper: #f7f5ff;
+  --surface: #ffffff;
+  --sunken: #f0ecfb;
+  --ink: #1a1533;
+  --muted: #635c86;
+  --faint: #928bb4;
+  --line: #e5e0f5;
+  --line-strong: #d0c8ea;
+
+  --clay: #7c3aed;
+  --clay-hover: #6a28dd;
+  --clay-soft: #f2ebff;
+  --clay-ink: #ffffff;
+
+  --success: #2f8f77;
+  --success-soft: #e5f4f0;
+  --warn: #9d7413;
+  --warn-soft: #f8f0dd;
+  --danger: #c8375f;
+  --danger-soft: #fbe9ef;
+
+  --overlay: rgb(26 21 51 / 0.38);
+  --shadow-pop: 0 1px 2px rgb(26 21 51 / 0.06), 0 14px 36px -10px rgb(124 58 237 / 0.22);
+  --shadow-glow: 0 0 0 1px rgb(124 58 237 / 0.18), 0 8px 28px -6px rgb(124 58 237 / 0.3);
+  --page-glow: radial-gradient(60% 40% at 50% 0%, rgb(124 58 237 / 0.07), transparent 70%);
+
+  --radius-card-token: 18px;
+}
+
+:root[data-preset='galaxy'][data-theme='dark'] {
+  --paper: #0a0a18;
+  --surface: #14142a;
+  --sunken: #0e0e20;
+  --ink: #edebff;
+  --muted: #a29fc7;
+  --faint: #706d9b;
+  --line: #262444;
+  --line-strong: #383560;
+
+  --clay: #a78bfa;
+  --clay-hover: #bda6ff;
+  --clay-soft: #241f3d;
+  --clay-ink: #0a0a18;
+
+  --success: #4dd4ac;
+  --success-soft: #102b26;
+  --warn: #e5b95c;
+  --warn-soft: #2b2416;
+  --danger: #f4708f;
+  --danger-soft: #331823;
+
+  --overlay: rgb(3 3 12 / 0.72);
+  --shadow-pop: 0 1px 2px rgb(0 0 0 / 0.5), 0 16px 44px -10px rgb(167 139 250 / 0.35);
+  --shadow-glow: 0 0 0 1px rgb(167 139 250 / 0.28), 0 8px 32px -6px rgb(167 139 250 / 0.45);
+  --page-glow:
+    radial-gradient(55% 45% at 12% 0%, rgb(167 139 250 / 0.16), transparent 70%),
+    radial-gradient(50% 40% at 85% 12%, rgb(79 130 246 / 0.12), transparent 70%),
+    radial-gradient(70% 50% at 50% 100%, rgb(236 122 200 / 0.07), transparent 70%);
+}

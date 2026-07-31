@@ -38,11 +38,17 @@ export function useI18n() {
     locale.value = next
     if (!import.meta.client) return
     localStorage.setItem(LOCALE_STORAGE_KEY, next)
-    document.documentElement.lang = next === 'zh' ? 'zh-CN' : 'en'
+    if (next === 'zh') {
+      document.documentElement.lang = 'zh-CN'
+    } else if (next === 'zh-Hant') {
+      document.documentElement.lang = 'zh-TW'
+    } else {
+      document.documentElement.lang = 'en'
+    }
   }
 
   function toggleLocale() {
-    setLocale(locale.value === 'zh' ? 'en' : 'zh')
+    setLocale(locale.value === 'zh' ? 'en' : locale.value === 'zh-Hant' ? 'zh' : 'zh-Hant')
   }
 
   function initializeLocale() {
@@ -52,7 +58,14 @@ export function useI18n() {
       setLocale(stored)
       return
     }
-    setLocale(navigator.language.toLowerCase().startsWith('zh') ? 'zh' : 'en')
+    const navLang = navigator.language.toLowerCase()
+    if (navLang.startsWith('zh-hant') || navLang.startsWith('zh-tw')) {
+      setLocale('zh-Hant')
+    } else if (navLang.startsWith('zh')) {
+      setLocale('zh')
+    } else {
+      setLocale('en')
+    }
   }
 
   return { locale, locales: LOCALES, t, setLocale, toggleLocale, initializeLocale }

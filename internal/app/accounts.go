@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"net/http"
 	"net/mail"
 	"sort"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 type accountContext struct {
@@ -88,7 +90,16 @@ func (s *Service) register(w http.ResponseWriter, r *http.Request) {
 	var id string
 	err = tx.QueryRow(r.Context(), `insert into users(email,name,role,password_hash) values($1,$2,$3,$4) returning id`, email, strings.TrimSpace(in.Name), role, passwordHash).Scan(&id)
 	if err != nil {
-		writeError(w, http.StatusConflict, "conflict", "email already exists")
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			if pgErr.ConstraintName == "users_name_key" {
+				writeError(w, http.StatusConflict, "conflict", "username already exists")
+			} else {
+				writeError(w, http.StatusConflict, "conflict", "email already exists")
+			}
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not create account")
 		return
 	}
 	if _, err = tx.Exec(r.Context(), `insert into user_wallets(user_id) values($1) on conflict do nothing`, id); err != nil {
@@ -110,17 +121,23 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 		geetestPayload
 	}
 	if decode(r, &in) != nil || strings.TrimSpace(in.Email) == "" || in.Password == "" {
-		writeError(w, http.StatusBadRequest, "invalid_request", "email and password are required")
+		writeError(w, http.StatusBadRequest, "invalid_request", "email or username and password are required")
 		return
 	}
 	if !validPasswordLength(in.Password) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "password must be between 8 and 72 characters")
 		return
 	}
-	email := strings.ToLower(strings.TrimSpace(in.Email))
+	identifier := strings.TrimSpace(in.Email)
+	isEmail := strings.Contains(identifier, "@")
+	rateLimitKey := identifier
+	if isEmail {
+		identifier = strings.ToLower(identifier)
+		rateLimitKey = identifier
+	}
 	clientIP := requestMetadata(r).clientIP
 	if s.limiter != nil {
-		if !s.limiter.allowN("auth:login:ip:"+clientIP, authLoginPerMinute) || !s.limiter.allowN("auth:login:email:"+email, authLoginPerMinute) {
+		if !s.limiter.allowN("auth:login:ip:"+clientIP, authLoginPerMinute) || !s.limiter.allowN("auth:login:email:"+rateLimitKey, authLoginPerMinute) {
 			writeError(w, http.StatusTooManyRequests, "rate_limit_exceeded", "too many login attempts")
 			return
 		}
@@ -130,15 +147,21 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var userID, passwordHash string
-	err := s.db.QueryRow(r.Context(), `select id,password_hash from users where email=$1 and enabled and password_hash is not null`, email).Scan(&userID, &passwordHash)
+	var query string
+	if isEmail {
+		query = `select id,password_hash from users where email=$1 and enabled and password_hash is not null`
+	} else {
+		query = `select id,password_hash from users where name=$1 and enabled and password_hash is not null`
+	}
+	err := s.db.QueryRow(r.Context(), query, identifier).Scan(&userID, &passwordHash)
 	if err != nil {
 		// Spend comparable time to a real bcrypt check so missing users are not free to probe.
 		_ = passwordMatches(dummyPasswordHash, in.Password)
-		writeError(w, http.StatusUnauthorized, "invalid_credentials", "invalid email or password")
+		writeError(w, http.StatusUnauthorized, "invalid_credentials", "invalid email or username or password")
 		return
 	}
 	if !passwordMatches(passwordHash, in.Password) {
-		writeError(w, http.StatusUnauthorized, "invalid_credentials", "invalid email or password")
+		writeError(w, http.StatusUnauthorized, "invalid_credentials", "invalid email or username or password")
 		return
 	}
 	s.auditActor(r, userID, "account.logged_in", "user", userID, nil)

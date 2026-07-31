@@ -52,7 +52,21 @@ func resolveGatewayMaxTokens(maxTokens int) (int, bool) {
 
 func (s *Service) models(w http.ResponseWriter, r *http.Request) {
 	key := r.Context().Value(contextKey{}).(keyContext)
-	rows, err := s.db.Query(r.Context(), `select model from (select jsonb_array_elements_text(c.models) as model from channels c where c.enabled and (not exists(select 1 from channel_groups cg where cg.channel_id=c.id) or ($2<>'' and exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($2,'')::uuid)) or ($2='' and exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$1))) union select m.public_model as model from model_routes m join channels c on c.id=m.channel_id where m.enabled and not m.hidden and c.enabled and (not exists(select 1 from channel_groups cg where cg.channel_id=c.id) or ($2<>'' and exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($2,'')::uuid)) or ($2='' and exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$1)))) available order by model`, key.userID, key.groupID)
+	rows, err := s.db.Query(r.Context(), `select model from (
+		select jsonb_array_elements_text(c.models) as model from channels c where c.enabled and (
+			not exists(select 1 from channel_groups cg where cg.channel_id=c.id)
+			or exists(select 1 from channel_groups cg join groups g on g.id=cg.group_id where cg.channel_id=c.id and g."public")
+			or ($2<>'' and exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($2,'')::uuid))
+			or ($2='' and exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$1))
+		)
+		union
+		select m.public_model as model from model_routes m join channels c on c.id=m.channel_id where m.enabled and not m.hidden and c.enabled and (
+			not exists(select 1 from channel_groups cg where cg.channel_id=c.id)
+			or exists(select 1 from channel_groups cg join groups g on g.id=cg.group_id where cg.channel_id=c.id and g."public")
+			or ($2<>'' and exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($2,'')::uuid))
+			or ($2='' and exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$1))
+		)
+	) available order by model`, key.userID, key.groupID)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
@@ -140,6 +154,23 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 		}
 	}
 	defer func() { s.releaseReservation(ctx, key, reserved) }()
+	// Group concurrency limit: reject when the group's limit is reached,
+	// preventing a single group from saturating all its channels.
+	maxConcurrency := 0
+	if key.groupID != "" {
+		maxConcurrency = s.groupConcurrencyLimitFor(ctx, key.groupID)
+	}
+	if maxConcurrency > 0 && !s.groupLimiter.acquire(key.groupID, maxConcurrency) {
+		s.logRequest(ctx, key, "", model, 429, 0, 0, 0, time.Since(started), "group_concurrency_limit")
+		s.releaseReservation(ctx, key, reserved)
+		writeError(w, 429, "group_concurrency_exceeded", "group concurrency limit exceeded")
+		return
+	}
+	defer func() {
+		if key.groupID != "" && maxConcurrency > 0 {
+			s.groupLimiter.release(key.groupID)
+		}
+	}()
 	channels, err := s.channelsForModel(ctx, key, model)
 	if err != nil {
 		s.logRequest(ctx, key, "", model, 503, 0, 0, 0, time.Since(started), "no_channel")
@@ -391,7 +422,7 @@ func (s *Service) checkQuota(ctx context.Context, key keyContext, model string) 
 	return rows.Err()
 }
 func (s *Service) channelsForModel(ctx context.Context, key keyContext, model string) ([]channel, error) {
-	rows, err := s.db.Query(ctx, `select c.id,c.base_url,c.api_key,coalesce(m.priority,c.priority),coalesce(m.weight,c.weight),coalesce(m.upstream_model,''),c.provider from channels c left join model_routes m on m.channel_id=c.id and m.public_model=$1 and m.enabled where c.enabled and (c.cooldown_until is null or c.cooldown_until<=now()) and (c.models ? $1 or m.public_model is not null) and (not exists(select 1 from channel_groups cg where cg.channel_id=c.id) or ($3<>'' and exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($3,'')::uuid)) or ($3='' and exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$2))) order by coalesce(m.priority,c.priority), c.priority, c.id`, model, key.userID, key.groupID)
+	rows, err := s.db.Query(ctx, `select c.id,c.base_url,c.api_key,coalesce(m.priority,c.priority),coalesce(m.weight,c.weight),coalesce(m.upstream_model,''),c.provider from channels c left join model_routes m on m.channel_id=c.id and m.public_model=$1 and m.enabled where c.enabled and (c.cooldown_until is null or c.cooldown_until<=now()) and (c.models ? $1 or m.public_model is not null) and (not exists(select 1 from channel_groups cg where cg.channel_id=c.id) or exists(select 1 from channel_groups cg join groups g on g.id=cg.group_id where cg.channel_id=c.id and g."public") or ($3<>'' and exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($3,'')::uuid)) or ($3='' and exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$2))) order by coalesce(m.priority,c.priority), c.priority, c.id`, model, key.userID, key.groupID)
 	if err != nil {
 		return nil, err
 	}

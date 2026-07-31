@@ -170,7 +170,7 @@ async function toggleHidden(route: ModelRoute) {
       </UiTable>
     </ConsoleOpsListState>
 
-    <UiDialog
+    <UiSlidePanel
       v-model:open="dialogOpen"
       :title="editingId ? t('admin.editModelRoute') : t('admin.createModelRoute')"
     >
@@ -207,6 +207,6 @@ async function toggleHidden(route: ModelRoute) {
         <UiButton variant="secondary" @click="dialogOpen = false">{{ t('common.cancel') }}</UiButton>
         <UiButton :loading="busy" @click="save">{{ t('common.save') }}</UiButton>
       </template>
-    </UiDialog>
+    </UiSlidePanel>
   </div>
 </template>

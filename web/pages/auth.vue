@@ -169,13 +169,13 @@ async function submit() {
               />
             </UiField>
 
-            <UiField :label="t('auth.email')" for="auth-email" required>
+            <UiField :label="isRegister ? t('auth.email') : t('auth.emailOrUsername')" for="auth-email" required>
               <UiInput
                 id="auth-email"
                 v-model="form.email"
                 type="text"
                 autocomplete="email"
-                :placeholder="t('auth.emailPlaceholder')"
+                :placeholder="isRegister ? t('auth.emailPlaceholder') : t('auth.emailOrUsernamePlaceholder')"
               />
             </UiField>
 
@@ -220,6 +220,27 @@ async function submit() {
             <UiButton type="submit" size="lg" block :loading="busy">
               {{ isRegister ? t('common.signUp') : t('common.signIn') }}
             </UiButton>
+
+            <div v-if="!isRegister && settings.oauth_providers?.length" class="relative my-2">
+              <div class="absolute inset-0 flex items-center">
+                <span class="w-full border-t border-line" />
+              </div>
+              <div class="relative flex justify-center text-xs">
+                <span class="bg-surface px-2 text-muted">{{ t('auth.orContinueWith') }}</span>
+              </div>
+            </div>
+
+            <div v-if="!isRegister" class="flex flex-col gap-2">
+              <a
+                v-for="p in settings.oauth_providers || []"
+                :key="p"
+                :href="`/api/auth/oauth/${p}`"
+                class="inline-flex items-center justify-center gap-2 rounded-control border border-line bg-surface px-4 py-2.5 text-sm font-medium text-ink transition-colors duration-150 hover:bg-sunken"
+              >
+                <img v-if="p === 'github'" src="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2216%22%20height%3D%2216%22%20viewBox%3D%220%200%2024%2024%22%3E%3Cpath%20fill%3D%22%23181717%22%20d%3D%22M12%200C5.37%200%200%205.37%200%2012c0%205.31%203.435%209.795%208.205%2011.385.6.105.825-.255.825-.57%200-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015%201.62.87%201.845%201.23%201.08%201.815%202.805%201.305%203.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925%200-1.305.465-2.385%201.23-3.225-.12-.3-.54-1.53.12-3.18%200%200%201.005-.315%203.3%201.23.96-.27%201.98-.405%203-.405s2.04.135%203%20.405c2.295-1.56%203.3-1.23%203.3-1.23.66%201.65.24%202.88.12%203.18.765.84%201.23%201.905%201.23%203.225%200%204.605-2.805%205.625-5.475%205.925.435.375.81%201.095.81%202.22%200%201.605-.015%202.895-.015%203.3%200%20.315.225.69.825.57A12.02%2012.02%200%200%200%2024%2012c0-6.63-5.37-12-12-12z%22%3E%3C%2Fpath%3E%3C%2Fsvg%3E" alt="GitHub" class="size-4">
+                <span>{{ p === 'github' ? 'GitHub' : p }}</span>
+              </a>
+            </div>
           </form>
         </UiTabs>
       </UiCard>

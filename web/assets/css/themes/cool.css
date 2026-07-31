@@ -1,0 +1,62 @@
+/* 酷炫 — 高对比电光风：冷调中性面 + 电紫强调 + 发光浮层，圆角更锐利。 */
+
+:root[data-preset='cool'] {
+  --paper: #f5f6fb;
+  --surface: #ffffff;
+  --sunken: #ebedf6;
+  --ink: #0b0d17;
+  --muted: #575c73;
+  --faint: #8a8fa6;
+  --line: #dfe2ef;
+  --line-strong: #c8cce0;
+
+  --clay: #5b5bf5;
+  --clay-hover: #4747e0;
+  --clay-soft: #ecebff;
+  --clay-ink: #ffffff;
+
+  --success: #12876a;
+  --success-soft: #e2f5ef;
+  --warn: #a8700a;
+  --warn-soft: #fbf0dc;
+  --danger: #d92d4b;
+  --danger-soft: #fdeaee;
+
+  --overlay: rgb(11 13 23 / 0.4);
+  --shadow-pop: 0 1px 2px rgb(11 13 23 / 0.06), 0 16px 40px -10px rgb(91 91 245 / 0.25);
+  --shadow-glow: 0 0 0 1px rgb(91 91 245 / 0.2), 0 8px 28px -6px rgb(91 91 245 / 0.35);
+  --page-glow: none;
+
+  --radius-control-token: 8px;
+  --radius-card-token: 12px;
+}
+
+:root[data-preset='cool'][data-theme='dark'] {
+  --paper: #08090f;
+  --surface: #12141f;
+  --sunken: #0c0e17;
+  --ink: #f2f3fa;
+  --muted: #9aa0bd;
+  --faint: #6b7191;
+  --line: #232739;
+  --line-strong: #333852;
+
+  --clay: #7c7cff;
+  --clay-hover: #9494ff;
+  --clay-soft: #1b1c38;
+  --clay-ink: #08090f;
+
+  --success: #2fd3a5;
+  --success-soft: #0e2a24;
+  --warn: #e8b64a;
+  --warn-soft: #2c2413;
+  --danger: #ff5f7a;
+  --danger-soft: #33131c;
+
+  --overlay: rgb(2 3 8 / 0.7);
+  --shadow-pop: 0 1px 2px rgb(0 0 0 / 0.5), 0 16px 44px -10px rgb(124 124 255 / 0.4);
+  --shadow-glow: 0 0 0 1px rgb(124 124 255 / 0.3), 0 8px 32px -6px rgb(124 124 255 / 0.5);
+  --page-glow:
+    radial-gradient(50% 40% at 15% 0%, rgb(124 124 255 / 0.14), transparent 70%),
+    radial-gradient(45% 35% at 88% 8%, rgb(47 211 165 / 0.1), transparent 70%);
+}

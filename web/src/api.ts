@@ -1,17 +1,18 @@
 export interface User { id: string; email: string; name: string; role: string; enabled: boolean; balance: number; reserved: number; permissions: string[]; groups: string[]; created_at: string }
 export interface ApiKey { id: string; user_id: string; name: string; key_prefix: string; group_id: string; group_name: string; expires_at: string | null; revoked_at: string | null; last_used_at: string | null; created_at: string }
 /** `groups` holds group ids, not names — resolve them through /admin/groups. */
-export interface Channel { id: string; name: string; base_url: string; provider: 'openai' | 'ollama' | 'kimi' | 'opencode_go' | 'anthropic'; models: string[]; enabled: boolean; auto_disabled: boolean; disabled_reason: string; priority: number; groups: string[]; key_count: number; created_at: string; updated_at: string }
+export interface Channel { id: string; name: string; base_url: string; provider: 'openai' | 'ollama' | 'kimi' | 'opencode_go' | 'anthropic'; models: string[]; enabled: boolean; auto_disabled: boolean; disabled_reason: string; priority: number; groups: string[]; key_count: number; created_at: string; updated_at: string; model_routes: ModelRoute[] }
 
 export interface ChannelKey { id: string; name: string; enabled: boolean; created_at: string }
 export interface ChannelKeyForm { name?: string; api_key: string }
 
-export interface ModelRoute { id: string; public_model: string; upstream_model: string; channel_id: string; priority: number; weight: number; enabled: boolean; hidden: boolean; created_at: string }
-export interface Group { id: string; name: string; multiplier: number; created_at: string }
+export interface ModelRoute { id: string; public_model: string; upstream_model: string; channel_id?: string; priority: number; weight: number; enabled: boolean; hidden: boolean; created_at: string }
+export interface ModelRouteForm { public_model: string; upstream_model: string; priority?: number; weight?: number; hidden?: boolean }
+export interface Group { id: string; name: string; multiplier: number; max_concurrency: number | null; public: boolean; created_at: string }
 export interface RequestLog { request_id: string; user_id: string | null; api_key_id: string | null; channel_id: string | null; model: string; status_code: number; prompt_tokens: number | null; completion_tokens: number | null; total_tokens: number | null; duration_ms: number; error_code: string | null; created_at: string }
 export interface Account { id: string; email: string; name: string; role: string; avatar_url: string; permissions: string[]; balance: number; reserved: number; leaderboard_opt_in: boolean; leaderboard_mask_name: boolean; must_change_password?: boolean }
 export interface Pricing { id: string; model: string; input_per_million: number; cached_input_per_million: number; output_per_million: number; multiplier: number; enabled: boolean; updated_at: string }
-export interface CatalogGroup { id: string; name: string; multiplier: number }
+export interface CatalogGroup { id: string; name: string; multiplier: number; public: boolean }
 export interface CatalogModel { id: string; model: string; provider: string; provider_slug: string; input_per_million: number | null; cached_input_per_million: number | null; output_per_million: number | null; multiplier: number | null; groups: CatalogGroup[] }
 export interface ModelProvider { id: string; name: string; slug: string; prefixes: string[]; priority: number }
 export interface UsageRecord { request_id: string; model: string; prompt_tokens: number; cached_prompt_tokens: number; completion_tokens: number; cost: string; status: string; created_at: string }
@@ -25,7 +26,7 @@ export interface VendorRanking { rank: number; vendor: string; total_tokens: num
 export interface RankingMover { model_name: string; vendor: string; rank_delta: number; current_rank: number; growth_pct: number }
 export interface UserRanking { rank: number; name: string; total_tokens: number; total_cost: number; share: number; growth_pct: number; requests: number; top_model: string }
 export interface Rankings { period: string; models: ModelRanking[]; vendors: VendorRanking[]; top_movers: RankingMover[]; top_droppers: RankingMover[]; users: UserRanking[]; total_tokens: number; updated_at: string }
-export interface SiteSettings { name: string; icon_url: string; auto_disable_failed_channels: boolean; geetest_enabled?: boolean; geetest_captcha_id?: string; email_verification_enabled?: boolean }
+export interface SiteSettings { name: string; icon_url: string; auto_disable_failed_channels: boolean; geetest_enabled?: boolean; geetest_captcha_id?: string; email_verification_enabled?: boolean; oauth_providers?: string[] }
 export interface AdminSiteSettings { name: string; icon_url: string; auto_disable_failed_channels: boolean; geetest_captcha_id: string; has_geetest_captcha_key: boolean; smtp_host: string; smtp_port: string; smtp_username: string; has_smtp_password: boolean; smtp_from: string }
 export interface ReliabilitySettings { retry_count: number; retry_status_codes: string; health_check_mode: 'off' | 'scheduled_all' | 'passive_recovery'; health_check_interval_minutes: number; health_check_auto_recover: boolean; health_check_channel_ids: string; auto_disable_on_test_failure: boolean; auto_disable_slow_seconds: number; auto_disable_status_codes: string; auto_disable_keywords: string }
 
@@ -160,6 +161,16 @@ export interface AdminSubscription {
   updated_at: string
 }
 
+export interface PublicActivityItem {
+  model: string
+  status_code: number
+  duration_ms: number
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  created_at: string
+}
+
 export interface AuditLog {
   id: string
   action: string
@@ -179,6 +190,28 @@ export interface AuditLog {
   request_method: string
   request_path: string
   request_id: string
+  created_at: string
+}
+
+export interface OAuthProvider {
+  id: string
+  client_id: string
+  enabled: boolean
+  has_client_secret: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface OAuthProviderForm {
+  client_id: string
+  client_secret: string
+  enabled: boolean
+}
+
+export interface OAuthConnection {
+  provider: string
+  provider_username: string
+  provider_avatar_url: string
   created_at: string
 }
 
@@ -241,7 +274,7 @@ export interface LoginBody { email: string; password: string; code?: string; lot
 export interface RegisterBody { name: string; email: string; password: string; code?: string; lot_number?: string; captcha_output?: string; pass_token?: string; gen_time?: string }
 export interface KeyForm { user_id?: string; name: string; expires_at: string; group_id: string }
 export interface AccountKeyForm { name: string; expires_at: string; group_id: string }
-export interface ChannelForm { name: string; provider: string; base_url: string; api_key: string; api_keys?: string[]; models: string[]; priority: number; groups: string[] }
+export interface ChannelForm { name: string; provider: string; base_url: string; api_key: string; api_keys?: string[]; models: string[]; priority: number; groups: string[]; model_routes?: ModelRouteForm[] }
 export interface ProviderForm { name: string; slug: string; prefixes: string[]; priority: number; id?: string }
 export interface PaymentSettingsForm { enabled: boolean; base_url: string; merchant_id: string; merchant_key: string; public_base_url: string }
 export interface PaymentMethodForm { code: string; name: string; enabled: boolean }
@@ -310,13 +343,14 @@ export const endpoints = {
   getAdminUsers: () => get<{ data: User[] }>('/admin/users'),
   updateUser: (id: string, update: UserUpdate) => send(`/admin/users/${encodeURIComponent(id)}`, 'PUT', update),
   getAdminGroups: () => get<{ data: Group[] }>('/admin/groups'),
-  createGroup: (name: string, multiplier: number) => send('/admin/groups', 'POST', { name, multiplier }),
-  updateGroup: (id: string, multiplier: number) => send(`/admin/groups/${encodeURIComponent(id)}`, 'PUT', { multiplier }),
+  createGroup: (name: string, multiplier: number, maxConcurrency: number | null, publicGroup: boolean) => send('/admin/groups', 'POST', { name, multiplier, max_concurrency: maxConcurrency, public: publicGroup }),
+  updateGroup: (id: string, multiplier: number, maxConcurrency: number | null, publicGroup: boolean) => send(`/admin/groups/${encodeURIComponent(id)}`, 'PUT', { multiplier, max_concurrency: maxConcurrency, public: publicGroup }),
   importGroups: (entries: Record<string, number>) => send('/admin/groups/import', 'POST', entries),
   getAdminKeys: () => get<{ data: ApiKey[] }>('/admin/keys'),
   createKey: (form: KeyForm) => post<{ key: string }>('/admin/keys', form),
   revokeKey: (id: string) => send(`/admin/keys/${encodeURIComponent(id)}/revoke`, 'POST'),
   getAdminChannels: () => get<{ data: Channel[] }>('/admin/channels'),
+  batchToggleChannels: (ids: string[], enabled: boolean) => post<{ affected: number }>('/admin/channels/batch-status', { ids, enabled }),
   createChannel: (form: ChannelForm) => send('/admin/channels', 'POST', form),
   fetchChannelModels: (baseUrl: string, apiKey: string) => post<{ models: string[] }>('/admin/channels/models', { base_url: baseUrl, api_key: apiKey }),
   updateChannel: (id: string, form: ChannelForm) => send(`/admin/channels/${encodeURIComponent(id)}`, 'PUT', form),
@@ -359,6 +393,10 @@ export const endpoints = {
   getModelRoutes: () => get<{ data: ModelRoute[] }>('/admin/model-routes'),
   createModelRoute: (form: Record<string, unknown>) => send('/admin/model-routes', 'POST', form),
   updateModelRoute: (id: string, form: Record<string, unknown>) => send(`/admin/model-routes/${encodeURIComponent(id)}`, 'PUT', form),
+  getChannelRoutes: (channelId: string) => get<{ data: ModelRoute[] }>(`/admin/channels/${encodeURIComponent(channelId)}/routes`),
+  createChannelRoute: (channelId: string, form: ModelRouteForm) => post<{ id: string }>(`/admin/channels/${encodeURIComponent(channelId)}/routes`, form),
+  updateChannelRoute: (channelId: string, routeId: string, form: Record<string, unknown>) => send(`/admin/channels/${encodeURIComponent(channelId)}/routes/${encodeURIComponent(routeId)}`, 'PUT', form),
+  deleteChannelRoute: (channelId: string, routeId: string) => send(`/admin/channels/${encodeURIComponent(channelId)}/routes/${encodeURIComponent(routeId)}`, 'DELETE'),
   getGroupNames: () => get<{ data: string[] }>('/group'),
   setAccountKeyGroup: (id: string, groupId: string) => send(`/account/keys/${encodeURIComponent(id)}/group`, 'PUT', { group_id: groupId }),
   setKeyGroup: (id: string, groupId: string) => send(`/admin/keys/${encodeURIComponent(id)}/group`, 'PUT', { group_id: groupId }),
@@ -367,4 +405,11 @@ export const endpoints = {
   setUserGroups: (id: string, groups: string[]) => send(`/admin/users/${encodeURIComponent(id)}/groups`, 'PUT', { groups }),
   adjustBalance: (userId: string, amount: number, note: string) => send('/admin/wallets/adjustments', 'POST', { user_id: userId, amount, note }),
   getMigrationRequests: () => get<{ data: MigrationRequest[] }>('/admin/migrate/requests'),
+
+  getOAuthProviders: () => get<{ data: OAuthProvider[] }>('/admin/oauth/providers'),
+  saveOAuthProvider: (provider: string, form: OAuthProviderForm) => send(`/admin/oauth/providers/${encodeURIComponent(provider)}`, 'POST', form),
+  deleteOAuthProvider: (provider: string) => send(`/admin/oauth/providers/${encodeURIComponent(provider)}`, 'DELETE'),
+
+  getOAuthConnections: () => get<{ data: OAuthConnection[] }>('/account/oauth/connections'),
+  unlinkOAuthConnection: (provider: string) => send(`/account/oauth/${encodeURIComponent(provider)}/unlink`, 'POST'),
 }

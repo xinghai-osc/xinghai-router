@@ -29,6 +29,7 @@ export default {
   siteSettings: '站点设置',
   migrate: '数据迁移',
 
+  activity: '最近活动',
   models: '模型广场',
   rankings: '排行榜',
   pricingPublic: '定价',

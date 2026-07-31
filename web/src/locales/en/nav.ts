@@ -29,6 +29,7 @@ export default {
   siteSettings: 'Site',
   migrate: 'Migration',
 
+  activity: 'Activity',
   models: 'Models',
   rankings: 'Rankings',
   pricingPublic: 'Pricing',

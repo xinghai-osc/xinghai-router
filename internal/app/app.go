@@ -29,6 +29,8 @@ type Service struct {
 	background      *backgroundWriter
 	pricingCache    *ttlCache[string, pricingRule]
 	groupCache      *ttlCache[string, float64]
+	groupConcurrencyCache *ttlCache[string, int]
+	groupLimiter    *GroupLimiter
 	reliabilityData *ttlCache[struct{}, reliabilitySettings]
 	keyTouchCache   *ttlCache[string, struct{}]
 	scheduler       context.CancelFunc
@@ -104,6 +106,8 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 		background:      newBackgroundWriter(),
 		pricingCache:    newTTLCache[string, pricingRule](pricingCacheTTL),
 		groupCache:      newTTLCache[string, float64](groupCacheTTL),
+		groupConcurrencyCache: newTTLCache[string, int](groupCacheTTL),
+		groupLimiter:    NewGroupLimiter(),
 		reliabilityData: newTTLCache[struct{}, reliabilitySettings](reliabilityCacheTTL),
 		keyTouchCache:   newTTLCache[string, struct{}](keyTouchInterval),
 		migration:       migrationStatus{mu: &sync.Mutex{}},

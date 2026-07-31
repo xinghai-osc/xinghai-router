@@ -22,6 +22,14 @@ const groups = useResource(
 )
 
 const search = ref('')
+const selected = ref<Set<string>>(new Set())
+
+function toggleSelected(id: string) {
+  const next = new Set(selected.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  selected.value = next
+}
 
 const groupOptions = computed(() => groups.data.value.data)
 const groupNames = computed(() => new Map(groupOptions.value.map(group => [group.id, group.name])))
@@ -31,8 +39,36 @@ const filtered = computed(() => {
   const term = search.value.trim().toLowerCase()
   if (!term) return channels.data.value.data
   return channels.data.value.data.filter(channel =>
-    channel.name.toLowerCase().includes(term) || channel.base_url.toLowerCase().includes(term))
+    channel.name.toLowerCase().includes(term) ||
+    channel.base_url.toLowerCase().includes(term) ||
+    channel.models.some(m => m.toLowerCase().includes(term)))
 })
+
+const allSelected = computed(() => filtered.value.length > 0 && filtered.value.every(ch => selected.value.has(ch.id)))
+
+function toggleAll() {
+  if (allSelected.value) selected.value.clear()
+  else selected.value = new Set(filtered.value.map(ch => ch.id))
+}
+
+const batchConfirmOpen = ref(false)
+const batchEnabled = ref(false)
+
+function openBatchToggle(enabled: boolean) {
+  batchEnabled.value = enabled
+  batchConfirmOpen.value = true
+}
+
+async function confirmBatchToggle() {
+  const ids = [...selected.value]
+  const enabled = batchEnabled.value
+  const ok = await run(() => endpoints.batchToggleChannels(ids, enabled))
+  if (!ok) { toast.error(t('common.actionFailed')); return }
+  toast.success(t('admin.batchToggleDone', { action: enabled ? t('common.enable') : t('common.disable'), count: ids.length }))
+  batchConfirmOpen.value = false
+  selected.value.clear()
+  await channels.refresh()
+}
 
 const dialogOpen = ref(false)
 const editingId = ref('')
@@ -267,6 +303,11 @@ async function migrateKeys() {
       <template #actions>
         <ConsoleOpsSearch v-model="search" :placeholder="t('admin.channelsSearchPlaceholder')" />
         <UiButton variant="secondary" size="sm" @click="channels.refresh()">{{ t('common.refresh') }}</UiButton>
+        <template v-if="canManage && selected.size > 0">
+          <UiBadge tone="outline" class="text-xs">{{ selected.size }}</UiBadge>
+          <UiButton variant="secondary" size="sm" @click="openBatchToggle(true)">{{ t('admin.batchEnable') }}</UiButton>
+          <UiButton variant="secondary" size="sm" @click="openBatchToggle(false)">{{ t('admin.batchDisable') }}</UiButton>
+        </template>
         <UiButton v-if="canManage" size="sm" @click="openCreate">{{ t('admin.createChannel') }}</UiButton>
       </template>
     </ConsoleOpsPageHeader>
@@ -288,6 +329,10 @@ async function migrateKeys() {
       <UiTable v-else>
         <thead>
           <tr>
+            <th class="w-10">
+              <UiCheckbox v-if="canManage" :model-value="allSelected" @change="toggleAll" />
+            </th>
+            <th>{{ t('admin.channelId') }}</th>
             <th>{{ t('admin.channelName') }}</th>
             <th>{{ t('admin.provider') }}</th>
             <th>{{ t('admin.baseUrl') }}</th>
@@ -301,7 +346,16 @@ async function migrateKeys() {
         </thead>
         <tbody>
           <tr v-for="channel in filtered" :key="channel.id">
-            <td class="font-medium text-ink">{{ channel.name }}</td>
+            <td>
+              <UiCheckbox v-if="canManage" :model-value="selected.has(channel.id)" @change="toggleSelected(channel.id)" />
+            </td>
+            <td class="font-mono text-[13px] text-faint">{{ channel.id }}</td>
+            <td class="font-medium text-ink">
+              <div class="flex items-center gap-2">
+                {{ channel.name }}
+                <UiBadge v-if="channel.key_count > 1" tone="warn" class="shrink-0">{{ t('admin.multiKey') }}</UiBadge>
+              </div>
+            </td>
             <td><UiBadge tone="outline">{{ channel.provider }}</UiBadge></td>
             <td class="max-w-64 truncate font-mono text-[13px] text-muted">{{ channel.base_url }}</td>
             <td class="num">{{ formatNumber(channel.models.length) }}</td>
@@ -339,7 +393,7 @@ async function migrateKeys() {
       </UiTable>
     </ConsoleOpsListState>
 
-    <UiDialog
+    <UiSlidePanel
       v-model:open="dialogOpen"
       size="lg"
       :title="editingId ? t('admin.editChannel') : t('admin.createChannel')"
@@ -394,9 +448,9 @@ async function migrateKeys() {
         <UiButton variant="secondary" @click="dialogOpen = false">{{ t('common.cancel') }}</UiButton>
         <UiButton :loading="busy" @click="save">{{ t('common.save') }}</UiButton>
       </template>
-    </UiDialog>
+    </UiSlidePanel>
 
-    <UiDialog
+    <UiSlidePanel
       v-model:open="keysDialogOpen"
       size="md"
       :title="t('admin.manageKeys')"
@@ -436,9 +490,9 @@ v-for="key in channelKeys.data.value.data" :key="key.id"
       <template #footer>
         <UiButton variant="secondary" @click="keysDialogOpen = false">{{ t('common.close') }}</UiButton>
       </template>
-    </UiDialog>
+    </UiSlidePanel>
 
-    <UiDialog
+    <UiSlidePanel
       v-model:open="addKeyDialogOpen"
       size="sm"
       :title="t('admin.addKey')"
@@ -454,6 +508,20 @@ v-for="key in channelKeys.data.value.data" :key="key.id"
       <template #footer>
         <UiButton variant="secondary" @click="addKeyDialogOpen = false">{{ t('common.cancel') }}</UiButton>
         <UiButton :loading="busy" @click="addKey">{{ t('common.save') }}</UiButton>
+      </template>
+    </UiSlidePanel>
+
+    <UiDialog
+      v-model:open="batchConfirmOpen"
+      size="sm"
+      :title="batchEnabled ? t('admin.batchEnable') : t('admin.batchDisable')"
+    >
+      <p class="text-sm text-muted">
+        {{ t('admin.confirmBatchToggle', { toggle: batchEnabled ? t('common.enable') : t('common.disable'), count: selected.size }) }}
+      </p>
+      <template #footer>
+        <UiButton variant="secondary" @click="batchConfirmOpen = false">{{ t('common.cancel') }}</UiButton>
+        <UiButton :loading="busy" @click="confirmBatchToggle">{{ t('common.confirm') }}</UiButton>
       </template>
     </UiDialog>
   </div>

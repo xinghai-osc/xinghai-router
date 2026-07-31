@@ -507,7 +507,7 @@ func (s *Service) batchExtendSubscriptions(w http.ResponseWriter, r *http.Reques
 			return
 		}
 	}
-	const ext = `update user_subscriptions set current_period_end = case when current_period_end is null or current_period_end <= now() then now() + ($1 || ' days')::interval else current_period_end + ($1 || ' days')::interval end, updated_at = now() where status='active'`
+	const ext = `update user_subscriptions set current_period_end = case when current_period_end is null or current_period_end <= now() then now() + $1::interval else current_period_end + $1::interval end, updated_at = now() where status='active'`
 	var result pgconn.CommandTag
 	var err error
 	days := fmt.Sprintf("%d days", in.Days)

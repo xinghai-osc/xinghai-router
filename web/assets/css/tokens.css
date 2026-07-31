@@ -1,0 +1,50 @@
+/* ------------------------------------------------------------------
+   Non-colour tokens + the Tailwind mapping.
+
+   Colours live in assets/css/themes/*.css, one file per preset. Every
+   preset defines both its light and its dark values under
+   `:root[data-preset='<name>']` / `[data-preset='<name>'][data-theme='dark']`
+   so that the two axes never fight over specificity.
+------------------------------------------------------------------- */
+
+@theme inline {
+  --color-paper: var(--paper);
+  --color-surface: var(--surface);
+  --color-sunken: var(--sunken);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+
+  --color-clay: var(--clay);
+  --color-clay-hover: var(--clay-hover);
+  --color-clay-soft: var(--clay-soft);
+  --color-clay-ink: var(--clay-ink);
+
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB',
+    'Noto Sans SC', 'Microsoft YaHei', sans-serif;
+  --font-serif: 'Instrument Serif', 'Iowan Old Style', Georgia, serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --radius-control: var(--radius-control-token);
+  --radius-card: var(--radius-card-token);
+
+  --shadow-pop: var(--shadow-pop);
+  --shadow-glow: var(--shadow-glow);
+
+  --text-2xs: 0.6875rem;
+}
+
+:root {
+  --radius-control-token: 10px;
+  --radius-card-token: 16px;
+  --shadow-glow: none;
+}

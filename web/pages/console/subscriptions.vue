@@ -287,7 +287,7 @@ async function confirmCancel() {
       </div>
     </UiCard>
 
-    <UiDialog
+    <UiSlidePanel
       v-model:open="subscribeOpen"
       size="sm"
       :title="selectedPlan ? t('console.subscribeTitle', { name: selectedPlan.name }) : t('console.subscribe')"
@@ -312,7 +312,7 @@ async function confirmCancel() {
           {{ t('console.subscribe') }}
         </UiButton>
       </template>
-    </UiDialog>
+    </UiSlidePanel>
 
     <UiDialog
       v-model:open="cancelOpen"
