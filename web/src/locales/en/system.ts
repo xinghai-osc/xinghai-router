@@ -5,6 +5,7 @@ export default {
   captcha: 'Captcha',
   payments: 'Payments',
   reliability: 'Reliability',
+  conversationCache: 'Conversation cache',
   migration: 'Migration',
 
   noAccessTitle: 'No access',
@@ -113,6 +114,14 @@ export default {
   autoDisableKeywords: 'Disabling keywords',
   autoDisableKeywordsHint: 'Comma separated. An upstream error containing any keyword disables the channel.',
   reliabilitySaved: 'Reliability settings saved',
+
+  conversationCacheTitle: 'Conversation cache',
+  conversationCacheLead: 'When enabled, the gateway stores each conversation request and response for one day, clearing expired records at midnight.',
+  conversationCacheEnabled: 'Enable conversation cache',
+  conversationCacheEnabledHint: 'Every proxied conversation is recorded and retained for 24 hours before automatic deletion.',
+  conversationCacheRetention: 'Retention',
+  conversationCacheRetentionHint: 'Records are kept for 24 hours and cleared at midnight.',
+  conversationCacheSaved: 'Conversation cache settings saved',
 
   paymentTitle: 'Payment settings',
   paymentLead: 'Configure the EPay merchant credentials and the methods offered to users.',

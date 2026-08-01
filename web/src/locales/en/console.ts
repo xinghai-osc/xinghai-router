@@ -65,6 +65,28 @@ export default {
   revokeKeyBody: 'Requests using this key fail immediately and it cannot be restored.',
   keyNameRequired: 'A key name is required',
 
+  // ---- Usage limits ----
+  usageLimits: 'Usage limits',
+  usageLimitsHint: 'Cap this key on requests, tokens, or spend over a time window. Requests return 429 once a limit is reached.',
+  quotaWindow: 'Window',
+  quotaWindowDay: 'Daily',
+  quotaWindowMonth: 'Monthly',
+  quotaWindowTotal: 'Lifetime',
+  quotaMaxRequests: 'Max requests',
+  quotaMaxTokens: 'Max tokens',
+  quotaMaxCost: 'Max spend',
+  quotaMaxRequestsHint: 'Leave blank for no request limit',
+  quotaMaxTokensHint: 'Leave blank for no token limit',
+  quotaMaxCostHint: 'Leave blank for no spend limit',
+  quotaUnlimited: 'Unlimited',
+  quotaNoLimits: 'No usage limits set',
+  quotaNoLimitsHint: 'Add a limit to cap this key\u2019s usage.',
+  quotaAddLimit: 'Add limit',
+  quotaEditLimit: 'Edit limit',
+  quotaSaved: 'Usage limit saved',
+  quotaDeleted: 'Usage limit deleted',
+  quotaLimitInvalid: 'Enter valid limits (non-negative; requests and tokens must be integers)',
+
   // ---- Usage ----
   usageDescription: 'The latest 100 calls, with tokens and cost per request.',
   usageSearchPlaceholder: 'Search model or request ID',

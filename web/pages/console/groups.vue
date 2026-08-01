@@ -190,6 +190,25 @@ async function runBatch() {
   selected.value.clear()
   await groups.refresh()
 }
+
+const removeTarget = ref<Group | null>(null)
+const removeOpen = ref(false)
+
+function askRemove(group: Group) {
+  removeTarget.value = group
+  removeOpen.value = true
+}
+
+async function remove() {
+  const target = removeTarget.value
+  if (!target) return
+  const ok = await run(() => endpoints.deleteGroup(target.id))
+  if (!ok) { toast.error(t('common.actionFailed')); return }
+  toast.success(t('admin.groupDeleted'))
+  removeOpen.value = false
+  selected.value.delete(target.id)
+  await groups.refresh()
+}
 </script>
 
 <template>
@@ -276,15 +295,18 @@ async function runBatch() {
             </td>
             <td class="text-muted whitespace-nowrap">{{ formatDateTime(group.created_at) }}</td>
             <td v-if="canManage">
-              <UiButton
-                variant="ghost"
-                size="sm"
-                :disabled="!isDirty(group)"
-                :loading="savingId === group.id"
-                @click="saveGroup(group)"
-              >
-                {{ t('common.save') }}
-              </UiButton>
+              <div class="flex items-center gap-1">
+                <UiButton
+                  variant="ghost"
+                  size="sm"
+                  :disabled="!isDirty(group)"
+                  :loading="savingId === group.id"
+                  @click="saveGroup(group)"
+                >
+                  {{ t('common.save') }}
+                </UiButton>
+                <UiButton variant="ghost" size="sm" @click="askRemove(group)">{{ t('common.delete') }}</UiButton>
+              </div>
             </td>
           </tr>
         </tbody>
@@ -356,5 +378,13 @@ async function runBatch() {
         <UiButton :loading="busy" @click="runBatch">{{ t('common.submit') }}</UiButton>
       </template>
     </UiSlidePanel>
+
+    <UiDialog v-model:open="removeOpen" size="sm" :title="t('common.delete')">
+      <p class="text-sm text-muted">{{ t('admin.confirmDeleteGroup', { name: removeTarget?.name ?? '' }) }}</p>
+      <template #footer>
+        <UiButton variant="secondary" @click="removeOpen = false">{{ t('common.cancel') }}</UiButton>
+        <UiButton variant="danger" :loading="busy" @click="remove">{{ t('common.delete') }}</UiButton>
+      </template>
+    </UiDialog>
   </div>
 </template>

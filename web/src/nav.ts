@@ -1,6 +1,6 @@
 import {
   Activity, ArrowRightLeft, BadgeDollarSign, Blocks, CreditCard, Database, FileClock,
-  KeyRound, LayoutDashboard, Layers, Receipt, Repeat, ScrollText, Server,
+  KeyRound, LayoutDashboard, Layers, MessageSquareText, Receipt, Repeat, ScrollText, Server,
   Settings, ShieldCheck, Sparkles, UserCog, Users, Wallet,
 } from 'lucide-vue-next'
 import type { Component } from 'vue'
@@ -52,6 +52,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { to: '/console/pricing', labelKey: 'nav.pricing', icon: BadgeDollarSign, permission: 'pricing.read' },
       { to: '/console/model-routes', labelKey: 'nav.modelRoutes', icon: ArrowRightLeft, permission: 'routes.manage' },
       { to: '/console/logs', labelKey: 'nav.logs', icon: ScrollText, permission: 'logs.read' },
+      { to: '/console/conversation-cache', labelKey: 'nav.conversationCache', icon: MessageSquareText, permission: 'logs.read' },
       { to: '/console/audit', labelKey: 'nav.audit', icon: FileClock, permission: 'audit.read' },
     ],
   },
@@ -61,6 +62,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { to: '/console/subscription-plans', labelKey: 'nav.subscriptionPlans', icon: Sparkles, permission: 'system.manage' },
       { to: '/console/admin-subscriptions', labelKey: 'nav.adminSubscriptions', icon: Repeat, permission: 'users.read' },
       { to: '/console/reliability', labelKey: 'nav.reliability', icon: ShieldCheck, permission: 'system.manage' },
+      { to: '/console/conversation-cache-settings', labelKey: 'nav.conversationCacheSettings', icon: MessageSquareText, permission: 'system.manage' },
       { to: '/console/payment-settings', labelKey: 'nav.paymentSettings', icon: CreditCard, permission: 'system.manage' },
       { to: '/console/site-settings', labelKey: 'nav.siteSettings', icon: Settings, permission: 'system.manage' },
       { to: '/console/migrate', labelKey: 'nav.migrate', icon: Database, permission: 'system.manage' },

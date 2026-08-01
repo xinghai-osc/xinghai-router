@@ -110,7 +110,7 @@ function buildUpdate(): UserUpdate | null {
   }
   if (form.password) update.password = form.password
 
-  const balance = form.balance.trim()
+  const balance = String(form.balance ?? '').trim()
   if (balance) {
     const amount = Number(balance)
     if (!Number.isFinite(amount) || amount < 0) { formError.value = t('admin.balanceInvalid'); return null }

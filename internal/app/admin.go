@@ -989,6 +989,23 @@ func (s *Service) batchUpdateGroups(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"affected": affected})
 }
 
+func (s *Service) deleteGroup(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	result, err := s.db.Exec(r.Context(), `delete from groups where id=$1`, id)
+	if err != nil {
+		writeError(w, 500, "internal_error", "could not delete group")
+		return
+	}
+	if result.RowsAffected() != 1 {
+		writeError(w, 404, "not_found", "group not found")
+		return
+	}
+	s.groupCache.invalidate(id)
+	s.groupConcurrencyCache.invalidate(id)
+	s.audit(r, "group.deleted", "group", id, nil)
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Service) modelCatalog(w http.ResponseWriter, r *http.Request) {
 	account := accountFromContext(r)
 	providers := s.providers(r)
@@ -1184,6 +1201,13 @@ func validQuotaLimit(value *int64) bool {
 		return true
 	}
 	return *value >= 0 && *value <= maxQuotaLimit
+}
+
+func validQuotaCost(value *float64) bool {
+	if value == nil {
+		return true
+	}
+	return validNonNegativeFinite(*value) && *value <= maxKeyQuotaCost
 }
 
 func validPricingMultiplier(value float64) bool {
@@ -2690,14 +2714,15 @@ func (s *Service) deleteChannelRoute(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) upsertQuota(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		UserID      string `json:"user_id"`
-		APIKeyID    string `json:"api_key_id"`
-		Model       string `json:"model"`
-		Window      string `json:"window"`
-		MaxRequests *int64 `json:"max_requests"`
-		MaxTokens   *int64 `json:"max_tokens"`
+		UserID      string   `json:"user_id"`
+		APIKeyID    string   `json:"api_key_id"`
+		Model       string   `json:"model"`
+		Window      string   `json:"window"`
+		MaxRequests *int64   `json:"max_requests"`
+		MaxTokens   *int64   `json:"max_tokens"`
+		MaxCost     *float64 `json:"max_cost"`
 	}
-	if decode(r, &in) != nil || (in.UserID == "" && in.APIKeyID == "") || (in.Window != "minute" && in.Window != "day" && in.Window != "month") || (in.MaxRequests == nil && in.MaxTokens == nil) {
+	if decode(r, &in) != nil || (in.UserID == "" && in.APIKeyID == "") || (in.Window != "minute" && in.Window != "day" && in.Window != "month" && in.Window != "total") || (in.MaxRequests == nil && in.MaxTokens == nil && in.MaxCost == nil) {
 		writeError(w, 400, "invalid_request", "scope, window, and a limit are required")
 		return
 	}
@@ -2706,18 +2731,77 @@ func (s *Service) upsertQuota(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_request", "model must be 1-200 characters when set")
 		return
 	}
-	if !validQuotaLimit(in.MaxRequests) || !validQuotaLimit(in.MaxTokens) {
+	if !validQuotaLimit(in.MaxRequests) || !validQuotaLimit(in.MaxTokens) || !validQuotaCost(in.MaxCost) {
 		writeError(w, 400, "invalid_request", "limits must be between 0 and 1e12")
 		return
 	}
 	id, _ := randomID()
-	_, err := s.db.Exec(r.Context(), `insert into quota_limits(id,user_id,api_key_id,model,"window",max_requests,max_tokens) values($1,nullif($2,'')::bigint,nullif($3,'')::uuid,nullif($4,''),$5,$6,$7) on conflict (coalesce(user_id, 0), coalesce(api_key_id, '00000000-0000-0000-0000-000000000000'::uuid), coalesce(model, ''), "window") do update set max_requests=excluded.max_requests,max_tokens=excluded.max_tokens`, id, in.UserID, in.APIKeyID, in.Model, in.Window, in.MaxRequests, in.MaxTokens)
+	_, err := s.db.Exec(r.Context(), `insert into quota_limits(id,user_id,api_key_id,model,"window",max_requests,max_tokens,max_cost) values($1,nullif($2,'')::bigint,nullif($3,'')::uuid,nullif($4,''),$5,$6,$7,$8) on conflict (coalesce(user_id, 0), coalesce(api_key_id, '00000000-0000-0000-0000-000000000000'::uuid), coalesce(model, ''), "window") do update set max_requests=excluded.max_requests,max_tokens=excluded.max_tokens,max_cost=excluded.max_cost`, id, in.UserID, in.APIKeyID, in.Model, in.Window, in.MaxRequests, in.MaxTokens, in.MaxCost)
 	if err != nil {
 		writeError(w, 400, "invalid_request", "could not save quota")
 		return
 	}
 	s.audit(r, "quota.updated", "quota", id, map[string]any{"user_id": in.UserID, "api_key_id": in.APIKeyID, "model": in.Model, "window": in.Window})
 	writeJSON(w, 200, map[string]any{"id": id})
+}
+
+// listQuotaLimits returns all quota_limits rows, optionally filtered by
+// user_id and/or api_key_id query parameters.
+func (s *Service) listQuotaLimits(w http.ResponseWriter, r *http.Request) {
+	userID := strings.TrimSpace(r.URL.Query().Get("user_id"))
+	apiKeyID := strings.TrimSpace(r.URL.Query().Get("api_key_id"))
+	q := `select id,coalesce(user_id::text,''),coalesce(api_key_id::text,''),coalesce(model,''),"window",max_requests,max_tokens,max_cost,created_at from quota_limits`
+	var args []any
+	var clauses []string
+	if userID != "" {
+		args = append(args, userID)
+		clauses = append(clauses, "user_id=$"+strconv.Itoa(len(args)))
+	}
+	if apiKeyID != "" {
+		args = append(args, apiKeyID)
+		clauses = append(clauses, "api_key_id=$"+strconv.Itoa(len(args)))
+	}
+	if len(clauses) > 0 {
+		q += " where " + strings.Join(clauses, " and ")
+	}
+	q += ` order by created_at desc`
+	rows, err := s.db.Query(r.Context(), q, args...)
+	if err != nil {
+		writeError(w, 500, "internal_error", "query failed")
+		return
+	}
+	defer rows.Close()
+	data := []map[string]any{}
+	for rows.Next() {
+		var id, uid, keyID, model, window string
+		var maxRequests, maxTokens *int64
+		var maxCost *float64
+		var created any
+		if rows.Scan(&id, &uid, &keyID, &model, &window, &maxRequests, &maxTokens, &maxCost, &created) == nil {
+			data = append(data, map[string]any{"id": id, "user_id": uid, "api_key_id": keyID, "model": model, "window": window, "max_requests": maxRequests, "max_tokens": maxTokens, "max_cost": maxCost, "created_at": created})
+		}
+	}
+	writeJSON(w, 200, map[string]any{"data": data})
+}
+
+// deleteQuotaLimit removes a single quota_limits row by id.
+func (s *Service) deleteQuotaLimit(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		writeError(w, 400, "invalid_request", "quota id is required")
+		return
+	}
+	result, err := s.db.Exec(r.Context(), `delete from quota_limits where id=$1`, id)
+	if err != nil {
+		writeError(w, 500, "internal_error", "could not delete quota")
+		return
+	}
+	if result.RowsAffected() == 0 {
+		writeError(w, 404, "not_found", "quota not found")
+		return
+	}
+	s.audit(r, "quota.deleted", "quota", id, nil)
+	w.WriteHeader(http.StatusNoContent)
 }
 func (s *Service) listLogs(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.db.Query(r.Context(), `select rl.request_id,coalesce(rl.user_id::text,''),coalesce(u.name,'') as user_name,coalesce(rl.api_key_id::text,''),coalesce(ak.name,'') as key_name,coalesce(rl.channel_id::text,''),coalesce(c.name,'') as channel_name,coalesce(rl.channel_key_id::text,''),coalesce(ck.name,'') as channel_key_name,coalesce(rl.group_id::text,''),coalesce(g.name,'') as group_name,rl.model,rl.status_code,coalesce(rl.prompt_tokens,0),coalesce(rl.completion_tokens,0),coalesce(rl.total_tokens,0),rl.duration_ms,coalesce(rl.error_code,''),case when rl.error_code is not null or rl.status_code>=400 then rl.error_detail else '' end,rl.client_ip,rl.user_agent,rl.created_at from request_logs rl left join users u on u.id=rl.user_id left join api_keys ak on ak.id=rl.api_key_id left join channels c on c.id=rl.channel_id left join channel_api_keys ck on ck.id=rl.channel_key_id left join groups g on g.id=rl.group_id order by rl.created_at desc limit 100`)

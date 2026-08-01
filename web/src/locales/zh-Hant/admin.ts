@@ -74,6 +74,8 @@ export default {
   groupNamePlaceholder: 'default',
   groupCreated: '分組已創建',
   groupUpdated: '倍率已更新',
+  groupDeleted: '分組已刪除',
+  confirmDeleteGroup: '確定刪除分組「{name}」嗎？關聯的 API key、請求日誌與訂閱計劃的分組將自動清空，此操作不可撤銷。',
   groupNameRequired: '請填寫分組名稱',
   multiplierInvalid: '倍率必須大於 0 且不超過 1000',
   maxConcurrency: '並發限制',

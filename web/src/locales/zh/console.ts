@@ -65,6 +65,28 @@ export default {
   revokeKeyBody: '吊销后使用该密钥的请求会立刻失败，且无法恢复。',
   keyNameRequired: '请填写密钥名称',
 
+  // ---- 用量限制 ----
+  usageLimits: '用量限制',
+  usageLimitsHint: '设置此密钥在时间窗口内的请求、Token 或消费上限。达到上限后请求会返回 429。',
+  quotaWindow: '时间窗口',
+  quotaWindowDay: '每日',
+  quotaWindowMonth: '每月',
+  quotaWindowTotal: '总量',
+  quotaMaxRequests: '最大请求数',
+  quotaMaxTokens: '最大 Token 数',
+  quotaMaxCost: '最大消费',
+  quotaMaxRequestsHint: '留空表示不限制请求数',
+  quotaMaxTokensHint: '留空表示不限制 Token 数',
+  quotaMaxCostHint: '留空表示不限制消费金额',
+  quotaUnlimited: '不限',
+  quotaNoLimits: '尚未设置用量限制',
+  quotaNoLimitsHint: '添加一条限制来控制此密钥的用量。',
+  quotaAddLimit: '添加限制',
+  quotaEditLimit: '编辑限制',
+  quotaSaved: '用量限制已保存',
+  quotaDeleted: '用量限制已删除',
+  quotaLimitInvalid: '请输入有效的限制值（非负数，请求数和 Token 数为整数）',
+
   // ---- 用量 ----
   usageDescription: '最近 100 条调用记录，含每次请求的 Tokens 与费用。',
   usageSearchPlaceholder: '搜索模型或请求 ID',

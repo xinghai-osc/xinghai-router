@@ -14,8 +14,11 @@ import (
 )
 
 // geetestPayload is the client-side validation result produced by the
-// Geetest v4 widget after the user completes the challenge.
+// Geetest v4 widget after the user completes the challenge. The widget's
+// getValidate() also returns captcha_id; we accept and use it so the raw
+// widget output decodes cleanly under DisallowUnknownFields.
 type geetestPayload struct {
+	CaptchaID     string `json:"captcha_id"`
 	LotNumber     string `json:"lot_number"`
 	CaptchaOutput string `json:"captcha_output"`
 	PassToken     string `json:"pass_token"`
@@ -36,6 +39,12 @@ func (s *Service) verifyGeetest(ctx context.Context, payload geetestPayload) err
 	if !payload.complete() {
 		return fmt.Errorf("captcha validation is required")
 	}
+	// Prefer the captcha_id the client sent (it is the one the challenge was
+	// issued for); fall back to the system-configured id.
+	captchaID := payload.CaptchaID
+	if captchaID == "" {
+		captchaID = sys.GeetestCaptchaID
+	}
 	mac := hmac.New(sha256.New, []byte(sys.GeetestCaptchaKey))
 	mac.Write([]byte(payload.LotNumber))
 	form := url.Values{
@@ -45,7 +54,7 @@ func (s *Service) verifyGeetest(ctx context.Context, payload geetestPayload) err
 		"gen_time":       {payload.GenTime},
 		"sign_token":     {hex.EncodeToString(mac.Sum(nil))},
 	}
-	endpoint := fmt.Sprintf("https://gcaptcha4.geetest.com/validate?captcha_id=%s", url.QueryEscape(sys.GeetestCaptchaID))
+	endpoint := fmt.Sprintf("https://gcaptcha4.geetest.com/validate?captcha_id=%s", url.QueryEscape(captchaID))
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
 	if err != nil {
 		return fmt.Errorf("captcha verification unavailable")

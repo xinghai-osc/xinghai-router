@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { KeyRound, MoreHorizontal, Plus } from 'lucide-vue-next'
-import { endpoints, type AccountKeyForm, type ApiKey, type Group } from '~/src/api'
-import { formatDateTime } from '~/src/format'
+import { endpoints, type AccountKeyForm, type ApiKey, type Group, type KeyQuota, type KeyQuotaForm, type KeyQuotaLimit } from '~/src/api'
+import { formatCompact, formatDateTime, formatMoney, formatNumber } from '~/src/format'
 
 definePageMeta({ layout: 'console', middleware: 'console-auth' })
 
@@ -34,6 +34,21 @@ const revealedSecret = ref('')
 const revealError = ref('')
 const formError = ref('')
 const form = reactive({ name: '', expiresOn: '', groupId: '' })
+
+const quotaPanelOpen = ref(false)
+const editingQuotaWindow = ref('')
+const quotaFormError = ref('')
+const quotaForm = reactive({ window: 'day' as 'day' | 'month' | 'total', maxRequests: '', maxTokens: '', maxCost: '' })
+const keyQuota = useResource(
+  () => editing.value && formOpen.value ? endpoints.getKeyQuota(editing.value.id) : Promise.resolve({ limits: [], usage: [] } as KeyQuota),
+  { data: { limits: [], usage: [] } as KeyQuota },
+)
+
+const QUOTA_WINDOWS = computed(() => [
+  { value: 'day', label: t('console.quotaWindowDay') },
+  { value: 'month', label: t('console.quotaWindowMonth') },
+  { value: 'total', label: t('console.quotaWindowTotal') },
+])
 
 const groupOptions = computed(() => [
   { value: '', label: t('console.keyGroupDefault') },
@@ -89,6 +104,7 @@ function openEdit(key: ApiKey) {
   form.expiresOn = toDateInput(key.expires_at)
   form.groupId = key.group_id
   formOpen.value = true
+  keyQuota.refresh()
 }
 
 function openRevoke(key: ApiKey) {
@@ -148,6 +164,78 @@ async function confirmRevoke() {
   if (!ok) { toast.error(t('common.actionFailed')); return }
   toast.success(t('console.keyRevoked'))
   await refresh()
+}
+
+function openCreateQuota() {
+  editingQuotaWindow.value = ''
+  quotaFormError.value = ''
+  quotaForm.window = 'day'
+  quotaForm.maxRequests = ''
+  quotaForm.maxTokens = ''
+  quotaForm.maxCost = ''
+  quotaPanelOpen.value = true
+}
+
+function openEditQuota(limit: KeyQuotaLimit) {
+  editingQuotaWindow.value = limit.window
+  quotaFormError.value = ''
+  quotaForm.window = limit.window
+  quotaForm.maxRequests = limit.max_requests != null ? String(limit.max_requests) : ''
+  quotaForm.maxTokens = limit.max_tokens != null ? String(limit.max_tokens) : ''
+  quotaForm.maxCost = limit.max_cost != null ? String(limit.max_cost) : ''
+  quotaPanelOpen.value = true
+}
+
+async function saveQuota() {
+  const target = editing.value
+  if (!target) return
+  quotaFormError.value = ''
+  const maxRequests = quotaForm.maxRequests.trim()
+  const maxTokens = quotaForm.maxTokens.trim()
+  const maxCost = quotaForm.maxCost.trim()
+  if (!maxRequests && !maxTokens && !maxCost) {
+    quotaFormError.value = t('console.quotaLimitInvalid')
+    return
+  }
+  const form: KeyQuotaForm = { window: quotaForm.window }
+  if (maxRequests) {
+    const val = Number(maxRequests)
+    if (!Number.isInteger(val) || val < 0 || val > 1e12) { quotaFormError.value = t('console.quotaLimitInvalid'); return }
+    form.max_requests = val
+  }
+  if (maxTokens) {
+    const val = Number(maxTokens)
+    if (!Number.isInteger(val) || val < 0 || val > 1e12) { quotaFormError.value = t('console.quotaLimitInvalid'); return }
+    form.max_tokens = val
+  }
+  if (maxCost) {
+    const val = Number(maxCost)
+    if (!Number.isFinite(val) || val < 0 || val > 1e9) { quotaFormError.value = t('console.quotaLimitInvalid'); return }
+    form.max_cost = val
+  }
+  const ok = await run(() => endpoints.upsertKeyQuota(target.id, form))
+  if (!ok) { toast.error(t('common.actionFailed')); return }
+  toast.success(t('console.quotaSaved'))
+  quotaPanelOpen.value = false
+  await keyQuota.refresh()
+}
+
+async function deleteQuota(window: string) {
+  const target = editing.value
+  if (!target) return
+  const ok = await run(() => endpoints.deleteKeyQuota(target.id, window))
+  if (!ok) { toast.error(t('common.actionFailed')); return }
+  toast.success(t('console.quotaDeleted'))
+  await keyQuota.refresh()
+}
+
+function quotaUsageForWindow(window: string) {
+  return keyQuota.data.value.usage.find(u => u.window === window)
+}
+
+function quotaProgress(used: number, max: number | null): number {
+  if (max == null || max === 0) return 0
+  return Math.min(100, Math.round((used / max) * 100))
 }
 
 watch(secretOpen, (open) => { if (!open) secret.value = '' })
@@ -254,6 +342,82 @@ onMounted(() => { if (route.query.create) openCreate() })
         </UiField>
       </form>
 
+      <div v-if="editing" class="mt-6 border-t border-line pt-4">
+        <div class="mb-3 flex items-center justify-between">
+          <div>
+            <h3 class="text-sm font-medium text-ink">{{ t('console.usageLimits') }}</h3>
+            <p class="text-[13px] text-muted">{{ t('console.usageLimitsHint') }}</p>
+          </div>
+          <UiButton size="sm" variant="secondary" :disabled="Boolean(editing.revoked_at)" @click="openCreateQuota">
+            <Plus class="size-4" />
+            {{ t('console.quotaAddLimit') }}
+          </UiButton>
+        </div>
+
+        <UiSkeleton v-if="keyQuota.pending.value" :rows="3" />
+
+        <div v-else-if="!keyQuota.data.value.limits.length" class="rounded-control border border-dashed border-line px-4 py-6 text-center">
+          <p class="text-[13px] text-muted">{{ t('console.quotaNoLimits') }}</p>
+          <p class="mt-1 text-[13px] text-faint">{{ t('console.quotaNoLimitsHint') }}</p>
+        </div>
+
+        <div v-else class="space-y-3">
+          <div
+            v-for="limit in keyQuota.data.value.limits" :key="limit.id"
+            class="rounded-control border border-line px-4 py-3"
+          >
+            <div class="flex items-center justify-between">
+              <UiBadge tone="outline">{{ t(`console.quotaWindow${limit.window.charAt(0).toUpperCase() + limit.window.slice(1)}`) }}</UiBadge>
+              <div class="flex items-center gap-1">
+                <UiButton variant="ghost" size="sm" :disabled="Boolean(editing.revoked_at)" @click="openEditQuota(limit)">{{ t('common.edit') }}</UiButton>
+                <UiButton variant="danger" size="sm" :disabled="Boolean(editing.revoked_at)" @click="deleteQuota(limit.window)">{{ t('common.delete') }}</UiButton>
+              </div>
+            </div>
+            <div class="mt-3 space-y-2 text-[13px]">
+              <div v-if="limit.max_requests != null" class="flex items-center justify-between gap-3">
+                <span class="text-muted">{{ t('console.quotaMaxRequests') }}</span>
+                <div class="flex items-center gap-2">
+                  <div class="h-1.5 w-24 rounded-full bg-sunken">
+                    <div
+                      class="h-full rounded-full"
+                      :class="quotaProgress(quotaUsageForWindow(limit.window)?.requests ?? 0, limit.max_requests) >= 100 ? 'bg-danger' : 'bg-clay'"
+                      :style="{ width: `${quotaProgress(quotaUsageForWindow(limit.window)?.requests ?? 0, limit.max_requests)}%` }"
+                    />
+                  </div>
+                  <span class="numeric text-ink">{{ formatNumber(quotaUsageForWindow(limit.window)?.requests ?? 0) }} / {{ formatNumber(limit.max_requests) }}</span>
+                </div>
+              </div>
+              <div v-if="limit.max_tokens != null" class="flex items-center justify-between gap-3">
+                <span class="text-muted">{{ t('console.quotaMaxTokens') }}</span>
+                <div class="flex items-center gap-2">
+                  <div class="h-1.5 w-24 rounded-full bg-sunken">
+                    <div
+                      class="h-full rounded-full"
+                      :class="quotaProgress(quotaUsageForWindow(limit.window)?.tokens ?? 0, limit.max_tokens) >= 100 ? 'bg-danger' : 'bg-clay'"
+                      :style="{ width: `${quotaProgress(quotaUsageForWindow(limit.window)?.tokens ?? 0, limit.max_tokens)}%` }"
+                    />
+                  </div>
+                  <span class="numeric text-ink">{{ formatCompact(quotaUsageForWindow(limit.window)?.tokens ?? 0) }} / {{ formatCompact(limit.max_tokens) }}</span>
+                </div>
+              </div>
+              <div v-if="limit.max_cost != null" class="flex items-center justify-between gap-3">
+                <span class="text-muted">{{ t('console.quotaMaxCost') }}</span>
+                <div class="flex items-center gap-2">
+                  <div class="h-1.5 w-24 rounded-full bg-sunken">
+                    <div
+                      class="h-full rounded-full"
+                      :class="quotaProgress(quotaUsageForWindow(limit.window)?.cost ?? 0, limit.max_cost) >= 100 ? 'bg-danger' : 'bg-clay'"
+                      :style="{ width: `${quotaProgress(quotaUsageForWindow(limit.window)?.cost ?? 0, limit.max_cost)}%` }"
+                    />
+                  </div>
+                  <span class="numeric text-ink">{{ formatMoney(quotaUsageForWindow(limit.window)?.cost ?? 0, 4) }} / {{ formatMoney(limit.max_cost, 2) }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <template #footer>
         <UiButton variant="secondary" @click="formOpen = false">{{ t('common.cancel') }}</UiButton>
         <UiButton :loading="busy" @click="submitForm">
@@ -322,5 +486,40 @@ onMounted(() => { if (route.query.create) openCreate() })
         <UiButton variant="danger" :loading="busy" @click="confirmRevoke">{{ t('console.revokeKey') }}</UiButton>
       </template>
     </UiDialog>
+
+    <UiSlidePanel
+      v-model:open="quotaPanelOpen"
+      size="sm"
+      :title="editingQuotaWindow ? t('console.quotaEditLimit') : t('console.quotaAddLimit')"
+    >
+      <div class="space-y-4">
+        <UiAlert v-if="quotaFormError" tone="danger">{{ quotaFormError }}</UiAlert>
+
+        <UiField :label="t('console.quotaWindow')" required>
+          <UiSelect
+            v-model="quotaForm.window"
+            :options="QUOTA_WINDOWS"
+            :disabled="!!editingQuotaWindow"
+          />
+        </UiField>
+
+        <UiField :label="t('console.quotaMaxRequests')" :hint="t('console.quotaMaxRequestsHint')">
+          <UiInput v-model="quotaForm.maxRequests" type="number" mono :placeholder="t('console.quotaUnlimited')" />
+        </UiField>
+
+        <UiField :label="t('console.quotaMaxTokens')" :hint="t('console.quotaMaxTokensHint')">
+          <UiInput v-model="quotaForm.maxTokens" type="number" mono :placeholder="t('console.quotaUnlimited')" />
+        </UiField>
+
+        <UiField :label="t('console.quotaMaxCost')" :hint="t('console.quotaMaxCostHint')">
+          <UiInput v-model="quotaForm.maxCost" type="number" mono :placeholder="t('console.quotaUnlimited')" />
+        </UiField>
+      </div>
+
+      <template #footer>
+        <UiButton variant="secondary" @click="quotaPanelOpen = false">{{ t('common.cancel') }}</UiButton>
+        <UiButton :loading="busy" @click="saveQuota">{{ t('common.save') }}</UiButton>
+      </template>
+    </UiSlidePanel>
   </div>
 </template>

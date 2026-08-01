@@ -980,6 +980,109 @@ function quotaUsageForWindow(window: string) {
       </template>
     </UiSlidePanel>
 
+    <UiSlidePanel
+      v-model:open="usageDialogOpen"
+      size="lg"
+      :title="usageChannelName"
+    >
+      <UiTabs v-model="usageTab" :items="usageTabs" class="mb-4" />
+
+      <div v-if="usageTab === 'stats'">
+        <p class="text-sm text-muted mb-4">{{ t('admin.channelUsageLead') }}</p>
+
+        <UiSkeleton v-if="channelUsageStats.pending.value" :rows="4" />
+        <div v-else class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div v-for="tile in usageStatTiles" :key="tile.key" class="rounded-card border border-line bg-surface px-4 py-3">
+            <p class="text-2xs text-muted">{{ t(`admin.${tile.key}`) }}</p>
+            <p class="numeric mt-1 text-lg text-ink">{{ tile.value }}</p>
+          </div>
+        </div>
+      </div>
+
+      <div v-else-if="usageTab === 'quota'">
+        <p class="text-sm text-muted mb-4">{{ t('admin.channelQuotaLead') }}</p>
+
+        <UiSkeleton v-if="channelQuota.pending.value" :rows="3" />
+
+        <div v-else-if="!channelQuota.data.value.limits.length" class="py-4 text-center text-muted text-sm">
+          <p>{{ t('admin.quotaNoLimits') }}</p>
+          <p class="mt-1">{{ t('admin.quotaNoLimitsHint') }}</p>
+        </div>
+
+        <div v-else class="space-y-2">
+          <div
+            v-for="limit in channelQuota.data.value.limits" :key="limit.id"
+            class="rounded-control border border-line px-3 py-2"
+          >
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <UiBadge tone="outline">{{ t(`admin.quotaWindow${limit.window.charAt(0).toUpperCase() + limit.window.slice(1)}`) }}</UiBadge>
+              </div>
+              <div v-if="canManage" class="flex items-center gap-1">
+                <UiButton variant="ghost" size="sm" @click="openEditQuota(limit)">{{ t('common.edit') }}</UiButton>
+                <UiButton variant="danger" size="sm" @click="deleteQuota(limit.window)">{{ t('common.delete') }}</UiButton>
+              </div>
+            </div>
+            <div class="mt-2 grid gap-2 sm:grid-cols-2 text-sm">
+              <div>
+                <span class="text-muted">{{ t('admin.quotaMaxRequests') }}:</span>
+                <span class="numeric text-ink ml-1">{{ limit.max_requests != null ? formatNumber(limit.max_requests) : '—' }}</span>
+                <template v-if="quotaUsageForWindow(limit.window)">
+                  <span class="text-faint ml-1">/ {{ formatNumber(quotaUsageForWindow(limit.window)!.requests) }}</span>
+                </template>
+              </div>
+              <div>
+                <span class="text-muted">{{ t('admin.quotaMaxTokens') }}:</span>
+                <span class="numeric text-ink ml-1">{{ limit.max_tokens != null ? formatNumber(limit.max_tokens) : '—' }}</span>
+                <template v-if="quotaUsageForWindow(limit.window)">
+                  <span class="text-faint ml-1">/ {{ formatCompact(quotaUsageForWindow(limit.window)!.tokens) }}</span>
+                </template>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="canManage" class="mt-4">
+          <UiButton size="sm" @click="openCreateQuota">{{ t('admin.quotaAddLimit') }}</UiButton>
+        </div>
+      </div>
+
+      <template #footer>
+        <UiButton variant="secondary" @click="usageDialogOpen = false">{{ t('common.close') }}</UiButton>
+      </template>
+    </UiSlidePanel>
+
+    <UiSlidePanel
+      v-model:open="quotaDialogOpen"
+      size="sm"
+      :title="editingQuotaWindow ? t('admin.quotaEditLimit') : t('admin.quotaAddLimit')"
+    >
+      <div class="space-y-4">
+        <UiAlert v-if="quotaFormError" tone="danger">{{ quotaFormError }}</UiAlert>
+
+        <UiField :label="t('admin.quotaWindow')" required>
+          <UiSelect
+            v-model="quotaForm.window"
+            :options="QUOTA_WINDOWS"
+            :disabled="!!editingQuotaWindow"
+          />
+        </UiField>
+
+        <UiField :label="t('admin.quotaMaxRequests')" :hint="t('admin.quotaMaxRequestsHint')">
+          <UiInput v-model="quotaForm.max_requests" type="number" mono />
+        </UiField>
+
+        <UiField :label="t('admin.quotaMaxTokens')" :hint="t('admin.quotaMaxTokensHint')">
+          <UiInput v-model="quotaForm.max_tokens" type="number" mono />
+        </UiField>
+      </div>
+
+      <template #footer>
+        <UiButton variant="secondary" @click="quotaDialogOpen = false">{{ t('common.cancel') }}</UiButton>
+        <UiButton :loading="busy" @click="saveQuota">{{ t('common.save') }}</UiButton>
+      </template>
+    </UiSlidePanel>
+
     <UiDialog
       v-model:open="batchConfirmOpen"
       size="sm"

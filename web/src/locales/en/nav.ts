@@ -21,10 +21,12 @@ export default {
   pricing: 'Model pricing',
   logs: 'Request logs',
   audit: 'Audit logs',
+  conversationCache: 'Conversations',
 
   subscriptionPlans: 'Plans',
   adminSubscriptions: 'Subscriptions',
   reliability: 'Reliability',
+  conversationCacheSettings: 'Conversation cache',
   paymentSettings: 'Payments',
   siteSettings: 'Site',
   migrate: 'Migration',

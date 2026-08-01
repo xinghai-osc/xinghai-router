@@ -32,6 +32,7 @@ type Service struct {
 	groupConcurrencyCache *ttlCache[string, int]
 	groupLimiter    *GroupLimiter
 	reliabilityData *ttlCache[struct{}, reliabilitySettings]
+	conversationCacheData *ttlCache[struct{}, conversationCacheSettings]
 	keyTouchCache   *ttlCache[string, struct{}]
 	scheduler       context.CancelFunc
 	migration       migrationStatus
@@ -109,6 +110,7 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 		groupConcurrencyCache: newTTLCache[string, int](groupCacheTTL),
 		groupLimiter:    NewGroupLimiter(),
 		reliabilityData: newTTLCache[struct{}, reliabilitySettings](reliabilityCacheTTL),
+		conversationCacheData: newTTLCache[struct{}, conversationCacheSettings](reliabilityCacheTTL),
 		keyTouchCache:   newTTLCache[string, struct{}](keyTouchInterval),
 		migration:       migrationStatus{mu: &sync.Mutex{}},
 	}
@@ -116,6 +118,7 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 	s.scheduler = cancel
 	s.startHealthCheckScheduler(schedulerCtx)
 	s.startAuthCleanupScheduler(schedulerCtx)
+	s.startConversationCacheCleanup(schedulerCtx)
 	go s.limiterCleanup(schedulerCtx)
 	return s, nil
 }

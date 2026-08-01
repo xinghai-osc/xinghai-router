@@ -1,5 +1,9 @@
 export interface User { id: string; email: string; name: string; role: string; enabled: boolean; balance: number; reserved: number; permissions: string[]; groups: string[]; created_at: string }
 export interface ApiKey { id: string; user_id: string; name: string; key_prefix: string; group_id: string; group_name: string; expires_at: string | null; revoked_at: string | null; last_used_at: string | null; created_at: string; revealable: boolean }
+export interface KeyQuotaLimit { id: string; window: 'day' | 'month' | 'total'; max_requests: number | null; max_tokens: number | null; max_cost: number | null; created_at: string }
+export interface KeyQuotaUsage { window: string; requests: number; tokens: number; cost: number }
+export interface KeyQuota { limits: KeyQuotaLimit[]; usage: KeyQuotaUsage[] }
+export interface KeyQuotaForm { window: 'day' | 'month' | 'total'; max_requests?: number | null; max_tokens?: number | null; max_cost?: number | null }
 /** `groups` holds group ids, not names — resolve them through /admin/groups. */
 export interface Channel { id: string; name: string; base_url: string; provider: 'openai' | 'ollama' | 'kimi' | 'opencode_go' | 'anthropic' | 'custom'; models: string[]; enabled: boolean; auto_disabled: boolean; auto_disable: boolean; disabled_reason: string; priority: number; groups: string[]; key_type: 'single' | 'multi'; key_count: number; upstream_path: string; upstream_format: string; created_at: string; updated_at: string; model_routes: ModelRoute[] }
 
@@ -51,6 +55,25 @@ export interface Rankings { period: string; models: ModelRanking[]; vendors: Ven
 export interface SiteSettings { name: string; icon_url: string; auto_disable_failed_channels: boolean; geetest_enabled?: boolean; geetest_captcha_id?: string; email_verification_enabled?: boolean; oauth_providers?: string[] }
 export interface AdminSiteSettings { name: string; icon_url: string; auto_disable_failed_channels: boolean; geetest_captcha_id: string; has_geetest_captcha_key: boolean; smtp_host: string; smtp_port: string; smtp_username: string; has_smtp_password: boolean; smtp_from: string }
 export interface ReliabilitySettings { retry_count: number; retry_status_codes: string; health_check_mode: 'off' | 'scheduled_all' | 'passive_recovery'; health_check_interval_minutes: number; health_check_auto_recover: boolean; health_check_channel_ids: string; auto_disable_on_test_failure: boolean; auto_disable_slow_seconds: number; auto_disable_status_codes: string; auto_disable_keywords: string }
+
+export interface ConversationCacheSettings { conversation_cache_enabled: boolean }
+
+export interface ConversationLog {
+  id: string
+  request_id: string
+  user_id: string
+  api_key_id: string
+  model: string
+  status_code: number
+  stream: boolean
+  duration_ms: number
+  created_at: string
+}
+
+export interface ConversationLogDetail extends ConversationLog {
+  request_body: unknown
+  response_body: unknown
+}
 
 export interface PaymentRedirect { order_no: string; amount: string; status: 'pending'; pay_url: string }
 
@@ -300,8 +323,8 @@ async function post<T>(path: string, body?: unknown): Promise<T> { return api<T>
 async function put<T>(path: string, body?: unknown): Promise<T> { return api<T>(path, { method: 'PUT', body: body === undefined ? undefined : JSON.stringify(body) }) }
 async function send(path: string, method: 'POST' | 'PUT' | 'DELETE', body?: unknown): Promise<void> { await api<unknown>(path, { method, body: body === undefined ? undefined : JSON.stringify(body) }) }
 
-export interface LoginBody { email: string; password: string; code?: string; lot_number?: string; captcha_output?: string; pass_token?: string; gen_time?: string }
-export interface RegisterBody { name: string; email: string; password: string; code?: string; lot_number?: string; captcha_output?: string; pass_token?: string; gen_time?: string }
+export interface LoginBody { email: string; password: string; code?: string; captcha_id?: string; lot_number?: string; captcha_output?: string; pass_token?: string; gen_time?: string }
+export interface RegisterBody { name: string; email: string; password: string; code?: string; captcha_id?: string; lot_number?: string; captcha_output?: string; pass_token?: string; gen_time?: string }
 export interface KeyForm { user_id?: string; name: string; expires_at: string; group_id: string }
 export interface AccountKeyForm { name: string; expires_at: string; group_id: string }
 export interface ChannelForm { name: string; provider: string; base_url: string; key_type: 'single' | 'multi'; api_keys: string; models: string[]; priority: number; groups: string[]; upstream_path?: string; upstream_format?: string; model_routes?: ModelRouteForm[]; auto_disable: boolean }
@@ -361,6 +384,9 @@ export const endpoints = {
   createAccountKey: (form: AccountKeyForm) => post<{ key: string }>('/account/keys', form),
   updateAccountKey: (id: string, form: AccountKeyForm) => send(`/account/keys/${encodeURIComponent(id)}`, 'PUT', form),
   revealAccountKey: (id: string) => get<{ key: string }>(`/account/keys/${encodeURIComponent(id)}/secret`),
+  getKeyQuota: (id: string) => get<KeyQuota>(`/account/keys/${encodeURIComponent(id)}/quota`),
+  upsertKeyQuota: (id: string, form: KeyQuotaForm) => post<{ id: string }>(`/account/keys/${encodeURIComponent(id)}/quota`, form),
+  deleteKeyQuota: (id: string, window: string) => send(`/account/keys/${encodeURIComponent(id)}/quota?window=${encodeURIComponent(window)}`, 'DELETE'),
 
   getActivityLogs: (query = '') => get<{ data: ActivityLog[] }>(`/activity-logs${query}`),
   getModelCatalog: () => get<{ data: CatalogModel[]; groups: CatalogGroup[] }>('/model-catalog'),
@@ -376,6 +402,7 @@ export const endpoints = {
   getAdminGroups: () => get<{ data: Group[] }>('/admin/groups'),
   createGroup: (name: string, multiplier: number, maxConcurrency: number | null, publicGroup: boolean) => send('/admin/groups', 'POST', { name, multiplier, max_concurrency: maxConcurrency, public: publicGroup }),
   updateGroup: (id: string, multiplier: number, maxConcurrency: number | null, publicGroup: boolean) => send(`/admin/groups/${encodeURIComponent(id)}`, 'PUT', { multiplier, max_concurrency: maxConcurrency, public: publicGroup }),
+  deleteGroup: (id: string) => send(`/admin/groups/${encodeURIComponent(id)}`, 'DELETE'),
   importGroups: (entries: Record<string, number>) => send('/admin/groups/import', 'POST', entries),
   batchUpdateGroups: (ids: string[], multiplier: number, maxConcurrency: number | null, publicGroup: boolean) => post<{ affected: number }>('/admin/groups/batch-update', { ids, multiplier, max_concurrency: maxConcurrency, public: publicGroup }),
   getAdminKeys: () => get<{ data: ApiKey[] }>('/admin/keys'),
@@ -411,6 +438,10 @@ export const endpoints = {
   deletePricingTimeRule: (id: string, model: string) => send(`/admin/pricing/time-rules/${encodeURIComponent(id)}?model=${encodeURIComponent(model)}`, 'DELETE'),
   getAdminReliabilitySettings: () => get<ReliabilitySettings>('/admin/reliability-settings'),
   updateReliabilitySettings: (form: ReliabilitySettings) => put<ReliabilitySettings>('/admin/reliability-settings', form),
+  getConversationCacheSettings: () => get<ConversationCacheSettings>('/admin/conversation-cache/settings'),
+  updateConversationCacheSettings: (form: ConversationCacheSettings) => put<ConversationCacheSettings>('/admin/conversation-cache/settings', form),
+  getConversationLogs: (query = '') => get<{ data: ConversationLog[]; total: number; page: number; page_size: number }>(`/admin/conversation-cache${query}`),
+  getConversationLogDetail: (id: string) => get<ConversationLogDetail>(`/admin/conversation-cache/${encodeURIComponent(id)}`),
   getAdminSiteSettings: () => get<AdminSiteSettings>('/admin/site-settings'),
   updateAdminSiteSettings: (form: SiteSettingsForm) => put<AdminSiteSettings>('/admin/site-settings', form),
   getAdminPaymentSettings: () => get<PaymentSettings>('/admin/payment-settings'),

@@ -14,6 +14,7 @@ export const GEETEST_CANCELLED = 'geetest_cancelled'
 
 /** Declared as a type alias, not an interface, so it stays assignable to Record<string, string>. */
 export type GeetestResult = {
+  captcha_id: string
   lot_number: string
   captcha_output: string
   pass_token: string
@@ -97,7 +98,7 @@ export function useGeetest() {
       }
       instance.onSuccess(() => {
         const result = instance.getValidate()
-        finish(() => (result ? resolve(result) : reject(new Error(GEETEST_UNAVAILABLE))))
+        finish(() => (result ? resolve({ captcha_id: captchaId, ...result }) : reject(new Error(GEETEST_UNAVAILABLE))))
       })
       instance.onError(() => finish(() => reject(new Error(GEETEST_UNAVAILABLE))))
       instance.onClose(() => finish(() => reject(new Error(GEETEST_CANCELLED))))

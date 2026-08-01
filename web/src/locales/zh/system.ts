@@ -5,6 +5,7 @@ export default {
   captcha: '人机验证',
   payments: '支付',
   reliability: '可靠性',
+  conversationCache: '对话缓存',
   migration: '数据迁移',
 
   noAccessTitle: '没有访问权限',
@@ -113,6 +114,14 @@ export default {
   autoDisableKeywords: '停用关键词',
   autoDisableKeywordsHint: '逗号分隔；上游错误信息包含任一关键词时自动停用该渠道。',
   reliabilitySaved: '可靠性设置已保存',
+
+  conversationCacheTitle: '对话缓存设置',
+  conversationCacheLead: '开启后，网关会将用户对话的请求与响应完整保存一天，每天 0 点自动清空。',
+  conversationCacheEnabled: '启用对话缓存',
+  conversationCacheEnabledHint: '开启后所有通过网关的对话请求都会被记录，保留 24 小时后自动删除。',
+  conversationCacheRetention: '保留时长',
+  conversationCacheRetentionHint: '数据保留 24 小时，每天 0 点自动清空过期记录。',
+  conversationCacheSaved: '对话缓存设置已保存',
 
   paymentTitle: '支付设置',
   paymentLead: '配置易支付商户信息与对用户开放的支付方式。',

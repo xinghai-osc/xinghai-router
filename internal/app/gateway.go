@@ -328,6 +328,11 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 	}
 	if stream && resp.StatusCode >= 200 && resp.StatusCode < 300 && strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
 		var st streamStats
+		var capture *streamCaptureWriter
+		if s.conversationCacheSettings(ctx).Enabled {
+			capture = newStreamCaptureWriter(w)
+			w = capture
+		}
 		if selectedFormat == "anthropic" && streamFn == nil {
 			st, _ = streamAnthropicToOpenAI(w, resp, prefill)
 		} else if streamFn != nil && selectedFormat != "anthropic" {
@@ -342,6 +347,9 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 			reserved = reservation{}
 		}
 		s.channelSucceeded(ctx, ch.id)
+		if capture != nil {
+			s.storeConversationCache(ctx, key, model, true, body, capture.bytes(), resp.StatusCode, time.Since(started).Milliseconds())
+		}
 		return
 	}
 	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, maxUpstreamResponseBody))
@@ -381,6 +389,7 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 	w.Header().Set("Content-Type", contentType(resp.Header.Get("Content-Type")))
 	w.WriteHeader(resp.StatusCode)
 	w.Write(responseBody)
+	s.storeConversationCache(ctx, key, model, false, body, responseBody, resp.StatusCode, time.Since(started).Milliseconds())
 }
 
 // reserveUsage holds the worst-case cost of a request before it is proxied. The whole
@@ -512,28 +521,34 @@ func (s *Service) releaseReservation(ctx context.Context, key keyContext, held r
 	_, _ = s.db.Exec(releaseCtx, `update user_wallets set reserved=greatest(0,reserved-$1),updated_at=now() where user_id=$2`, held.amount, key.userID)
 }
 
-// checkQuota evaluates every matching quota row in one query. Each row's usage window is
-// aggregated by a lateral join instead of a follow-up query per row.
+// checkQuota evaluates every matching quota row in one query. Each row's usage
+// window is aggregated by a lateral join instead of a follow-up query per row.
+// "total" rows aggregate lifetime usage (no created_at cutoff); day/month/minute
+// rows use a rolling window. Cost is summed from usage_records via the shared
+// request_id so a key can also be capped on spend.
 func (s *Service) checkQuota(ctx context.Context, key keyContext, model string) error {
-	rows, err := s.db.Query(ctx, `select q.max_requests,q.max_tokens,agg.requests,agg.tokens
+	rows, err := s.db.Query(ctx, `select q.max_requests,q.max_tokens,q.max_cost,agg.requests,agg.tokens,agg.cost
 	from quota_limits q
 	cross join lateral (
-		select count(*) as requests, coalesce(sum(rl.total_tokens),0) as tokens
+		select count(rl.*) as requests, coalesce(sum(rl.total_tokens),0) as tokens, coalesce(sum(ur.cost),0) as cost
 		from request_logs rl
-		where rl.api_key_id=$2 and rl.created_at >= now() - ('1 '||q."window")::interval
+		left join usage_records ur on ur.request_id=rl.request_id
+		where rl.api_key_id=$2 and (q."window"='total' or rl.created_at >= now() - ('1 '||q."window")::interval)
 	) agg
-	where (q.user_id=$1 or q.user_id is null) and (q.api_key_id=$2 or q.api_key_id is null) and (q.model=$3 or q.model is null) and (q.max_requests is not null or q.max_tokens is not null)`, key.userID, key.keyID, model)
+	where (q.user_id=$1 or q.user_id is null) and (q.api_key_id=$2 or q.api_key_id is null) and (q.model=$3 or q.model is null) and (q.max_requests is not null or q.max_tokens is not null or q.max_cost is not null)`, key.userID, key.keyID, model)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var maxRequests, maxTokens *int64
+		var maxCost *float64
 		var count, tokens int64
-		if rows.Scan(&maxRequests, &maxTokens, &count, &tokens) != nil {
+		var cost float64
+		if rows.Scan(&maxRequests, &maxTokens, &maxCost, &count, &tokens, &cost) != nil {
 			return errInvalid
 		}
-		if (maxRequests != nil && count >= *maxRequests) || (maxTokens != nil && tokens >= *maxTokens) {
+		if (maxRequests != nil && count >= *maxRequests) || (maxTokens != nil && tokens >= *maxTokens) || (maxCost != nil && cost >= *maxCost) {
 			return errInvalid
 		}
 	}
@@ -701,6 +716,35 @@ func (s *Service) disableFailedChannel(ctx context.Context, id, reason string) {
 func retryableStatus(status int) bool {
 	settings := defaultReliabilitySettings()
 	return settings.retryable(status)
+}
+
+type streamCaptureWriter struct {
+	http.ResponseWriter
+	buf     *bytes.Buffer
+	flusher http.Flusher
+}
+
+func newStreamCaptureWriter(w http.ResponseWriter) *streamCaptureWriter {
+	c := &streamCaptureWriter{ResponseWriter: w, buf: &bytes.Buffer{}}
+	if f, ok := w.(http.Flusher); ok {
+		c.flusher = f
+	}
+	return c
+}
+
+func (c *streamCaptureWriter) Write(p []byte) (int, error) {
+	c.buf.Write(p)
+	return c.ResponseWriter.Write(p)
+}
+
+func (c *streamCaptureWriter) Flush() {
+	if c.flusher != nil {
+		c.flusher.Flush()
+	}
+}
+
+func (c *streamCaptureWriter) bytes() []byte {
+	return c.buf.Bytes()
 }
 // streamUsage collects token counts from the SSE chunks that pass through a
 // stream. OpenAI streams carry usage in the final chunk's "usage" object (when
