@@ -164,21 +164,29 @@ func TestNewRateLimiterFallsBackWithoutRedis(t *testing.T) {
 }
 
 func TestUsage(t *testing.T) {
-	prompt, completion, total := usage([]byte(`{"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}}`))
-	if prompt != 2 || completion != 3 || total != 5 {
-		t.Fatalf("got %d, %d, %d", prompt, completion, total)
+	prompt, completion, total, cached := usage([]byte(`{"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}}`))
+	if prompt != 2 || completion != 3 || total != 5 || cached != 0 {
+		t.Fatalf("got %d, %d, %d, %d", prompt, completion, total, cached)
 	}
-	prompt, completion, total = usage([]byte(`{"usage":{}}`))
-	if prompt != 0 || completion != 0 || total != 0 {
-		t.Fatalf("empty usage got %d, %d, %d", prompt, completion, total)
+	prompt, completion, total, cached = usage([]byte(`{"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5,"prompt_tokens_details":{"cached_tokens":1}}}`))
+	if prompt != 2 || completion != 3 || total != 5 || cached != 1 {
+		t.Fatalf("openai cached got %d, %d, %d, %d", prompt, completion, total, cached)
 	}
-	prompt, completion, total = usage([]byte(`not-json`))
-	if prompt != 0 || completion != 0 || total != 0 {
-		t.Fatalf("invalid json got %d, %d, %d", prompt, completion, total)
+	prompt, completion, total, cached = usage([]byte(`{"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5,"cache_read_input_tokens":2}}`))
+	if prompt != 2 || completion != 3 || total != 5 || cached != 2 {
+		t.Fatalf("anthropic cached got %d, %d, %d, %d", prompt, completion, total, cached)
 	}
-	prompt, completion, total = usage([]byte(`{"model":"x"}`))
-	if prompt != 0 || completion != 0 || total != 0 {
-		t.Fatalf("missing usage got %d, %d, %d", prompt, completion, total)
+	prompt, completion, total, cached = usage([]byte(`{"usage":{}}`))
+	if prompt != 0 || completion != 0 || total != 0 || cached != 0 {
+		t.Fatalf("empty usage got %d, %d, %d, %d", prompt, completion, total, cached)
+	}
+	prompt, completion, total, cached = usage([]byte(`not-json`))
+	if prompt != 0 || completion != 0 || total != 0 || cached != 0 {
+		t.Fatalf("invalid json got %d, %d, %d, %d", prompt, completion, total, cached)
+	}
+	prompt, completion, total, cached = usage([]byte(`{"model":"x"}`))
+	if prompt != 0 || completion != 0 || total != 0 || cached != 0 {
+		t.Fatalf("missing usage got %d, %d, %d, %d", prompt, completion, total, cached)
 	}
 }
 

@@ -24,10 +24,14 @@ const { busy, run } = useAction()
 
 const formOpen = ref(false)
 const secretOpen = ref(false)
+const revealOpen = ref(false)
 const revokeOpen = ref(false)
 const editing = ref<ApiKey | null>(null)
 const revoking = ref<ApiKey | null>(null)
+const revealing = ref<ApiKey | null>(null)
 const secret = ref('')
+const revealedSecret = ref('')
+const revealError = ref('')
 const formError = ref('')
 const form = reactive({ name: '', expiresOn: '', groupId: '' })
 
@@ -92,6 +96,22 @@ function openRevoke(key: ApiKey) {
   revokeOpen.value = true
 }
 
+function openReveal(key: ApiKey) {
+  revealing.value = key
+  revealedSecret.value = ''
+  revealError.value = ''
+  revealOpen.value = true
+}
+
+async function loadRevealedSecret() {
+  const target = revealing.value
+  if (!target) return
+  revealedSecret.value = ''
+  revealError.value = ''
+  const ok = await run(async () => { revealedSecret.value = (await endpoints.revealAccountKey(target.id)).key })
+  if (!ok) revealError.value = t('console.keyRevealFailed')
+}
+
 async function submitForm() {
   const name = form.name.trim()
   if (!name) {
@@ -131,6 +151,8 @@ async function confirmRevoke() {
 }
 
 watch(secretOpen, (open) => { if (!open) secret.value = '' })
+watch(revealOpen, (open) => { if (open && revealing.value) loadRevealedSecret() })
+watch(revealOpen, (open) => { if (!open) { revealedSecret.value = ''; revealing.value = null } })
 
 onMounted(() => { if (route.query.create) openCreate() })
 </script>
@@ -193,6 +215,9 @@ onMounted(() => { if (route.query.create) openCreate() })
                     <UiDropdownItem :disabled="Boolean(key.revoked_at)" @select="openEdit(key)">
                       {{ t('common.edit') }}
                     </UiDropdownItem>
+                    <UiDropdownItem :disabled="Boolean(key.revoked_at) || !key.revealable" @select="openReveal(key)">
+                      {{ t('console.revealKey') }}
+                    </UiDropdownItem>
                     <UiDropdownItem as="separator" />
                     <UiDropdownItem danger :disabled="Boolean(key.revoked_at)" @select="openRevoke(key)">
                       {{ t('console.revokeKey') }}
@@ -253,6 +278,34 @@ onMounted(() => { if (route.query.create) openCreate() })
 
       <template #footer>
         <UiButton @click="secretOpen = false">{{ t('console.keyCreatedDone') }}</UiButton>
+      </template>
+    </UiDialog>
+
+    <UiDialog v-model:open="revealOpen" size="sm" :title="t('console.revealKeyTitle')">
+      <div class="space-y-3">
+        <UiAlert tone="warn">{{ t('console.revealKeyWarning') }}</UiAlert>
+
+        <UiField :label="t('console.keySecret')">
+          <div class="flex items-center gap-2">
+            <code class="min-w-0 flex-1 truncate rounded-control bg-sunken px-3 py-2 font-mono text-[13px] text-ink">
+              {{ revealedSecret || '••••••••' }}
+            </code>
+            <ConsoleUserCopyButton
+              v-if="revealedSecret"
+              :value="revealedSecret"
+              :success-message="t('console.keySecretCopied')"
+            />
+          </div>
+        </UiField>
+
+        <p v-if="revealError" class="text-[13px] text-danger">{{ revealError }}</p>
+      </div>
+
+      <template #footer>
+        <UiButton variant="secondary" @click="revealOpen = false">{{ t('common.close') }}</UiButton>
+        <UiButton v-if="revealError" :loading="busy" @click="loadRevealedSecret">
+          {{ t('common.retry') }}
+        </UiButton>
       </template>
     </UiDialog>
 

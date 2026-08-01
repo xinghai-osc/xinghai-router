@@ -130,6 +130,8 @@ watch(pageSize, applyFilters)
 
 const statusTone = (code: number): 'danger' | 'warn' | 'success' =>
   (code >= 400 ? 'danger' : code >= 300 ? 'warn' : 'success')
+
+const detailTarget = ref<UsageLog | RequestLog | null>(null)
 </script>
 
 <template>
@@ -196,14 +198,17 @@ const statusTone = (code: number): 'danger' | 'warn' | 'success' =>
                 <th>{{ t('admin.time') }}</th>
                 <th>{{ t('admin.requestId') }}</th>
                 <th>{{ t('admin.user') }}</th>
+                <th>{{ t('admin.keyName') }}</th>
                 <th>{{ t('admin.model') }}</th>
                 <th>{{ t('admin.channel') }}</th>
+                <th>{{ t('admin.channelKey') }}</th>
                 <th>{{ t('admin.groups') }}</th>
                 <th>{{ t('admin.statusCode') }}</th>
                 <th class="num">{{ t('admin.statPromptTokens') }}</th>
                 <th class="num">{{ t('admin.statCompletionTokens') }}</th>
                 <th class="num">{{ t('admin.duration') }}</th>
                 <th class="num">{{ t('admin.cost') }}</th>
+                <th>{{ t('common.detail') }}</th>
               </tr>
             </thead>
             <tbody>
@@ -211,8 +216,10 @@ const statusTone = (code: number): 'danger' | 'warn' | 'success' =>
                 <td class="text-muted whitespace-nowrap">{{ formatDateTime(log.created_at) }}</td>
                 <td class="font-mono text-[13px] text-muted">{{ shortId(log.request_id) }}</td>
                 <td class="text-muted">{{ log.user_name || shortId(log.user_id) }}</td>
+                <td class="text-muted">{{ log.key_name || '—' }}</td>
                 <td class="font-medium text-ink">{{ log.model }}</td>
                 <td class="text-muted">{{ log.channel_name || '—' }}</td>
+                <td class="text-muted">{{ log.channel_key_name || '—' }}</td>
                 <td class="text-muted">{{ log.group_name || '—' }}</td>
                 <td>
                   <UiBadge :tone="statusTone(log.status_code)">{{ log.status_code }}</UiBadge>
@@ -221,6 +228,9 @@ const statusTone = (code: number): 'danger' | 'warn' | 'success' =>
                 <td class="num">{{ formatNumber(log.completion_tokens) }}</td>
                 <td class="num">{{ t('admin.durationMs', { value: log.duration_ms }) }}</td>
                 <td class="num">{{ formatMoney(log.cost, 4) }}</td>
+                <td>
+                  <UiButton variant="ghost" size="sm" @click="detailTarget = log">{{ t('common.detail') }}</UiButton>
+                </td>
               </tr>
             </tbody>
           </UiTable>
@@ -272,31 +282,64 @@ const statusTone = (code: number): 'danger' | 'warn' | 'success' =>
               <tr>
                 <th>{{ t('admin.time') }}</th>
                 <th>{{ t('admin.requestId') }}</th>
+                <th>{{ t('admin.user') }}</th>
+                <th>{{ t('admin.keyName') }}</th>
                 <th>{{ t('admin.model') }}</th>
+                <th>{{ t('admin.channel') }}</th>
+                <th>{{ t('admin.channelKey') }}</th>
                 <th>{{ t('admin.statusCode') }}</th>
                 <th class="num">{{ t('admin.statPromptTokens') }}</th>
                 <th class="num">{{ t('admin.statCompletionTokens') }}</th>
                 <th class="num">{{ t('admin.statTotalTokens') }}</th>
                 <th class="num">{{ t('admin.duration') }}</th>
                 <th>{{ t('admin.errorCode') }}</th>
+                <th>{{ t('common.detail') }}</th>
               </tr>
             </thead>
             <tbody>
               <tr v-for="log in requests.data.value.data" :key="log.request_id">
                 <td class="text-muted whitespace-nowrap">{{ formatDateTime(log.created_at) }}</td>
                 <td class="font-mono text-[13px] text-muted">{{ shortId(log.request_id) }}</td>
+                <td class="text-muted">{{ log.user_name || shortId(log.user_id) }}</td>
+                <td class="text-muted">{{ log.key_name || '—' }}</td>
                 <td class="font-medium text-ink">{{ log.model }}</td>
+                <td class="text-muted">{{ log.channel_name || '—' }}</td>
+                <td class="text-muted">{{ log.channel_key_name || '—' }}</td>
                 <td><UiBadge :tone="statusTone(log.status_code)">{{ log.status_code }}</UiBadge></td>
                 <td class="num">{{ formatNumber(log.prompt_tokens) }}</td>
                 <td class="num">{{ formatNumber(log.completion_tokens) }}</td>
                 <td class="num">{{ formatNumber(log.total_tokens) }}</td>
                 <td class="num">{{ t('admin.durationMs', { value: log.duration_ms }) }}</td>
                 <td class="text-muted">{{ log.error_code || '—' }}</td>
+                <td>
+                  <UiButton variant="ghost" size="sm" @click="detailTarget = log">{{ t('common.detail') }}</UiButton>
+                </td>
               </tr>
             </tbody>
           </UiTable>
         </ConsoleOpsListState>
       </div>
     </UiTabs>
+
+    <UiDialog v-model:open="detailTarget" :title="t('common.detail')">
+      <div class="space-y-3 text-sm">
+        <div>
+          <div class="mb-1 text-xs text-muted">{{ t('admin.requestId') }}</div>
+          <div class="break-all font-mono text-ink">{{ detailTarget?.request_id || '—' }}</div>
+        </div>
+        <div>
+          <div class="mb-1 text-xs text-muted">{{ t('admin.clientIp') }}</div>
+          <div class="font-mono text-ink">{{ detailTarget?.client_ip || '—' }}</div>
+        </div>
+        <div>
+          <div class="mb-1 text-xs text-muted">{{ t('admin.userAgent') }}</div>
+          <div class="break-all font-mono text-ink">{{ detailTarget?.user_agent || '—' }}</div>
+        </div>
+        <div>
+          <div class="mb-1 text-xs text-muted">{{ t('admin.errorDetail') }}</div>
+          <div class="break-all font-mono text-ink">{{ detailTarget?.error_detail || '—' }}</div>
+        </div>
+      </div>
+    </UiDialog>
   </div>
 </template>

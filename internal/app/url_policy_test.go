@@ -81,6 +81,9 @@ func TestValidateRedirectURL(t *testing.T) {
 		"https://api.openai.com/v1/models",
 		"http://127.0.0.1:11434/v1/models",
 		"http://localhost:11434/v1/models",
+		"http://evil.example.com/x",
+		"https://169.254.169.254/latest/meta-data",
+		"https://10.0.0.5/internal",
 	}
 	for _, value := range allow {
 		u, err := url.Parse(value)
@@ -92,10 +95,6 @@ func TestValidateRedirectURL(t *testing.T) {
 		}
 	}
 	deny := []string{
-		"http://evil.example.com/x",
-		"https://169.254.169.254/latest/meta-data",
-		"https://10.0.0.5/internal",
-		"https://127.0.0.1/secret",
 		"ftp://example.com/x",
 		"https://",
 	}
@@ -110,27 +109,34 @@ func TestValidateRedirectURL(t *testing.T) {
 	}
 }
 
-func TestHTTPClientBlocksUnsafeRedirect(t *testing.T) {
-	final := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer final.Close()
-	// final.URL is http://127.0.0.1:port — loopback HTTP is allowed.
-	// Build an intermediate that redirects to a non-loopback HTTP host.
-	evil := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "http://example.com/steal", http.StatusFound)
-	}))
-	defer evil.Close()
-
-	client := newHTTPClient(5 * time.Second)
-	resp, err := client.Get(evil.URL)
-	if err == nil {
-		resp.Body.Close()
-		t.Fatal("expected redirect to non-loopback HTTP to fail")
+func TestValidUpstreamURL(t *testing.T) {
+	for _, value := range []string{
+		"https://api.openai.com",
+		"http://api.example.com",
+		"http://10.0.0.5:8080",
+		"http://192.168.1.10/v1",
+		"http://127.0.0.1:11434",
+		"https://169.254.169.254/",
+	} {
+		if err := validUpstreamURL(value); err != nil {
+			t.Fatalf("validUpstreamURL(%q) = %v", value, err)
+		}
 	}
+	for _, value := range []string{
+		"",
+		"not-a-url",
+		"ftp://example.com",
+		"https://",
+	} {
+		if err := validUpstreamURL(value); err == nil {
+			t.Fatalf("validUpstreamURL(%q) expected error", value)
+		}
+	}
+}
 
-	// Public HTTPS redirect target simulation: use loopback HTTPS is hard without certs.
-	// Safe path: redirect to another loopback HTTP server should succeed.
+func TestHTTPClientFollowsPlainHTTPRedirects(t *testing.T) {
+	// Redirect to another loopback HTTP server should succeed; non-loopback
+	// HTTP targets are covered by TestValidateRedirectURL (no network here).
 	safeTarget := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
@@ -139,7 +145,8 @@ func TestHTTPClientBlocksUnsafeRedirect(t *testing.T) {
 		http.Redirect(w, r, safeTarget.URL, http.StatusFound)
 	}))
 	defer safeRedirect.Close()
-	resp, err = client.Get(safeRedirect.URL)
+	client := newHTTPClient(5 * time.Second)
+	resp, err := client.Get(safeRedirect.URL)
 	if err != nil {
 		t.Fatal(err)
 	}

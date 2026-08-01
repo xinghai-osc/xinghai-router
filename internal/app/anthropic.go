@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"time"
 )
 
 type anthropicRequest struct {
@@ -34,22 +35,27 @@ type anthropicTool struct {
 }
 
 func (s *Service) anthropicMessages(w http.ResponseWriter, r *http.Request) {
+	started := time.Now()
 	if strings.TrimSpace(r.Header.Get("Anthropic-Version")) == "" {
+		s.logReject(r.Context(), "", http.StatusBadRequest, "invalid_request", started)
 		writeError(w, http.StatusBadRequest, "invalid_request", "anthropic-version header is required")
 		return
 	}
 	var in anthropicRequest
 	if decode(r, &in) != nil {
+		s.logReject(r.Context(), "", http.StatusBadRequest, "invalid_request", started)
 		writeError(w, http.StatusBadRequest, "invalid_request", "model, messages, and max_tokens are required")
 		return
 	}
 	in.Model = strings.TrimSpace(in.Model)
 	if !validModelName(in.Model) || !validGatewayMaxTokens(in.MaxTokens) || len(in.Messages) == 0 {
+		s.logReject(r.Context(), in.Model, http.StatusBadRequest, "invalid_request", started)
 		writeError(w, http.StatusBadRequest, "invalid_request", "model must be 1-200 characters; messages and max_tokens (1-200000) are required")
 		return
 	}
 	body, err := anthropicToOpenAI(in)
 	if err != nil {
+		s.logReject(r.Context(), in.Model, http.StatusBadRequest, "invalid_request", started)
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
@@ -167,7 +173,35 @@ func anthropicContentToOpenAI(raw json.RawMessage) (any, error) {
 	return parts, nil
 }
 
+func openAIMessageText(content any) string {
+	if text, ok := content.(string); ok {
+		return text
+	}
+	parts, ok := content.([]any)
+	if !ok {
+		return ""
+	}
+	var b strings.Builder
+	for _, partValue := range parts {
+		part, _ := partValue.(map[string]any)
+		if part["type"] == "text" {
+			text, _ := part["text"].(string)
+			b.WriteString(text)
+		}
+	}
+	return b.String()
+}
+
 func openAIToAnthropic(body []byte) ([]byte, error) {
+	var probe map[string]json.RawMessage
+	if json.Unmarshal(body, &probe) == nil {
+		var kind string
+		if json.Unmarshal(probe["type"], &kind) == nil && kind == "message" {
+			// The upstream already answered in Anthropic shape (e.g. a relay behind a
+			// channel marked as OpenAI); pass it through untouched.
+			return body, nil
+		}
+	}
 	var response struct {
 		ID      string `json:"id"`
 		Model   string `json:"model"`
@@ -193,7 +227,7 @@ func openAIToAnthropic(body []byte) ([]byte, error) {
 		return nil, fmt.Errorf("invalid upstream response")
 	}
 	content := []any{}
-	if text, ok := response.Choices[0].Message.Content.(string); ok && text != "" {
+	if text := openAIMessageText(response.Choices[0].Message.Content); text != "" {
 		content = append(content, map[string]any{"type": "text", "text": text})
 	}
 	for _, call := range response.Choices[0].Message.ToolCalls {
@@ -202,13 +236,17 @@ func openAIToAnthropic(body []byte) ([]byte, error) {
 		content = append(content, map[string]any{"type": "tool_use", "id": call.ID, "name": call.Function.Name, "input": input})
 	}
 	stop := map[string]string{"stop": "end_turn", "length": "max_tokens", "tool_calls": "tool_use"}[response.Choices[0].Finish]
+	if stop == "" {
+		stop = "end_turn"
+	}
 	return json.Marshal(map[string]any{"id": response.ID, "type": "message", "role": "assistant", "model": response.Model, "content": content, "stop_reason": stop, "stop_sequence": nil, "usage": map[string]int{"input_tokens": response.Usage.Input, "output_tokens": response.Usage.Output}})
 }
 
-func streamOpenAIToAnthropic(w http.ResponseWriter, resp *http.Response) error {
+func streamOpenAIToAnthropic(w http.ResponseWriter, resp *http.Response) (streamStats, error) {
+	var st streamStats
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		return fmt.Errorf("streaming unsupported")
+		return st, fmt.Errorf("streaming unsupported")
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -227,16 +265,43 @@ func streamOpenAIToAnthropic(w http.ResponseWriter, resp *http.Response) error {
 	toolOrder := []int{}
 	stopReason := "end_turn"
 	var outputTokens int
+	var inputTokens int
+	decided, passthrough := false, false
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64*1024), 2<<20)
 	for scanner.Scan() {
 		line := scanner.Text()
+		if passthrough {
+			fmt.Fprintln(w, line)
+			flusher.Flush()
+			if strings.HasPrefix(line, "data:") {
+				if data := strings.TrimSpace(strings.TrimPrefix(line, "data:")); data != "" && data != "[DONE]" {
+					parseSSEUsage([]byte(data), &st)
+				}
+			}
+			continue
+		}
 		if !strings.HasPrefix(line, "data:") {
 			continue
 		}
 		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		if data == "[DONE]" {
 			break
+		}
+		if !decided {
+			var probe map[string]any
+			if json.Unmarshal([]byte(data), &probe) == nil {
+				decided = true
+				if kind, _ := probe["type"].(string); kind != "" {
+					// The upstream is streaming Anthropic events although the
+					// channel is marked as OpenAI; forward the stream verbatim.
+					passthrough = true
+					fmt.Fprintf(w, "data: %s\n\n", data)
+					flusher.Flush()
+					parseSSEUsage([]byte(data), &st)
+					continue
+				}
+			}
 		}
 		var chunk struct {
 			ID, Model string
@@ -259,12 +324,16 @@ func streamOpenAIToAnthropic(w http.ResponseWriter, resp *http.Response) error {
 		if json.Unmarshal([]byte(data), &chunk) != nil {
 			continue
 		}
-		if !started {
-			writeEvent("message_start", map[string]any{"type": "message_start", "message": map[string]any{"id": chunk.ID, "type": "message", "role": "assistant", "model": chunk.Model, "content": []any{}, "stop_reason": nil, "stop_sequence": nil, "usage": map[string]int{"input_tokens": chunk.Usage.Input, "output_tokens": 0}}})
-			started = true
+		if chunk.Usage.Input > 0 {
+			inputTokens = chunk.Usage.Input
 		}
 		if chunk.Usage.Output > 0 {
 			outputTokens = chunk.Usage.Output
+		}
+		parseSSEUsage([]byte(data), &st)
+		if !started {
+			writeEvent("message_start", map[string]any{"type": "message_start", "message": map[string]any{"id": chunk.ID, "type": "message", "role": "assistant", "model": chunk.Model, "content": []any{}, "stop_reason": nil, "stop_sequence": nil, "usage": map[string]int{"input_tokens": inputTokens, "output_tokens": 0}}})
+			started = true
 		}
 		if len(chunk.Choices) == 0 {
 			continue
@@ -301,15 +370,17 @@ func streamOpenAIToAnthropic(w http.ResponseWriter, resp *http.Response) error {
 			}
 		}
 	}
-	if textBlock >= 0 && !textStopped {
-		writeEvent("content_block_stop", map[string]any{"type": "content_block_stop", "index": textBlock})
+	if !passthrough {
+		if textBlock >= 0 && !textStopped {
+			writeEvent("content_block_stop", map[string]any{"type": "content_block_stop", "index": textBlock})
+		}
+		for _, index := range toolOrder {
+			writeEvent("content_block_stop", map[string]any{"type": "content_block_stop", "index": toolBlocks[index]})
+		}
+		writeEvent("message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": stopReason, "stop_sequence": nil}, "usage": map[string]int{"output_tokens": outputTokens}})
+		writeEvent("message_stop", map[string]string{"type": "message_stop"})
 	}
-	for _, index := range toolOrder {
-		writeEvent("content_block_stop", map[string]any{"type": "content_block_stop", "index": toolBlocks[index]})
-	}
-	writeEvent("message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": stopReason, "stop_sequence": nil}, "usage": map[string]int{"output_tokens": outputTokens}})
-	writeEvent("message_stop", map[string]string{"type": "message_stop"})
-	return scanner.Err()
+	return st, scanner.Err()
 }
 
 func isLoopbackHost(host string) bool {
@@ -320,10 +391,10 @@ func isLoopbackHost(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-func openAIRequestToAnthropic(body []byte) ([]byte, error) {
+func openAIRequestToAnthropic(body []byte) ([]byte, string, error) {
 	var in map[string]any
 	if json.Unmarshal(body, &in) != nil {
-		return nil, fmt.Errorf("invalid OpenAI request")
+		return nil, "", fmt.Errorf("invalid OpenAI request")
 	}
 	out := map[string]any{"model": in["model"], "max_tokens": 4096}
 	for _, key := range []string{"max_tokens", "stream", "temperature", "top_p"} {
@@ -358,7 +429,7 @@ func openAIRequestToAnthropic(body []byte) ([]byte, error) {
 	}
 	messages, ok := in["messages"].([]any)
 	if !ok || len(messages) == 0 {
-		return nil, fmt.Errorf("messages are required")
+		return nil, "", fmt.Errorf("messages are required")
 	}
 	converted := []any{}
 	for _, item := range messages {
@@ -415,11 +486,50 @@ func openAIRequestToAnthropic(body []byte) ([]byte, error) {
 		}
 		converted = append(converted, entry)
 	}
+	prefill := ""
+	if format, ok := in["response_format"].(map[string]any); ok {
+		formatType, _ := format["type"].(string)
+		if formatType == "json_object" || formatType == "json_schema" {
+			instruction := "You must respond with valid JSON only. Do not include explanations or markdown code fences."
+			if formatType == "json_schema" {
+				if schema, ok := format["json_schema"].(map[string]any); ok {
+					if encoded, marshalErr := json.Marshal(schema["schema"]); marshalErr == nil && string(encoded) != "null" {
+						instruction = "You must respond with valid JSON only, conforming to this JSON schema: " + string(encoded) + " Do not include explanations or markdown code fences."
+					}
+				}
+			}
+			switch system := out["system"].(type) {
+			case string:
+				out["system"] = system + "\n\n" + instruction
+			case []any:
+				out["system"] = append(system, map[string]any{"type": "text", "text": instruction})
+			case nil:
+				out["system"] = instruction
+			}
+			prefillBlock := map[string]any{"type": "text", "text": "{"}
+			if len(converted) > 0 && converted[len(converted)-1].(map[string]any)["role"] == "assistant" {
+				last := converted[len(converted)-1].(map[string]any)
+				last["content"] = append(last["content"].([]any), prefillBlock)
+			} else {
+				converted = append(converted, map[string]any{"role": "assistant", "content": []any{prefillBlock}})
+			}
+			prefill = "{"
+		}
+	}
 	out["messages"] = converted
-	return json.Marshal(out)
+	encoded, err := json.Marshal(out)
+	return encoded, prefill, err
 }
 
-func anthropicResponseToOpenAI(body []byte) ([]byte, error) {
+func anthropicResponseToOpenAI(body []byte, prefill string) ([]byte, error) {
+	var probe map[string]json.RawMessage
+	if json.Unmarshal(body, &probe) == nil {
+		if _, ok := probe["choices"]; ok {
+			// The upstream already answered in OpenAI shape (e.g. a relay behind a
+			// channel marked as Anthropic); pass it through untouched.
+			return body, nil
+		}
+	}
 	var in struct {
 		ID         string           `json:"id"`
 		Model      string           `json:"model"`
@@ -433,7 +543,7 @@ func anthropicResponseToOpenAI(body []byte) ([]byte, error) {
 	if json.Unmarshal(body, &in) != nil || in.ID == "" {
 		return nil, fmt.Errorf("invalid Anthropic response")
 	}
-	text := ""
+	text := prefill
 	toolCalls := []any{}
 	for _, block := range in.Content {
 		switch block["type"] {
@@ -450,13 +560,17 @@ func anthropicResponseToOpenAI(body []byte) ([]byte, error) {
 		message["tool_calls"] = toolCalls
 	}
 	finish := map[string]string{"end_turn": "stop", "stop_sequence": "stop", "max_tokens": "length", "tool_use": "tool_calls"}[in.StopReason]
+	if finish == "" {
+		finish = "stop"
+	}
 	return json.Marshal(map[string]any{"id": in.ID, "object": "chat.completion", "created": 0, "model": in.Model, "choices": []any{map[string]any{"index": 0, "message": message, "finish_reason": finish}}, "usage": map[string]int{"prompt_tokens": in.Usage.Input, "completion_tokens": in.Usage.Output, "total_tokens": in.Usage.Input + in.Usage.Output}})
 }
 
-func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response) error {
+func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response, prefill string) (streamStats, error) {
+	var st streamStats
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		return fmt.Errorf("streaming unsupported")
+		return st, fmt.Errorf("streaming unsupported")
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -469,10 +583,21 @@ func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response) error {
 	}
 	id, model := "", ""
 	toolIndexes := map[int]int{}
+	decided, passthrough := false, false
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64*1024), 2<<20)
 	for scanner.Scan() {
 		line := scanner.Text()
+		if passthrough {
+			fmt.Fprintln(w, line)
+			flusher.Flush()
+			if strings.HasPrefix(line, "data:") {
+				if data := strings.TrimSpace(strings.TrimPrefix(line, "data:")); data != "" && data != "[DONE]" {
+					parseSSEUsage([]byte(data), &st)
+				}
+			}
+			continue
+		}
 		if !strings.HasPrefix(line, "data:") {
 			continue
 		}
@@ -481,12 +606,28 @@ func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response) error {
 		if json.Unmarshal([]byte(data), &event) != nil {
 			continue
 		}
+		if !decided {
+			decided = true
+			if _, isOpenAI := event["choices"]; isOpenAI {
+				// The upstream is streaming OpenAI chunks although the channel is
+				// marked as Anthropic; forward the stream verbatim.
+				passthrough = true
+				fmt.Fprintf(w, "data: %s\n\n", data)
+				flusher.Flush()
+				parseSSEUsage([]byte(data), &st)
+				continue
+			}
+		}
 		switch event["type"] {
 		case "message_start":
 			message, _ := event["message"].(map[string]any)
 			id, _ = message["id"].(string)
 			model, _ = message["model"].(string)
 			writeChunk(map[string]any{"id": id, "object": "chat.completion.chunk", "model": model, "choices": []any{map[string]any{"index": 0, "delta": map[string]any{"role": "assistant"}, "finish_reason": nil}}})
+			if prefill != "" {
+				writeChunk(map[string]any{"id": id, "object": "chat.completion.chunk", "model": model, "choices": []any{map[string]any{"index": 0, "delta": map[string]any{"content": prefill}, "finish_reason": nil}}})
+			}
+			parseSSEUsage([]byte(data), &st)
 		case "content_block_start":
 			block, _ := event["content_block"].(map[string]any)
 			if block["type"] != "tool_use" {
@@ -512,10 +653,16 @@ func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response) error {
 			delta, _ := event["delta"].(map[string]any)
 			stop, _ := delta["stop_reason"].(string)
 			finish := map[string]string{"end_turn": "stop", "stop_sequence": "stop", "max_tokens": "length", "tool_use": "tool_calls"}[stop]
+			if finish == "" {
+				finish = "stop"
+			}
 			writeChunk(map[string]any{"id": id, "object": "chat.completion.chunk", "model": model, "choices": []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": finish}}})
+			parseSSEUsage([]byte(data), &st)
 		}
 	}
-	fmt.Fprint(w, "data: [DONE]\n\n")
-	flusher.Flush()
-	return scanner.Err()
+	if !passthrough {
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	}
+	return st, scanner.Err()
 }

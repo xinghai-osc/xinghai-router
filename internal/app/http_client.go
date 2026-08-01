@@ -70,7 +70,23 @@ func validateRedirectURL(u *url.URL) error {
 	if u == nil {
 		return fmt.Errorf("redirect missing host")
 	}
-	return validOutboundURL(u.String())
+	return validUpstreamURL(u.String())
+}
+
+// validUpstreamURL accepts http:// or https:// to any host. Upstream base URLs are
+// configured by the admin, who may legitimately point at plaintext or private-network
+// endpoints (LAN proxies, internal one-api/new-api instances, Ollama, ...).
+func validUpstreamURL(value string) error {
+	u, err := url.Parse(strings.TrimSpace(value))
+	if err != nil || u.Host == "" {
+		return fmt.Errorf("must be an HTTP or HTTPS URL")
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https":
+		return nil
+	default:
+		return fmt.Errorf("scheme must be http or https")
+	}
 }
 
 // validOutboundURL accepts:
@@ -109,9 +125,4 @@ func isNonPublicHost(host string) bool {
 		return false
 	}
 	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast()
-}
-
-// isUnsafeRedirectHost is kept as an alias for redirect checks (same policy as first-hop HTTPS).
-func isUnsafeRedirectHost(host string) bool {
-	return isNonPublicHost(host)
 }

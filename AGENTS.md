@@ -4,7 +4,7 @@ Guidance for AI coding agents (opencode, Claude Code, etc.) working in this repo
 
 ## Project overview
 
-Xinghai Router is an LLM gateway and operations console. The Go service (`cmd/router`) exposes an OpenAI-compatible gateway (`/v1/*`), an Anthropic-compatible gateway (`/v1/messages`), account APIs (`/auth/*`, `/account/*`), public APIs (`/rankings`, `/subscription-plans`, `/model-catalog`, `/site-settings`), and admin APIs (`/admin/*`). A Nuxt 3 console in `web/` proxies `/api/*` to the Go service. PostgreSQL is the source of truth; Redis is used for shared API-key rate limiting when `REDIS_URL` is set (memory fallback otherwise). Provider credentials are encrypted at rest with `ENCRYPTION_KEY`.
+Xinghai Router is an LLM gateway and operations console. The Go service (`cmd/router`) exposes an OpenAI-compatible gateway (`/v1/*`), an Anthropic-compatible gateway (`/v1/messages`), account APIs (`/auth/*`, `/account/*`), public APIs (`/rankings`, `/subscription-plans`, `/model-catalog`, `/site-settings`), and admin APIs (`/admin/*`). A Nuxt 3 console in `web/` proxies `/api/*` to the Go service. PostgreSQL is the source of truth; Redis is used for shared API-key rate limiting when `REDIS_URL` is set (memory fallback otherwise). Channel (provider) API keys are stored plaintext; merchant keys and other service secrets are encrypted at rest with `ENCRYPTION_KEY`.
 
 The repository is bilingual: README and user-facing copy are in Chinese and English. Match the language of the surrounding content when editing; do not translate existing strings unless asked.
 
@@ -84,7 +84,7 @@ There is no web test script. No `vue-tsc` typecheck or Prettier is wired in yet.
 - HTTP routing uses Go 1.22+ method-pattern `http.ServeMux` (`mux.HandleFunc("GET /path", s.handler)`). See `routes.go` for the canonical pattern and middleware order (`s.optionalAccount`, `s.account`, `s.permission("perm", handler)`).
 - Handlers read request bodies with `io.LimitReader(r.Body, 2<<20)` and `decode(r, &v)`; respond with `writeJSON(w, status, body)` or `writeError(w, status, code, msg)`. Match this style.
 - DB access goes through `s.db` (`*pgxpool.Pool`) using `QueryRow`/`Query`/`Exec` with `$1, $2, ...` placeholders. Never build SQL by string-concatenating user input.
-- Secrets: API keys are hashed (`hashSecret`) and only the full key is returned once at creation. Provider keys are encrypted with `crypt(ENCRYPTION_KEY, value, false)` and decrypted on use. Never log or return decrypted provider secrets or merchant keys.
+- Secrets: API keys are hashed (`hashSecret`) and only the full key is returned once at creation. Channel (provider) keys are stored plaintext; reads go through `channelKeyValue`, which transparently decrypts rows written before the switch to plaintext. Merchant keys, SMTP/Geetest credentials, and OAuth client secrets are encrypted with `crypt(ENCRYPTION_KEY, value, false)` and decrypted on use. Never log or return channel keys, decrypted secrets, or merchant keys.
 - New schema changes ship as a new `internal/app/migrations/NNNN_name.sql` file (zero-padded, incrementing). Migrations must be idempotent-safe within their own statements and are wrapped in a transaction by `migrate.go`. Never edit an applied migration in a way that breaks already-deployed databases; add a new migration instead.
 - Embeds: any new migration file is picked up automatically by the `//go:embed migrations/*.sql` directive — no registration needed.
 - Error wrapping: use `fmt.Errorf("...: %w", err)` for propagated errors.
@@ -108,8 +108,8 @@ There is no web test script. No `vue-tsc` typecheck or Prettier is wired in yet.
 
 ### Security
 
-- `ENCRYPTION_KEY` must be ≥24 chars and kept stable across restarts; losing it makes encrypted provider credentials and merchant keys unrecoverable.
-- `base_url` for channels must be HTTPS, except loopback HTTP (`127.0.0.1` / `localhost`) for local services like Ollama. Validate with `isLoopbackHost` before accepting HTTP origins.
+- `ENCRYPTION_KEY` must be ≥24 chars and kept stable across restarts; losing it makes encrypted merchant keys and other service secrets unrecoverable. Channel API keys are plaintext and do not depend on it.
+- `base_url` for channels accepts HTTP or HTTPS to any host (validated by `validUpstreamURL`), so admins can point at plaintext or private-network upstreams. Payment and site icon URLs stay stricter (`validOutboundURL`: HTTPS to a public host, or loopback HTTP).
 - `/admin/*` endpoints require an authenticated session plus a specific permission (`users.read`, `keys.manage`, `channels.read/manage`, `logs.read`, `audit.read`, `pricing.read/manage`, `wallets.manage`, `routes.manage`, `quotas.manage`, `system.manage`). Use the existing `s.permission("...", handler)` wrapper.
 - Gateway endpoints authenticate API keys via `Authorization: Bearer $KEY` (OpenAI) or `x-api-key: $KEY` (Anthropic). Anthropic requests also require `anthropic-version`.
 - Passwords: bcrypt only; minimum 8 chars. Session tokens are 7-day bearer tokens.
@@ -118,7 +118,7 @@ There is no web test script. No `vue-tsc` typecheck or Prettier is wired in yet.
 ### Known limits (do not "fix" silently)
 
 - The rate limiter uses Redis fixed-window counters when `REDIS_URL` is set (`internal/app/redis_limiter.go`), with automatic fallback to the in-process limiter (`internal/app/limiter.go`) if Redis is unreachable.
-- Streaming (SSE) responses are passed through transparently and are **not** settled against the wallet; only non-stream requests record tokens and bill. Do not introduce streaming billing without solving inconsistent upstream SSE usage events.
+- Streaming (SSE) responses are parsed for usage events and billed after the stream closes. OpenAI upstreams receive `stream_options.include_usage: true` so the final chunk carries `usage`; Anthropic events carry usage in `message_start` (input/cache) and `message_delta` (output). If a stream yields no usage events, no tokens are recorded or billed for that request.
 - Balance reservation happens before the upstream call to prevent concurrent overspend; releases/refunds must go through the wallet ledger (`internal/app/gateway.go`).
 
 ## Git and commits
@@ -132,5 +132,5 @@ There is no web test script. No `vue-tsc` typecheck or Prettier is wired in yet.
 - Don't add third-party Go or npm dependencies for things the stdlib / existing stack already does.
 - Don't introduce a CORS policy for the dev setup — Nuxt proxying `/api/*` is intentional.
 - Don't add `/v1` to a channel `base_url`; it is appended by the provider adapters.
-- Don't bill streaming requests, edit applied migrations destructively, or expose encrypted/decrypted secrets via any API.
+- Don't edit applied migrations destructively, or expose encrypted/decrypted secrets via any API.
 - Don't add comments to code unless explicitly requested.

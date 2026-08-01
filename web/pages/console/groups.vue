@@ -15,6 +15,22 @@ const canManage = computed(() => can('system.manage'))
 
 const groups = useResource(() => endpoints.getAdminGroups(), { data: [] as Group[] })
 
+const selected = ref<Set<string>>(new Set())
+
+function toggleSelected(id: string) {
+  const next = new Set(selected.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  selected.value = next
+}
+
+const allSelected = computed(() => groups.data.value.data.length > 0 && groups.data.value.data.every(group => selected.value.has(group.id)))
+
+function toggleAll() {
+  if (allSelected.value) selected.value.clear()
+  else selected.value = new Set(groups.data.value.data.map(group => group.id))
+}
+
 const drafts = reactive<Record<string, string>>({})
 const concurrencyDrafts = reactive<Record<string, string>>({})
 const publicDrafts = reactive<Record<string, boolean>>({})
@@ -143,6 +159,37 @@ async function runImport() {
   importOpen.value = false
   await groups.refresh()
 }
+
+const batchOpen = ref(false)
+const batchError = ref('')
+const batchForm = reactive({ multiplier: '1', maxConcurrency: '', public: false })
+
+function openBatch() {
+  batchError.value = ''
+  const first = groups.data.value.data.find(group => selected.value.has(group.id))
+  batchForm.multiplier = first ? String(first.multiplier) : '1'
+  batchForm.maxConcurrency = first?.max_concurrency ? String(first.max_concurrency) : ''
+  batchForm.public = first?.public ?? false
+  batchOpen.value = true
+}
+
+async function runBatch() {
+  batchError.value = ''
+  const ids = [...selected.value]
+  if (!ids.length) { batchOpen.value = false; return }
+  const multiplier = Number(batchForm.multiplier)
+  if (!validMultiplier(multiplier)) { batchError.value = t('admin.multiplierInvalid'); return }
+  const rawConcurrency = batchForm.maxConcurrency.trim()
+  const concurrency = rawConcurrency === '' ? null : Number(rawConcurrency)
+  if (!validConcurrency(concurrency)) { batchError.value = t('admin.concurrencyInvalid'); return }
+
+  const ok = await run(() => endpoints.batchUpdateGroups(ids, multiplier, concurrency, batchForm.public))
+  if (!ok) { toast.error(t('common.actionFailed')); return }
+  toast.success(t('admin.batchEditDone', { count: ids.length }))
+  batchOpen.value = false
+  selected.value.clear()
+  await groups.refresh()
+}
 </script>
 
 <template>
@@ -153,6 +200,10 @@ async function runImport() {
       <template #actions>
         <UiButton variant="secondary" size="sm" @click="groups.refresh()">{{ t('common.refresh') }}</UiButton>
         <template v-if="canManage">
+          <template v-if="selected.size > 0">
+            <UiBadge tone="outline" class="text-xs">{{ selected.size }}</UiBadge>
+            <UiButton variant="secondary" size="sm" @click="openBatch">{{ t('admin.batchEdit') }}</UiButton>
+          </template>
           <UiButton variant="secondary" size="sm" @click="openImport">{{ t('admin.importGroups') }}</UiButton>
           <UiButton size="sm" @click="openCreate">{{ t('admin.createGroup') }}</UiButton>
         </template>
@@ -172,6 +223,9 @@ async function runImport() {
       <UiTable>
         <thead>
           <tr>
+            <th v-if="canManage" class="w-10">
+              <UiCheckbox :model-value="allSelected" @update:model-value="toggleAll" />
+            </th>
             <th>{{ t('admin.groupName') }}</th>
             <th class="num">{{ t('admin.multiplier') }}</th>
             <th class="num">{{ t('admin.maxConcurrency') }}</th>
@@ -182,6 +236,9 @@ async function runImport() {
         </thead>
         <tbody>
           <tr v-for="group in groups.data.value.data" :key="group.id">
+            <td v-if="canManage">
+              <UiCheckbox :model-value="selected.has(group.id)" @update:model-value="toggleSelected(group.id)" />
+            </td>
             <td class="font-medium text-ink">{{ group.name }}</td>
             <td class="num">
               <div v-if="canManage" class="flex justify-end">
@@ -272,6 +329,31 @@ async function runImport() {
       <template #footer>
         <UiButton variant="secondary" @click="importOpen = false">{{ t('common.cancel') }}</UiButton>
         <UiButton :loading="busy" @click="runImport">{{ t('common.submit') }}</UiButton>
+      </template>
+    </UiSlidePanel>
+
+    <UiSlidePanel
+      v-model:open="batchOpen"
+      :title="t('admin.batchEdit')"
+      :description="t('admin.batchEditLead', { count: selected.size })"
+    >
+      <div class="space-y-4">
+        <UiAlert v-if="batchError" tone="danger">{{ batchError }}</UiAlert>
+        <UiField :label="t('admin.multiplier')" required>
+          <UiInput v-model="batchForm.multiplier" type="number" mono />
+        </UiField>
+
+        <UiField :label="t('admin.maxConcurrency')" :hint="t('admin.maxConcurrencyHint')">
+          <UiInput v-model="batchForm.maxConcurrency" type="number" mono :placeholder="t('admin.concurrencyPlaceholder')" />
+        </UiField>
+
+        <UiField :label="t('admin.groupPublic')" :hint="t('admin.groupPublicHint')">
+          <UiSwitch v-model="batchForm.public" :label="t('admin.groupPublic')" />
+        </UiField>
+      </div>
+      <template #footer>
+        <UiButton variant="secondary" @click="batchOpen = false">{{ t('common.cancel') }}</UiButton>
+        <UiButton :loading="busy" @click="runBatch">{{ t('common.submit') }}</UiButton>
       </template>
     </UiSlidePanel>
   </div>

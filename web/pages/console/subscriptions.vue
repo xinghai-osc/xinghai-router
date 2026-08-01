@@ -62,8 +62,16 @@ watch(methodOptions, (options) => {
   if (!method.value && options.length) method.value = options[0].value
 })
 
+const PERIOD_KEYS: Record<string, string> = {
+  hour: 'console.perHour',
+  day: 'console.perDay',
+  week: 'console.perWeek',
+  month: 'console.perMonth',
+  year: 'console.perYear',
+}
+
 function periodLabel(period: string): string {
-  return period === 'year' ? t('console.perYear') : t('console.perMonth')
+  return PERIOD_KEYS[period] ? t(PERIOD_KEYS[period]) : period
 }
 
 function statusLabel(status: string): string {
@@ -72,7 +80,11 @@ function statusLabel(status: string): string {
 
 function planBenefits(plan: PublicSubscriptionPlan): string[] {
   const list: string[] = []
-  if (Number(plan.credit_amount) > 0) list.push(t('console.planCredit', { amount: Number(plan.credit_amount).toFixed(2) }))
+  if (plan.credit_amount) {
+    list.push(t('console.planCredit', { amount: Number(plan.credit_amount).toFixed(2) }))
+  } else {
+    list.push(t('console.planUnlimitedCredit'))
+  }
   if (plan.group_name) list.push(t('console.planGroup', { group: plan.group_name }))
   list.push(plan.model_whitelist.length
     ? t('console.planWhitelist', { count: plan.model_whitelist.length })

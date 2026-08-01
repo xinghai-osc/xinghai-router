@@ -312,7 +312,7 @@ func (s *Service) updateReliabilitySettings(w http.ResponseWriter, r *http.Reque
 
 // autoDisableChannel marks a channel as automatically disabled with an audit record.
 func (s *Service) autoDisableChannel(ctx context.Context, id, reason string) {
-	result, err := s.db.Exec(ctx, `update channels set enabled=false,auto_disabled=true,disabled_reason=$1,last_error=$1,last_checked_at=now(),updated_at=now() where id=$2 and enabled`, reason, id)
+	result, err := s.db.Exec(ctx, `update channels set enabled=false,auto_disabled=true,disabled_reason=$1,last_error=$1,last_checked_at=now(),updated_at=now() where id=$2 and enabled and auto_disable`, reason, id)
 	if err != nil || result.RowsAffected() != 1 {
 		return
 	}
@@ -391,7 +391,7 @@ func (s *Service) runHealthChecks(ctx context.Context) {
 	}
 	rows.Close()
 	for _, t := range targets {
-		apiKey, err := crypt(s.cfg.EncryptionKey, t.encrypted, true)
+		apiKey, err := channelKeyValue(s.cfg.EncryptionKey, t.encrypted)
 		if err != nil {
 			continue
 		}

@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseCreditAmount(t *testing.T) {
@@ -17,6 +18,9 @@ func TestParseCreditAmount(t *testing.T) {
 		{"10", 10, true},
 		{"10.5", 10.5, true},
 		{"0.01", 0.01, true},
+		{"1000000", 1000000, true},
+		{"999999.99", 999999.99, true},
+		{"1000000.01", 1000000.01, true},
 		{"-1", 0, false},
 		{"1.001", 0, false},
 		{"abc", 0, false},
@@ -75,7 +79,7 @@ func TestReadSubscriptionPlanInputRejectsInvalid(t *testing.T) {
 	cases := []string{
 		`{}`,
 		`{"name":"","price":"1","billing_period":"month","credit_amount":"0"}`,
-		`{"name":"Plan","price":"1","billing_period":"week","credit_amount":"0"}`,
+		`{"name":"Plan","price":"1","billing_period":"fortnight","credit_amount":"0"}`,
 		`{"name":"Plan","price":"-1","billing_period":"month","credit_amount":"0"}`,
 		`{"name":"Plan","price":"1","billing_period":"month","credit_amount":"abc"}`,
 		`{"name":"Plan","price":"1","billing_period":"month","credit_amount":"0","currency":"TOOLONGCODE"}`,
@@ -98,7 +102,7 @@ func TestReadSubscriptionPlanInputRejectsInvalid(t *testing.T) {
 func TestCreateSubscriptionPlanRejectsInvalidBeforeDatabase(t *testing.T) {
 	for _, body := range []string{
 		`{}`,
-		`{"name":"x","price":"1","billing_period":"day","credit_amount":"0"}`,
+		`{"name":"x","price":"1","billing_period":"fortnight","credit_amount":"0"}`,
 		`{"name":"x","price":"bad","billing_period":"month","credit_amount":"0"}`,
 	} {
 		rec := httptest.NewRecorder()
@@ -116,6 +120,58 @@ func TestNullableGroupRef(t *testing.T) {
 	}
 	if nullableGroupRef("abc") != "abc" {
 		t.Fatal("non-empty group should pass through")
+	}
+}
+
+func TestNullableCredit(t *testing.T) {
+	if nullableCredit("") != nil {
+		t.Fatal("empty credit should be nil")
+	}
+	if nullableCredit("5") != "5" {
+		t.Fatal("non-empty credit should pass through")
+	}
+}
+
+func TestReadSubscriptionPlanInputUnlimitedCredit(t *testing.T) {
+	body := `{"name":"Pro","price":"10.00","billing_period":"month"}`
+	req := httptest.NewRequest(http.MethodPost, "/admin/subscription-plans", strings.NewReader(body))
+	plan, err := readSubscriptionPlanInput(req, &Service{}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.CreditAmount != "" {
+		t.Fatalf("credit amount = %q, want empty for unlimited", plan.CreditAmount)
+	}
+}
+
+func TestReadSubscriptionPlanInputMaxCredit(t *testing.T) {
+	body := `{"name":"Pro","price":"10.00","billing_period":"month","credit_amount":"1000000"}`
+	req := httptest.NewRequest(http.MethodPost, "/admin/subscription-plans", strings.NewReader(body))
+	plan, err := readSubscriptionPlanInput(req, &Service{}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.CreditAmount != "1000000" {
+		t.Fatalf("credit amount = %q, want 1000000", plan.CreditAmount)
+	}
+}
+
+func TestSubscriptionPeriodEnd(t *testing.T) {
+	start := time.Date(2026, 1, 31, 12, 30, 0, 0, time.UTC)
+	tests := []struct {
+		billing string
+		want    time.Time
+	}{
+		{"hour", time.Date(2026, 1, 31, 13, 30, 0, 0, time.UTC)},
+		{"day", time.Date(2026, 2, 1, 12, 30, 0, 0, time.UTC)},
+		{"week", time.Date(2026, 2, 7, 12, 30, 0, 0, time.UTC)},
+		{"month", time.Date(2026, 3, 3, 12, 30, 0, 0, time.UTC)},
+		{"year", time.Date(2027, 1, 31, 12, 30, 0, 0, time.UTC)},
+	}
+	for _, tt := range tests {
+		if got := subscriptionPeriodEnd(start, tt.billing); !got.Equal(tt.want) {
+			t.Fatalf("subscriptionPeriodEnd(%s) = %v, want %v", tt.billing, got, tt.want)
+		}
 	}
 }
 

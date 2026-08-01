@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Activity, Search } from 'lucide-vue-next'
 import { endpoints, type UsageRecord } from '~/src/api'
-import { formatDateTime, formatMoney, formatNumber, shortId } from '~/src/format'
+import { formatDateTime, formatMoney, formatNumber } from '~/src/format'
 
 definePageMeta({ layout: 'console', middleware: 'console-auth' })
 
@@ -17,20 +17,29 @@ const { data: usage, pending, error } = useResource(
 
 const query = ref('')
 const model = ref('')
+const key = ref('')
+const group = ref('')
 const status = ref('')
 const start = ref('')
 const end = ref('')
 
-const modelOptions = computed(() => [
-  { value: '', label: t('console.allModels') },
-  ...[...new Set(usage.value.data.map(record => record.model))]
-    .sort()
-    .map(name => ({ value: name, label: name })),
-])
+function nameOptions(records: UsageRecord[], pick: (record: UsageRecord) => string, allLabel: string) {
+  return [
+    { value: '', label: allLabel },
+    ...[...new Set(records.map(pick).filter(Boolean))]
+      .sort()
+      .map(name => ({ value: name, label: name })),
+  ]
+}
+
+const modelOptions = computed(() => nameOptions(usage.value.data, record => record.model, t('console.allModels')))
+const keyOptions = computed(() => nameOptions(usage.value.data, record => record.key_name, t('console.allKeys')))
+const groupOptions = computed(() => nameOptions(usage.value.data, record => record.group_name, t('console.allGroups')))
 
 const statusOptions = computed(() => [
   { value: '', label: t('console.statusAll') },
   { value: 'settled', label: t('console.statusSettled') },
+  { value: 'success', label: t('console.statusSuccess') },
   { value: 'failed', label: t('console.statusFailed') },
 ])
 
@@ -38,6 +47,8 @@ const filtered = computed(() => {
   const needle = query.value.trim().toLowerCase()
   return usage.value.data.filter((record) => {
     if (model.value && record.model !== model.value) return false
+    if (key.value && record.key_name !== key.value) return false
+    if (group.value && record.group_name !== group.value) return false
     if (status.value && record.status !== status.value) return false
     if (start.value && new Date(record.created_at) < new Date(start.value)) return false
     if (end.value) {
@@ -62,15 +73,19 @@ const totals = computed(() => filtered.value.reduce(
   { prompt: 0, cached: 0, completion: 0, total: 0, cost: 0 },
 ))
 
-const filtersActive = computed(() => Boolean(query.value.trim() || model.value || status.value || start.value || end.value))
+const filtersActive = computed(() => Boolean(query.value.trim() || model.value || key.value || group.value || status.value || start.value || end.value))
 
 function resetFilters() {
   query.value = ''
   model.value = ''
+  key.value = ''
+  group.value = ''
   status.value = ''
   start.value = ''
   end.value = ''
 }
+
+const clientTarget = ref<UsageRecord | null>(null)
 </script>
 
 <template>
@@ -86,6 +101,12 @@ function resetFilters() {
         </div>
         <div class="w-full sm:w-40">
           <UiSelect v-model="model" :options="modelOptions" :placeholder="t('console.allModels')" />
+        </div>
+        <div class="w-full sm:w-40">
+          <UiSelect v-model="key" :options="keyOptions" :placeholder="t('console.allKeys')" />
+        </div>
+        <div class="w-full sm:w-36">
+          <UiSelect v-model="group" :options="groupOptions" :placeholder="t('console.allGroups')" />
         </div>
         <div class="w-full sm:w-36">
           <UiSelect v-model="status" :options="statusOptions" :placeholder="t('console.statusAll')" />
@@ -113,33 +134,46 @@ function resetFilters() {
         <UiTable>
           <thead>
             <tr>
+              <th>{{ t('console.time') }}</th>
+              <th>{{ t('console.keyUsed') }}</th>
               <th>{{ t('console.model') }}</th>
-              <th>{{ t('console.requestId') }}</th>
+              <th>{{ t('console.group') }}</th>
+              <th class="num">{{ t('console.duration') }}</th>
               <th class="num">{{ t('console.promptTokens') }}</th>
               <th class="num">{{ t('console.cachedTokens') }}</th>
               <th class="num">{{ t('console.completionTokens') }}</th>
               <th class="num">{{ t('console.totalTokens') }}</th>
               <th class="num">{{ t('console.cost') }}</th>
               <th>{{ t('common.status') }}</th>
-              <th>{{ t('console.time') }}</th>
+              <th>{{ t('common.detail') }}</th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="record in filtered" :key="record.request_id">
+              <td class="text-muted whitespace-nowrap">{{ formatDateTime(record.created_at) }}</td>
+              <td class="text-muted">{{ record.key_name || '-' }}</td>
               <td class="font-medium">{{ record.model }}</td>
-              <td><code class="font-mono text-[13px] text-muted">{{ shortId(record.request_id) }}</code></td>
+              <td class="text-muted">{{ record.group_name || '-' }}</td>
+              <td class="num text-muted">{{ t('console.durationMs', { value: record.duration_ms }) }}</td>
               <td class="num">{{ formatNumber(record.prompt_tokens) }}</td>
               <td class="num text-muted">{{ formatNumber(record.cached_prompt_tokens) }}</td>
               <td class="num">{{ formatNumber(record.completion_tokens) }}</td>
               <td class="num">{{ formatNumber(record.prompt_tokens + record.completion_tokens) }}</td>
-              <td class="num">{{ formatMoney(record.cost, 4) }}</td>
+              <td class="num">
+                <UiBadge v-if="record.subscription" tone="clay">{{ t('console.subscriptionCovered') }}</UiBadge>
+                <template v-else>{{ formatMoney(record.cost, 4) }}</template>
+              </td>
               <td><ConsoleUserStatusBadge :status="record.status" /></td>
-              <td class="text-muted">{{ formatDateTime(record.created_at) }}</td>
+              <td>
+                <UiButton variant="ghost" size="sm" @click="clientTarget = record">
+                  {{ t('common.detail') }}
+                </UiButton>
+              </td>
             </tr>
           </tbody>
           <tfoot>
             <tr class="border-t border-line-strong bg-sunken font-medium">
-              <td colspan="2">{{ t('console.totalsRow', { count: filtered.length }) }}</td>
+              <td colspan="5">{{ t('console.totalsRow', { count: filtered.length }) }}</td>
               <td class="num">{{ formatNumber(totals.prompt) }}</td>
               <td class="num">{{ formatNumber(totals.cached) }}</td>
               <td class="num">{{ formatNumber(totals.completion) }}</td>
@@ -151,5 +185,26 @@ function resetFilters() {
         </UiTable>
       </ConsoleUserDataState>
     </div>
+
+    <UiDialog v-model:open="clientTarget" :title="t('common.detail')">
+      <div class="space-y-3 text-sm">
+        <div>
+          <div class="mb-1 text-xs text-muted">{{ t('console.requestId') }}</div>
+          <div class="break-all font-mono text-ink">{{ clientTarget?.request_id || '-' }}</div>
+        </div>
+        <div>
+          <div class="mb-1 text-xs text-muted">{{ t('console.clientIp') }}</div>
+          <div class="font-mono text-ink">{{ clientTarget?.client_ip || '-' }}</div>
+        </div>
+        <div>
+          <div class="mb-1 text-xs text-muted">{{ t('console.userAgent') }}</div>
+          <div class="break-all font-mono text-ink">{{ clientTarget?.user_agent || '-' }}</div>
+        </div>
+        <div>
+          <div class="mb-1 text-xs text-muted">{{ t('console.errorDetail') }}</div>
+          <div class="break-all font-mono text-ink">{{ clientTarget?.error || '-' }}</div>
+        </div>
+      </div>
+    </UiDialog>
   </UiCard>
 </template>

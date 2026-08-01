@@ -112,11 +112,29 @@ func (c *ttlCache[K, V]) clear() {
 	c.mu.Unlock()
 }
 
+// pricingTier is a single volume band in a tiered pricing rule.
+type pricingTier struct {
+	fromTokens                              int64
+	input, cachedInput, output              float64
+}
+
+// pricingTimeRule is a time-windowed price override.
+type pricingTimeRule struct {
+	startMinute, endMinute                  int
+	weekdays                                string
+	input, cachedInput, output              float64
+}
+
 // pricingRule is the cached form of a row in pricing_rules. found is false when no
 // enabled rule exists, which is cached too so unpriced models cost one query per ttl.
+// tiers, when non-empty, override the flat input/cachedInput/output for requests
+// whose total token count falls in a tier band. timeRules, when non-empty, are
+// evaluated at request time; the last matching rule overrides the base prices.
 type pricingRule struct {
-	input, cachedInput, output, multiplier float64
-	found                                  bool
+	input, cachedInput, output, multiplier  float64
+	tiers                                   []pricingTier
+	timeRules                               []pricingTimeRule
+	found                                   bool
 }
 
 func (s *Service) pricingFor(ctx context.Context, model string) pricingRule {
@@ -131,12 +149,80 @@ func (s *Service) pricingFor(ctx context.Context, model string) pricingRule {
 			return pricingRule{}, err
 		}
 		rule.found = true
+		// Load tiered pricing bands (ordered by from_tokens ascending).
+		tr, err := s.db.Query(ctx, `select from_tokens,input_per_million,cached_input_per_million,output_per_million from pricing_tiers where model=$1 order by from_tokens`, model)
+		if err == nil {
+			for tr.Next() {
+				var t pricingTier
+				if tr.Scan(&t.fromTokens, &t.input, &t.cachedInput, &t.output) == nil {
+					rule.tiers = append(rule.tiers, t)
+				}
+			}
+			tr.Close()
+		}
+		// Load time-based pricing overrides (ordered by created_at ascending so the
+		// last match wins when multiple rules overlap).
+		rr, err := s.db.Query(ctx, `select start_minute,end_minute,weekdays,input_per_million,cached_input_per_million,output_per_million from pricing_time_rules where model=$1 and enabled order by created_at`, model)
+		if err == nil {
+			for rr.Next() {
+				var tr pricingTimeRule
+				if rr.Scan(&tr.startMinute, &tr.endMinute, &tr.weekdays, &tr.input, &tr.cachedInput, &tr.output) == nil {
+					rule.timeRules = append(rule.timeRules, tr)
+				}
+			}
+			rr.Close()
+		}
 		return rule, nil
 	})
 	if err != nil {
 		return pricingRule{}
 	}
 	return rule
+}
+
+// resolvePricing returns the effective prices for a model at the given time,
+// applying time-based overrides first, then tiered pricing.
+func (r pricingRule) resolvePricing(now time.Time) (input, cachedInput, output float64) {
+	input, cachedInput, output = r.input, r.cachedInput, r.output
+	if len(r.timeRules) > 0 {
+		minute := now.Hour()*60 + now.Minute()
+		weekday := int(now.Weekday())
+		if weekday == 0 {
+			weekday = 6 // Sunday → index 6 (Mon=0 … Sun=6)
+		} else {
+			weekday-- // Go Sunday=0,Mon=1…Sat=6 → Mon=0…Sun=6
+		}
+		for _, tr := range r.timeRules {
+			if len(tr.weekdays) != 7 || tr.weekdays[weekday] != '1' {
+				continue
+			}
+			if tr.startMinute < tr.endMinute {
+				if minute >= tr.startMinute && minute < tr.endMinute {
+					input, cachedInput, output = tr.input, tr.cachedInput, tr.output
+				}
+			} else {
+				// Wrap-around window (e.g. 22:00 → 06:00).
+				if minute >= tr.startMinute || minute < tr.endMinute {
+					input, cachedInput, output = tr.input, tr.cachedInput, tr.output
+				}
+			}
+		}
+	}
+	return input, cachedInput, output
+}
+
+// resolveTier returns the tier-specific prices for a given total token count.
+// When no tier matches, the provided fallback prices are returned unchanged.
+func (r pricingRule) resolveTier(totalTokens int64, fbInput, fbCached, fbOutput float64) (input, cachedInput, output float64) {
+	input, cachedInput, output = fbInput, fbCached, fbOutput
+	for _, t := range r.tiers {
+		if totalTokens >= t.fromTokens {
+			input, cachedInput, output = t.input, t.cachedInput, t.output
+		} else {
+			break
+		}
+	}
+	return input, cachedInput, output
 }
 
 // groupMultiplierFor returns the billing multiplier of a group, defaulting to 1 when the

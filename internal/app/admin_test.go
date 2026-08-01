@@ -13,7 +13,6 @@ import (
 func TestSyncNewAPIPricingRejectsInvalidSourceBeforeNetworkOrDatabaseAccess(t *testing.T) {
 	for _, body := range []string{
 		`{}`,
-		`{"base_url":"http://example.com","price_per_quota_unit":1}`,
 		`{"base_url":"https://example.com","price_per_quota_unit":-1}`,
 		`{"base_url":"https://example.com","price_per_quota_unit":"nan"}`,
 		`{"base_url":"https://example.com","price_per_quota_unit":"inf"}`,
@@ -21,7 +20,6 @@ func TestSyncNewAPIPricingRejectsInvalidSourceBeforeNetworkOrDatabaseAccess(t *t
 		`{"base_url":"https://` + strings.Repeat("a", 2040) + `.example.com","price_per_quota_unit":1}`,
 		`{"base_url":"https://example.com","api_key":"` + strings.Repeat("k", 4097) + `","price_per_quota_unit":1}`,
 		`{"base_url":"","price_per_quota_unit":1}`,
-		`{"base_url":"https://10.0.0.1","price_per_quota_unit":1}`,
 	} {
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodPost, "/admin/pricing/newapi/sync", strings.NewReader(body))
@@ -37,8 +35,6 @@ func TestFetchChannelModelsRejectsInvalidRequestBeforeNetworkAccess(t *testing.T
 		`{}`,
 		`{"base_url":"","api_key":"sk"}`,
 		`{"base_url":"https://api.example.com","api_key":""}`,
-		`{"base_url":"http://api.example.com","api_key":"sk"}`,
-		`{"base_url":"https://10.0.0.1","api_key":"sk"}`,
 		`{"base_url":"https://api.example.com","api_key":"` + strings.Repeat("k", 4097) + `"}`,
 		`{"base_url":"https://` + strings.Repeat("a", 2040) + `.example.com","api_key":"sk"}`,
 	} {
@@ -116,7 +112,6 @@ func TestUpdateChannelRejectsInvalidRequestBeforeDatabaseAccess(t *testing.T) {
 	for _, body := range []string{
 		`{}`,
 		`{"name":"channel","base_url":"https://api.example.com","models":[]}`,
-		`{"name":"channel","base_url":"http://api.example.com","models":["model"]}`,
 		`{"name":"channel","base_url":"https://api.example.com","models":["model"],"provider":"unknown"}`,
 	} {
 		recorder := httptest.NewRecorder()
@@ -134,11 +129,8 @@ func TestCreateChannelRejectsInvalidRequestBeforeDatabaseAccess(t *testing.T) {
 	for _, body := range []string{
 		`{}`,
 		`{"name":"channel","key_type":"single","api_keys":"sk","base_url":"https://api.example.com","models":[]}`,
-		`{"name":"channel","key_type":"single","api_keys":"sk","base_url":"http://api.example.com","models":["model"]}`,
 		`{"name":"channel","key_type":"single","api_keys":"sk","base_url":"https://api.example.com","models":["model"],"provider":"unknown"}`,
 		`{"name":"","key_type":"single","api_keys":"sk","base_url":"https://api.example.com","models":["model"]}`,
-		`{"name":"channel","key_type":"single","api_keys":"sk","base_url":"https://169.254.169.254","models":["model"]}`,
-		`{"name":"channel","key_type":"single","api_keys":"sk","base_url":"https://10.0.0.8","models":["model"]}`,
 		`{"name":"channel","key_type":"single","api_keys":"sk","base_url":"https://api.example.com","models":["model"],"priority":10001}`,
 		`{"name":"channel","key_type":"single","api_keys":"sk","base_url":"https://api.example.com","models":["model"],"priority":-10001}`,
 		`{"name":"channel","key_type":"single","api_keys":"","base_url":"https://api.example.com","models":["model"]}`,
@@ -173,7 +165,7 @@ func TestUpdateChannelRejectsInvalidPriorityBeforeDatabaseAccess(t *testing.T) {
 }
 
 func TestValidChannelProviderAndPriority(t *testing.T) {
-	for _, p := range []string{"openai", "ollama", "kimi", "opencode_go", "anthropic"} {
+	for _, p := range []string{"openai", "ollama", "kimi", "opencode_go", "anthropic", "custom"} {
 		if !validChannelProvider(p) {
 			t.Fatalf("expected provider %q valid", p)
 		}
@@ -222,30 +214,6 @@ func TestCreateChannelRejectsEmptyModelsAfterSanitize(t *testing.T) {
 	(&Service{}).createChannel(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
-	}
-}
-
-func TestUpdateChannelRejectsPrivateHTTPSBeforeDatabaseAccess(t *testing.T) {
-	for _, body := range []string{
-		`{"name":"channel","base_url":"https://169.254.169.254","models":["m"]}`,
-		`{"name":"channel","base_url":"https://192.168.0.1","models":["m"]}`,
-	} {
-		recorder := httptest.NewRecorder()
-		request := httptest.NewRequest(http.MethodPut, "/admin/channels/channel-id", strings.NewReader(body))
-		(&Service{}).updateChannel(recorder, request)
-		if recorder.Code != http.StatusBadRequest {
-			t.Fatalf("body %s status = %d, want %d", body, recorder.Code, http.StatusBadRequest)
-		}
-	}
-}
-
-func TestSyncNewAPIPricingRejectsPrivateBaseURL(t *testing.T) {
-	body := `{"base_url":"https://10.0.0.1","price_per_quota_unit":1}`
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/admin/pricing/newapi/sync", strings.NewReader(body))
-	(&Service{}).syncNewAPIPricing(recorder, request)
-	if recorder.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
 	}
 }
 
@@ -313,6 +281,33 @@ func TestCreateAndUpdateGroupRejectInvalidMultipliers(t *testing.T) {
 	}
 }
 
+func TestBatchUpdateGroupsRejectsInvalidBeforeDatabaseAccess(t *testing.T) {
+	for _, body := range []string{
+		`{"ids":[]}`,
+		`{"ids":["g1"],"multiplier":-1}`,
+		`{"ids":["g1"],"multiplier":"nan"}`,
+		`{"ids":["g1"],"multiplier":1001}`,
+	} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/admin/groups/batch-update", strings.NewReader(body))
+		(&Service{}).batchUpdateGroups(recorder, request)
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("batchUpdateGroups body %s status = %d", body, recorder.Code)
+		}
+	}
+	var ids []string
+	for i := 0; i < 101; i++ {
+		ids = append(ids, "g")
+	}
+	body, _ := json.Marshal(map[string]any{"ids": ids, "multiplier": 1})
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/admin/groups/batch-update", strings.NewReader(string(body)))
+	(&Service{}).batchUpdateGroups(recorder, request)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("batchUpdateGroups with 101 ids status = %d", recorder.Code)
+	}
+}
+
 func TestSetUserRoleRejectsInvalidBeforeDatabaseAccess(t *testing.T) {
 	for _, body := range []string{`{}`, `{"role":"owner"}`, `{"role":""}`} {
 		recorder := httptest.NewRecorder()
@@ -351,6 +346,24 @@ func TestValidFiniteHelpers(t *testing.T) {
 	}
 	if !validPricingModel("m") || validPricingModel("") || validPricingModel(strings.Repeat("m", 201)) {
 		t.Fatal("pricing model bounds unexpected")
+	}
+}
+
+func TestValidTimeWindow(t *testing.T) {
+	if !validTimeWindow(0, 1440) || !validTimeWindow(360, 720) || !validTimeWindow(1320, 360) {
+		t.Fatal("valid time windows rejected")
+	}
+	if validTimeWindow(0, 0) || validTimeWindow(-1, 100) || validTimeWindow(0, 1441) || validTimeWindow(1440, 100) {
+		t.Fatal("invalid time windows accepted")
+	}
+}
+
+func TestValidWeekdays(t *testing.T) {
+	if !validWeekdays("1111111") || !validWeekdays("0000010") || !validWeekdays("1010100") {
+		t.Fatal("valid weekday strings rejected")
+	}
+	if validWeekdays("") || validWeekdays("111111") || validWeekdays("11111111") || validWeekdays("2111111") {
+		t.Fatal("invalid weekday strings accepted")
 	}
 }
 
@@ -636,10 +649,10 @@ func TestValidChannelAPIKeyAndBaseURL(t *testing.T) {
 	if validChannelAPIKey("") || validChannelAPIKey(strings.Repeat("k", maxChannelAPIKeyLen+1)) {
 		t.Fatal("out-of-range api keys must be invalid")
 	}
-	if !validChannelBaseURL("https://api.example.com") {
-		t.Fatal("public https base_url must be valid")
+	if !validChannelBaseURL("https://api.example.com") || !validChannelBaseURL("http://api.example.com") || !validChannelBaseURL("http://10.0.0.5:8080") {
+		t.Fatal("http and https base_url must be valid")
 	}
-	if validChannelBaseURL("") || validChannelBaseURL("http://api.example.com") || validChannelBaseURL("https://"+strings.Repeat("a", 2040)+".example.com") {
+	if validChannelBaseURL("") || validChannelBaseURL("ftp://api.example.com") || validChannelBaseURL("https://"+strings.Repeat("a", 2040)+".example.com") {
 		t.Fatal("invalid base_url must be rejected")
 	}
 }

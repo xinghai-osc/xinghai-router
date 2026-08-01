@@ -25,7 +25,13 @@ const dialogOpen = ref(false)
 const editing = ref<SubscriptionPlan | null>(null)
 const removing = ref<SubscriptionPlan | null>(null)
 
-const PERIOD_KEYS = { month: 'system.periodMonth', year: 'system.periodYear' } as const
+const PERIOD_KEYS: Record<string, string> = {
+  hour: 'system.periodHour',
+  day: 'system.periodDay',
+  week: 'system.periodWeek',
+  month: 'system.periodMonth',
+  year: 'system.periodYear',
+}
 
 function openCreate() {
   editing.value = null
@@ -110,7 +116,7 @@ async function confirmDelete() {
                 {{ plan.price }} {{ plan.currency }}
                 <span class="text-muted"> · {{ t(PERIOD_KEYS[plan.billing_period]) }}</span>
               </td>
-              <td class="num">{{ plan.credit_amount }}</td>
+              <td class="num">{{ plan.credit_amount || t('system.unlimited') }}</td>
               <td>{{ plan.group_name || '—' }}</td>
               <td class="num">
                 {{ plan.model_whitelist.length

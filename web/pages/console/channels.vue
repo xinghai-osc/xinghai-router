@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { Server, KeyRound, Play, ArrowRightLeft } from 'lucide-vue-next'
-import { endpoints, type Channel, type ChannelForm, type ChannelKey, type ChannelKeyTestResult, type Group, type ModelRoute, type ModelRouteForm } from '~/src/api'
-import { formatNumber } from '~/src/format'
+import { Server, KeyRound, Play, ArrowRightLeft, BarChart3 } from 'lucide-vue-next'
+import { endpoints, type Channel, type ChannelForm, type ChannelKey, type ChannelKeyTestResult, type ChannelQuota, type ChannelQuotaForm, type ChannelTestResult, type ChannelUsageStats, type Group, type ModelRoute, type ModelRouteForm } from '~/src/api'
+import { formatCompact, formatNumber, formatMoney } from '~/src/format'
 
 definePageMeta({ layout: 'console', middleware: 'console-auth' })
 
@@ -13,7 +13,7 @@ const { busy, run } = useAction()
 const allowed = computed(() => can('channels.read'))
 const canManage = computed(() => can('channels.manage'))
 
-const PROVIDERS = ['openai', 'ollama', 'kimi', 'opencode_go', 'anthropic']
+const PROVIDERS = ['openai', 'ollama', 'kimi', 'opencode_go', 'anthropic', 'custom']
 const KEY_TYPES = [
   { value: 'single', label: t('admin.singleKey') },
   { value: 'multi', label: t('admin.multiKey') },
@@ -88,12 +88,97 @@ const form = reactive({
   models: '',
   priority: '0',
   groups: [] as string[],
+  auto_disable: true,
+  upstream_path: '',
+  upstream_format: '',
 })
 
 const keysDialogOpen = ref(false)
 const keysChannelId = ref('')
 const keysChannelName = ref('')
 const channelKeys = useResource(() => Promise.resolve({ data: [] as ChannelKey[] }), { data: [] as ChannelKey[] })
+
+const keyDialogOpen = ref(false)
+const editingKeyId = ref('')
+const keyFormError = ref('')
+const keyForm = reactive({
+  name: '',
+  api_key: '',
+  priority: '100',
+})
+
+function openCreateKey() {
+  editingKeyId.value = ''
+  keyFormError.value = ''
+  keyForm.name = ''
+  keyForm.api_key = ''
+  keyForm.priority = '100'
+  keyDialogOpen.value = true
+}
+
+function openEditKey(key: ChannelKey) {
+  editingKeyId.value = key.id
+  keyFormError.value = ''
+  keyForm.name = key.name
+  keyForm.api_key = ''
+  keyForm.priority = String(key.priority)
+  keyDialogOpen.value = true
+}
+
+async function saveKey() {
+  keyFormError.value = ''
+  const name = keyForm.name.trim()
+  if (name.length > 100) {
+    keyFormError.value = t('admin.nameRequired')
+    return
+  }
+  const priority = Number(keyForm.priority)
+  if (!Number.isInteger(priority) || priority < -10000 || priority > 10000) {
+    keyFormError.value = t('admin.priorityInvalid')
+    return
+  }
+  if (!editingKeyId.value) {
+    const apiKey = keyForm.api_key.trim()
+    if (!apiKey || apiKey.length > 4096) {
+      keyFormError.value = t('admin.apiKeyRequired')
+      return
+    }
+    const ok = await run(() => endpoints.createChannelKey(keysChannelId.value, { name, api_key: apiKey, priority }))
+    if (!ok) { toast.error(t('common.actionFailed')); return }
+    toast.success(t('admin.keyCreated'))
+  } else {
+    if (!name) {
+      keyFormError.value = t('admin.nameRequired')
+      return
+    }
+    const ok = await run(() => endpoints.updateChannelKey(keysChannelId.value, editingKeyId.value, { name, priority }))
+    if (!ok) { toast.error(t('common.actionFailed')); return }
+    toast.success(t('admin.keySaved'))
+  }
+  keyDialogOpen.value = false
+  const refreshed = await endpoints.getChannelKeys(keysChannelId.value)
+  channelKeys.data.value.data = refreshed.data
+  await channels.refresh()
+}
+
+async function toggleKey(key: ChannelKey) {
+  const ok = await run(() => endpoints.toggleChannelKey(keysChannelId.value, key.id, !key.enabled))
+  if (!ok) { toast.error(t('common.actionFailed')); return }
+  toast.success(key.enabled ? t('admin.keyDisabled') : t('admin.keyEnabled'))
+  const refreshed = await endpoints.getChannelKeys(keysChannelId.value)
+  channelKeys.data.value.data = refreshed.data
+  await channels.refresh()
+}
+
+async function deleteKey(key: ChannelKey) {
+  if (!confirm(t('admin.confirmDeleteKey'))) return
+  const ok = await run(() => endpoints.deleteChannelKey(keysChannelId.value, key.id))
+  if (!ok) { toast.error(t('common.actionFailed')); return }
+  toast.success(t('admin.keyDeleted'))
+  const refreshed = await endpoints.getChannelKeys(keysChannelId.value)
+  channelKeys.data.value.data = refreshed.data
+  await channels.refresh()
+}
 
 const routesDialogOpen = ref(false)
 const routesChannelId = ref('')
@@ -121,6 +206,9 @@ function openCreate() {
   form.models = ''
   form.priority = '0'
   form.groups = []
+  form.auto_disable = true
+  form.upstream_path = ''
+  form.upstream_format = ''
   dialogOpen.value = true
 }
 
@@ -135,6 +223,9 @@ function openEdit(channel: Channel) {
   form.models = channel.models.join('\n')
   form.priority = String(channel.priority)
   form.groups = [...channel.groups]
+  form.auto_disable = channel.auto_disable
+  form.upstream_path = channel.upstream_path ?? ''
+  form.upstream_format = channel.upstream_format ?? ''
   dialogOpen.value = true
 }
 
@@ -156,7 +247,7 @@ function parseApiKeys(value: string): string[] {
   return [...seen]
 }
 
-/** Mirrors the server rule: HTTPS to a public host, or HTTP to loopback, never a trailing /v1. */
+/** Mirrors the server rule: HTTP or HTTPS to any host, never a trailing /v1. */
 function validateBaseUrl(value: string): string {
   if (!value) return t('admin.baseUrlRequired')
   let parsed: URL
@@ -165,13 +256,7 @@ function validateBaseUrl(value: string): string {
   } catch {
     return t('admin.baseUrlInvalid')
   }
-  const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '')
-  const loopback = host === 'localhost' || host === '127.0.0.1' || host === '::1'
-  if (parsed.protocol === 'http:') {
-    if (!loopback) return t('admin.baseUrlInvalid')
-  } else if (parsed.protocol === 'https:') {
-    if (loopback) return t('admin.baseUrlInvalid')
-  } else {
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     return t('admin.baseUrlInvalid')
   }
   if (/\/v1\/?$/.test(parsed.pathname)) return t('admin.baseUrlTrailingV1')
@@ -234,6 +319,11 @@ async function save() {
     models,
     priority,
     groups: [...form.groups],
+    auto_disable: form.auto_disable,
+  }
+  if (form.provider === 'custom') {
+    payload.upstream_path = form.upstream_path.trim()
+    payload.upstream_format = form.upstream_format
   }
   if (!apiKeys.length) {
     delete (payload as Partial<ChannelForm>).api_keys
@@ -286,6 +376,30 @@ async function testKey(key: ChannelKey) {
   }
   const refreshed = await endpoints.getChannelKeys(keysChannelId.value)
   channelKeys.data.value.data = refreshed.data
+  await channels.refresh()
+}
+
+const testingChannelId = ref<string | null>(null)
+async function testChannelRow(channel: Channel) {
+  let result: ChannelTestResult | undefined
+  testingChannelId.value = channel.id
+  const ok = await run(async () => {
+    result = await endpoints.testChannel(channel.id)
+  })
+  testingChannelId.value = null
+  if (!ok || !result) { toast.error(t('common.actionFailed')); return }
+  const failedKeys = result.keys.filter(k => !k.success)
+  if (result.success) {
+    if (failedKeys.length > 0) {
+      toast.warn(t('admin.channelTestPartial', { passed: result.keys.length - failedKeys.length, disabled: failedKeys.length }))
+    } else {
+      toast.success(t('admin.channelTestSuccess', { status_code: result.status_code, latency_ms: result.latency_ms }))
+    }
+  } else if (result.channel_disabled) {
+    toast.error(t('admin.channelTestFailedAndDisabled', { reason: result.reason ?? '', disabled: failedKeys.length }))
+  } else {
+    toast.error(t('admin.channelTestFailed', { status_code: result.status_code, reason: result.reason ?? '' }))
+  }
   await channels.refresh()
 }
 
@@ -375,12 +489,136 @@ async function toggleRouteHidden(route: ModelRoute) {
   await refreshRoutes()
 }
 
+async function toggleRouteEnabled(route: ModelRoute) {
+  const ok = await run(() => endpoints.updateChannelRoute(routesChannelId.value, route.id, { enabled: !route.enabled }))
+  if (!ok) { toast.error(t('common.actionFailed')); return }
+  await refreshRoutes()
+}
+
 async function deleteRoute(route: ModelRoute) {
   if (!confirm(t('admin.confirmDeleteModelRoute'))) return
   const ok = await run(() => endpoints.deleteChannelRoute(routesChannelId.value, route.id))
   if (!ok) { toast.error(t('common.actionFailed')); return }
   toast.success(t('admin.modelRouteDeleted'))
   await refreshRoutes()
+}
+
+const usageDialogOpen = ref(false)
+const usageChannelId = ref('')
+const usageChannelName = ref('')
+const usageTab = ref('stats')
+const usageTabs = computed(() => [
+  { value: 'stats', label: t('admin.channelUsage') },
+  { value: 'quota', label: t('admin.channelQuota') },
+])
+const EMPTY_USAGE_STATS: ChannelUsageStats = {
+  total_requests: 0, success_count: 0, error_count: 0,
+  prompt_tokens: 0, completion_tokens: 0, total_tokens: 0,
+  total_cost: '0', avg_duration_ms: 0,
+}
+const channelUsageStats = useResource(
+  () => usageChannelId.value ? endpoints.getChannelUsageStats(usageChannelId.value) : Promise.resolve(EMPTY_USAGE_STATS),
+  { data: EMPTY_USAGE_STATS },
+)
+const channelQuota = useResource(
+  () => usageChannelId.value ? endpoints.getChannelQuota(usageChannelId.value) : Promise.resolve({ limits: [], usage: [] } as ChannelQuota),
+  { data: { limits: [], usage: [] } as ChannelQuota },
+)
+
+const usageStatTiles = computed(() => [
+  { key: 'statRequests', value: formatNumber(channelUsageStats.data.value.total_requests) },
+  { key: 'statSuccess', value: formatNumber(channelUsageStats.data.value.success_count) },
+  { key: 'statErrors', value: formatNumber(channelUsageStats.data.value.error_count) },
+  { key: 'statPromptTokens', value: formatCompact(channelUsageStats.data.value.prompt_tokens) },
+  { key: 'statCompletionTokens', value: formatCompact(channelUsageStats.data.value.completion_tokens) },
+  { key: 'statTotalTokens', value: formatCompact(channelUsageStats.data.value.total_tokens) },
+  { key: 'statCost', value: formatMoney(channelUsageStats.data.value.total_cost, 4) },
+  { key: 'statAvgDuration', value: t('admin.durationMs', { value: Math.round(channelUsageStats.data.value.avg_duration_ms) }) },
+])
+
+const QUOTA_WINDOWS = [
+  { value: 'minute', label: t('admin.quotaWindowMinute') },
+  { value: 'day', label: t('admin.quotaWindowDay') },
+  { value: 'month', label: t('admin.quotaWindowMonth') },
+]
+
+const quotaDialogOpen = ref(false)
+const editingQuotaWindow = ref('')
+const quotaFormError = ref('')
+const quotaForm = reactive({
+  window: 'day' as 'minute' | 'day' | 'month',
+  max_requests: '',
+  max_tokens: '',
+})
+
+async function openUsage(channel: Channel) {
+  usageChannelId.value = channel.id
+  usageChannelName.value = channel.name
+  usageTab.value = 'stats'
+  usageDialogOpen.value = true
+  await Promise.all([channelUsageStats.refresh(), channelQuota.refresh()])
+}
+
+function openCreateQuota() {
+  editingQuotaWindow.value = ''
+  quotaFormError.value = ''
+  quotaForm.window = 'day'
+  quotaForm.max_requests = ''
+  quotaForm.max_tokens = ''
+  quotaDialogOpen.value = true
+}
+
+function openEditQuota(limit: { window: string; max_requests: number | null; max_tokens: number | null }) {
+  editingQuotaWindow.value = limit.window
+  quotaFormError.value = ''
+  quotaForm.window = limit.window as 'minute' | 'day' | 'month'
+  quotaForm.max_requests = limit.max_requests != null ? String(limit.max_requests) : ''
+  quotaForm.max_tokens = limit.max_tokens != null ? String(limit.max_tokens) : ''
+  quotaDialogOpen.value = true
+}
+
+async function saveQuota() {
+  quotaFormError.value = ''
+  const maxRequests = quotaForm.max_requests.trim()
+  const maxTokens = quotaForm.max_tokens.trim()
+  if (!maxRequests && !maxTokens) {
+    quotaFormError.value = t('admin.quotaLimitInvalid')
+    return
+  }
+  const form: ChannelQuotaForm = { window: quotaForm.window }
+  if (maxRequests) {
+    const val = Number(maxRequests)
+    if (!Number.isInteger(val) || val < 0 || val > 1e12) {
+      quotaFormError.value = t('admin.quotaLimitInvalid')
+      return
+    }
+    form.max_requests = val
+  }
+  if (maxTokens) {
+    const val = Number(maxTokens)
+    if (!Number.isInteger(val) || val < 0 || val > 1e12) {
+      quotaFormError.value = t('admin.quotaLimitInvalid')
+      return
+    }
+    form.max_tokens = val
+  }
+  const ok = await run(() => endpoints.upsertChannelQuota(usageChannelId.value, form))
+  if (!ok) { toast.error(t('common.actionFailed')); return }
+  toast.success(t('admin.quotaSaved'))
+  quotaDialogOpen.value = false
+  await channelQuota.refresh()
+}
+
+async function deleteQuota(window: string) {
+  if (!confirm(t('admin.quotaConfirmDelete'))) return
+  const ok = await run(() => endpoints.deleteChannelQuota(usageChannelId.value, window))
+  if (!ok) { toast.error(t('common.actionFailed')); return }
+  toast.success(t('admin.quotaDeleted'))
+  await channelQuota.refresh()
+}
+
+function quotaUsageForWindow(window: string) {
+  return channelQuota.data.value.usage.find(u => u.window === window)
 }
 </script>
 
@@ -419,7 +657,7 @@ async function deleteRoute(route: ModelRoute) {
         <thead>
           <tr>
             <th class="w-10">
-              <UiCheckbox v-if="canManage" :model-value="allSelected" @change="toggleAll" />
+              <UiCheckbox v-if="canManage" :model-value="allSelected" @update:model-value="toggleAll" />
             </th>
             <th>{{ t('admin.channelId') }}</th>
             <th>{{ t('admin.channelName') }}</th>
@@ -432,13 +670,14 @@ async function deleteRoute(route: ModelRoute) {
             <th class="num">{{ t('admin.priority') }}</th>
             <th>{{ t('admin.groups') }}</th>
             <th>{{ t('common.status') }}</th>
+            <th>{{ t('admin.channelUsage') }}</th>
             <th v-if="canManage">{{ t('common.actions') }}</th>
           </tr>
         </thead>
         <tbody>
           <tr v-for="channel in filtered" :key="channel.id">
             <td>
-              <UiCheckbox v-if="canManage" :model-value="selected.has(channel.id)" @change="toggleSelected(channel.id)" />
+              <UiCheckbox v-if="canManage" :model-value="selected.has(channel.id)" @update:model-value="toggleSelected(channel.id)" />
             </td>
             <td class="font-mono text-[13px] text-faint">{{ channel.id }}</td>
             <td class="font-medium text-ink">
@@ -479,6 +718,9 @@ async function deleteRoute(route: ModelRoute) {
             <td v-if="canManage">
               <div class="flex items-center gap-1">
                 <UiButton variant="ghost" size="sm" @click="openEdit(channel)">{{ t('common.edit') }}</UiButton>
+                <UiButton variant="ghost" size="sm" :loading="testingChannelId === channel.id" :disabled="busy" @click="testChannelRow(channel)">
+                  <Play class="h-4 w-4" />
+                </UiButton>
                 <UiButton variant="ghost" size="sm" @click="openKeys(channel)">
                   <KeyRound class="h-4 w-4" />
                 </UiButton>
@@ -486,6 +728,11 @@ async function deleteRoute(route: ModelRoute) {
                   <ArrowRightLeft class="h-4 w-4" />
                 </UiButton>
               </div>
+            </td>
+            <td>
+              <UiButton variant="ghost" size="sm" @click="openUsage(channel)">
+                <BarChart3 class="h-4 w-4" />
+              </UiButton>
             </td>
           </tr>
         </tbody>
@@ -542,6 +789,10 @@ async function deleteRoute(route: ModelRoute) {
         <UiField :label="t('admin.groups')" :hint="t('admin.groupsHint')">
           <ConsoleOpsGroupPicker v-model="form.groups" :options="groupOptions" />
         </UiField>
+
+        <UiField :label="t('admin.autoDisable')" :hint="t('admin.autoDisableHint')">
+          <UiSwitch v-model="form.auto_disable" />
+        </UiField>
       </div>
 
       <template #footer>
@@ -559,6 +810,7 @@ async function deleteRoute(route: ModelRoute) {
 
       <div v-if="!channelKeys.data.value.data.length" class="py-4 text-center text-muted text-sm">
         <p>{{ t('admin.noKeys') }}</p>
+        <p class="mt-1">{{ t('admin.keysEmptyHint') }}</p>
       </div>
 
       <div v-else class="space-y-2">
@@ -569,20 +821,66 @@ async function deleteRoute(route: ModelRoute) {
           <div class="flex items-center gap-2 min-w-0">
             <KeyRound class="h-4 w-4 text-faint shrink-0" />
             <span class="text-sm font-medium text-ink truncate">{{ key.name }}</span>
+            <UiBadge tone="outline" class="shrink-0">{{ t('admin.keyPriorityShort', { value: key.priority }) }}</UiBadge>
             <UiBadge v-if="!key.enabled" tone="danger" class="shrink-0">{{ t('common.disabled') }}</UiBadge>
             <UiTooltip v-else-if="key.last_error" :content="key.last_error">
               <UiBadge tone="warn" class="shrink-0">{{ t('admin.lastTestFailed') }}</UiBadge>
             </UiTooltip>
           </div>
-          <UiButton variant="secondary" size="sm" :loading="busy" :disabled="busy" @click="testKey(key)">
-            <Play class="h-4 w-4" />
-            <span class="ml-1">{{ t('admin.testKey') }}</span>
-          </UiButton>
+          <div class="flex items-center gap-1 shrink-0">
+            <UiSwitch
+              :model-value="key.enabled"
+              size="sm"
+              :disabled="busy"
+              @update:model-value="toggleKey(key)"
+            />
+            <UiButton variant="ghost" size="sm" :disabled="busy" @click="openEditKey(key)">
+              {{ t('common.edit') }}
+            </UiButton>
+            <UiButton variant="secondary" size="sm" :loading="busy" :disabled="busy" @click="testKey(key)">
+              <Play class="h-4 w-4" />
+              <span class="ml-1">{{ t('admin.testKey') }}</span>
+            </UiButton>
+            <UiButton variant="ghost" size="sm" :disabled="busy" @click="deleteKey(key)">
+              {{ t('common.delete') }}
+            </UiButton>
+          </div>
         </div>
+      </div>
+
+      <div class="mt-4">
+        <UiButton size="sm" @click="openCreateKey">{{ t('admin.addKey') }}</UiButton>
       </div>
 
       <template #footer>
         <UiButton variant="secondary" @click="keysDialogOpen = false">{{ t('common.close') }}</UiButton>
+      </template>
+    </UiSlidePanel>
+
+    <UiSlidePanel
+      v-model:open="keyDialogOpen"
+      size="sm"
+      :title="editingKeyId ? t('admin.editKey') : t('admin.addKey')"
+    >
+      <div class="space-y-4">
+        <UiAlert v-if="keyFormError" tone="danger">{{ keyFormError }}</UiAlert>
+
+        <UiField v-if="!editingKeyId" :label="t('admin.apiKey')" required>
+          <UiInput v-model="keyForm.api_key" mono :placeholder="t('admin.apiKeysPlaceholder')" />
+        </UiField>
+
+        <UiField :label="t('admin.keyName')" :required="!!editingKeyId">
+          <UiInput v-model="keyForm.name" :placeholder="t('admin.keyNamePlaceholder')" />
+        </UiField>
+
+        <UiField :label="t('admin.keyPriority')" :hint="t('admin.keyPriorityHint')">
+          <UiInput v-model="keyForm.priority" type="number" mono />
+        </UiField>
+      </div>
+
+      <template #footer>
+        <UiButton variant="secondary" @click="keyDialogOpen = false">{{ t('common.cancel') }}</UiButton>
+        <UiButton :loading="busy" @click="saveKey">{{ t('common.save') }}</UiButton>
       </template>
     </UiSlidePanel>
 
@@ -614,8 +912,16 @@ async function deleteRoute(route: ModelRoute) {
           </div>
           <div class="flex items-center gap-1 shrink-0">
             <UiSwitch
+              :model-value="route.enabled"
+              size="sm"
+              :label="route.enabled ? t('common.enabled') : t('common.disabled')"
+              :disabled="busy"
+              @update:model-value="toggleRouteEnabled(route)"
+            />
+            <UiSwitch
               :model-value="route.hidden"
               size="sm"
+              :label="t('admin.hidden')"
               :disabled="busy"
               @update:model-value="toggleRouteHidden(route)"
             />

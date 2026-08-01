@@ -91,7 +91,7 @@ func (s *Service) listUsageLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	query := `select rl.request_id,rl.user_id,coalesce(u.name,'') as user_name,rl.api_key_id,rl.channel_id,coalesce(c.name,'') as channel_name,coalesce(rl.group_id::text,'') as group_id,coalesce(g.name,'') as group_name,rl.model,rl.status_code,rl.prompt_tokens,rl.completion_tokens,rl.total_tokens,rl.duration_ms,rl.error_code,coalesce(ur.cost,0) as cost,rl.created_at from request_logs rl left join users u on u.id=rl.user_id left join channels c on c.id=rl.channel_id left join groups g on g.id=rl.group_id left join usage_records ur on ur.request_id=rl.request_id` + whereClause + ` order by rl.created_at desc limit $` + strconv.Itoa(argIdx) + ` offset $` + strconv.Itoa(argIdx+1)
+	query := `select rl.request_id,coalesce(rl.user_id::text,''),coalesce(u.name,'') as user_name,coalesce(rl.api_key_id::text,''),coalesce(ak.name,'') as key_name,coalesce(rl.channel_id::text,''),coalesce(c.name,'') as channel_name,coalesce(rl.channel_key_id::text,''),coalesce(ck.name,'') as channel_key_name,coalesce(rl.group_id::text,'') as group_id,coalesce(g.name,'') as group_name,rl.model,rl.status_code,coalesce(rl.prompt_tokens,0),coalesce(rl.completion_tokens,0),coalesce(rl.total_tokens,0),rl.duration_ms,coalesce(rl.error_code,''),case when rl.error_code is not null or rl.status_code>=400 then rl.error_detail else '' end,rl.client_ip,rl.user_agent,coalesce(ur.cost,0) as cost,rl.created_at from request_logs rl left join users u on u.id=rl.user_id left join api_keys ak on ak.id=rl.api_key_id left join channels c on c.id=rl.channel_id left join channel_api_keys ck on ck.id=rl.channel_key_id left join groups g on g.id=rl.group_id left join usage_records ur on ur.request_id=rl.request_id` + whereClause + ` order by rl.created_at desc limit $` + strconv.Itoa(argIdx) + ` offset $` + strconv.Itoa(argIdx+1)
 	args = append(args, pageSize, offset)
 
 	rows, err := s.db.Query(r.Context(), query, args...)
@@ -104,30 +104,37 @@ func (s *Service) listUsageLogs(w http.ResponseWriter, r *http.Request) {
 
 	data := []map[string]any{}
 	for rows.Next() {
-		var requestID, userID, userName, apiKeyID, channelID, channelName, groupID, groupName, model, errorCode string
+		var requestID, userID, userName, apiKeyID, keyName, channelID, channelName, channelKeyID, channelKeyName, groupID, groupName, model, errorCode, errorDetail, clientIP, userAgent string
 		var statusCode, duration, prompt, completion, totalTokens int
 		var cost, created any
-		if rows.Scan(&requestID, &userID, &userName, &apiKeyID, &channelID, &channelName, &groupID, &groupName, &model, &statusCode, &prompt, &completion, &totalTokens, &duration, &errorCode, &cost, &created) != nil {
+		if err := rows.Scan(&requestID, &userID, &userName, &apiKeyID, &keyName, &channelID, &channelName, &channelKeyID, &channelKeyName, &groupID, &groupName, &model, &statusCode, &prompt, &completion, &totalTokens, &duration, &errorCode, &errorDetail, &clientIP, &userAgent, &cost, &created); err != nil {
+			log.Printf("scan usage log row: %v", err)
 			continue
 		}
 		data = append(data, map[string]any{
-			"request_id":       requestID,
-			"user_id":          userID,
-			"user_name":        userName,
-			"api_key_id":       apiKeyID,
-			"channel_id":       channelID,
-			"channel_name":     channelName,
-			"group_id":         groupID,
-			"group_name":       groupName,
-			"model":            model,
-			"status_code":      statusCode,
-			"prompt_tokens":    prompt,
+			"request_id":        requestID,
+			"user_id":           userID,
+			"user_name":         userName,
+			"api_key_id":        apiKeyID,
+			"key_name":          keyName,
+			"channel_id":        channelID,
+			"channel_name":      channelName,
+			"channel_key_id":    channelKeyID,
+			"channel_key_name":  channelKeyName,
+			"group_id":          groupID,
+			"group_name":        groupName,
+			"model":             model,
+			"status_code":       statusCode,
+			"prompt_tokens":     prompt,
 			"completion_tokens": completion,
-			"total_tokens":     totalTokens,
-			"duration_ms":      duration,
-			"error_code":       errorCode,
-			"cost":             cost,
-			"created_at":       created,
+			"total_tokens":      totalTokens,
+			"duration_ms":       duration,
+			"error_code":        errorCode,
+			"error_detail":      errorDetail,
+			"client_ip":         clientIP,
+			"user_agent":        userAgent,
+			"cost":              cost,
+			"created_at":        created,
 		})
 	}
 	writeJSON(w, 200, map[string]any{"data": data, "total": total, "page": page, "page_size": pageSize})
@@ -136,6 +143,8 @@ func (s *Service) listUsageLogs(w http.ResponseWriter, r *http.Request) {
 func (s *Service) usageStats(w http.ResponseWriter, r *http.Request) {
 	userID := strings.TrimSpace(r.URL.Query().Get("user_id"))
 	model := strings.TrimSpace(r.URL.Query().Get("model"))
+	channelID := strings.TrimSpace(r.URL.Query().Get("channel_id"))
+	groupID := strings.TrimSpace(r.URL.Query().Get("group_id"))
 	period := strings.TrimSpace(r.URL.Query().Get("period"))
 	startStr := strings.TrimSpace(r.URL.Query().Get("start"))
 	endStr := strings.TrimSpace(r.URL.Query().Get("end"))
@@ -171,6 +180,16 @@ func (s *Service) usageStats(w http.ResponseWriter, r *http.Request) {
 	if model != "" {
 		where = append(where, "rl.model=$"+strconv.Itoa(argIdx))
 		args = append(args, model)
+		argIdx++
+	}
+	if channelID != "" {
+		where = append(where, "rl.channel_id=$"+strconv.Itoa(argIdx))
+		args = append(args, channelID)
+		argIdx++
+	}
+	if groupID != "" {
+		where = append(where, "rl.group_id=$"+strconv.Itoa(argIdx))
+		args = append(args, groupID)
 		argIdx++
 	}
 	if start != nil {

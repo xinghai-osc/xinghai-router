@@ -36,6 +36,7 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("PUT /account/keys/{id}", s.account(s.updateAccountKey))
 	mux.Handle("PUT /account/keys/{id}/group", s.account(s.setAccountKeyGroup))
 	mux.Handle("POST /account/keys/{id}/revoke", s.account(s.revokeAccountKey))
+	mux.Handle("GET /account/keys/{id}/secret", s.account(s.revealAccountKey))
 	mux.Handle("GET /account/usage", s.account(s.accountUsage))
 	mux.Handle("GET /account/ledger", s.account(s.accountLedger))
 	mux.Handle("GET /account/payments", s.account(s.listAccountPayments))
@@ -67,12 +68,14 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("GET /group", s.permission("users.read", s.listGroupNames))
 	mux.Handle("POST /admin/groups", s.permission("system.manage", s.createGroup))
 	mux.Handle("POST /admin/groups/import", s.permission("system.manage", s.importGroups))
+	mux.Handle("POST /admin/groups/batch-update", s.permission("system.manage", s.batchUpdateGroups))
 	mux.Handle("PUT /admin/groups/{id}", s.permission("system.manage", s.updateGroup))
 	mux.Handle("PUT /admin/users/{id}/groups", s.permission("system.manage", s.setUserGroups))
 	mux.Handle("POST /admin/keys", s.permission("keys.manage", s.createKey))
 	mux.Handle("GET /admin/keys", s.permission("keys.manage", s.listKeys))
 	mux.Handle("POST /admin/keys/{id}/revoke", s.permission("keys.manage", s.revokeKey))
 	mux.Handle("PUT /admin/keys/{id}/group", s.permission("keys.manage", s.setKeyGroup))
+	mux.Handle("GET /admin/keys/{id}/secret", s.permission("keys.manage", s.revealKey))
 	mux.Handle("POST /admin/channels", s.permission("channels.manage", s.createChannel))
 	mux.Handle("PUT /admin/channels/{id}", s.permission("channels.manage", s.updateChannel))
 	mux.Handle("POST /admin/channels/models", s.permission("channels.manage", s.fetchChannelModels))
@@ -82,12 +85,19 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("DELETE /admin/providers/{id}", s.permission("system.manage", s.deleteProvider))
 	mux.Handle("POST /admin/channels/batch-status", s.permission("channels.manage", s.batchSetChannelStatus))
 	mux.Handle("POST /admin/channels/{id}/status", s.permission("channels.manage", s.setChannelStatus))
+	mux.Handle("POST /admin/channels/{id}/test", s.permission("channels.manage", s.testChannelHandler))
 	mux.Handle("PUT /admin/channels/{id}/groups", s.permission("channels.manage", s.setChannelGroups))
 	mux.Handle("GET /admin/request-logs", s.permission("logs.read", s.listLogs))
 	mux.Handle("GET /admin/usage-logs", s.permission("logs.read", s.listUsageLogs))
 	mux.Handle("GET /admin/usage-stats", s.permission("logs.read", s.usageStats))
 	mux.Handle("GET /admin/pricing", s.permission("pricing.read", s.listPricing))
 	mux.Handle("POST /admin/pricing", s.permission("pricing.manage", s.upsertPricing))
+	mux.Handle("GET /admin/pricing/tiers", s.permission("pricing.read", s.listPricingTiers))
+	mux.Handle("POST /admin/pricing/tiers", s.permission("pricing.manage", s.savePricingTier))
+	mux.Handle("DELETE /admin/pricing/tiers/{id}", s.permission("pricing.manage", s.deletePricingTier))
+	mux.Handle("GET /admin/pricing/time-rules", s.permission("pricing.read", s.listPricingTimeRules))
+	mux.Handle("POST /admin/pricing/time-rules", s.permission("pricing.manage", s.savePricingTimeRule))
+	mux.Handle("DELETE /admin/pricing/time-rules/{id}", s.permission("pricing.manage", s.deletePricingTimeRule))
 	mux.Handle("GET /admin/site-settings", s.permission("system.manage", s.adminSiteSettings))
 	mux.Handle("PUT /admin/site-settings", s.permission("system.manage", s.updateSiteSettings))
 	mux.Handle("GET /admin/reliability-settings", s.permission("system.manage", s.getReliabilitySettings))
@@ -106,6 +116,7 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("GET /admin/channels/{id}/keys", s.permission("channels.read", s.listChannelKeys))
 	mux.Handle("POST /admin/channels/{id}/keys", s.permission("channels.manage", s.createChannelKey))
 	mux.Handle("DELETE /admin/channels/{id}/keys/{keyId}", s.permission("channels.manage", s.deleteChannelKey))
+	mux.Handle("PUT /admin/channels/{id}/keys/{keyId}", s.permission("channels.manage", s.updateChannelKey))
 	mux.Handle("POST /admin/channels/{id}/keys/{keyId}/test", s.permission("channels.manage", s.testChannelKey))
 	mux.Handle("POST /admin/channels/{id}/keys/{keyId}/status", s.permission("channels.manage", s.setChannelKeyStatus))
 	mux.Handle("POST /admin/channels/{id}/keys/migrate", s.permission("channels.manage", s.migrateChannelKeys))
@@ -113,6 +124,10 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("POST /admin/channels/{id}/routes", s.permission("routes.manage", s.createChannelRoute))
 	mux.Handle("PUT /admin/channels/{id}/routes/{routeId}", s.permission("routes.manage", s.updateChannelRoute))
 	mux.Handle("DELETE /admin/channels/{id}/routes/{routeId}", s.permission("routes.manage", s.deleteChannelRoute))
+	mux.Handle("GET /admin/channels/{id}/quota", s.permission("channels.read", s.getChannelQuotaHandler))
+	mux.Handle("POST /admin/channels/{id}/quota", s.permission("channels.manage", s.upsertChannelQuotaHandler))
+	mux.Handle("DELETE /admin/channels/{id}/quota", s.permission("channels.manage", s.deleteChannelQuotaHandler))
+	mux.Handle("GET /admin/channels/{id}/usage-stats", s.permission("channels.read", s.channelUsageStatsHandler))
 	mux.Handle("POST /admin/quota-limits", s.permission("quotas.manage", s.upsertQuota))
 	mux.Handle("POST /admin/migrate", s.permission("system.manage", s.runMigration))
 	mux.Handle("GET /admin/migrate", s.permission("system.manage", s.getMigrationStatus))
@@ -138,11 +153,30 @@ func (s *Service) requestID(next http.Handler) http.Handler {
 			return
 		}
 		w.Header().Set("X-Request-ID", id)
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), requestIDKey{}, id)))
+		ctx := context.WithValue(r.Context(), requestIDKey{}, id)
+		meta := requestMetadata(r)
+		ua := meta.userAgent
+		if len(ua) > 256 {
+			ua = ua[:256]
+		}
+		ctx = context.WithValue(ctx, clientInfoKey{}, clientInfo{ip: meta.clientIP, userAgent: ua})
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
 type requestIDKey struct{}
+
+type clientInfoKey struct{}
+
+type clientInfo struct {
+	ip        string
+	userAgent string
+}
+
+func clientInfoFromContext(ctx context.Context) clientInfo {
+	info, _ := ctx.Value(clientInfoKey{}).(clientInfo)
+	return info
+}
 
 func requestID(ctx context.Context) string { id, _ := ctx.Value(requestIDKey{}).(string); return id }
 func (s *Service) api(next http.HandlerFunc) http.Handler {
@@ -192,7 +226,7 @@ func (s *Service) me(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Service) myKeys(w http.ResponseWriter, r *http.Request) {
 	key := r.Context().Value(contextKey{}).(keyContext)
-	rows, err := s.db.Query(r.Context(), `select k.id,k.name,k.key_prefix,k.expires_at,k.revoked_at,k.last_used_at,k.created_at,coalesce(k.group_id::text,''),coalesce(g.name,'') from api_keys k left join groups g on g.id=k.group_id where k.user_id=$1 order by k.created_at desc`, key.userID)
+	rows, err := s.db.Query(r.Context(), `select k.id,k.name,k.key_prefix,k.expires_at,k.revoked_at,k.last_used_at,k.created_at,coalesce(k.group_id::text,''),coalesce(g.name,''),k.secret_encrypted<>'' from api_keys k left join groups g on g.id=k.group_id where k.user_id=$1 order by k.created_at desc`, key.userID)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
@@ -201,9 +235,10 @@ func (s *Service) myKeys(w http.ResponseWriter, r *http.Request) {
 	data := []map[string]any{}
 	for rows.Next() {
 		var id, name, prefix, groupID, groupName string
+		var revealable bool
 		var expires, revoked, used, created any
-		if rows.Scan(&id, &name, &prefix, &expires, &revoked, &used, &created, &groupID, &groupName) == nil {
-			data = append(data, map[string]any{"id": id, "name": name, "key_prefix": prefix, "group_id": groupID, "group_name": groupName, "expires_at": expires, "revoked_at": revoked, "last_used_at": used, "created_at": created})
+		if rows.Scan(&id, &name, &prefix, &expires, &revoked, &used, &created, &groupID, &groupName, &revealable) == nil {
+			data = append(data, map[string]any{"id": id, "name": name, "key_prefix": prefix, "group_id": groupID, "group_name": groupName, "expires_at": expires, "revoked_at": revoked, "last_used_at": used, "created_at": created, "revealable": revealable})
 		}
 	}
 	writeJSON(w, 200, map[string]any{"data": data})
@@ -270,6 +305,9 @@ func decode(r *http.Request, target any) error {
 var (
 	errInvalid            = errors.New("invalid request")
 	errPricingUnavailable = errors.New("pricing unavailable")
+	// errChannelCredentials means enabled channels matched the model but none had a
+	// usable API key (decryption failure or no key), so the failure is not "no channel".
+	errChannelCredentials = errors.New("channel credentials unavailable")
 )
 
 func parseExpiry(value string) (*time.Time, error) {

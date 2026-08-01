@@ -31,7 +31,7 @@ func (s *Service) fetchChannelModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !validChannelBaseURL(in.BaseURL) {
-		writeError(w, 400, "invalid_request", "base_url must be 1-2048 characters and use HTTPS to a public host, or HTTP to loopback")
+		writeError(w, 400, "invalid_request", "base_url must be 1-2048 characters and use HTTP or HTTPS")
 		return
 	}
 	baseURL, err := url.Parse(strings.TrimRight(in.BaseURL, "/"))
@@ -159,7 +159,7 @@ func (s *Service) syncNewAPIPricing(w http.ResponseWriter, r *http.Request) {
 	in.BaseURL = strings.TrimSpace(in.BaseURL)
 	in.APIKey = strings.TrimSpace(in.APIKey)
 	if !validChannelBaseURL(in.BaseURL) {
-		writeError(w, 400, "invalid_request", "base_url must be 1-2048 characters and use HTTPS to a public host, or HTTP to loopback")
+		writeError(w, 400, "invalid_request", "base_url must be 1-2048 characters and use HTTP or HTTPS")
 		return
 	}
 	if in.APIKey != "" && !validChannelAPIKey(in.APIKey) {
@@ -252,6 +252,203 @@ func (s *Service) syncNewAPIPricing(w http.ResponseWriter, r *http.Request) {
 	s.pricingCache.clear()
 	s.audit(r, "pricing.newapi_synced", "pricing", "newapi", map[string]any{"count": synced, "quota_per_unit": status.Data.QuotaPerUnit})
 	writeJSON(w, 200, map[string]any{"synced": synced, "skipped": len(pricing.Data) - synced})
+}
+
+// --- Tiered pricing CRUD ---
+
+func (s *Service) listPricingTiers(w http.ResponseWriter, r *http.Request) {
+	model := r.URL.Query().Get("model")
+	if !validPricingModel(model) {
+		writeError(w, 400, "invalid_request", "invalid model")
+		return
+	}
+	rows, err := s.db.Query(r.Context(), `select id,model,from_tokens,input_per_million,cached_input_per_million,output_per_million,created_at from pricing_tiers where model=$1 order by from_tokens`, model)
+	if err != nil {
+		writeError(w, 500, "internal_error", "query failed")
+		return
+	}
+	defer rows.Close()
+	data := []map[string]any{}
+	for rows.Next() {
+		var id, m string
+		var fromTokens int64
+		var input, cached, output any
+		var created any
+		if rows.Scan(&id, &m, &fromTokens, &input, &cached, &output, &created) != nil {
+			continue
+		}
+		data = append(data, map[string]any{"id": id, "model": m, "from_tokens": fromTokens, "input_per_million": input, "cached_input_per_million": cached, "output_per_million": output, "created_at": created})
+	}
+	writeJSON(w, 200, map[string]any{"data": data})
+}
+
+func (s *Service) savePricingTier(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		ID     string  `json:"id"`
+		Model  string  `json:"model"`
+		From   int64   `json:"from_tokens"`
+		Input  float64 `json:"input_per_million"`
+		Cached float64 `json:"cached_input_per_million"`
+		Output float64 `json:"output_per_million"`
+	}
+	if decode(r, &in) != nil {
+		writeError(w, 400, "invalid_request", "invalid pricing tier")
+		return
+	}
+	in.Model = strings.TrimSpace(in.Model)
+	if !validPricingModel(in.Model) || in.From < 0 || !validPricingRate(in.Input) || !validPricingRate(in.Cached) || !validPricingRate(in.Output) {
+		writeError(w, 400, "invalid_request", "invalid pricing tier")
+		return
+	}
+	// Count existing tiers to prevent unbounded growth.
+	var count int
+	s.db.QueryRow(r.Context(), `select count(*) from pricing_tiers where model=$1`, in.Model).Scan(&count)
+	if in.ID == "" && count >= maxPricingTiers {
+		writeError(w, 400, "invalid_request", "too many tiers")
+		return
+	}
+	if in.ID == "" {
+		id, _ := randomID()
+		_, err := s.db.Exec(r.Context(), `insert into pricing_tiers(id,model,from_tokens,input_per_million,cached_input_per_million,output_per_million) values($1,$2,$3,$4,$5,$6)`, id, in.Model, in.From, in.Input, in.Cached, in.Output)
+		if err != nil {
+			writeError(w, 400, "invalid_request", "could not save pricing tier")
+			return
+		}
+		in.ID = id
+	} else {
+		_, err := s.db.Exec(r.Context(), `update pricing_tiers set from_tokens=$1,input_per_million=$2,cached_input_per_million=$3,output_per_million=$4 where id=$5 and model=$6`, in.From, in.Input, in.Cached, in.Output, in.ID, in.Model)
+		if err != nil {
+			writeError(w, 400, "invalid_request", "could not save pricing tier")
+			return
+		}
+	}
+	s.pricingCache.invalidate(in.Model)
+	s.audit(r, "pricing.tier_saved", "pricing_tier", in.Model, map[string]any{"from_tokens": in.From})
+	writeJSON(w, 200, map[string]any{"id": in.ID})
+}
+
+func (s *Service) deletePricingTier(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	model := r.URL.Query().Get("model")
+	if id == "" || !validPricingModel(model) {
+		writeError(w, 400, "invalid_request", "invalid request")
+		return
+	}
+	_, err := s.db.Exec(r.Context(), `delete from pricing_tiers where id=$1 and model=$2`, id, model)
+	if err != nil {
+		writeError(w, 500, "internal_error", "delete failed")
+		return
+	}
+	s.pricingCache.invalidate(model)
+	s.audit(r, "pricing.tier_deleted", "pricing_tier", model, map[string]any{"id": id})
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+// --- Time-based pricing CRUD ---
+
+func (s *Service) listPricingTimeRules(w http.ResponseWriter, r *http.Request) {
+	model := r.URL.Query().Get("model")
+	if !validPricingModel(model) {
+		writeError(w, 400, "invalid_request", "invalid model")
+		return
+	}
+	rows, err := s.db.Query(r.Context(), `select id,model,name,start_minute,end_minute,weekdays,input_per_million,cached_input_per_million,output_per_million,enabled,created_at from pricing_time_rules where model=$1 order by created_at`, model)
+	if err != nil {
+		writeError(w, 500, "internal_error", "query failed")
+		return
+	}
+	defer rows.Close()
+	data := []map[string]any{}
+	for rows.Next() {
+		var id, m, name, weekdays string
+		var startMinute, endMinute int
+		var input, cached, output any
+		var enabled bool
+		var created any
+		if rows.Scan(&id, &m, &name, &startMinute, &endMinute, &weekdays, &input, &cached, &output, &enabled, &created) != nil {
+			continue
+		}
+		data = append(data, map[string]any{"id": id, "model": m, "name": name, "start_minute": startMinute, "end_minute": endMinute, "weekdays": weekdays, "input_per_million": input, "cached_input_per_million": cached, "output_per_million": output, "enabled": enabled, "created_at": created})
+	}
+	writeJSON(w, 200, map[string]any{"data": data})
+}
+
+func (s *Service) savePricingTimeRule(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		ID     string  `json:"id"`
+		Model  string  `json:"model"`
+		Name   string  `json:"name"`
+		Start  int     `json:"start_minute"`
+		End    int     `json:"end_minute"`
+		Weekdays string `json:"weekdays"`
+		Input  float64 `json:"input_per_million"`
+		Cached float64 `json:"cached_input_per_million"`
+		Output float64 `json:"output_per_million"`
+		Enabled *bool  `json:"enabled"`
+	}
+	if decode(r, &in) != nil {
+		writeError(w, 400, "invalid_request", "invalid time rule")
+		return
+	}
+	in.Model = strings.TrimSpace(in.Model)
+	in.Name = strings.TrimSpace(in.Name)
+	in.Weekdays = strings.TrimSpace(in.Weekdays)
+	if in.Weekdays == "" {
+		in.Weekdays = "1111111"
+	}
+	if !validPricingModel(in.Model) || len(in.Name) > maxTimeRuleNameLength || !validTimeWindow(in.Start, in.End) || !validWeekdays(in.Weekdays) {
+		writeError(w, 400, "invalid_request", "invalid time rule")
+		return
+	}
+	if !validPricingRate(in.Input) || !validPricingRate(in.Cached) || !validPricingRate(in.Output) {
+		writeError(w, 400, "invalid_request", "invalid time rule prices")
+		return
+	}
+	enabled := true
+	if in.Enabled != nil {
+		enabled = *in.Enabled
+	}
+	var count int
+	s.db.QueryRow(r.Context(), `select count(*) from pricing_time_rules where model=$1`, in.Model).Scan(&count)
+	if in.ID == "" && count >= maxPricingTimeRules {
+		writeError(w, 400, "invalid_request", "too many time rules")
+		return
+	}
+	if in.ID == "" {
+		id, _ := randomID()
+		_, err := s.db.Exec(r.Context(), `insert into pricing_time_rules(id,model,name,start_minute,end_minute,weekdays,input_per_million,cached_input_per_million,output_per_million,enabled) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, id, in.Model, in.Name, in.Start, in.End, in.Weekdays, in.Input, in.Cached, in.Output, enabled)
+		if err != nil {
+			writeError(w, 400, "invalid_request", "could not save time rule")
+			return
+		}
+		in.ID = id
+	} else {
+		_, err := s.db.Exec(r.Context(), `update pricing_time_rules set name=$1,start_minute=$2,end_minute=$3,weekdays=$4,input_per_million=$5,cached_input_per_million=$6,output_per_million=$7,enabled=$8 where id=$9 and model=$10`, in.Name, in.Start, in.End, in.Weekdays, in.Input, in.Cached, in.Output, enabled, in.ID, in.Model)
+		if err != nil {
+			writeError(w, 400, "invalid_request", "could not save time rule")
+			return
+		}
+	}
+	s.pricingCache.invalidate(in.Model)
+	s.audit(r, "pricing.time_rule_saved", "pricing_time_rule", in.Model, map[string]any{"name": in.Name})
+	writeJSON(w, 200, map[string]any{"id": in.ID})
+}
+
+func (s *Service) deletePricingTimeRule(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	model := r.URL.Query().Get("model")
+	if id == "" || !validPricingModel(model) {
+		writeError(w, 400, "invalid_request", "invalid request")
+		return
+	}
+	_, err := s.db.Exec(r.Context(), `delete from pricing_time_rules where id=$1 and model=$2`, id, model)
+	if err != nil {
+		writeError(w, 500, "internal_error", "delete failed")
+		return
+	}
+	s.pricingCache.invalidate(model)
+	s.audit(r, "pricing.time_rule_deleted", "pricing_time_rule", model, map[string]any{"id": id})
+	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
 func (s *Service) listAuditLogs(w http.ResponseWriter, r *http.Request) {
@@ -759,6 +956,39 @@ func (s *Service) updateGroup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"id": r.PathValue("id"), "multiplier": in.Multiplier, "max_concurrency": in.MaxConcurrency, "public": in.Public})
 }
 
+func (s *Service) batchUpdateGroups(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		IDs            []string `json:"ids"`
+		Multiplier     float64  `json:"multiplier"`
+		MaxConcurrency int      `json:"max_concurrency"`
+		Public         bool     `json:"public"`
+	}
+	if decode(r, &in) != nil || len(in.IDs) == 0 {
+		writeError(w, 400, "invalid_request", "ids, multiplier and public are required")
+		return
+	}
+	if len(in.IDs) > 100 {
+		writeError(w, 400, "invalid_request", "at most 100 groups at a time")
+		return
+	}
+	if !validGroupMultiplier(in.Multiplier) {
+		writeError(w, 400, "invalid_request", "multiplier must be between 0 and 1000")
+		return
+	}
+	result, err := s.db.Exec(r.Context(), `update groups set multiplier=$1, max_concurrency=$2, "public"=$3 where id = any($4)`, in.Multiplier, in.MaxConcurrency, in.Public, in.IDs)
+	if err != nil {
+		writeError(w, 500, "internal_error", "could not update groups")
+		return
+	}
+	affected := result.RowsAffected()
+	for _, id := range in.IDs {
+		s.groupCache.invalidate(id)
+		s.groupConcurrencyCache.invalidate(id)
+	}
+	s.audit(r, "groups.batch_updated", "group", "batch", map[string]any{"count": affected, "multiplier": in.Multiplier, "max_concurrency": in.MaxConcurrency, "public": in.Public})
+	writeJSON(w, 200, map[string]any{"affected": affected})
+}
+
 func (s *Service) modelCatalog(w http.ResponseWriter, r *http.Request) {
 	account := accountFromContext(r)
 	providers := s.providers(r)
@@ -968,12 +1198,32 @@ func validPricingModel(model string) bool {
 	return validModelName(model)
 }
 
+const maxPricingTiers = 20
+const maxPricingTimeRules = 20
+const maxTimeRuleNameLength = 100
+
+func validTimeWindow(start, end int) bool {
+	return start >= 0 && start < 1440 && end > 0 && end <= 1440 && start != end
+}
+
+func validWeekdays(wd string) bool {
+	if len(wd) != 7 {
+		return false
+	}
+	for _, c := range wd {
+		if c != '0' && c != '1' {
+			return false
+		}
+	}
+	return true
+}
+
 func validModelName(model string) bool {
 	return len(model) > 0 && len(model) <= 200
 }
 
 func validChannelProvider(provider string) bool {
-	return map[string]bool{"openai": true, "ollama": true, "kimi": true, "opencode_go": true, "anthropic": true}[provider]
+	return map[string]bool{"openai": true, "ollama": true, "kimi": true, "opencode_go": true, "anthropic": true, "custom": true}[provider]
 }
 
 func validChannelKeyType(keyType string) bool {
@@ -1045,7 +1295,7 @@ func parseChannelAPIKeys(value string) []string {
 }
 
 func validChannelBaseURL(value string) bool {
-	return len(value) > 0 && len(value) <= maxChannelBaseURLLen && validOutboundURL(value) == nil
+	return len(value) > 0 && len(value) <= maxChannelBaseURLLen && validUpstreamURL(value) == nil
 }
 
 func validAPIKeyName(name string) bool {
@@ -1213,7 +1463,12 @@ func (s *Service) createKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_request", "group must belong to user")
 		return
 	}
-	_, err = s.db.Exec(r.Context(), `insert into api_keys(id,user_id,name,key_prefix,secret_hash,expires_at,group_id) values($1,$2,$3,$4,$5,$6,$7)`, id, in.UserID, name, secret[:12], hashSecret(secret), expires, groupID)
+	encryptedSecret, err := crypt(s.cfg.EncryptionKey, secret, false)
+	if err != nil {
+		writeError(w, 500, "internal_error", "could not create API key")
+		return
+	}
+	_, err = s.db.Exec(r.Context(), `insert into api_keys(id,user_id,name,key_prefix,secret_hash,secret_encrypted,expires_at,group_id) values($1,$2,$3,$4,$5,$6,$7,$8)`, id, in.UserID, name, secret[:12], hashSecret(secret), encryptedSecret, expires, groupID)
 	if err != nil {
 		writeError(w, 400, "invalid_request", "unknown user")
 		return
@@ -1222,7 +1477,7 @@ func (s *Service) createKey(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 201, map[string]any{"id": id, "name": name, "key": secret, "expires_at": expires, "group_id": groupID})
 }
 func (s *Service) listKeys(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query(r.Context(), `select k.id,k.user_id,k.name,k.key_prefix,k.expires_at,k.revoked_at,k.last_used_at,k.created_at,coalesce(k.group_id::text,''),coalesce(g.name,'') from api_keys k left join groups g on g.id=k.group_id order by k.created_at desc`)
+	rows, err := s.db.Query(r.Context(), `select k.id,k.user_id,k.name,k.key_prefix,k.expires_at,k.revoked_at,k.last_used_at,k.created_at,coalesce(k.group_id::text,''),coalesce(g.name,''),k.secret_encrypted<>'' from api_keys k left join groups g on g.id=k.group_id order by k.created_at desc`)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
@@ -1232,9 +1487,10 @@ func (s *Service) listKeys(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var id, uid, name, prefix string
 		var groupID, groupName string
+		var revealable bool
 		var expiry, revoked, used, created any
-		rows.Scan(&id, &uid, &name, &prefix, &expiry, &revoked, &used, &created, &groupID, &groupName)
-		data = append(data, map[string]any{"id": id, "user_id": uid, "name": name, "key_prefix": prefix, "expires_at": expiry, "revoked_at": revoked, "last_used_at": used, "created_at": created, "group_id": groupID, "group_name": groupName})
+		rows.Scan(&id, &uid, &name, &prefix, &expiry, &revoked, &used, &created, &groupID, &groupName, &revealable)
+		data = append(data, map[string]any{"id": id, "user_id": uid, "name": name, "key_prefix": prefix, "expires_at": expiry, "revoked_at": revoked, "last_used_at": used, "created_at": created, "group_id": groupID, "group_name": groupName, "revealable": revealable})
 	}
 	writeJSON(w, 200, map[string]any{"data": data})
 }
@@ -1284,6 +1540,29 @@ func (s *Service) revokeKey(w http.ResponseWriter, r *http.Request) {
 	s.audit(r, "api_key.revoked", "api_key", r.PathValue("id"), nil)
 	w.WriteHeader(http.StatusNoContent)
 }
+func (s *Service) revealKey(w http.ResponseWriter, r *http.Request) {
+	keyID := strings.TrimSpace(r.PathValue("id"))
+	if keyID == "" {
+		writeError(w, 400, "invalid_request", "key id is required")
+		return
+	}
+	var encrypted string
+	if err := s.db.QueryRow(r.Context(), `select secret_encrypted from api_keys where id=$1`, keyID).Scan(&encrypted); err != nil {
+		writeError(w, 404, "not_found", "API key not found")
+		return
+	}
+	if encrypted == "" {
+		writeError(w, 404, "not_recoverable", "this key was created before recovery was enabled and cannot be revealed")
+		return
+	}
+	secret, err := crypt(s.cfg.EncryptionKey, encrypted, true)
+	if err != nil {
+		writeError(w, 500, "internal_error", "could not decrypt API key")
+		return
+	}
+	s.audit(r, "api_key.revealed", "api_key", keyID, nil)
+	writeJSON(w, 200, map[string]any{"key": secret})
+}
 func (s *Service) createChannel(w http.ResponseWriter, r *http.Request) {
 	type routeInput struct {
 		PublicModel   string `json:"public_model"`
@@ -1302,6 +1581,7 @@ func (s *Service) createChannel(w http.ResponseWriter, r *http.Request) {
 		Groups      []string     `json:"groups"`
 		Provider    string       `json:"provider"`
 		ModelRoutes []routeInput `json:"model_routes"`
+		AutoDisable *bool        `json:"auto_disable"`
 	}
 	if decode(r, &in) != nil {
 		writeError(w, 400, "invalid_request", "name, key_type, api_keys, and models are required")
@@ -1354,7 +1634,7 @@ func (s *Service) createChannel(w http.ResponseWriter, r *http.Request) {
 	}
 	in.BaseURL = strings.TrimSpace(in.BaseURL)
 	if !validChannelBaseURL(in.BaseURL) {
-		writeError(w, 400, "invalid_request", "base_url must be 1-2048 characters and use HTTPS to a public host, or HTTP to loopback")
+		writeError(w, 400, "invalid_request", "base_url must be 1-2048 characters and use HTTP or HTTPS")
 		return
 	}
 	keys := parseChannelAPIKeys(in.APIKeys)
@@ -1396,25 +1676,19 @@ func (s *Service) createChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(r.Context())
-	firstEncrypted, err := crypt(s.cfg.EncryptionKey, keys[0], false)
-	if err != nil {
-		writeError(w, 500, "internal_error", "credential encryption failed")
-		return
+	autoDisable := true
+	if in.AutoDisable != nil {
+		autoDisable = *in.AutoDisable
 	}
-	_, err = tx.Exec(r.Context(), `insert into channels(id,name,base_url,api_key,models,priority,provider,key_type) values($1,$2,$3,$4,$5,$6,$7,$8)`, id, in.Name, strings.TrimRight(in.BaseURL, "/"), firstEncrypted, models, in.Priority, in.Provider, in.KeyType)
+	_, err = tx.Exec(r.Context(), `insert into channels(id,name,base_url,api_key,models,priority,provider,key_type,auto_disable) values($1,$2,$3,$4,$5,$6,$7,$8,$9)`, id, in.Name, strings.TrimRight(in.BaseURL, "/"), keys[0], models, in.Priority, in.Provider, in.KeyType, autoDisable)
 	if err != nil {
 		writeError(w, 409, "conflict", "channel name already exists")
 		return
 	}
 	for i, rawKey := range keys {
 		keyName := "key_" + strconv.Itoa(i+1)
-		enc, kerr := crypt(s.cfg.EncryptionKey, rawKey, false)
-		if kerr != nil {
-			writeError(w, 500, "internal_error", "credential encryption failed")
-			return
-		}
 		kid, _ := randomID()
-		if _, kerr = tx.Exec(r.Context(), `insert into channel_api_keys(id,channel_id,name,key_encrypted,enabled) values($1,$2,$3,$4,true)`, kid, id, keyName, enc); kerr != nil {
+		if _, kerr := tx.Exec(r.Context(), `insert into channel_api_keys(id,channel_id,name,key_encrypted,enabled) values($1,$2,$3,$4,true)`, kid, id, keyName, rawKey); kerr != nil {
 			writeError(w, 500, "internal_error", "could not save api key")
 			return
 		}
@@ -1460,6 +1734,7 @@ func (s *Service) updateChannel(w http.ResponseWriter, r *http.Request) {
 		Provider    string       `json:"provider"`
 		Groups      []string     `json:"groups"`
 		ModelRoutes []routeInput `json:"model_routes"`
+		AutoDisable *bool        `json:"auto_disable"`
 	}
 	if decode(r, &in) != nil {
 		writeError(w, 400, "invalid_request", "name and models are required")
@@ -1495,7 +1770,7 @@ func (s *Service) updateChannel(w http.ResponseWriter, r *http.Request) {
 	}
 	in.BaseURL = strings.TrimSpace(in.BaseURL)
 	if !validChannelBaseURL(in.BaseURL) {
-		writeError(w, 400, "invalid_request", "base_url must be 1-2048 characters and use HTTPS to a public host, or HTTP to loopback")
+		writeError(w, 400, "invalid_request", "base_url must be 1-2048 characters and use HTTP or HTTPS")
 		return
 	}
 	for i := range in.ModelRoutes {
@@ -1522,6 +1797,11 @@ func (s *Service) updateChannel(w http.ResponseWriter, r *http.Request) {
 	query := `update channels set name=$1,base_url=$2,models=$3,priority=$4,provider=$5`
 	args := []any{in.Name, strings.TrimRight(in.BaseURL, "/"), models, in.Priority, in.Provider}
 	argIdx := 6
+	if in.AutoDisable != nil {
+		query += `,auto_disable=$` + strconv.Itoa(argIdx)
+		args = append(args, *in.AutoDisable)
+		argIdx++
+	}
 	keys := parseChannelAPIKeys(in.APIKeys)
 	if in.KeyType != "" || in.APIKeys != "" {
 		var currentKeyType string
@@ -1558,15 +1838,10 @@ func (s *Service) updateChannel(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		firstEncrypted, err := crypt(s.cfg.EncryptionKey, keys[0], false)
-		if err != nil {
-			writeError(w, 500, "internal_error", "credential encryption failed")
-			return
-		}
 		query += `,key_type=$` + strconv.Itoa(argIdx) + `,api_key=$` + strconv.Itoa(argIdx+1)
-		args = append(args, in.KeyType, firstEncrypted)
+		args = append(args, in.KeyType, keys[0])
 		argIdx += 2
-		if err = s.replaceChannelAPIKeys(r.Context(), channelID, keys); err != nil {
+		if err := s.replaceChannelAPIKeys(r.Context(), channelID, keys); err != nil {
 			writeError(w, 500, "internal_error", "could not update api keys")
 			return
 		}
@@ -1614,7 +1889,7 @@ func (s *Service) channelAPIKeys(ctx context.Context, channelID string) ([]strin
 		if err := rows.Scan(&enc); err != nil {
 			continue
 		}
-		key, err := crypt(s.cfg.EncryptionKey, enc, true)
+		key, err := channelKeyValue(s.cfg.EncryptionKey, enc)
 		if err != nil {
 			continue
 		}
@@ -1624,6 +1899,30 @@ func (s *Service) channelAPIKeys(ctx context.Context, channelID string) ([]strin
 }
 
 func (s *Service) replaceChannelAPIKeys(ctx context.Context, channelID string, keys []string) error {
+	existing := map[string]struct {
+		name     string
+		priority int
+	}{}
+	krows, err := s.db.Query(ctx, `select key_encrypted,name,priority from channel_api_keys where channel_id=$1`, channelID)
+	if err != nil {
+		return err
+	}
+	for krows.Next() {
+		var enc, name string
+		var priority int
+		if krows.Scan(&enc, &name, &priority) != nil {
+			continue
+		}
+		plain, err := channelKeyValue(s.cfg.EncryptionKey, enc)
+		if err != nil {
+			continue
+		}
+		existing[plain] = struct {
+			name     string
+			priority int
+		}{name, priority}
+	}
+	krows.Close()
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return err
@@ -1633,20 +1932,21 @@ func (s *Service) replaceChannelAPIKeys(ctx context.Context, channelID string, k
 		return err
 	}
 	for i, key := range keys {
-		enc, err := crypt(s.cfg.EncryptionKey, key, false)
-		if err != nil {
-			return err
-		}
 		id, _ := randomID()
 		keyName := "key_" + strconv.Itoa(i+1)
-		if _, err := tx.Exec(ctx, `insert into channel_api_keys(id,channel_id,name,key_encrypted,enabled) values($1,$2,$3,$4,true)`, id, channelID, keyName, enc); err != nil {
+		priority := 100
+		if prev, ok := existing[key]; ok {
+			keyName = prev.name
+			priority = prev.priority
+		}
+		if _, err := tx.Exec(ctx, `insert into channel_api_keys(id,channel_id,name,key_encrypted,enabled,priority) values($1,$2,$3,$4,true,$5)`, id, channelID, keyName, key, priority); err != nil {
 			return err
 		}
 	}
 	return tx.Commit(ctx)
 }
 func (s *Service) listChannels(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query(r.Context(), `select c.id,c.name,c.base_url,c.models,c.enabled,c.auto_disabled,c.disabled_reason,c.priority,c.created_at,c.updated_at,coalesce((select array_agg(cg.group_id order by cg.group_id) from channel_groups cg where cg.channel_id=c.id), '{}'),c.provider,c.key_type,(select count(*) from channel_api_keys ak where ak.channel_id=c.id and ak.enabled) from channels c order by c.priority,c.id`)
+	rows, err := s.db.Query(r.Context(), `select c.id,c.name,c.base_url,c.models,c.enabled,c.auto_disabled,c.disabled_reason,c.priority,c.created_at,c.updated_at,coalesce((select array_agg(cg.group_id order by cg.group_id) from channel_groups cg where cg.channel_id=c.id), '{}'),c.provider,c.key_type,(select count(*) from channel_api_keys ak where ak.channel_id=c.id and ak.enabled),c.auto_disable from channels c order by c.priority,c.id`)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
@@ -1663,13 +1963,14 @@ func (s *Service) listChannels(w http.ResponseWriter, r *http.Request) {
 		var groups []string
 		var provider, keyType string
 		var keyCount int
-		if rows.Scan(&id, &name, &base, &models, &enabled, &autoDisabled, &disabledReason, &priority, &created, &updated, &groups, &provider, &keyType, &keyCount) != nil {
+		var autoDisable bool
+		if rows.Scan(&id, &name, &base, &models, &enabled, &autoDisabled, &disabledReason, &priority, &created, &updated, &groups, &provider, &keyType, &keyCount, &autoDisable) != nil {
 			continue
 		}
 		var list []string
 		json.Unmarshal(models, &list)
 		routes := s.getChannelRoutes(r.Context(), id)
-		data = append(data, map[string]any{"id": id, "name": name, "base_url": base, "models": list, "provider": provider, "key_type": keyType, "enabled": enabled, "auto_disabled": autoDisabled, "disabled_reason": disabledReason, "priority": priority, "groups": groups, "key_count": keyCount, "created_at": created, "updated_at": updated, "model_routes": routes})
+		data = append(data, map[string]any{"id": id, "name": name, "base_url": base, "models": list, "provider": provider, "key_type": keyType, "enabled": enabled, "auto_disabled": autoDisabled, "disabled_reason": disabledReason, "priority": priority, "groups": groups, "key_count": keyCount, "created_at": created, "updated_at": updated, "model_routes": routes, "auto_disable": autoDisable})
 	}
 	writeJSON(w, 200, map[string]any{"data": data})
 }
@@ -1732,8 +2033,13 @@ func (s *Service) setChannelStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]bool{"enabled": in.Enabled})
 }
 
+// syncChannelKeyType keeps channels.key_type consistent with the number of enabled keys.
+func (s *Service) syncChannelKeyType(ctx context.Context, channelID string) {
+	_, _ = s.db.Exec(ctx, `update channels set key_type=case when (select count(*) from channel_api_keys ak where ak.channel_id=channels.id and ak.enabled)>1 then 'multi' else 'single' end,updated_at=now() where id=$1`, channelID)
+}
+
 func (s *Service) listChannelKeys(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query(r.Context(), `select id,name,enabled,last_checked_at,last_error,created_at from channel_api_keys where channel_id=$1 order by created_at`, r.PathValue("id"))
+	rows, err := s.db.Query(r.Context(), `select id,name,enabled,priority,last_checked_at,last_error,created_at from channel_api_keys where channel_id=$1 order by priority,created_at`, r.PathValue("id"))
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
@@ -1743,10 +2049,11 @@ func (s *Service) listChannelKeys(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var id, name string
 		var enabled bool
+		var priority int
 		var lastChecked, lastError any
 		var created any
-		if rows.Scan(&id, &name, &enabled, &lastChecked, &lastError, &created) == nil {
-			data = append(data, map[string]any{"id": id, "name": name, "enabled": enabled, "last_checked_at": lastChecked, "last_error": lastError, "created_at": created})
+		if rows.Scan(&id, &name, &enabled, &priority, &lastChecked, &lastError, &created) == nil {
+			data = append(data, map[string]any{"id": id, "name": name, "enabled": enabled, "priority": priority, "last_checked_at": lastChecked, "last_error": lastError, "created_at": created})
 		}
 	}
 	writeJSON(w, 200, map[string]any{"data": data})
@@ -1754,8 +2061,9 @@ func (s *Service) listChannelKeys(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) createChannelKey(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Name   string `json:"name"`
-		APIKey string `json:"api_key"`
+		Name     string `json:"name"`
+		APIKey   string `json:"api_key"`
+		Priority *int   `json:"priority"`
 	}
 	if decode(r, &in) != nil {
 		writeError(w, 400, "invalid_request", "api_key is required")
@@ -1773,19 +2081,23 @@ func (s *Service) createChannelKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_request", "name must be 1-100 characters")
 		return
 	}
-	encrypted, err := crypt(s.cfg.EncryptionKey, in.APIKey, false)
-	if err != nil {
-		writeError(w, 500, "internal_error", "credential encryption failed")
-		return
+	priority := 100
+	if in.Priority != nil {
+		if !validChannelPriority(*in.Priority) {
+			writeError(w, 400, "invalid_request", "priority must be between -10000 and 10000")
+			return
+		}
+		priority = *in.Priority
 	}
 	id, _ := randomID()
-	_, err = s.db.Exec(r.Context(), `insert into channel_api_keys(id,channel_id,name,key_encrypted,enabled) values($1,$2,$3,$4,true)`, id, r.PathValue("id"), in.Name, encrypted)
+	_, err := s.db.Exec(r.Context(), `insert into channel_api_keys(id,channel_id,name,key_encrypted,enabled,priority) values($1,$2,$3,$4,true,$5)`, id, r.PathValue("id"), in.Name, in.APIKey, priority)
 	if err != nil {
 		writeError(w, 400, "invalid_request", "could not create api key")
 		return
 	}
-	s.audit(r, "channel_key.created", "channel_api_key", id, map[string]any{"channel_id": r.PathValue("id"), "name": in.Name})
-	writeJSON(w, 201, map[string]any{"id": id, "name": in.Name, "enabled": true})
+	s.audit(r, "channel_key.created", "channel_api_key", id, map[string]any{"channel_id": r.PathValue("id"), "name": in.Name, "priority": priority})
+	s.syncChannelKeyType(r.Context(), r.PathValue("id"))
+	writeJSON(w, 201, map[string]any{"id": id, "name": in.Name, "enabled": true, "priority": priority})
 }
 
 func (s *Service) deleteChannelKey(w http.ResponseWriter, r *http.Request) {
@@ -1795,6 +2107,7 @@ func (s *Service) deleteChannelKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "channel_key.deleted", "channel_api_key", r.PathValue("keyId"), map[string]any{"channel_id": r.PathValue("id")})
+	s.syncChannelKeyType(r.Context(), r.PathValue("id"))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -1812,7 +2125,46 @@ func (s *Service) setChannelKeyStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "channel_key.status_changed", "channel_api_key", r.PathValue("keyId"), map[string]any{"enabled": in.Enabled})
+	s.syncChannelKeyType(r.Context(), r.PathValue("id"))
 	writeJSON(w, 200, map[string]bool{"enabled": in.Enabled})
+}
+
+func (s *Service) updateChannelKey(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Name     *string `json:"name"`
+		Priority *int    `json:"priority"`
+	}
+	if decode(r, &in) != nil {
+		writeError(w, 400, "invalid_request", "invalid request")
+		return
+	}
+	var name string
+	var priority int
+	if err := s.db.QueryRow(r.Context(), `select name,priority from channel_api_keys where id=$1 and channel_id=$2`, r.PathValue("keyId"), r.PathValue("id")).Scan(&name, &priority); err != nil {
+		writeError(w, 404, "not_found", "channel API key not found")
+		return
+	}
+	if in.Name != nil {
+		name = strings.TrimSpace(*in.Name)
+		if !validChannelName(name) {
+			writeError(w, 400, "invalid_request", "name must be 1-100 characters")
+			return
+		}
+	}
+	if in.Priority != nil {
+		if !validChannelPriority(*in.Priority) {
+			writeError(w, 400, "invalid_request", "priority must be between -10000 and 10000")
+			return
+		}
+		priority = *in.Priority
+	}
+	result, err := s.db.Exec(r.Context(), `update channel_api_keys set name=$1,priority=$2 where id=$3 and channel_id=$4`, name, priority, r.PathValue("keyId"), r.PathValue("id"))
+	if err != nil || result.RowsAffected() != 1 {
+		writeError(w, 404, "not_found", "channel API key not found")
+		return
+	}
+	s.audit(r, "channel_key.updated", "channel_api_key", r.PathValue("keyId"), map[string]any{"channel_id": r.PathValue("id"), "name": name, "priority": priority})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Service) testChannelKey(w http.ResponseWriter, r *http.Request) {
@@ -1831,9 +2183,9 @@ func (s *Service) testChannelKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	apiKey, err := crypt(s.cfg.EncryptionKey, encrypted, true)
+	apiKey, err := channelKeyValue(s.cfg.EncryptionKey, encrypted)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "could not decrypt key")
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not read key")
 		return
 	}
 
@@ -1867,8 +2219,128 @@ func (s *Service) testChannelKey(w http.ResponseWriter, r *http.Request) {
 	result["reason"] = reason
 	_, _ = s.db.Exec(r.Context(), `update channel_api_keys set enabled=false,last_checked_at=now(),last_error=$1 where id=$2 and channel_id=$3`, reason, keyID, channelID)
 	_, _ = s.db.Exec(r.Context(), `update channels set last_checked_at=now(),last_error=$1,updated_at=now() where id=$2`, reason, channelID)
+	s.syncChannelKeyType(r.Context(), channelID)
 	result["auto_disabled"] = true
 	s.audit(r, "channel_key.auto_disabled", "channel_api_key", keyID, map[string]any{"channel_id": channelID, "reason": reason})
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Service) testChannelHandler(w http.ResponseWriter, r *http.Request) {
+	channelID := r.PathValue("id")
+
+	var baseURL, provider, legacyKey string
+	if err := s.db.QueryRow(r.Context(), `select base_url,provider,api_key from channels where id=$1`, channelID).Scan(&baseURL, &provider, &legacyKey); err != nil {
+		writeError(w, http.StatusNotFound, "not_found", "channel not found")
+		return
+	}
+
+	type keyRow struct {
+		id, encrypted string
+	}
+	var keys []keyRow
+	rows, err := s.db.Query(r.Context(), `select id,key_encrypted from channel_api_keys where channel_id=$1 and enabled order by priority desc nulls last, created_at`, channelID)
+	if err == nil {
+		for rows.Next() {
+			var k keyRow
+			if rows.Scan(&k.id, &k.encrypted) == nil {
+				keys = append(keys, k)
+			}
+		}
+		rows.Close()
+	}
+	if len(keys) == 0 {
+		if legacyKey == "" {
+			writeError(w, http.StatusBadRequest, "no_key", "channel has no API key to test")
+			return
+		}
+		keys = []keyRow{{id: "", encrypted: legacyKey}}
+	}
+
+	settings := s.reliabilitySettings(r.Context())
+	type keyResult struct {
+		ID        string `json:"key_id"`
+		Success   bool   `json:"success"`
+		StatusCode int    `json:"status_code"`
+		LatencyMs int64  `json:"latency_ms"`
+		Reason    string `json:"reason,omitempty"`
+		AutoDisabled bool `json:"auto_disabled"`
+	}
+
+	keyResults := make([]keyResult, 0, len(keys))
+	anySuccess := false
+	var successStatus, lastStatus int
+	var successLatency, lastLatency time.Duration
+	channelReason := ""
+
+	for _, k := range keys {
+		apiKey, kerr := channelKeyValue(s.cfg.EncryptionKey, k.encrypted)
+		if kerr != nil {
+			keyResults = append(keyResults, keyResult{ID: k.id, Reason: "could not read key"})
+			continue
+		}
+
+		status, body, latency, testErr := s.testChannel(r.Context(), baseURL, apiKey, provider)
+		success := testErr == nil && status >= 200 && status < 300
+		reason := healthFailureReason(status, testErr)
+		if success && settings.AutoDisableSlowSeconds > 0 && latency > time.Duration(settings.AutoDisableSlowSeconds)*time.Second {
+			success = false
+			reason = "health_check_slow_response"
+		}
+		if !success && settings.autoDisableKeyword(string(body)) {
+			reason = "health_check_keyword_match"
+		}
+
+		lastStatus = status
+		lastLatency = latency
+		kr := keyResult{ID: k.id, Success: success, StatusCode: status, LatencyMs: latency.Milliseconds()}
+		if success {
+			successStatus = status
+			successLatency = latency
+			if k.id != "" {
+				_, _ = s.db.Exec(r.Context(), `update channel_api_keys set last_checked_at=now(),last_error=null where id=$1 and channel_id=$2`, k.id, channelID)
+			}
+			kr.AutoDisabled = false
+			keyResults = append(keyResults, kr)
+			anySuccess = true
+			break
+		}
+
+		kr.Reason = reason
+		if k.id != "" {
+			_, _ = s.db.Exec(r.Context(), `update channel_api_keys set enabled=false,last_checked_at=now(),last_error=$1 where id=$2 and channel_id=$3`, reason, k.id, channelID)
+			s.audit(r, "channel_key.auto_disabled", "channel_api_key", k.id, map[string]any{"channel_id": channelID, "reason": reason})
+			kr.AutoDisabled = true
+		}
+		keyResults = append(keyResults, kr)
+		channelReason = reason
+	}
+
+	channelDisabled := false
+	if anySuccess {
+		_, _ = s.db.Exec(r.Context(), `update channels set last_checked_at=now(),last_error=null,updated_at=now() where id=$1`, channelID)
+		s.syncChannelKeyType(r.Context(), channelID)
+	} else {
+		_, _ = s.db.Exec(r.Context(), `update channels set enabled=false,auto_disabled=true,disabled_reason=$1,last_checked_at=now(),last_error=$1,updated_at=now() where id=$2`, channelReason, channelID)
+		s.syncChannelKeyType(r.Context(), channelID)
+		s.audit(r, "channel.auto_disabled", "channel", channelID, map[string]any{"reason": channelReason})
+		channelDisabled = true
+	}
+
+	result := map[string]any{
+		"success":          anySuccess,
+		"status_code":      0,
+		"latency_ms":       0,
+		"channel_disabled": channelDisabled,
+		"reason":           channelReason,
+		"keys":             keyResults,
+	}
+	if anySuccess {
+		result["status_code"] = successStatus
+		result["latency_ms"] = successLatency.Milliseconds()
+	} else {
+		result["status_code"] = lastStatus
+		result["latency_ms"] = lastLatency.Milliseconds()
+	}
 	writeJSON(w, http.StatusOK, result)
 }
 
@@ -1999,6 +2471,7 @@ func (s *Service) updateModelRoute(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		PublicModel   *string `json:"public_model"`
 		UpstreamModel *string `json:"upstream_model"`
+		ChannelID     *string `json:"channel_id"`
 		Priority      *int    `json:"priority"`
 		Weight        *int    `json:"weight"`
 		Enabled       *bool   `json:"enabled"`
@@ -2247,7 +2720,7 @@ func (s *Service) upsertQuota(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"id": id})
 }
 func (s *Service) listLogs(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query(r.Context(), `select request_id,user_id,api_key_id,channel_id,model,status_code,prompt_tokens,completion_tokens,total_tokens,duration_ms,error_code,created_at from request_logs order by created_at desc limit 100`)
+	rows, err := s.db.Query(r.Context(), `select rl.request_id,coalesce(rl.user_id::text,''),coalesce(u.name,'') as user_name,coalesce(rl.api_key_id::text,''),coalesce(ak.name,'') as key_name,coalesce(rl.channel_id::text,''),coalesce(c.name,'') as channel_name,coalesce(rl.channel_key_id::text,''),coalesce(ck.name,'') as channel_key_name,coalesce(rl.group_id::text,''),coalesce(g.name,'') as group_name,rl.model,rl.status_code,coalesce(rl.prompt_tokens,0),coalesce(rl.completion_tokens,0),coalesce(rl.total_tokens,0),rl.duration_ms,coalesce(rl.error_code,''),case when rl.error_code is not null or rl.status_code>=400 then rl.error_detail else '' end,rl.client_ip,rl.user_agent,rl.created_at from request_logs rl left join users u on u.id=rl.user_id left join api_keys ak on ak.id=rl.api_key_id left join channels c on c.id=rl.channel_id left join channel_api_keys ck on ck.id=rl.channel_key_id left join groups g on g.id=rl.group_id order by rl.created_at desc limit 100`)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
@@ -2255,11 +2728,14 @@ func (s *Service) listLogs(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	data := []map[string]any{}
 	for rows.Next() {
-		var requestID, model string
-		var uid, kid, cid, prompt, completion, total, errorCode, created any
+		var requestID, userID, userName, apiKeyID, keyName, channelID, channelName, channelKeyID, channelKeyName, groupID, groupName, model, errorCode, errorDetail, clientIP, userAgent string
+		var prompt, completion, total any
 		var status, duration int
-		rows.Scan(&requestID, &uid, &kid, &cid, &model, &status, &prompt, &completion, &total, &duration, &errorCode, &created)
-		data = append(data, map[string]any{"request_id": requestID, "user_id": uid, "api_key_id": kid, "channel_id": cid, "model": model, "status_code": status, "prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": total, "duration_ms": duration, "error_code": errorCode, "created_at": created})
+		var created any
+		if err := rows.Scan(&requestID, &userID, &userName, &apiKeyID, &keyName, &channelID, &channelName, &channelKeyID, &channelKeyName, &groupID, &groupName, &model, &status, &prompt, &completion, &total, &duration, &errorCode, &errorDetail, &clientIP, &userAgent, &created); err != nil {
+			continue
+		}
+		data = append(data, map[string]any{"request_id": requestID, "user_id": userID, "user_name": userName, "api_key_id": apiKeyID, "key_name": keyName, "channel_id": channelID, "channel_name": channelName, "channel_key_id": channelKeyID, "channel_key_name": channelKeyName, "group_id": groupID, "group_name": groupName, "model": model, "status_code": status, "prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": total, "duration_ms": duration, "error_code": errorCode, "error_detail": errorDetail, "client_ip": clientIP, "user_agent": userAgent, "created_at": created})
 	}
 	writeJSON(w, 200, map[string]any{"data": data})
 }

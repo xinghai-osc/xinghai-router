@@ -96,12 +96,18 @@ async function save() {
     if (!editingId.value) {
       await endpoints.createModelRoute(payload)
     } else {
-      await endpoints.updateModelRoute(editingId.value, payload)
+      await endpoints.updateModelRoute(editingId.value, { ...payload, channel_id: undefined })
     }
   })
   if (!ok) { toast.error(t('common.actionFailed')); return }
   toast.success(t('admin.modelRouteSaved'))
   dialogOpen.value = false
+  await routes.refresh()
+}
+
+async function toggleEnabled(route: ModelRoute) {
+  const ok = await run(() => endpoints.updateModelRoute(route.id, { enabled: !route.enabled }))
+  if (!ok) { toast.error(t('common.actionFailed')); return }
   await routes.refresh()
 }
 
@@ -144,6 +150,7 @@ async function toggleHidden(route: ModelRoute) {
             <th>{{ t('admin.channel') }}</th>
             <th class="num">{{ t('admin.priority') }}</th>
             <th class="num">{{ t('admin.weight') }}</th>
+            <th>{{ t('common.status') }}</th>
             <th>{{ t('admin.hidden') }}</th>
             <th>{{ t('common.actions') }}</th>
           </tr>
@@ -157,7 +164,16 @@ async function toggleHidden(route: ModelRoute) {
             <td class="num">{{ formatNumber(route.weight) }}</td>
             <td>
               <UiSwitch
+                :model-value="route.enabled"
+                :label="route.enabled ? t('common.enabled') : t('common.disabled')"
+                :disabled="busy"
+                @update:model-value="toggleEnabled(route)"
+              />
+            </td>
+            <td>
+              <UiSwitch
                 :model-value="route.hidden"
+                :label="t('admin.hidden')"
                 :disabled="busy"
                 @update:model-value="toggleHidden(route)"
               />

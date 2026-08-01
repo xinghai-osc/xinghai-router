@@ -295,7 +295,7 @@ func (s *Service) updateAccountProfile(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) accountKeys(w http.ResponseWriter, r *http.Request) {
 	account := accountFromContext(r)
-	rows, err := s.db.Query(r.Context(), `select k.id,k.name,k.key_prefix,k.expires_at,k.revoked_at,k.last_used_at,k.created_at,coalesce(k.group_id::text,''),coalesce(g.name,'') from api_keys k left join groups g on g.id=k.group_id where k.user_id=$1 order by k.created_at desc`, account.userID)
+	rows, err := s.db.Query(r.Context(), `select k.id,k.name,k.key_prefix,k.expires_at,k.revoked_at,k.last_used_at,k.created_at,coalesce(k.group_id::text,''),coalesce(g.name,''),k.secret_encrypted<>'' from api_keys k left join groups g on g.id=k.group_id where k.user_id=$1 order by k.created_at desc`, account.userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
 		return
@@ -304,9 +304,10 @@ func (s *Service) accountKeys(w http.ResponseWriter, r *http.Request) {
 	data := []map[string]any{}
 	for rows.Next() {
 		var id, name, prefix, groupID, groupName string
+		var revealable bool
 		var expires, revoked, used, created any
-		if rows.Scan(&id, &name, &prefix, &expires, &revoked, &used, &created, &groupID, &groupName) == nil {
-			data = append(data, map[string]any{"id": id, "name": name, "key_prefix": prefix, "group_id": groupID, "group_name": groupName, "expires_at": expires, "revoked_at": revoked, "last_used_at": used, "created_at": created})
+		if rows.Scan(&id, &name, &prefix, &expires, &revoked, &used, &created, &groupID, &groupName, &revealable) == nil {
+			data = append(data, map[string]any{"id": id, "name": name, "key_prefix": prefix, "group_id": groupID, "group_name": groupName, "expires_at": expires, "revoked_at": revoked, "last_used_at": used, "created_at": created, "revealable": revealable})
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": data})
@@ -348,7 +349,12 @@ func (s *Service) createAccountKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "group must belong to user")
 		return
 	}
-	_, err = s.db.Exec(r.Context(), `insert into api_keys(id,user_id,name,key_prefix,secret_hash,expires_at,group_id) values($1,$2,$3,$4,$5,$6,$7)`, id, account.userID, name, secret[:12], hashSecret(secret), expires, groupID)
+	encryptedSecret, err := crypt(s.cfg.EncryptionKey, secret, false)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not create API key")
+		return
+	}
+	_, err = s.db.Exec(r.Context(), `insert into api_keys(id,user_id,name,key_prefix,secret_hash,secret_encrypted,expires_at,group_id) values($1,$2,$3,$4,$5,$6,$7,$8)`, id, account.userID, name, secret[:12], hashSecret(secret), encryptedSecret, expires, groupID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not create API key")
 		return
@@ -443,9 +449,35 @@ func (s *Service) revokeAccountKey(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *Service) revealAccountKey(w http.ResponseWriter, r *http.Request) {
+	account := accountFromContext(r)
+	keyID := strings.TrimSpace(r.PathValue("id"))
+	if keyID == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "key id is required")
+		return
+	}
+	var encrypted string
+	err := s.db.QueryRow(r.Context(), `select secret_encrypted from api_keys where id=$1 and user_id=$2`, keyID, account.userID).Scan(&encrypted)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", "API key not found")
+		return
+	}
+	if encrypted == "" {
+		writeError(w, http.StatusNotFound, "not_recoverable", "this key was created before recovery was enabled and cannot be revealed")
+		return
+	}
+	secret, err := crypt(s.cfg.EncryptionKey, encrypted, true)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not decrypt API key")
+		return
+	}
+	s.audit(r, "api_key.revealed", "api_key", keyID, map[string]any{"self_service": true})
+	writeJSON(w, http.StatusOK, map[string]any{"key": secret})
+}
+
 func (s *Service) accountUsage(w http.ResponseWriter, r *http.Request) {
 	account := accountFromContext(r)
-	rows, err := s.db.Query(r.Context(), `select request_id,model,prompt_tokens,cached_prompt_tokens,completion_tokens,cost,status,created_at from usage_records where user_id=$1 order by created_at desc limit 100`, account.userID)
+	rows, err := s.db.Query(r.Context(), `select rl.request_id,rl.model,coalesce(rl.prompt_tokens,0),coalesce(ur.cached_prompt_tokens,0),coalesce(rl.completion_tokens,0),coalesce(ur.cost,0),case when ur.status is not null then ur.status when rl.status_code>=400 or rl.error_code is not null then 'failed' else 'success' end,rl.created_at,rl.client_ip,rl.user_agent,case when rl.error_code is not null or rl.status_code>=400 then rl.error_detail else '' end,coalesce(ak.name,''),rl.subscription_covered,rl.duration_ms,coalesce(g.name,'') from request_logs rl left join usage_records ur on ur.request_id=rl.request_id left join api_keys ak on ak.id=rl.api_key_id left join groups g on g.id=rl.group_id where rl.user_id=$1 order by rl.created_at desc limit 100`, account.userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
 		return
@@ -453,11 +485,12 @@ func (s *Service) accountUsage(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	data := []map[string]any{}
 	for rows.Next() {
-		var requestID, model, status string
-		var prompt, cached, completion int
+		var requestID, model, status, clientIP, userAgent, errorDetail, keyName, groupName string
+		var prompt, cached, completion, durationMs int
+		var subscriptionCovered bool
 		var cost, created any
-		if rows.Scan(&requestID, &model, &prompt, &cached, &completion, &cost, &status, &created) == nil {
-			data = append(data, map[string]any{"request_id": requestID, "model": model, "prompt_tokens": prompt, "cached_prompt_tokens": cached, "completion_tokens": completion, "cost": cost, "status": status, "created_at": created})
+		if rows.Scan(&requestID, &model, &prompt, &cached, &completion, &cost, &status, &created, &clientIP, &userAgent, &errorDetail, &keyName, &subscriptionCovered, &durationMs, &groupName) == nil {
+			data = append(data, map[string]any{"request_id": requestID, "model": model, "prompt_tokens": prompt, "cached_prompt_tokens": cached, "completion_tokens": completion, "cost": cost, "status": status, "created_at": created, "client_ip": clientIP, "user_agent": userAgent, "error": errorDetail, "key_name": keyName, "subscription": subscriptionCovered, "duration_ms": durationMs, "group_name": groupName})
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": data})

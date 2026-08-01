@@ -14,6 +14,7 @@ const TONES: Record<string, Tone> = {
   active: 'success',
   cancelled: 'neutral',
   settled: 'success',
+  success: 'success',
   error: 'danger',
 }
 
@@ -25,6 +26,7 @@ const LABEL_KEYS: Record<string, string> = {
   active: 'console.subStatusActive',
   cancelled: 'console.subStatusCancelled',
   settled: 'console.statusSettled',
+  success: 'console.statusSuccess',
 }
 
 const tone = computed<Tone>(() => TONES[props.status] ?? 'neutral')

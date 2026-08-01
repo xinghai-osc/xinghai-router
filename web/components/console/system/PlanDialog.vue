@@ -28,6 +28,9 @@ const enabled = ref(true)
 const invalid = ref('')
 
 const periodOptions = computed(() => [
+  { value: 'hour', label: t('system.periodHour') },
+  { value: 'day', label: t('system.periodDay') },
+  { value: 'week', label: t('system.periodWeek') },
   { value: 'month', label: t('system.periodMonth') },
   { value: 'year', label: t('system.periodYear') },
 ])

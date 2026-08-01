@@ -56,10 +56,42 @@ func TestOpenAIToAnthropic(t *testing.T) {
 	}
 }
 
-func TestOpenAIRequestToAnthropic(t *testing.T) {
-	body, err := openAIRequestToAnthropic([]byte(`{"model":"claude-sonnet","messages":[{"role":"system","content":"Be concise"},{"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"weather","arguments":"{\"city\":\"Beijing\"}"}}]},{"role":"tool","tool_call_id":"call_1","content":"sunny"}],"tools":[{"type":"function","function":{"name":"weather","parameters":{"type":"object"}}}],"max_tokens":256}`))
+func TestOpenAIToAnthropicArrayContent(t *testing.T) {
+	body, err := openAIToAnthropic([]byte(`{"id":"chat_1","model":"kimi-k2.6","choices":[{"message":{"content":[{"type":"text","text":"hello"},{"type":"text","text":" world"}]},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2}}`))
 	if err != nil {
 		t.Fatal(err)
+	}
+	var response map[string]any
+	if err = json.Unmarshal(body, &response); err != nil {
+		t.Fatal(err)
+	}
+	content := response["content"].([]any)
+	if len(content) != 1 || content[0].(map[string]any)["text"] != "hello world" {
+		t.Fatalf("unexpected content: %#v", content)
+	}
+}
+
+func TestOpenAIToAnthropicDefaultsStopReason(t *testing.T) {
+	body, err := openAIToAnthropic([]byte(`{"id":"chat_1","model":"kimi-k2.6","choices":[{"message":{"content":"hi"}}],"usage":{"prompt_tokens":3,"completion_tokens":2}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response map[string]any
+	if err = json.Unmarshal(body, &response); err != nil {
+		t.Fatal(err)
+	}
+	if response["stop_reason"] != "end_turn" {
+		t.Fatalf("unexpected stop_reason: %#v", response["stop_reason"])
+	}
+}
+
+func TestOpenAIRequestToAnthropic(t *testing.T) {
+	body, prefill, err := openAIRequestToAnthropic([]byte(`{"model":"claude-sonnet","messages":[{"role":"system","content":"Be concise"},{"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"weather","arguments":"{\"city\":\"Beijing\"}"}}]},{"role":"tool","tool_call_id":"call_1","content":"sunny"}],"tools":[{"type":"function","function":{"name":"weather","parameters":{"type":"object"}}}],"max_tokens":256}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prefill != "" {
+		t.Fatalf("unexpected prefill: %q", prefill)
 	}
 	var request map[string]any
 	if err = json.Unmarshal(body, &request); err != nil {
@@ -74,8 +106,73 @@ func TestOpenAIRequestToAnthropic(t *testing.T) {
 	}
 }
 
+func TestOpenAIRequestToAnthropicResponseFormat(t *testing.T) {
+	body, prefill, err := openAIRequestToAnthropic([]byte(`{"model":"claude-sonnet","messages":[{"role":"system","content":"Be concise"},{"role":"user","content":"list colors"}],"max_tokens":256,"response_format":{"type":"json_schema","json_schema":{"name":"colors","schema":{"type":"object","properties":{"items":{"type":"array"}}}}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prefill != "{" {
+		t.Fatalf("prefill = %q, want %q", prefill, "{")
+	}
+	var request map[string]any
+	if err = json.Unmarshal(body, &request); err != nil {
+		t.Fatal(err)
+	}
+	system, _ := request["system"].(string)
+	if !strings.Contains(system, "Be concise") || !strings.Contains(system, `"type":"object"`) {
+		t.Fatalf("unexpected system: %q", system)
+	}
+	messages := request["messages"].([]any)
+	last := messages[len(messages)-1].(map[string]any)
+	if last["role"] != "assistant" {
+		t.Fatalf("expected assistant prefill message: %#v", messages)
+	}
+	blocks := last["content"].([]any)
+	if blocks[0].(map[string]any)["text"] != "{" {
+		t.Fatalf("unexpected prefill block: %#v", blocks)
+	}
+}
+
+func TestOpenAIRequestToAnthropicResponseFormatMergesAssistantPrefill(t *testing.T) {
+	body, prefill, err := openAIRequestToAnthropic([]byte(`{"model":"claude-sonnet","messages":[{"role":"user","content":"hi"},{"role":"assistant","content":"Working on it."}],"response_format":{"type":"json_object"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prefill != "{" {
+		t.Fatalf("prefill = %q, want %q", prefill, "{")
+	}
+	var request map[string]any
+	if err = json.Unmarshal(body, &request); err != nil {
+		t.Fatal(err)
+	}
+	messages := request["messages"].([]any)
+	if len(messages) != 2 {
+		t.Fatalf("expected prefill merged into last assistant message: %#v", messages)
+	}
+	blocks := messages[1].(map[string]any)["content"].([]any)
+	if len(blocks) != 2 || blocks[1].(map[string]any)["text"] != "{" {
+		t.Fatalf("unexpected assistant blocks: %#v", blocks)
+	}
+}
+
+func TestAnthropicResponseToOpenAIPrefill(t *testing.T) {
+	body, err := anthropicResponseToOpenAI([]byte(`{"id":"msg_1","model":"claude-sonnet","content":[{"type":"text","text":"\"a\": 1}"}],"stop_reason":"end_turn","usage":{"input_tokens":5,"output_tokens":4}}`), "{")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response map[string]any
+	if err = json.Unmarshal(body, &response); err != nil {
+		t.Fatal(err)
+	}
+	choice := response["choices"].([]any)[0].(map[string]any)
+	content := choice["message"].(map[string]any)["content"]
+	if content != `{"a": 1}` {
+		t.Fatalf("unexpected content: %#v", content)
+	}
+}
+
 func TestAnthropicResponseToOpenAI(t *testing.T) {
-	body, err := anthropicResponseToOpenAI([]byte(`{"id":"msg_1","model":"claude-sonnet","content":[{"type":"tool_use","id":"tool_1","name":"weather","input":{"city":"Beijing"}}],"stop_reason":"tool_use","usage":{"input_tokens":9,"output_tokens":3}}`))
+	body, err := anthropicResponseToOpenAI([]byte(`{"id":"msg_1","model":"claude-sonnet","content":[{"type":"tool_use","id":"tool_1","name":"weather","input":{"city":"Beijing"}}],"stop_reason":"tool_use","usage":{"input_tokens":9,"output_tokens":3}}`), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,6 +183,21 @@ func TestAnthropicResponseToOpenAI(t *testing.T) {
 	choice := response["choices"].([]any)[0].(map[string]any)
 	if choice["finish_reason"] != "tool_calls" || response["usage"].(map[string]any)["total_tokens"].(float64) != 12 {
 		t.Fatalf("unexpected response: %#v", response)
+	}
+}
+
+func TestAnthropicResponseToOpenAIDefaultsFinishReason(t *testing.T) {
+	body, err := anthropicResponseToOpenAI([]byte(`{"id":"msg_1","model":"claude-sonnet","content":[{"type":"text","text":"hi"}],"stop_reason":"refusal","usage":{"input_tokens":5,"output_tokens":2}}`), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response map[string]any
+	if err = json.Unmarshal(body, &response); err != nil {
+		t.Fatal(err)
+	}
+	choice := response["choices"].([]any)[0].(map[string]any)
+	if choice["finish_reason"] != "stop" {
+		t.Fatalf("unexpected finish_reason: %#v", choice["finish_reason"])
 	}
 }
 

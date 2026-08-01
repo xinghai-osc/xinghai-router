@@ -13,14 +13,24 @@ const { t } = useI18n()
 
 const sorted = computed(() => [...props.plans].sort((a, b) => a.sort_order - b.sort_order))
 
+const PERIOD_KEYS: Record<string, string> = {
+  hour: 'site.planPerHour',
+  day: 'site.planPerDay',
+  week: 'site.planPerWeek',
+  month: 'site.planPerMonth',
+  year: 'site.planPerYear',
+}
+
 function periodLabel(plan: PublicSubscriptionPlan): string {
-  return plan.billing_period === 'year' ? t('site.planPerYear') : t('site.planPerMonth')
+  return PERIOD_KEYS[plan.billing_period] ? t(PERIOD_KEYS[plan.billing_period]) : plan.billing_period
 }
 
 function benefits(plan: PublicSubscriptionPlan): string[] {
   const list: string[] = []
-  if (Number(plan.credit_amount) > 0) {
+  if (plan.credit_amount) {
     list.push(t('site.planCredit', { amount: Number(plan.credit_amount).toFixed(2) }))
+  } else {
+    list.push(t('site.planUnlimitedCredit'))
   }
   if (plan.group_name) list.push(t('site.planGroup', { group: plan.group_name }))
   list.push(plan.model_whitelist.length

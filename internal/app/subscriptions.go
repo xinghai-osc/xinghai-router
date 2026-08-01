@@ -3,8 +3,10 @@ package app
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -72,7 +74,7 @@ type subscriptionOrder struct {
 // ---- Admin: plan management ----
 
 func (s *Service) listSubscriptionPlans(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query(r.Context(), `select p.id,p.name,p.description,p.price::text,p.currency,p.billing_period,p.credit_amount::text,coalesce(p.group_id::text,''),coalesce(g.name,''),p.model_whitelist,p.max_requests_per_period,p.max_tokens_per_period,p.sort_order,p.enabled,p.created_at,p.updated_at from subscription_plans p left join groups g on g.id=p.group_id order by p.sort_order,p.name`)
+	rows, err := s.db.Query(r.Context(), `select p.id,p.name,p.description,p.price::text,p.currency,p.billing_period,coalesce(p.credit_amount::text,''),coalesce(p.group_id::text,''),coalesce(g.name,''),p.model_whitelist,p.max_requests_per_period,p.max_tokens_per_period,p.sort_order,p.enabled,p.created_at,p.updated_at from subscription_plans p left join groups g on g.id=p.group_id order by p.sort_order,p.name`)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not load plans")
 		return
@@ -101,7 +103,7 @@ func (s *Service) listSubscriptionPlans(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Service) publicSubscriptionPlans(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query(r.Context(), `select p.id,p.name,p.description,p.price::text,p.currency,p.billing_period,p.credit_amount::text,coalesce(g.name,''),p.model_whitelist,p.sort_order from subscription_plans p left join groups g on g.id=p.group_id where p.enabled order by p.sort_order,p.name`)
+	rows, err := s.db.Query(r.Context(), `select p.id,p.name,p.description,p.price::text,p.currency,p.billing_period,coalesce(p.credit_amount::text,''),coalesce(g.name,''),p.model_whitelist,p.sort_order from subscription_plans p left join groups g on g.id=p.group_id where p.enabled order by p.sort_order,p.name`)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not load plans")
 		return
@@ -136,7 +138,7 @@ func (s *Service) createSubscriptionPlan(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	_, err = s.db.Exec(r.Context(), `insert into subscription_plans(id,name,description,price,currency,billing_period,credit_amount,group_id,model_whitelist,max_requests_per_period,max_tokens_per_period,sort_order,enabled) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-		id, plan.Name, plan.Description, plan.Price, plan.Currency, plan.BillingPeriod, plan.CreditAmount, nullableGroupRef(plan.GroupID), plan.ModelWhitelist, plan.MaxRequestsPerRule, plan.MaxTokensPerRule, plan.SortOrder, plan.Enabled)
+		id, plan.Name, plan.Description, plan.Price, plan.Currency, plan.BillingPeriod, nullableCredit(plan.CreditAmount), nullableGroupRef(plan.GroupID), plan.ModelWhitelist, plan.MaxRequestsPerRule, plan.MaxTokensPerRule, plan.SortOrder, plan.Enabled)
 	if err != nil {
 		writeError(w, http.StatusConflict, "conflict", "plan name already exists")
 		return
@@ -152,7 +154,7 @@ func (s *Service) updateSubscriptionPlan(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	result, err := s.db.Exec(r.Context(), `update subscription_plans set name=$1,description=$2,price=$3,currency=$4,billing_period=$5,credit_amount=$6,group_id=$7,model_whitelist=$8,max_requests_per_period=$9,max_tokens_per_period=$10,sort_order=$11,enabled=$12,updated_at=now() where id=$13`,
-		plan.Name, plan.Description, plan.Price, plan.Currency, plan.BillingPeriod, plan.CreditAmount, nullableGroupRef(plan.GroupID), plan.ModelWhitelist, plan.MaxRequestsPerRule, plan.MaxTokensPerRule, plan.SortOrder, plan.Enabled, r.PathValue("id"))
+		plan.Name, plan.Description, plan.Price, plan.Currency, plan.BillingPeriod, nullableCredit(plan.CreditAmount), nullableGroupRef(plan.GroupID), plan.ModelWhitelist, plan.MaxRequestsPerRule, plan.MaxTokensPerRule, plan.SortOrder, plan.Enabled, r.PathValue("id"))
 	if err != nil {
 		writeError(w, http.StatusConflict, "conflict", "plan name already exists")
 		return
@@ -206,8 +208,10 @@ func readSubscriptionPlanInput(r *http.Request, s *Service, existingID string) (
 		return subscriptionPlan{}, fmt.Errorf("description must be at most 2000 characters")
 	}
 	in.BillingPeriod = strings.ToLower(strings.TrimSpace(in.BillingPeriod))
-	if in.BillingPeriod != "month" && in.BillingPeriod != "year" {
-		return subscriptionPlan{}, fmt.Errorf("billing_period must be month or year")
+	switch in.BillingPeriod {
+	case "hour", "day", "week", "month", "year":
+	default:
+		return subscriptionPlan{}, fmt.Errorf("billing_period must be one of hour, day, week, month, year")
 	}
 	in.Currency = strings.ToUpper(strings.TrimSpace(in.Currency))
 	if in.Currency == "" {
@@ -220,9 +224,14 @@ func readSubscriptionPlanInput(r *http.Request, s *Service, existingID string) (
 	if !ok || priceCents < 0 || priceCents > maxPlanPriceCents {
 		return subscriptionPlan{}, fmt.Errorf("price must be a non-negative decimal up to 100000.00")
 	}
-	credit, ok := parseCreditAmount(in.CreditAmount)
-	if !ok || credit < 0 || credit > maxPlanCreditAmount {
-		return subscriptionPlan{}, fmt.Errorf("credit_amount must be a non-negative decimal up to 1000000")
+	creditAmount := strings.TrimSpace(in.CreditAmount)
+	credit := ""
+	if creditAmount != "" {
+		parsed, ok := parseCreditAmount(creditAmount)
+		if !ok || parsed < 0 || parsed > maxPlanCreditAmount {
+			return subscriptionPlan{}, fmt.Errorf("credit_amount must be a non-negative decimal up to 1000000")
+		}
+		credit = formatCredit(parsed)
 	}
 	if in.SortOrder < minPlanSortOrder || in.SortOrder > maxPlanSortOrder {
 		return subscriptionPlan{}, fmt.Errorf("sort_order must be between -10000 and 10000")
@@ -260,7 +269,7 @@ func readSubscriptionPlanInput(r *http.Request, s *Service, existingID string) (
 		Price:              formatAmount(priceCents),
 		Currency:           in.Currency,
 		BillingPeriod:      in.BillingPeriod,
-		CreditAmount:       formatCredit(credit),
+		CreditAmount:       credit,
 		GroupID:            groupRef,
 		ModelWhitelist:     models,
 		MaxRequestsPerRule: in.MaxRequests,
@@ -285,14 +294,43 @@ func nullableGroupRef(ref string) any {
 	return ref
 }
 
+func nullableCredit(credit string) any {
+	if credit == "" {
+		return nil
+	}
+	return credit
+}
+
 func parseCreditAmount(value string) (float64, bool) {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return 0, true
 	}
-	cents, _, ok := parsePaymentAmount(value)
-	if !ok {
+	parts := strings.Split(value, ".")
+	if len(parts) > 2 || len(parts[0]) == 0 || len(parts[0]) > 7 {
 		return 0, false
+	}
+	for _, ch := range parts[0] {
+		if ch < '0' || ch > '9' {
+			return 0, false
+		}
+	}
+	fraction := ""
+	if len(parts) == 2 {
+		fraction = parts[1]
+		if len(fraction) == 0 || len(fraction) > 2 {
+			return 0, false
+		}
+		for _, ch := range fraction {
+			if ch < '0' || ch > '9' {
+				return 0, false
+			}
+		}
+	}
+	fraction += strings.Repeat("0", 2-len(fraction))
+	var cents int64
+	for _, ch := range parts[0] + fraction {
+		cents = cents*10 + int64(ch-'0')
 	}
 	return float64(cents) / 100, true
 }
@@ -302,14 +340,14 @@ func formatAmount(cents int64) string {
 }
 
 func formatCredit(value float64) string {
-	return fmt.Sprintf("%g", value)
+	return strconv.FormatFloat(value, 'f', -1, 64)
 }
 
 // ---- Account: browse plans & subscriptions ----
 
 func (s *Service) accountSubscriptions(w http.ResponseWriter, r *http.Request) {
 	account := accountFromContext(r)
-	rows, err := s.db.Query(r.Context(), `select us.id,us.user_id,us.plan_id,p.name,us.status,us.current_period_start,us.current_period_end,us.auto_renew,us.cancelled_at,us.created_at,us.updated_at,p.price::text,p.billing_period,p.credit_amount::text,coalesce(p.group_id::text,''),coalesce(g.name,''),p.model_whitelist,p.max_requests_per_period,p.max_tokens_per_period from user_subscriptions us join subscription_plans p on p.id=us.plan_id left join groups g on g.id=p.group_id where us.user_id=$1 order by us.created_at desc`, account.userID)
+	rows, err := s.db.Query(r.Context(), `select us.id,us.user_id,us.plan_id,p.name,us.status,us.current_period_start,us.current_period_end,us.auto_renew,us.cancelled_at,us.created_at,us.updated_at,p.price::text,p.billing_period,coalesce(p.credit_amount::text,''),coalesce(p.group_id::text,''),coalesce(g.name,''),p.model_whitelist,p.max_requests_per_period,p.max_tokens_per_period from user_subscriptions us join subscription_plans p on p.id=us.plan_id left join groups g on g.id=p.group_id where us.user_id=$1 order by us.created_at desc`, account.userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not load subscriptions")
 		return
@@ -580,11 +618,11 @@ func (s *Service) activateSubscriptionOrderTx(ctx context.Context, tx pgx.Tx, or
 	var groupID any
 	var modelWhitelist []string
 	var maxReq, maxTok *int64
-	if err = tx.QueryRow(ctx, `select billing_period,credit_amount::text,group_id,model_whitelist,max_requests_per_period,max_tokens_per_period from subscription_plans where id=$1`, planID).Scan(&billing, &creditStr, &groupID, &modelWhitelist, &maxReq, &maxTok); err != nil {
+	if err = tx.QueryRow(ctx, `select billing_period,coalesce(credit_amount::text,''),group_id,model_whitelist,max_requests_per_period,max_tokens_per_period from subscription_plans where id=$1`, planID).Scan(&billing, &creditStr, &groupID, &modelWhitelist, &maxReq, &maxTok); err != nil {
 		return false, err
 	}
 	periodStart := time.Now()
-	periodEnd := periodStart.AddDate(0, map[string]int{"month": 1, "year": 1}[billing], 0)
+	periodEnd := subscriptionPeriodEnd(periodStart, billing)
 	if _, err = tx.Exec(ctx, `update subscription_orders set status='paid',provider_trade_no=$1,paid_at=now(),updated_at=now() where id=$2`, tradeNo, id); err != nil {
 		return false, err
 	}
@@ -624,12 +662,29 @@ func (s *Service) activateSubscriptionOrderTx(ctx context.Context, tx pgx.Tx, or
 	return true, nil
 }
 
+func subscriptionPeriodEnd(start time.Time, billing string) time.Time {
+	switch billing {
+	case "hour":
+		return start.Add(time.Hour)
+	case "day":
+		return start.AddDate(0, 0, 1)
+	case "week":
+		return start.AddDate(0, 0, 7)
+	case "year":
+		return start.AddDate(1, 0, 0)
+	default:
+		return start.AddDate(0, 1, 0)
+	}
+}
+
 // subscriptionCoversModel reports whether the user has an active subscription whose plan
 // whitelists the requested model (empty whitelist = all models) and whose per-period
-// request/token limits have not been reached.
+// request/token limits have not been reached. A null current_period_end means the
+// subscription has no expiry (e.g. migrated from a system that does not track one).
 // It runs on every proxied request, so whitelist matching and the per-period usage
 // aggregate are pushed into a single query. The lateral aggregate is only evaluated for
-// plans that actually declare a request or token cap.
+// plans that actually declare a request or token cap. The user_id comparison goes through
+// ::text so it works whether the column is uuid (pre-027 databases) or bigint.
 func (s *Service) subscriptionCoversModel(ctx context.Context, userID, model string) bool {
 	var covered bool
 	err := s.db.QueryRow(ctx, `select exists(
@@ -641,12 +696,13 @@ func (s *Service) subscriptionCoversModel(ctx context.Context, userID, model str
 			from request_logs rl
 			where rl.user_id=us.user_id and rl.created_at >= us.current_period_start
 		) agg on p.max_requests_per_period is not null or p.max_tokens_per_period is not null
-		where us.user_id=$1 and us.status='active' and us.current_period_end > now()
+		where us.user_id::text=$1 and us.status='active' and (us.current_period_end is null or us.current_period_end > now())
 		  and (coalesce(array_length(p.model_whitelist,1),0)=0 or $2 = any(p.model_whitelist))
 		  and (p.max_requests_per_period is null or agg.requests < p.max_requests_per_period)
 		  and (p.max_tokens_per_period is null or agg.tokens < p.max_tokens_per_period)
 	)`, userID, model).Scan(&covered)
 	if err != nil {
+		log.Printf("subscriptionCoversModel: %v", err)
 		return false
 	}
 	return covered
