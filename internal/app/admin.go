@@ -2343,15 +2343,17 @@ func (s *Service) testChannelHandler(w http.ResponseWriter, r *http.Request) {
 		lastLatency = latency
 		kr := keyResult{ID: k.id, Success: success, StatusCode: status, LatencyMs: latency.Milliseconds()}
 		if success {
-			successStatus = status
-			successLatency = latency
+			if !anySuccess {
+				successStatus = status
+				successLatency = latency
+			}
 			if k.id != "" {
 				_, _ = s.db.Exec(r.Context(), `update channel_api_keys set last_checked_at=now(),last_error=null where id=$1 and channel_id=$2`, k.id, channelID)
 			}
 			kr.AutoDisabled = false
 			keyResults = append(keyResults, kr)
 			anySuccess = true
-			break
+			continue
 		}
 
 		kr.Reason = reason

@@ -310,15 +310,46 @@ func (s *Service) updateReliabilitySettings(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, s.reliabilitySettings(r.Context()))
 }
 
-// autoDisableChannel marks a channel as automatically disabled with an audit record.
-func (s *Service) autoDisableChannel(ctx context.Context, id, reason string) {
-	result, err := s.db.Exec(ctx, `update channels set enabled=false,auto_disabled=true,disabled_reason=$1,last_error=$1,last_checked_at=now(),updated_at=now() where id=$2 and enabled and auto_disable`, reason, id)
+// autoDisableChannel marks a channel or, when the failing key is known (multi-key
+// channels), just that channel API key as automatically disabled with an audit
+// record. A key is disabled only if the channel allows auto-disable; when the last
+// enabled key of a channel is disabled the whole channel is disabled too.
+func (s *Service) autoDisableChannel(ctx context.Context, channelID, keyID, reason string) {
+	if keyID != "" {
+		result, err := s.db.Exec(ctx, `update channel_api_keys set enabled=false,failure_count=0,last_error=$1,last_checked_at=now() where id=$2 and channel_id=$3 and enabled and exists(select 1 from channels c where c.id=channel_api_keys.channel_id and c.enabled and c.auto_disable)`, reason, keyID, channelID)
+		if err != nil || result.RowsAffected() != 1 {
+			return
+		}
+		s.syncChannelKeyType(ctx, channelID)
+		details, _ := json.Marshal(map[string]string{"reason": reason})
+		auditID, _ := randomID()
+		_, _ = s.db.Exec(ctx, `insert into audit_logs(id,action,actor,entity_type,entity_id,details,request_method,request_path) values($1,'channel_key.auto_disabled','system','channel_api_key',$2,$3,'SYSTEM','/gateway')`, auditID, keyID, details)
+		s.disableChannelIfKeyless(ctx, channelID, reason)
+		return
+	}
+	result, err := s.db.Exec(ctx, `update channels set enabled=false,auto_disabled=true,disabled_reason=$1,last_error=$1,last_checked_at=now(),updated_at=now() where id=$2 and enabled and auto_disable`, reason, channelID)
 	if err != nil || result.RowsAffected() != 1 {
 		return
 	}
 	details, _ := json.Marshal(map[string]string{"reason": reason})
 	auditID, _ := randomID()
-	_, _ = s.db.Exec(ctx, `insert into audit_logs(id,action,actor,entity_type,entity_id,details,request_method,request_path) values($1,'channel.auto_disabled','system','channel',$2,$3,'SYSTEM','/system/channel-test')`, auditID, id, details)
+	_, _ = s.db.Exec(ctx, `insert into audit_logs(id,action,actor,entity_type,entity_id,details,request_method,request_path) values($1,'channel.auto_disabled','system','channel',$2,$3,'SYSTEM','/system/channel-test')`, auditID, channelID, details)
+}
+
+// disableChannelIfKeyless auto-disables a channel when all of its API keys are
+// disabled, so a channel left without usable credentials is retired as a whole.
+func (s *Service) disableChannelIfKeyless(ctx context.Context, channelID, reason string) {
+	var left int
+	if err := s.db.QueryRow(ctx, `select count(*) from channel_api_keys where channel_id=$1 and enabled`, channelID).Scan(&left); err != nil || left > 0 {
+		return
+	}
+	result, err := s.db.Exec(ctx, `update channels set enabled=false,auto_disabled=true,disabled_reason=$1,last_error=$1,last_checked_at=now(),updated_at=now() where id=$2 and enabled and auto_disable`, reason, channelID)
+	if err != nil || result.RowsAffected() != 1 {
+		return
+	}
+	details, _ := json.Marshal(map[string]string{"reason": reason})
+	auditID, _ := randomID()
+	_, _ = s.db.Exec(ctx, `insert into audit_logs(id,action,actor,entity_type,entity_id,details,request_method,request_path) values($1,'channel.auto_disabled','system','channel',$2,$3,'SYSTEM','/system/channel-test')`, auditID, channelID, details)
 }
 
 // testChannel probes a channel with GET /v1/models and returns the status code and latency.
@@ -344,7 +375,10 @@ func (s *Service) testChannel(ctx context.Context, baseURL, apiKey, provider str
 	return response.StatusCode, body, latency, nil
 }
 
-// runHealthChecks tests channels according to the configured mode.
+// runHealthChecks tests channels according to the configured mode. Multi-key
+// channels are probed key by key, so a failed key is auto-disabled on its own
+// instead of taking the whole channel down; channels without channel_api_keys
+// rows fall back to the legacy api_key column and are handled as a whole.
 func (s *Service) runHealthChecks(ctx context.Context) {
 	settings := s.reliabilitySettings(ctx)
 	if settings.HealthCheckMode == "off" {
@@ -353,25 +387,27 @@ func (s *Service) runHealthChecks(ctx context.Context) {
 	var query string
 	var args []any
 	if settings.HealthCheckMode == "scheduled_all" {
-		// Scheduled full tests only probe channels not manually disabled.
-		query = `select id,base_url,api_key,provider from channels where enabled and not auto_disabled order by id`
+		// Scheduled full tests only probe channels not manually disabled and
+		// only their enabled keys.
+		query = `select c.id,c.base_url,c.provider,k.id,k.key_encrypted from channels c left join channel_api_keys k on k.channel_id=c.id and k.enabled where c.enabled and not c.auto_disabled order by c.id,k.priority,k.created_at`
 		if len(settings.parsedChannelIDs) > 0 {
 			ids := make([]string, 0, len(settings.parsedChannelIDs))
 			for id := range settings.parsedChannelIDs {
 				ids = append(ids, id)
 			}
-			query = `select id,base_url,api_key,provider from channels where enabled and not auto_disabled and id::text = any($1) order by id`
+			query = `select c.id,c.base_url,c.provider,k.id,k.key_encrypted from channels c left join channel_api_keys k on k.channel_id=c.id and k.enabled where c.enabled and not c.auto_disabled and c.id::text = any($1) order by c.id,k.priority,k.created_at`
 			args = append(args, ids)
 		}
 	} else {
-		// Passive recovery only checks channels auto-disabled by failed real requests.
-		query = `select id,base_url,api_key,provider from channels where not enabled and auto_disabled order by id`
+		// Passive recovery checks channels auto-disabled by failed real requests
+		// and individual keys auto-disabled while their channel stayed enabled.
+		query = `select c.id,c.base_url,c.provider,k.id,k.key_encrypted from channels c left join channel_api_keys k on k.channel_id=c.id where (not c.enabled and c.auto_disabled) or (c.enabled and k.enabled=false) order by c.id,k.priority,k.created_at`
 		if len(settings.parsedChannelIDs) > 0 {
 			ids := make([]string, 0, len(settings.parsedChannelIDs))
 			for id := range settings.parsedChannelIDs {
 				ids = append(ids, id)
 			}
-			query = `select id,base_url,api_key,provider from channels where not enabled and auto_disabled and id::text = any($1) order by id`
+			query = `select c.id,c.base_url,c.provider,k.id,k.key_encrypted from channels c left join channel_api_keys k on k.channel_id=c.id where ((not c.enabled and c.auto_disabled) or (c.enabled and k.enabled=false)) and c.id::text = any($1) order by c.id,k.priority,k.created_at`
 			args = append(args, ids)
 		}
 	}
@@ -380,38 +416,63 @@ func (s *Service) runHealthChecks(ctx context.Context) {
 		return
 	}
 	type target struct {
-		id, baseURL, encrypted, provider string
+		id, baseURL, provider, keyID, encrypted string
+		hasKey                                  bool
 	}
 	var targets []target
 	for rows.Next() {
 		var t target
-		if rows.Scan(&t.id, &t.baseURL, &t.encrypted, &t.provider) == nil {
+		var keyID, encrypted any
+		if rows.Scan(&t.id, &t.baseURL, &t.provider, &keyID, &encrypted) == nil {
+			t.hasKey = keyID != nil
+			if t.hasKey {
+				t.keyID = keyID.(string)
+				t.encrypted = encrypted.(string)
+			}
 			targets = append(targets, t)
 		}
 	}
 	rows.Close()
 	for _, t := range targets {
-		apiKey, err := channelKeyValue(s.cfg.EncryptionKey, t.encrypted)
+		var apiKey string
+		if t.hasKey {
+			apiKey, err = channelKeyValue(s.cfg.EncryptionKey, t.encrypted)
+		} else {
+			var legacy string
+			if qerr := s.db.QueryRow(ctx, `select api_key from channels where id=$1`, t.id).Scan(&legacy); qerr != nil {
+				continue
+			}
+			apiKey, err = channelKeyValue(s.cfg.EncryptionKey, legacy)
+		}
 		if err != nil {
 			continue
 		}
-	status, _, latency, testErr := s.testChannel(ctx, t.baseURL, apiKey, t.provider)
-	success := testErr == nil && status >= 200 && status < 300
+		status, _, latency, testErr := s.testChannel(ctx, t.baseURL, apiKey, t.provider)
+		success := testErr == nil && status >= 200 && status < 300
 		if success {
 			if settings.HealthCheckAutoRecover {
+				if t.hasKey {
+					_, _ = s.db.Exec(ctx, `update channel_api_keys set enabled=true,failure_count=0,last_error=null,last_checked_at=now() where id=$1 and channel_id=$2`, t.keyID, t.id)
+				}
 				_, _ = s.db.Exec(ctx, `update channels set enabled=true,auto_disabled=false,disabled_reason='',failure_count=0,cooldown_until=null,last_error=null,last_checked_at=now(),updated_at=now() where id=$1`, t.id)
+			} else if t.hasKey {
+				_, _ = s.db.Exec(ctx, `update channel_api_keys set last_checked_at=now() where id=$1`, t.keyID)
 			} else {
 				_, _ = s.db.Exec(ctx, `update channels set last_checked_at=now() where id=$1`, t.id)
 			}
 			continue
 		}
-		_, _ = s.db.Exec(ctx, `update channels set last_checked_at=now(),last_error=$2 where id=$1`, t.id, healthFailureReason(status, testErr))
+		reason := healthFailureReason(status, testErr)
+		if t.hasKey {
+			_, _ = s.db.Exec(ctx, `update channel_api_keys set last_checked_at=now(),last_error=$2 where id=$1 and channel_id=$3`, t.keyID, reason, t.id)
+		} else {
+			_, _ = s.db.Exec(ctx, `update channels set last_checked_at=now(),last_error=$2 where id=$1`, t.id, reason)
+		}
 		if settings.HealthCheckMode == "scheduled_all" && settings.AutoDisableOnTestFailure {
-			reason := healthFailureReason(status, testErr)
 			if settings.AutoDisableSlowSeconds > 0 && latency > time.Duration(settings.AutoDisableSlowSeconds)*time.Second {
 				reason = "health_check_slow_response"
 			}
-			s.autoDisableChannel(ctx, t.id, reason)
+			s.autoDisableChannel(ctx, t.id, t.keyID, reason)
 		}
 	}
 }

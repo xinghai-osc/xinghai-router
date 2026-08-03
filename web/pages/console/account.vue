@@ -41,6 +41,7 @@ const passwordError = ref('')
 
 const optIn = ref(false)
 const maskName = ref(false)
+const dataUsage = ref(true)
 
 // While must_change_password is set the backend only answers /account/me,
 // /account/password and /auth/logout — the other two cards would 403.
@@ -51,6 +52,7 @@ watch(account, (value) => {
   avatarUrl.value = value.avatar_url
   optIn.value = value.leaderboard_opt_in
   maskName.value = value.leaderboard_mask_name
+  dataUsage.value = value.data_usage_enabled
 }, { immediate: true })
 
 function pickAvatar() {
@@ -108,7 +110,7 @@ async function savePassword() {
 }
 
 async function savePreferences() {
-  const ok = await preferencesAction.run(() => endpoints.updateAccountPreferences(optIn.value, maskName.value))
+  const ok = await preferencesAction.run(() => endpoints.updateAccountPreferences(optIn.value, maskName.value, dataUsage.value))
   if (!ok) { toast.error(t('common.actionFailed')); return }
   toast.success(t('console.preferencesSaved'))
   await loadAccount(true)
@@ -223,6 +225,14 @@ async function savePreferences() {
       :class="locked && 'order-3'"
     >
       <div class="space-y-4">
+        <div class="flex items-start justify-between gap-4">
+          <div class="min-w-0">
+            <p class="text-sm text-ink">{{ t('console.dataUsageEnabled') }}</p>
+            <p class="text-[13px] text-muted">{{ t('console.dataUsageEnabledHint') }}</p>
+          </div>
+          <UiSwitch v-model="dataUsage" :label="t('console.dataUsageEnabled')" />
+        </div>
+
         <div class="flex items-start justify-between gap-4">
           <div class="min-w-0">
             <p class="text-sm text-ink">{{ t('console.leaderboardOptIn') }}</p>

@@ -433,12 +433,12 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 				if readErr == nil {
 					failDetail = failureReason + ": " + string(bodyPeek)
 					if reliability.autoDisableStatus(resp.StatusCode) || reliability.autoDisableKeyword(string(bodyPeek)) {
-						s.autoDisableChannel(ctx, ch.id, failureReason)
+						s.autoDisableChannel(ctx, ch.id, ch.keyID, failureReason)
 					}
 				}
 				resp = nil
 			}
-			s.channelFailed(ctx, ch.id, failureReason)
+			s.channelFailed(ctx, ch.id, ch.keyID, failureReason)
 		}
 	}
 	if resp == nil {
@@ -502,7 +502,7 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 			if !capture.wrote && !capture.headerSent {
 				writeError(w, status, "upstream_error", detail)
 			}
-			s.channelFailed(ctx, ch.id, code)
+			s.channelFailed(ctx, ch.id, ch.keyID, code)
 		} else {
 			s.logRequest(ctx, key, ch.id, ch.keyID, model, status, st.prompt, st.completion, total, time.Since(started), "", "")
 			if streamErr == nil {
@@ -512,7 +512,7 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 				s.settleUsage(ctx, key, reserved, model, st.prompt, st.cached, st.completion, pricing, groupMultiplier)
 				reserved = reservation{}
 			}
-			s.channelSucceeded(ctx, ch.id)
+			s.channelSucceeded(ctx, ch.id, ch.keyID)
 		}
 		// Only cache a stream that ran to completion. A stream interrupted by a
 		// client disconnect or an upstream error is partial output and useless for
@@ -526,13 +526,13 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 	if err != nil {
 		s.logRequest(ctx, key, ch.id, ch.keyID, model, 502, 0, 0, 0, time.Since(started), "upstream_read_error", err.Error())
 		writeError(w, 502, "upstream_error", "could not read upstream response")
-		s.channelFailed(ctx, ch.id, "upstream_read_error")
+		s.channelFailed(ctx, ch.id, ch.keyID, "upstream_read_error")
 		return
 	}
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 && resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusNotModified && len(responseBody) == 0 {
 		s.logRequest(ctx, key, ch.id, ch.keyID, model, 502, 0, 0, 0, time.Since(started), "empty_upstream_response", "upstream returned an empty response")
 		writeError(w, 502, "upstream_error", "upstream returned an empty response")
-		s.channelFailed(ctx, ch.id, "empty_upstream_response")
+		s.channelFailed(ctx, ch.id, ch.keyID, "empty_upstream_response")
 		return
 	}
 	if selectedFormat == "anthropic" && resp.StatusCode >= 200 && resp.StatusCode < 300 {
@@ -540,7 +540,7 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 		if err != nil {
 			s.logRequest(ctx, key, ch.id, ch.keyID, model, 502, 0, 0, 0, time.Since(started), "upstream_convert_error", err.Error())
 			writeError(w, 502, "upstream_error", "could not convert upstream response")
-			s.channelFailed(ctx, ch.id, "upstream_convert_error")
+			s.channelFailed(ctx, ch.id, ch.keyID, "upstream_convert_error")
 			return
 		}
 	}
@@ -560,7 +560,7 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 		if !subscriptionAccess {
 			reserved = s.settleUsage(ctx, key, reserved, model, prompt, cached, completion, pricing, groupMultiplier)
 		}
-		s.channelSucceeded(ctx, ch.id)
+		s.channelSucceeded(ctx, ch.id, ch.keyID)
 		if transform != nil {
 			responseBody, err = transform(responseBody)
 			if err != nil {
@@ -574,9 +574,9 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 		// auto-disable the channel, so a persistently broken upstream is retired.
 		failureReason := "upstream_status_" + strconv.Itoa(resp.StatusCode)
 		if reliability.autoDisableStatus(resp.StatusCode) || reliability.autoDisableKeyword(detail) {
-			s.autoDisableChannel(ctx, ch.id, failureReason)
+			s.autoDisableChannel(ctx, ch.id, ch.keyID, failureReason)
 		}
-		s.channelFailed(ctx, ch.id, failureReason)
+		s.channelFailed(ctx, ch.id, ch.keyID, failureReason)
 	}
 	w.Header().Set("Content-Type", contentType(resp.Header.Get("Content-Type")))
 	w.WriteHeader(resp.StatusCode)
@@ -848,20 +848,37 @@ func (s *Service) selectChannelKey(ctx context.Context, channelID, fallbackEncry
 // channelSucceeded clears failure bookkeeping in the background. The WHERE clause makes
 // the common case (an already-healthy channel checked recently) touch no rows, which
 // keeps a shared channel row from becoming a write hotspot under concurrent traffic.
-func (s *Service) channelSucceeded(ctx context.Context, id string) {
+func (s *Service) channelSucceeded(ctx context.Context, id, keyID string) {
 	s.background.submit(func(ctx context.Context) {
+		if keyID != "" {
+			_, _ = s.db.Exec(ctx, `update channel_api_keys set failure_count=0,last_error=null,last_checked_at=now() where id=$1 and channel_id=$2 and (failure_count<>0 or last_error is not null or last_checked_at is null or last_checked_at < now()-interval '30 seconds')`, keyID, id)
+		}
 		_, _ = s.db.Exec(ctx, `update channels set failure_count=0,cooldown_until=null,last_error=null,last_checked_at=now(),updated_at=now(),enabled=case when auto_disabled then true else enabled end,auto_disabled=case when auto_disabled then false else auto_disabled end,disabled_reason=case when auto_disabled then '' else disabled_reason end where id=$1 and (failure_count<>0 or cooldown_until is not null or last_error is not null or last_checked_at is null or last_checked_at < now()-interval '30 seconds')`, id)
 	})
 }
-func (s *Service) channelFailed(ctx context.Context, id, reason string) {
+
+// channelFailed counts a failure against the channel or, when the failing key is
+// known (multi-key channels), against that key. Three failures on the same key
+// trigger an out-of-request verification test of exactly that key.
+func (s *Service) channelFailed(ctx context.Context, channelID, keyID, reason string) {
+	if keyID != "" {
+		var failureCount int
+		err := s.db.QueryRow(ctx, `update channel_api_keys set failure_count=failure_count+1,last_error=$2,last_checked_at=now() where id=$1 and channel_id=$3 returning failure_count`, keyID, reason, channelID).Scan(&failureCount)
+		if err == nil && failureCount == 3 {
+			go s.testFailedChannelKey(channelID, keyID)
+		}
+		return
+	}
 	var failureCount int
-	err := s.db.QueryRow(ctx, `update channels set failure_count=failure_count+1,last_error=$2,last_checked_at=now(),updated_at=now() where id=$1 returning failure_count`, id, reason).Scan(&failureCount)
+	err := s.db.QueryRow(ctx, `update channels set failure_count=failure_count+1,last_error=$2,last_checked_at=now(),updated_at=now() where id=$1 returning failure_count`, channelID, reason).Scan(&failureCount)
 	if err == nil && failureCount == 3 {
-		go s.testFailedChannel(id)
+		go s.testFailedChannel(channelID)
 	}
 }
 
 // testFailedChannel verifies a newly unhealthy channel outside the client request.
+// Used for legacy channels without channel_api_keys rows; multi-key channels go
+// through testFailedChannelKey so only the failing key is retired.
 func (s *Service) testFailedChannel(id string) {
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.RequestTimeout)
 	defer cancel()
@@ -873,13 +890,38 @@ func (s *Service) testFailedChannel(id string) {
 	seed := sha256.Sum256([]byte(id + "test"))
 	apiKey, _, err := s.selectChannelKey(ctx, id, encrypted, seed[:])
 	if err != nil {
-		s.disableFailedChannel(ctx, id, "credential_decryption_failed")
+		s.disableFailedChannel(ctx, id, "", "credential_decryption_failed")
 		return
 	}
+	s.testFailedCredential(ctx, id, "", baseURL, apiKey, provider, upstreamFormat)
+}
+
+// testFailedChannelKey verifies a channel API key that failed repeatedly, so only
+// that key is auto-disabled when the upstream really rejects it.
+func (s *Service) testFailedChannelKey(channelID, keyID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.RequestTimeout)
+	defer cancel()
+	var baseURL, encrypted, provider, upstreamFormat string
+	var enabled, autoDisable bool
+	if err := s.db.QueryRow(ctx, `select c.base_url,k.key_encrypted,c.provider,c.upstream_format,c.enabled,ss.auto_disable_failed_channels from channels c join channel_api_keys k on k.channel_id=c.id cross join site_settings ss where c.id=$1 and k.id=$2 and ss.id=true`, channelID, keyID).Scan(&baseURL, &encrypted, &provider, &upstreamFormat, &enabled, &autoDisable); err != nil || !enabled || !autoDisable {
+		return
+	}
+	apiKey, err := channelKeyValue(s.cfg.EncryptionKey, encrypted)
+	if err != nil {
+		s.disableFailedChannel(ctx, channelID, keyID, "credential_decryption_failed")
+		return
+	}
+	s.testFailedCredential(ctx, channelID, keyID, baseURL, apiKey, provider, upstreamFormat)
+}
+
+// testFailedCredential probes a channel credential with GET /v1/models three
+// times. Success clears the failure bookkeeping for the channel or key; three
+// failed attempts auto-disable the credential.
+func (s *Service) testFailedCredential(ctx context.Context, channelID, keyID, baseURL, apiKey, provider, upstreamFormat string) {
 	for attempt := 0; attempt < 3; attempt++ {
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/v1/models", nil)
 		if err != nil {
-			s.disableFailedChannel(ctx, id, "invalid_test_request")
+			s.disableFailedChannel(ctx, channelID, keyID, "invalid_test_request")
 			return
 		}
 		if provider == "anthropic" || (provider == "custom" && upstreamFormat == "anthropic") {
@@ -892,22 +934,40 @@ func (s *Service) testFailedChannel(id string) {
 		if err == nil {
 			response.Body.Close()
 			if response.StatusCode >= 200 && response.StatusCode < 300 {
-				_, _ = s.db.Exec(ctx, `update channels set failure_count=0,cooldown_until=null,last_error=null,last_checked_at=now(),updated_at=now() where id=$1 and enabled`, id)
+				if keyID != "" {
+					_, _ = s.db.Exec(ctx, `update channel_api_keys set failure_count=0,last_error=null,last_checked_at=now() where id=$1 and channel_id=$2 and enabled`, keyID, channelID)
+				} else {
+					_, _ = s.db.Exec(ctx, `update channels set failure_count=0,cooldown_until=null,last_error=null,last_checked_at=now(),updated_at=now() where id=$1 and enabled`, channelID)
+				}
 				return
 			}
 		}
 	}
-	s.disableFailedChannel(ctx, id, "system_test_failed")
+	s.disableFailedChannel(ctx, channelID, keyID, "system_test_failed")
 }
 
-func (s *Service) disableFailedChannel(ctx context.Context, id, reason string) {
-	result, err := s.db.Exec(ctx, `update channels set enabled=false,auto_disabled=true,disabled_reason=$1,last_error=$1,last_checked_at=now(),updated_at=now() where id=$2 and enabled and auto_disable and failure_count>=3`, reason, id)
+// disableFailedChannel marks a channel or, when the failing key is known, just
+// that channel API key as automatically disabled after repeated failures.
+func (s *Service) disableFailedChannel(ctx context.Context, channelID, keyID, reason string) {
+	if keyID != "" {
+		result, err := s.db.Exec(ctx, `update channel_api_keys set enabled=false,failure_count=0,last_error=$1,last_checked_at=now() where id=$2 and channel_id=$3 and enabled and failure_count>=3 and exists(select 1 from channels c where c.id=channel_api_keys.channel_id and c.enabled and c.auto_disable)`, reason, keyID, channelID)
+		if err != nil || result.RowsAffected() != 1 {
+			return
+		}
+		s.syncChannelKeyType(ctx, channelID)
+		details, _ := json.Marshal(map[string]string{"reason": reason})
+		auditID, _ := randomID()
+		_, _ = s.db.Exec(ctx, `insert into audit_logs(id,action,actor,entity_type,entity_id,details,request_method,request_path) values($1,'channel_key.auto_disabled','system','channel_api_key',$2,$3,'SYSTEM','/system/channel-test')`, auditID, keyID, details)
+		s.disableChannelIfKeyless(ctx, channelID, reason)
+		return
+	}
+	result, err := s.db.Exec(ctx, `update channels set enabled=false,auto_disabled=true,disabled_reason=$1,last_error=$1,last_checked_at=now(),updated_at=now() where id=$2 and enabled and auto_disable and failure_count>=3`, reason, channelID)
 	if err != nil || result.RowsAffected() != 1 {
 		return
 	}
 	details, _ := json.Marshal(map[string]string{"reason": reason})
 	auditID, _ := randomID()
-	_, _ = s.db.Exec(ctx, `insert into audit_logs(id,action,actor,entity_type,entity_id,details,request_method,request_path) values($1,'channel.auto_disabled','system','channel',$2,$3,'SYSTEM','/system/channel-test')`, auditID, id, details)
+	_, _ = s.db.Exec(ctx, `insert into audit_logs(id,action,actor,entity_type,entity_id,details,request_method,request_path) values($1,'channel.auto_disabled','system','channel',$2,$3,'SYSTEM','/system/channel-test')`, auditID, channelID, details)
 }
 func retryableStatus(status int) bool {
 	settings := defaultReliabilitySettings()

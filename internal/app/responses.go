@@ -187,7 +187,7 @@ func responsesInputItem(item any) map[string]any {
 			return map[string]any{"role": validChatRole(role), "content": responsesContent(value["content"])}
 		case "function_call":
 			return map[string]any{
-				"role": "assistant",
+				"role":    "assistant",
 				"content": "",
 				"tool_calls": []any{map[string]any{
 					"id":       value["call_id"],
@@ -325,9 +325,9 @@ func chatCompletionsToResponses(body []byte, responseID string) ([]byte, error) 
 			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
 		Usage struct {
-			Prompt     int `json:"prompt_tokens"`
-			Completion int `json:"completion_tokens"`
-			Total      int `json:"total_tokens"`
+			Prompt              int `json:"prompt_tokens"`
+			Completion          int `json:"completion_tokens"`
+			Total               int `json:"total_tokens"`
 			PromptTokensDetails struct {
 				Cached int `json:"cached_tokens"`
 			} `json:"prompt_tokens_details"`
@@ -365,9 +365,9 @@ func chatCompletionsToResponses(body []byte, responseID string) ([]byte, error) 
 		status = "failed"
 	}
 	usage := map[string]any{
-		"input_tokens":  in.Usage.Prompt,
-		"output_tokens": in.Usage.Completion,
-		"total_tokens":  in.Usage.Prompt + in.Usage.Completion,
+		"input_tokens":          in.Usage.Prompt,
+		"output_tokens":         in.Usage.Completion,
+		"total_tokens":          in.Usage.Prompt + in.Usage.Completion,
 		"input_tokens_details":  map[string]any{"cached_tokens": in.Usage.PromptTokensDetails.Cached},
 		"output_tokens_details": map[string]any{"reasoning_tokens": 0},
 	}
@@ -410,23 +410,23 @@ func responseObject(id, model, status string, output []any, usage map[string]any
 // responsesStream converts an upstream SSE stream (OpenAI chat-completions
 // chunks or Anthropic events) into OpenAI Responses streaming events.
 type responsesStream struct {
-	responseID  string
-	model       string
-	output      []any
-	outputIndex int
-	msgItemID   string
-	textOutput  int
-	textBlock   int
-	textOpen    bool
-	msgText     strings.Builder
-	tools       map[int]*responsesTool
-	toolOrder   []int
-	status      string
-	inputTokens int
-	cached      int
+	responseID   string
+	model        string
+	output       []any
+	outputIndex  int
+	msgItemID    string
+	textOutput   int
+	textBlock    int
+	textOpen     bool
+	msgText      strings.Builder
+	tools        map[int]*responsesTool
+	toolOrder    []int
+	status       string
+	inputTokens  int
+	cached       int
 	outputTokens int
-	started     bool
-	finished    bool
+	started      bool
+	finished     bool
 }
 
 type responsesTool struct {
@@ -446,9 +446,9 @@ func (s *responsesStream) nextOutputIndex() int {
 
 func (s *responsesStream) object(status string) map[string]any {
 	usage := map[string]any{
-		"input_tokens":  s.inputTokens,
-		"output_tokens": s.outputTokens,
-		"total_tokens":  s.inputTokens + s.outputTokens,
+		"input_tokens":          s.inputTokens,
+		"output_tokens":         s.outputTokens,
+		"total_tokens":          s.inputTokens + s.outputTokens,
 		"input_tokens_details":  map[string]any{"cached_tokens": s.cached},
 		"output_tokens_details": map[string]any{"reasoning_tokens": 0},
 	}

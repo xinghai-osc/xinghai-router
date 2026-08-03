@@ -91,6 +91,8 @@ const form = reactive({
   auto_disable: true,
   upstream_path: '',
   upstream_format: '',
+  delete_fields: '',
+  set_fields: '',
 })
 
 const keysDialogOpen = ref(false)
@@ -209,6 +211,8 @@ function openCreate() {
   form.auto_disable = true
   form.upstream_path = ''
   form.upstream_format = ''
+  form.delete_fields = ''
+  form.set_fields = ''
   dialogOpen.value = true
 }
 
@@ -226,6 +230,9 @@ function openEdit(channel: Channel) {
   form.auto_disable = channel.auto_disable
   form.upstream_path = channel.upstream_path ?? ''
   form.upstream_format = channel.upstream_format ?? ''
+  form.delete_fields = (channel.request_overrides?.delete ?? []).join('\n')
+  const setFields = channel.request_overrides?.set ?? {}
+  form.set_fields = Object.keys(setFields).length ? JSON.stringify(setFields, null, 2) : ''
   dialogOpen.value = true
 }
 
@@ -245,6 +252,29 @@ function parseApiKeys(value: string): string[] {
     if (key) seen.add(key)
   }
   return [...seen]
+}
+
+function parseOverrideFields(value: string): string[] {
+  const seen = new Set<string>()
+  for (const entry of value.split(/[\n,]/)) {
+    const field = entry.trim()
+    if (field) seen.add(field)
+  }
+  return [...seen]
+}
+
+/** Returns null when the text is non-empty but not a JSON object. */
+function parseOverrideSet(value: string): Record<string, unknown> | null {
+  const trimmed = value.trim()
+  if (!trimmed) return {}
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(trimmed)
+  } catch {
+    return null
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null
+  return parsed as Record<string, unknown>
 }
 
 /** Mirrors the server rule: HTTP or HTTPS to any host, never a trailing /v1. */
@@ -310,6 +340,20 @@ async function save() {
     return
   }
 
+  const overrideFields = parseOverrideFields(form.delete_fields)
+  const overrideSet = parseOverrideSet(form.set_fields)
+  if (overrideSet === null) {
+    formError.value = t('admin.requestOverridesInvalid')
+    return
+  }
+  const overrideSetKeys = Object.keys(overrideSet)
+  if (overrideFields.length > 50 || overrideSetKeys.length > 50
+    || overrideFields.some(field => field.length > 100)
+    || overrideSetKeys.some(key => !key.trim() || key.length > 100)) {
+    formError.value = t('admin.requestOverridesInvalid')
+    return
+  }
+
   const payload: ChannelForm = {
     name,
     provider: form.provider,
@@ -320,6 +364,7 @@ async function save() {
     priority,
     groups: [...form.groups],
     auto_disable: form.auto_disable,
+    request_overrides: { delete: overrideFields, set: overrideSet },
   }
   if (form.provider === 'custom') {
     payload.upstream_path = form.upstream_path.trim()
@@ -792,6 +837,14 @@ function quotaUsageForWindow(window: string) {
 
         <UiField :label="t('admin.autoDisable')" :hint="t('admin.autoDisableHint')">
           <UiSwitch v-model="form.auto_disable" />
+        </UiField>
+
+        <UiField :label="t('admin.requestOverrideDelete')" :hint="t('admin.requestOverrideDeleteHint')">
+          <UiTextarea v-model="form.delete_fields" mono :rows="2" :placeholder="t('admin.requestOverrideDeletePlaceholder')" />
+        </UiField>
+
+        <UiField :label="t('admin.requestOverrideSet')" :hint="t('admin.requestOverrideSetHint')">
+          <UiTextarea v-model="form.set_fields" mono :rows="3" :placeholder="t('admin.requestOverrideSetPlaceholder')" />
         </UiField>
       </div>
 

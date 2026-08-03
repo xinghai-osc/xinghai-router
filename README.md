@@ -6,7 +6,7 @@
 
 - PostgreSQL migrations for users、哈希 API Key、加密渠道凭据、不可变钱包账本、用量、路由和审计记录。
 - 基于用户会话、管理员角色和细粒度权限保护的管理 API。
-- OpenAI-compatible `GET /v1/models`、`POST /v1/chat/completions`，以及 Anthropic-compatible `POST /v1/messages`。
+- OpenAI-compatible `GET /v1/models`、`POST /v1/chat/completions`、`POST /v1/responses`，以及 Anthropic-compatible `POST /v1/messages`。
 - 透明 SSE、上游超时、每 Key 每分钟基础限流、请求 ID、安全响应头、请求体大小限制、panic 恢复、模型别名和同优先级权重路由。
 - 对可重试上游错误自动切换备用渠道；连续失败三次的渠道冷却一分钟。管理员可在站点设置中开启故障渠道自动检测：系统会重试检测三次，全部失败后自动停用渠道。
 - “路由可靠性”分组支持独立的请求重试配置（重试次数 0-10、逗号分隔的状态码与包含性范围）、后台渠道健康检查（定时全量测试或仅被动恢复、可配置频率、渠道 ID 白名单、检查成功后自动恢复上线），以及自动禁用规则（测试失败禁用、慢响应秒数阈值、状态码和上游错误关键字匹配，关键字不区分大小写）。
@@ -245,6 +245,15 @@ curl -N http://localhost:8080/v1/messages \
   -H 'anthropic-version: 2023-06-01' \
   -H 'Content-Type: application/json' \
   -d '{"model":"kimi-k2.6","max_tokens":1024,"messages":[{"role":"user","content":"Hello"}],"stream":true}'
+```
+
+OpenAI Responses 客户端可调用 `/v1/responses`。`instructions`、字符串或数组形式的 `input`（含 `message`、`function_call`、`function_call_output` 条目）、`tools`、`tool_choice`、`max_output_tokens` 和 `text.format` 会转换为上游 Chat Completions 请求；非流式响应和 SSE 事件（`response.created`、`response.output_text.delta`、`response.function_call_arguments.delta`、`response.completed` 等）会转换回 Responses 格式：
+
+```sh
+curl -N http://localhost:8080/v1/responses \
+  -H "Authorization: Bearer $XINGHAI_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"kimi-k3-mini","input":"Hello","instructions":"Be brief","stream":true}'
 ```
 
 OpenCode 配置示例：
