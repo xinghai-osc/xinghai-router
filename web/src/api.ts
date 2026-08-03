@@ -5,7 +5,8 @@ export interface KeyQuotaUsage { window: string; requests: number; tokens: numbe
 export interface KeyQuota { limits: KeyQuotaLimit[]; usage: KeyQuotaUsage[] }
 export interface KeyQuotaForm { window: 'day' | 'month' | 'total'; max_requests?: number | null; max_tokens?: number | null; max_cost?: number | null }
 /** `groups` holds group ids, not names — resolve them through /admin/groups. */
-export interface Channel { id: string; name: string; base_url: string; provider: 'openai' | 'ollama' | 'kimi' | 'opencode_go' | 'anthropic' | 'custom'; models: string[]; enabled: boolean; auto_disabled: boolean; auto_disable: boolean; disabled_reason: string; priority: number; groups: string[]; key_type: 'single' | 'multi'; key_count: number; upstream_path: string; upstream_format: string; created_at: string; updated_at: string; model_routes: ModelRoute[] }
+export interface RequestOverrides { delete: string[]; set: Record<string, unknown> }
+export interface Channel { id: string; name: string; base_url: string; provider: 'openai' | 'ollama' | 'kimi' | 'opencode_go' | 'anthropic' | 'custom'; models: string[]; enabled: boolean; auto_disabled: boolean; auto_disable: boolean; disabled_reason: string; priority: number; groups: string[]; key_type: 'single' | 'multi'; key_count: number; upstream_path: string; upstream_format: string; request_overrides: RequestOverrides; created_at: string; updated_at: string; model_routes: ModelRoute[] }
 
 export interface ChannelKey { id: string; name: string; enabled: boolean; priority: number; last_checked_at: string | null; last_error: string | null; created_at: string }
 export interface ChannelKeyForm { name?: string; api_key: string; priority?: number }
@@ -32,7 +33,7 @@ export interface ModelRoute { id: string; public_model: string; upstream_model: 
 export interface ModelRouteForm { public_model: string; upstream_model: string; priority?: number; weight?: number; hidden?: boolean }
 export interface Group { id: string; name: string; multiplier: number; max_concurrency: number | null; public: boolean; created_at: string }
 export interface RequestLog { request_id: string; user_id: string | null; user_name: string; api_key_id: string | null; key_name: string; channel_id: string | null; channel_name: string; channel_key_id: string | null; channel_key_name: string; group_id: string | null; group_name: string; model: string; status_code: number; prompt_tokens: number | null; completion_tokens: number | null; total_tokens: number | null; duration_ms: number; error_code: string | null; error_detail: string; client_ip: string; user_agent: string; created_at: string }
-export interface Account { id: string; email: string; name: string; role: string; avatar_url: string; permissions: string[]; balance: number; reserved: number; leaderboard_opt_in: boolean; leaderboard_mask_name: boolean; must_change_password?: boolean }
+export interface Account { id: string; email: string; name: string; role: string; avatar_url: string; permissions: string[]; balance: number; reserved: number; leaderboard_opt_in: boolean; leaderboard_mask_name: boolean; data_usage_enabled: boolean; must_change_password?: boolean }
 export interface Pricing { id: string; model: string; input_per_million: number; cached_input_per_million: number; output_per_million: number; multiplier: number; enabled: boolean; updated_at: string }
 export interface PricingTier { id: string; model: string; from_tokens: number; input_per_million: number; cached_input_per_million: number; output_per_million: number; created_at: string }
 export interface PricingTierForm { id?: string; model: string; from_tokens: number; input_per_million: number; cached_input_per_million: number; output_per_million: number }
@@ -327,7 +328,7 @@ export interface LoginBody { email: string; password: string; code?: string; cap
 export interface RegisterBody { name: string; email: string; password: string; code?: string; captcha_id?: string; lot_number?: string; captcha_output?: string; pass_token?: string; gen_time?: string }
 export interface KeyForm { user_id?: string; name: string; expires_at: string; group_id: string }
 export interface AccountKeyForm { name: string; expires_at: string; group_id: string }
-export interface ChannelForm { name: string; provider: string; base_url: string; key_type: 'single' | 'multi'; api_keys: string; models: string[]; priority: number; groups: string[]; upstream_path?: string; upstream_format?: string; model_routes?: ModelRouteForm[]; auto_disable: boolean }
+export interface ChannelForm { name: string; provider: string; base_url: string; key_type: 'single' | 'multi'; api_keys: string; models: string[]; priority: number; groups: string[]; upstream_path?: string; upstream_format?: string; model_routes?: ModelRouteForm[]; auto_disable: boolean; request_overrides?: RequestOverrides }
 export interface ProviderForm { name: string; slug: string; prefixes: string[]; priority: number; id?: string }
 export interface PaymentSettingsForm { enabled: boolean; base_url: string; merchant_id: string; merchant_key: string; public_base_url: string }
 export interface PaymentMethodForm { code: string; name: string; enabled: boolean }
@@ -380,7 +381,7 @@ export const endpoints = {
   updateAccountProfile: (avatarUrl: string) => send('/account/profile', 'PUT', { avatar_url: avatarUrl }),
   changeAccountPassword: (currentPassword: string, newPassword: string) => send('/account/password', 'PUT', { current_password: currentPassword, new_password: newPassword }),
   revokeAccountKey: (id: string) => send(`/account/keys/${encodeURIComponent(id)}/revoke`, 'POST'),
-  updateAccountPreferences: (leaderboardOptIn: boolean, leaderboardMaskName: boolean) => send('/account/preferences', 'PUT', { leaderboard_opt_in: leaderboardOptIn, leaderboard_mask_name: leaderboardMaskName }),
+  updateAccountPreferences: (leaderboardOptIn: boolean, leaderboardMaskName: boolean, dataUsageEnabled: boolean) => send('/account/preferences', 'PUT', { leaderboard_opt_in: leaderboardOptIn, leaderboard_mask_name: leaderboardMaskName, data_usage_enabled: dataUsageEnabled }),
   createAccountKey: (form: AccountKeyForm) => post<{ key: string }>('/account/keys', form),
   updateAccountKey: (id: string, form: AccountKeyForm) => send(`/account/keys/${encodeURIComponent(id)}`, 'PUT', form),
   revealAccountKey: (id: string) => get<{ key: string }>(`/account/keys/${encodeURIComponent(id)}/secret`),

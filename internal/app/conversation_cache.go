@@ -5,6 +5,10 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 )
 
@@ -12,7 +16,24 @@ type conversationCacheSettings struct {
 	Enabled bool `json:"conversation_cache_enabled"`
 }
 
-const conversationCacheRetentionSQL = "24 hours"
+// conversationFile is the on-disk JSON shape of one cached conversation.
+type conversationFile struct {
+	ID           string          `json:"id"`
+	RequestID    string          `json:"request_id"`
+	UserID       string          `json:"user_id"`
+	APIKeyID     string          `json:"api_key_id"`
+	Model        string          `json:"model"`
+	StatusCode   int             `json:"status_code"`
+	Stream       bool            `json:"stream"`
+	DurationMS   int64           `json:"duration_ms"`
+	CreatedAt    time.Time       `json:"created_at"`
+	RequestBody  json.RawMessage `json:"request_body"`
+	ResponseBody json.RawMessage `json:"response_body"`
+}
+
+func (s *Service) conversationCacheDir() string {
+	return s.cfg.ConversationCacheDir
+}
 
 func (s *Service) conversationCacheSettings(ctx context.Context) conversationCacheSettings {
 	if s.conversationCacheData != nil {
@@ -64,7 +85,7 @@ func (s *Service) updateConversationCacheSettings(w http.ResponseWriter, r *http
 
 func (s *Service) storeConversationCache(ctx context.Context, key keyContext, model string, stream bool, request, response []byte, statusCode int, durationMs int64) {
 	settings := s.conversationCacheSettings(ctx)
-	if !settings.Enabled {
+	if !settings.Enabled || !key.dataUsageEnabled {
 		return
 	}
 	if len(request) == 0 {
@@ -73,27 +94,57 @@ func (s *Service) storeConversationCache(ctx context.Context, key keyContext, mo
 	var reqJSON, respJSON json.RawMessage
 	if json.Valid(request) {
 		reqJSON = json.RawMessage(request)
-	} else {
-		reqJSON = json.RawMessage("null")
+	} else if len(request) > 0 {
+		reqJSON, _ = json.Marshal(string(request))
 	}
-	if len(response) > 0 && json.Valid(response) {
+	if json.Valid(response) {
 		respJSON = json.RawMessage(response)
+	} else if len(response) > 0 {
+		respJSON, _ = json.Marshal(string(response))
 	}
-	id, _ := randomID()
-	cacheCtx, cancel := detach(ctx, settlementTimeout)
-	defer cancel()
-	_, err := s.db.Exec(cacheCtx, `insert into conversation_cache(id,request_id,user_id,api_key_id,model,status_code,stream,request_body,response_body,duration_ms) values($1,$2,nullif($3,'')::bigint,$4::uuid,$5,$6,$7,$8,$9,$10)`,
-		id, requestID(ctx), key.userID, nullIfEmpty(key.keyID), model, statusCode, stream, []byte(reqJSON), []byte(respJSON), durationMs)
-	if err != nil {
-		log.Printf("conversation cache insert: %v", err)
+	entry := conversationFile{
+		ID:           randomIDString(),
+		RequestID:    requestID(ctx),
+		UserID:       key.userID,
+		APIKeyID:     key.keyID,
+		Model:        model,
+		StatusCode:   statusCode,
+		Stream:       stream,
+		DurationMS:   durationMs,
+		CreatedAt:    time.Now(),
+		RequestBody:  reqJSON,
+		ResponseBody: respJSON,
 	}
+	go func() {
+		if err := writeConversationFile(s.cfg.ConversationCacheDir, entry); err != nil {
+			log.Printf("conversation cache write: %v", err)
+		}
+	}()
 }
 
-func nullIfEmpty(s string) string {
-	if s == "" {
-		return ""
+func randomIDString() string {
+	id, _ := randomID()
+	if id == "" {
+		return time.Now().Format("20060102150405.999999999")
 	}
-	return s
+	return id
+}
+
+func writeConversationFile(dir string, entry conversationFile) error {
+	sub := filepath.Join(dir, entry.CreatedAt.Format("2006-01-02"))
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		return err
+	}
+	data, err := json.Marshal(entry)
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(sub, entry.ID+".json")
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 func (s *Service) listConversationCache(w http.ResponseWriter, r *http.Request) {
@@ -106,51 +157,50 @@ func (s *Service) listConversationCache(w http.ResponseWriter, r *http.Request) 
 	if pageSize < 1 || pageSize > 200 {
 		pageSize = 50
 	}
-	where := "where 1=1"
-	args := []any{}
-	idx := 1
-	if v := q.Get("user_id"); v != "" {
-		where += " and user_id::text = $" + itoa(idx)
-		args = append(args, v)
-		idx++
-	}
-	if v := q.Get("model"); v != "" {
-		where += " and model = $" + itoa(idx)
-		args = append(args, v)
-		idx++
-	}
+	userFilter := strings.TrimSpace(q.Get("user_id"))
+	modelFilter := strings.TrimSpace(q.Get("model"))
+	var start, end time.Time
 	if v := q.Get("start"); v != "" {
-		where += " and created_at >= $" + itoa(idx)
-		args = append(args, v)
-		idx++
+		start, _ = time.Parse(time.RFC3339, v)
 	}
 	if v := q.Get("end"); v != "" {
-		where += " and created_at < $" + itoa(idx)
-		args = append(args, v)
-		idx++
+		end, _ = time.Parse(time.RFC3339, v)
 	}
-	var total int
-	countErr := s.db.QueryRow(r.Context(), `select count(*) from conversation_cache `+where, args...).Scan(&total)
-	if countErr != nil {
-		total = 0
-	}
-	offset := (page - 1) * pageSize
-	queryArgs := append(args, pageSize, offset)
-	rows, err := s.db.Query(r.Context(), `select id,request_id,coalesce(user_id::text,''),coalesce(api_key_id::text,''),model,status_code,stream,duration_ms,created_at from conversation_cache `+where+` order by created_at desc limit $`+itoa(idx)+` offset $`+itoa(idx+1), queryArgs...)
+	entries, err := readConversationFiles(s.conversationCacheDir(), time.Now())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not read conversation cache")
 		return
 	}
-	defer rows.Close()
-	data := []map[string]any{}
-	for rows.Next() {
-		var id, requestID, userID, apiKeyID, model string
-		var statusCode, durationMs int
-		var stream bool
-		var createdAt any
-		if rows.Scan(&id, &requestID, &userID, &apiKeyID, &model, &statusCode, &stream, &durationMs, &createdAt) == nil {
-			data = append(data, map[string]any{"id": id, "request_id": requestID, "user_id": userID, "api_key_id": apiKeyID, "model": model, "status_code": statusCode, "stream": stream, "duration_ms": durationMs, "created_at": createdAt})
+	filtered := entries[:0]
+	for _, e := range entries {
+		if userFilter != "" && e.UserID != userFilter {
+			continue
 		}
+		if modelFilter != "" && e.Model != modelFilter {
+			continue
+		}
+		if !start.IsZero() && e.CreatedAt.Before(start) {
+			continue
+		}
+		if !end.IsZero() && !e.CreatedAt.Before(end) {
+			continue
+		}
+		filtered = append(filtered, e)
+	}
+	sort.Slice(filtered, func(i, j int) bool { return filtered[i].CreatedAt.After(filtered[j].CreatedAt) })
+	total := len(filtered)
+	offset := (page - 1) * pageSize
+	limit := pageSize
+	if offset >= total {
+		filtered = nil
+	} else if offset+limit > total {
+		filtered = filtered[offset:]
+	} else {
+		filtered = filtered[offset : offset+limit]
+	}
+	data := make([]map[string]any, 0, len(filtered))
+	for _, e := range filtered {
+		data = append(data, conversationSummary(e))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": data, "total": total, "page": page, "page_size": pageSize})
 }
@@ -161,55 +211,88 @@ func (s *Service) getConversationCacheDetail(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusBadRequest, "invalid_request", "id is required")
 		return
 	}
-	var requestID, userID, apiKeyID, model string
-	var statusCode, durationMs int
-	var stream bool
-	var requestBody, responseBody []byte
-	var createdAt any
-	err := s.db.QueryRow(r.Context(), `select request_id,coalesce(user_id::text,''),coalesce(api_key_id::text,''),model,status_code,stream,duration_ms,request_body,coalesce(response_body,'[]'::jsonb),created_at from conversation_cache where id=$1`, id).Scan(&requestID, &userID, &apiKeyID, &model, &statusCode, &stream, &durationMs, &requestBody, &responseBody, &createdAt)
+	entry, err := findConversationFile(s.conversationCacheDir(), id)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "not_found", "conversation not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"id": id, "request_id": requestID, "user_id": userID, "api_key_id": apiKeyID, "model": model, "status_code": statusCode, "stream": stream, "duration_ms": durationMs, "request_body": json.RawMessage(requestBody), "response_body": json.RawMessage(responseBody), "created_at": createdAt})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id":            entry.ID,
+		"request_id":    entry.RequestID,
+		"user_id":       entry.UserID,
+		"api_key_id":    entry.APIKeyID,
+		"model":         entry.Model,
+		"status_code":   entry.StatusCode,
+		"stream":        entry.Stream,
+		"duration_ms":   entry.DurationMS,
+		"request_body":  json.RawMessage(entry.RequestBody),
+		"response_body": json.RawMessage(entry.ResponseBody),
+		"created_at":    entry.CreatedAt,
+	})
 }
 
-func atoiOrDefault(s string, fallback int) int {
-	n := 0
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			return fallback
+// readConversationFiles walks the cache directory and returns every record that
+// is still within the retention window (today plus the immediately preceding day,
+// so deletions at midnight never race an in-flight write).
+func readConversationFiles(dir string, today time.Time) ([]conversationFile, error) {
+	var entries []conversationFile
+	dayDirs, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
 		}
-		n = n*10 + int(c-'0')
+		return nil, err
 	}
-	if s == "" {
-		return fallback
+	keep := map[string]bool{}
+	for offset := -2; offset <= 0; offset++ {
+		keep[today.AddDate(0, 0, offset).Format("2006-01-02")] = true
 	}
-	return n
+	for _, day := range dayDirs {
+		if !day.IsDir() || !keep[day.Name()] {
+			continue
+		}
+		files, err := os.ReadDir(filepath.Join(dir, day.Name()))
+		if err != nil {
+			continue
+		}
+		for _, f := range files {
+			if f.IsDir() || !strings.HasSuffix(f.Name(), ".json") {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(dir, day.Name(), f.Name()))
+			if err != nil {
+				continue
+			}
+			var e conversationFile
+			if json.Unmarshal(data, &e) == nil {
+				entries = append(entries, e)
+			}
+		}
+	}
+	return entries, nil
 }
 
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
+func findConversationFile(dir, id string) (conversationFile, error) {
+	var zero conversationFile
+	today := time.Now()
+	var lastErr error
+	for offset := 0; offset >= -2; offset-- {
+		dayDir := filepath.Join(dir, today.AddDate(0, 0, offset).Format("2006-01-02"))
+		data, err := os.ReadFile(filepath.Join(dayDir, id+".json"))
+		if err == nil {
+			var e conversationFile
+			if json.Unmarshal(data, &e) == nil {
+				return e, nil
+			}
+			return zero, err
+		}
+		lastErr = err
 	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		buf[i] = '-'
-	}
-	return string(buf[i:])
+	return zero, lastErr
 }
 
+// startConversationCacheCleanup deletes day directories that have aged past the
+// retention window, scheduled to run at midnight.
 func (s *Service) startConversationCacheCleanup(ctx context.Context) {
 	go func() {
 		for {
@@ -228,15 +311,63 @@ func (s *Service) startConversationCacheCleanup(ctx context.Context) {
 }
 
 func (s *Service) cleanupConversationCache(ctx context.Context) {
-	if s.db == nil {
+	dir := s.conversationCacheDir()
+	if dir == "" {
 		return
 	}
-	tag, err := s.db.Exec(ctx, `delete from conversation_cache where created_at < now() - $1::interval`, conversationCacheRetentionSQL)
+	today := time.Now()
+	var removed int64
+	dayDirs, err := os.ReadDir(dir)
 	if err != nil {
-		log.Printf("conversation cache cleanup: %v", err)
+		if !os.IsNotExist(err) {
+			log.Printf("conversation cache cleanup: %v", err)
+		}
 		return
 	}
-	if n := tag.RowsAffected(); n > 0 {
-		log.Printf("conversation cache cleanup: removed %d rows older than %s", n, conversationCacheRetentionSQL)
+	for _, day := range dayDirs {
+		if !day.IsDir() {
+			continue
+		}
+		when, err := time.Parse("2006-01-02", day.Name())
+		if err != nil || when.AddDate(0, 0, 1).Before(today) {
+			// Directory is unparseable or older than one full day: remove it.
+			full := filepath.Join(dir, day.Name())
+			os.RemoveAll(full)
+			removed++
+		}
 	}
+	if removed > 0 {
+		log.Printf("conversation cache cleanup: removed %d stale day directories in %s", removed, dir)
+	}
+}
+
+// conversationEntry is used both for disk persistence and for in-memory scans.
+type conversationEntry = conversationFile
+
+func conversationSummary(e conversationEntry) map[string]any {
+	return map[string]any{
+		"id":          e.ID,
+		"request_id":  e.RequestID,
+		"user_id":     e.UserID,
+		"api_key_id":  e.APIKeyID,
+		"model":       e.Model,
+		"status_code": e.StatusCode,
+		"stream":      e.Stream,
+		"duration_ms": e.DurationMS,
+		"created_at":  e.CreatedAt,
+	}
+}
+
+func atoiOrDefault(s string, fallback int) int {
+	n := 0
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return fallback
+		}
+		n = n*10 + int(c-'0')
+	}
+	if s == "" {
+		return fallback
+	}
+	return n
 }

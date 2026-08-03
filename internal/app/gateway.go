@@ -30,12 +30,138 @@ type channel struct {
 	id, baseURL, apiKey, keyID, upstreamModel, provider string
 	upstreamPath, upstreamFormat                        string
 	priority, weight                                    int
+	overrides                                           channelRequestOverrides
+}
+
+// channelRequestOverrides configures per-channel edits applied to the upstream
+// request body after every built-in rewrite: Delete removes top-level fields,
+// Set overwrites top-level fields with the configured value.
+type channelRequestOverrides struct {
+	Delete []string        `json:"delete"`
+	Set    map[string]any  `json:"set"`
+}
+
+const (
+	maxRequestOverrideFields = 50
+	maxRequestOverrideKeyLen = 100
+)
+
+// validRequestOverrides checks field names and sizes so a misconfigured channel
+// cannot wedge the gateway hot path or smuggle oversized payloads upstream.
+func validRequestOverrides(ov *channelRequestOverrides) error {
+	if ov == nil {
+		return nil
+	}
+	if len(ov.Delete) > maxRequestOverrideFields || len(ov.Set) > maxRequestOverrideFields {
+		return fmt.Errorf("at most %d delete and %d set fields are allowed", maxRequestOverrideFields, maxRequestOverrideFields)
+	}
+	seen := map[string]bool{}
+	for _, field := range ov.Delete {
+		field = strings.TrimSpace(field)
+		if field == "" || len(field) > maxRequestOverrideKeyLen || seen[field] {
+			return fmt.Errorf("delete fields must be unique, non-empty, and at most %d characters", maxRequestOverrideKeyLen)
+		}
+		seen[field] = true
+	}
+	for key := range ov.Set {
+		key = strings.TrimSpace(key)
+		if key == "" || len(key) > maxRequestOverrideKeyLen {
+			return fmt.Errorf("set field names must be non-empty and at most %d characters", maxRequestOverrideKeyLen)
+		}
+	}
+	return nil
+}
+
+// normalizedOverrides trims whitespace from delete fields and set keys so the
+// stored configuration matches exactly what the gateway applies.
+func normalizedOverrides(ov *channelRequestOverrides) channelRequestOverrides {
+	if ov == nil {
+		return channelRequestOverrides{Set: map[string]any{}}
+	}
+	out := channelRequestOverrides{Set: map[string]any{}}
+	for _, field := range ov.Delete {
+		if field = strings.TrimSpace(field); field != "" {
+			out.Delete = append(out.Delete, field)
+		}
+	}
+	for key, value := range ov.Set {
+		if key = strings.TrimSpace(key); key != "" {
+			out.Set[key] = value
+		}
+	}
+	return out
+}
+
+// applyRequestOverrides edits a request body according to the channel's
+// overrides: configured fields are deleted, then configured values are set.
+// Non-JSON bodies and unknown keys pass through untouched.
+func applyRequestOverrides(body []byte, ov channelRequestOverrides) []byte {
+	if len(ov.Delete) == 0 && len(ov.Set) == 0 {
+		return body
+	}
+	var payload map[string]any
+	if json.Unmarshal(body, &payload) != nil {
+		return body
+	}
+	changed := false
+	for _, key := range ov.Delete {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		if _, ok := payload[key]; ok {
+			delete(payload, key)
+			changed = true
+		}
+	}
+	for key, value := range ov.Set {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		payload[key] = value
+		changed = true
+	}
+	if !changed {
+		return body
+	}
+	out, err := json.Marshal(payload)
+	if err != nil {
+		return body
+	}
+	return out
 }
 
 type reservation struct{ amount float64 }
 
 func validGatewayMaxTokens(maxTokens int) bool {
 	return maxTokens > 0 && maxTokens <= maxGatewayMaxTokens
+}
+
+// stripGatewayExtensions removes router-reserved extension fields from a
+// request body before it is forwarded to an upstream. Clients may add these
+// fields for gateway-local behavior (e.g. prompt caching), but strict
+// OpenAI-compatible upstreams reject unknown fields with a 400.
+func stripGatewayExtensions(body []byte) []byte {
+	var payload map[string]any
+	if json.Unmarshal(body, &payload) != nil {
+		return body
+	}
+	changed := false
+	for _, key := range []string{"promptCacheKey"} {
+		if _, ok := payload[key]; ok {
+			delete(payload, key)
+			changed = true
+		}
+	}
+	if !changed {
+		return body
+	}
+	stripped, err := json.Marshal(payload)
+	if err != nil {
+		return body
+	}
+	return stripped
 }
 
 func resolveGatewayMaxTokens(maxTokens int) (int, bool) {
@@ -245,7 +371,7 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 				}
 			}
 			upstreamURL := ch.baseURL + upstreamPath
-			upstreamBody := body
+			upstreamBody := stripGatewayExtensions(body)
 			if stream && upstreamFormat != "anthropic" {
 				var payload map[string]any
 				if json.Unmarshal(upstreamBody, &payload) == nil {
@@ -275,6 +401,9 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 				}
 				prefill = prefillText
 			}
+			// Channel-configured deletes/overrides apply last, after every built-in
+			// rewrite, so the admin's configuration is authoritative.
+			upstreamBody = applyRequestOverrides(upstreamBody, ch.overrides)
 			upstreamReq, requestErr := http.NewRequestWithContext(r.Context(), http.MethodPost, upstreamURL, bytes.NewReader(upstreamBody))
 			if requestErr != nil {
 				continue
@@ -328,27 +457,68 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 	}
 	if stream && resp.StatusCode >= 200 && resp.StatusCode < 300 && strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
 		var st streamStats
-		var capture *streamCaptureWriter
-		if s.conversationCacheSettings(ctx).Enabled {
-			capture = newStreamCaptureWriter(w)
-			w = capture
-		}
-		if selectedFormat == "anthropic" && streamFn == nil {
-			st, _ = streamAnthropicToOpenAI(w, resp, prefill)
-		} else if streamFn != nil && selectedFormat != "anthropic" {
-			st, _ = streamFn(w, resp)
+		cacheEnabled := s.conversationCacheSettings(ctx).Enabled
+		capture := newStreamCaptureWriter(w, cacheEnabled)
+		w = capture
+		var streamErr error
+		if streamFn != nil {
+			// streamFn is format-aware: it converts whatever the upstream actually
+			// speaks (chat-completions chunks or Anthropic events) into the client
+			// format. For Anthropic-to-Anthropic streams it falls back to relaying
+			// the events verbatim.
+			st, streamErr = streamFn(w, resp)
+		} else if selectedFormat == "anthropic" {
+			st, streamErr = streamAnthropicToOpenAI(w, resp, prefill)
 		} else {
-			st, _ = s.streamResponse(w, resp)
+			st, streamErr = s.streamResponse(w, resp)
 		}
 		total := st.prompt + st.completion
-		s.logRequest(ctx, key, ch.id, ch.keyID, model, resp.StatusCode, st.prompt, st.completion, total, time.Since(started), "", "")
-		if !subscriptionAccess && (st.prompt > 0 || st.completion > 0) {
-			s.settleUsage(ctx, key, reserved, model, st.prompt, st.cached, st.completion, pricing, groupMultiplier)
-			reserved = reservation{}
+		status := resp.StatusCode
+		if st.cached == 0 {
+			// The upstream did not serve this prompt from its cache. Fall back to the
+			// local prefix cache so overlapping prompts are billed at the cached rate
+			// instead of paying full input price every time.
+			st.cached = int(s.promptCache.cached(model, normalizedPrompt(body), int64(st.prompt)))
 		}
-		s.channelSucceeded(ctx, ch.id)
-		if capture != nil {
-			s.storeConversationCache(ctx, key, model, true, body, capture.bytes(), resp.StatusCode, time.Since(started).Milliseconds())
+		code, detail := "", ""
+		switch {
+		case streamErr != nil && !capture.wrote && !capture.headerSent:
+			// The stream failed before emitting anything: hand the client a clean error.
+			code, detail = "upstream_stream_error", streamErr.Error()
+		case !capture.wrote && !capture.headerSent:
+			// The upstream accepted a 2xx streaming request but never sent a single byte.
+			// Relaying that as an empty 200 confuses clients, so convert it into a 502.
+			code, detail = "empty_upstream_response", "upstream returned an empty streaming response"
+		case streamErr != nil:
+			// Headers were already sent; the client saw a partial stream. Record the
+			// failure but keep the original status because it is already dispatching.
+			code, detail = "upstream_stream_error", streamErr.Error()
+		}
+		if code != "" {
+			if !capture.wrote && !capture.headerSent {
+				status = 502
+			}
+			s.logRequest(ctx, key, ch.id, ch.keyID, model, status, st.prompt, st.completion, total, time.Since(started), code, detail)
+			if !capture.wrote && !capture.headerSent {
+				writeError(w, status, "upstream_error", detail)
+			}
+			s.channelFailed(ctx, ch.id, code)
+		} else {
+			s.logRequest(ctx, key, ch.id, ch.keyID, model, status, st.prompt, st.completion, total, time.Since(started), "", "")
+			if streamErr == nil {
+				s.promptCache.store(model, normalizedPrompt(body), int64(st.prompt))
+			}
+			if !subscriptionAccess && (st.prompt > 0 || st.completion > 0) {
+				s.settleUsage(ctx, key, reserved, model, st.prompt, st.cached, st.completion, pricing, groupMultiplier)
+				reserved = reservation{}
+			}
+			s.channelSucceeded(ctx, ch.id)
+		}
+		// Only cache a stream that ran to completion. A stream interrupted by a
+		// client disconnect or an upstream error is partial output and useless for
+		// offline analysis, plus dropping it avoids recording half-sent turns.
+		if cacheEnabled && streamErr == nil {
+			s.storeConversationCache(ctx, key, model, true, body, capture.bytes(), status, time.Since(started).Milliseconds())
 		}
 		return
 	}
@@ -356,6 +526,13 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 	if err != nil {
 		s.logRequest(ctx, key, ch.id, ch.keyID, model, 502, 0, 0, 0, time.Since(started), "upstream_read_error", err.Error())
 		writeError(w, 502, "upstream_error", "could not read upstream response")
+		s.channelFailed(ctx, ch.id, "upstream_read_error")
+		return
+	}
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 && resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusNotModified && len(responseBody) == 0 {
+		s.logRequest(ctx, key, ch.id, ch.keyID, model, 502, 0, 0, 0, time.Since(started), "empty_upstream_response", "upstream returned an empty response")
+		writeError(w, 502, "upstream_error", "upstream returned an empty response")
+		s.channelFailed(ctx, ch.id, "empty_upstream_response")
 		return
 	}
 	if selectedFormat == "anthropic" && resp.StatusCode >= 200 && resp.StatusCode < 300 {
@@ -363,16 +540,23 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 		if err != nil {
 			s.logRequest(ctx, key, ch.id, ch.keyID, model, 502, 0, 0, 0, time.Since(started), "upstream_convert_error", err.Error())
 			writeError(w, 502, "upstream_error", "could not convert upstream response")
+			s.channelFailed(ctx, ch.id, "upstream_convert_error")
 			return
 		}
 	}
 	prompt, completion, total, cached := usage(responseBody)
+	if cached == 0 {
+		// Same accounting assist as the streaming path: an upstream cache miss does
+		// not mean the prompt prefixes were never seen here before.
+		cached = int(s.promptCache.cached(model, normalizedPrompt(body), int64(prompt)))
+	}
 	detail := ""
 	if resp.StatusCode >= 400 {
 		detail = string(responseBody)
 	}
 	s.logRequest(ctx, key, ch.id, ch.keyID, model, resp.StatusCode, prompt, completion, total, time.Since(started), errorCode(resp.StatusCode), detail)
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		s.promptCache.store(model, normalizedPrompt(body), int64(prompt))
 		if !subscriptionAccess {
 			reserved = s.settleUsage(ctx, key, reserved, model, prompt, cached, completion, pricing, groupMultiplier)
 		}
@@ -385,6 +569,14 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 				return
 			}
 		}
+	} else if resp.StatusCode >= 400 {
+		// Mirror the streaming path: real-request failures are counted and can
+		// auto-disable the channel, so a persistently broken upstream is retired.
+		failureReason := "upstream_status_" + strconv.Itoa(resp.StatusCode)
+		if reliability.autoDisableStatus(resp.StatusCode) || reliability.autoDisableKeyword(detail) {
+			s.autoDisableChannel(ctx, ch.id, failureReason)
+		}
+		s.channelFailed(ctx, ch.id, failureReason)
 	}
 	w.Header().Set("Content-Type", contentType(resp.Header.Get("Content-Type")))
 	w.WriteHeader(resp.StatusCode)
@@ -555,7 +747,7 @@ func (s *Service) checkQuota(ctx context.Context, key keyContext, model string) 
 	return rows.Err()
 }
 func (s *Service) channelsForModel(ctx context.Context, key keyContext, model string) ([]channel, error) {
-	rows, err := s.db.Query(ctx, `select c.id,c.base_url,c.api_key,coalesce(m.priority,c.priority),coalesce(m.weight,c.weight),coalesce(m.upstream_model,''),c.provider,c.upstream_path,c.upstream_format from channels c left join model_routes m on m.channel_id=c.id and m.public_model=$1 and m.enabled where (c.enabled or c.auto_disabled) and (c.models ? $1 or m.public_model is not null) and (not exists(select 1 from channel_groups cg where cg.channel_id=c.id) or exists(select 1 from channel_groups cg join groups g on g.id=cg.group_id where cg.channel_id=c.id and g."public") or ($3<>'' and exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($3,'')::uuid)) or ($3='' and exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$2))) order by (c.enabled and not c.auto_disabled) desc, coalesce(m.priority,c.priority), c.priority, c.id`, model, key.userID, key.groupID)
+	rows, err := s.db.Query(ctx, `select c.id,c.base_url,c.api_key,coalesce(m.priority,c.priority),coalesce(m.weight,c.weight),coalesce(m.upstream_model,''),c.provider,c.upstream_path,c.upstream_format,c.request_overrides from channels c left join model_routes m on m.channel_id=c.id and m.public_model=$1 and m.enabled where (c.enabled or c.auto_disabled) and (c.models ? $1 or m.public_model is not null) and (not exists(select 1 from channel_groups cg where cg.channel_id=c.id) or exists(select 1 from channel_groups cg join groups g on g.id=cg.group_id where cg.channel_id=c.id and g."public") or ($3<>'' and exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($3,'')::uuid)) or ($3='' and exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$2))) order by (c.enabled and not c.auto_disabled) desc, coalesce(m.priority,c.priority), c.priority, c.id`, model, key.userID, key.groupID)
 	if err != nil {
 		return nil, err
 	}
@@ -566,8 +758,12 @@ func (s *Service) channelsForModel(ctx context.Context, key keyContext, model st
 	for rows.Next() {
 		var ch channel
 		var encrypted string
-		if err := rows.Scan(&ch.id, &ch.baseURL, &encrypted, &ch.priority, &ch.weight, &ch.upstreamModel, &ch.provider, &ch.upstreamPath, &ch.upstreamFormat); err != nil {
+		var overrides []byte
+		if err := rows.Scan(&ch.id, &ch.baseURL, &encrypted, &ch.priority, &ch.weight, &ch.upstreamModel, &ch.provider, &ch.upstreamPath, &ch.upstreamFormat, &overrides); err != nil {
 			return nil, err
+		}
+		if len(overrides) > 0 {
+			_ = json.Unmarshal(overrides, &ch.overrides)
 		}
 		ch.apiKey, ch.keyID, err = s.selectChannelKey(ctx, ch.id, encrypted, seed[:])
 		if err != nil {
@@ -720,12 +916,20 @@ func retryableStatus(status int) bool {
 
 type streamCaptureWriter struct {
 	http.ResponseWriter
-	buf     *bytes.Buffer
-	flusher http.Flusher
+	buf        *bytes.Buffer
+	flusher    http.Flusher
+	wrote      bool
+	headerSent bool
 }
 
-func newStreamCaptureWriter(w http.ResponseWriter) *streamCaptureWriter {
-	c := &streamCaptureWriter{ResponseWriter: w, buf: &bytes.Buffer{}}
+// newStreamCaptureWriter wraps w so the gateway can tell whether an SSE stream
+// actually produced any bytes. When store is true the relayed body is buffered for
+// the conversation cache; otherwise no copy is kept so long-lived streams stay cheap.
+func newStreamCaptureWriter(w http.ResponseWriter, store bool) *streamCaptureWriter {
+	c := &streamCaptureWriter{ResponseWriter: w}
+	if store {
+		c.buf = &bytes.Buffer{}
+	}
 	if f, ok := w.(http.Flusher); ok {
 		c.flusher = f
 	}
@@ -733,8 +937,20 @@ func newStreamCaptureWriter(w http.ResponseWriter) *streamCaptureWriter {
 }
 
 func (c *streamCaptureWriter) Write(p []byte) (int, error) {
-	c.buf.Write(p)
+	if len(p) > 0 {
+		c.wrote = true
+	}
+	if c.buf != nil {
+		c.buf.Write(p)
+	}
 	return c.ResponseWriter.Write(p)
+}
+
+func (c *streamCaptureWriter) WriteHeader(code int) {
+	if !c.headerSent {
+		c.headerSent = true
+		c.ResponseWriter.WriteHeader(code)
+	}
 }
 
 func (c *streamCaptureWriter) Flush() {
@@ -744,6 +960,9 @@ func (c *streamCaptureWriter) Flush() {
 }
 
 func (c *streamCaptureWriter) bytes() []byte {
+	if c.buf == nil {
+		return nil
+	}
 	return c.buf.Bytes()
 }
 // streamUsage collects token counts from the SSE chunks that pass through a
@@ -807,7 +1026,6 @@ func (s *Service) streamResponse(w http.ResponseWriter, resp *http.Response) (st
 	w.Header().Set("Content-Type", contentType(resp.Header.Get("Content-Type")))
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
-	w.WriteHeader(resp.StatusCode)
 	var st streamStats
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64*1024), 2<<20)

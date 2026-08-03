@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"runtime"
 	"strings"
 	"sync"
@@ -33,6 +34,7 @@ type Service struct {
 	groupLimiter    *GroupLimiter
 	reliabilityData *ttlCache[struct{}, reliabilitySettings]
 	conversationCacheData *ttlCache[struct{}, conversationCacheSettings]
+	promptCache    *promptPrefixCache
 	keyTouchCache   *ttlCache[string, struct{}]
 	scheduler       context.CancelFunc
 	migration       migrationStatus
@@ -111,6 +113,7 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 		groupLimiter:    NewGroupLimiter(),
 		reliabilityData: newTTLCache[struct{}, reliabilitySettings](reliabilityCacheTTL),
 		conversationCacheData: newTTLCache[struct{}, conversationCacheSettings](reliabilityCacheTTL),
+		promptCache:    newPromptPrefixCache(cfg.LocalPromptCache, cfg.LocalPromptCacheSize),
 		keyTouchCache:   newTTLCache[string, struct{}](keyTouchInterval),
 		migration:       migrationStatus{mu: &sync.Mutex{}},
 	}
@@ -118,6 +121,9 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 	s.scheduler = cancel
 	s.startHealthCheckScheduler(schedulerCtx)
 	s.startAuthCleanupScheduler(schedulerCtx)
+	if err := os.MkdirAll(s.cfg.ConversationCacheDir, 0o755); err != nil {
+		log.Printf("conversation cache dir: %v", err)
+	}
 	s.startConversationCacheCleanup(schedulerCtx)
 	go s.limiterCleanup(schedulerCtx)
 	return s, nil

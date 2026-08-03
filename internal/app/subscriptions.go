@@ -615,10 +615,10 @@ func (s *Service) activateSubscriptionOrderTx(ctx context.Context, tx pgx.Tx, or
 	}
 	var billing string
 	var creditStr string
-	var groupID any
+	var groupID string
 	var modelWhitelist []string
 	var maxReq, maxTok *int64
-	if err = tx.QueryRow(ctx, `select billing_period,coalesce(credit_amount::text,''),group_id,model_whitelist,max_requests_per_period,max_tokens_per_period from subscription_plans where id=$1`, planID).Scan(&billing, &creditStr, &groupID, &modelWhitelist, &maxReq, &maxTok); err != nil {
+	if err = tx.QueryRow(ctx, `select billing_period,coalesce(credit_amount::text,''),coalesce(group_id::text,''),model_whitelist,max_requests_per_period,max_tokens_per_period from subscription_plans where id=$1`, planID).Scan(&billing, &creditStr, &groupID, &modelWhitelist, &maxReq, &maxTok); err != nil {
 		return false, err
 	}
 	periodStart := time.Now()
@@ -645,15 +645,9 @@ func (s *Service) activateSubscriptionOrderTx(ctx context.Context, tx pgx.Tx, or
 			return false, err
 		}
 	}
-	if groupID != nil {
-		var gid string
-		if v, ok := groupID.(string); ok {
-			gid = v
-		}
-		if gid != "" {
-			if _, err = tx.Exec(ctx, `insert into user_groups(user_id,group_id) values($1,$2) on conflict do nothing`, userID, gid); err != nil {
-				return false, err
-			}
+	if groupID != "" {
+		if _, err = tx.Exec(ctx, `insert into user_groups(user_id,group_id) values($1,$2) on conflict do nothing`, userID, groupID); err != nil {
+			return false, err
 		}
 	}
 	_ = maxReq

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -131,6 +132,93 @@ func TestResolveGatewayMaxTokens(t *testing.T) {
 	}
 	if maxUpstreamResponseBody != 16<<20 {
 		t.Fatalf("maxUpstreamResponseBody = %d, want 16MiB", maxUpstreamResponseBody)
+	}
+}
+
+func TestStripGatewayExtensions(t *testing.T) {
+	got := stripGatewayExtensions([]byte(`{"model":"m","promptCacheKey":"abc"}`))
+	if strings.Contains(string(got), "promptCacheKey") {
+		t.Fatalf("extension field not stripped: %s", got)
+	}
+	if !strings.Contains(string(got), `"model":"m"`) {
+		t.Fatalf("model dropped while stripping: %s", got)
+	}
+	want := `{"model":"m"}`
+	if got := string(stripGatewayExtensions([]byte(want))); got != want {
+		t.Fatalf("body without extensions must pass through unchanged: %s", got)
+	}
+	invalid := []byte(`not-json`)
+	if got := stripGatewayExtensions(invalid); string(got) != "not-json" {
+		t.Fatalf("invalid JSON must pass through unchanged: %s", got)
+	}
+}
+
+func TestApplyRequestOverrides(t *testing.T) {
+	ov := channelRequestOverrides{
+		Delete: []string{"promptCacheKey", "missing"},
+		Set:    map[string]any{"model": "gpt-4o-mini", "temperature": 0.2},
+	}
+	got := applyRequestOverrides([]byte(`{"model":"gpt-4o","promptCacheKey":"abc","stream":true}`), ov)
+	if strings.Contains(string(got), "promptCacheKey") {
+		t.Fatalf("delete did not remove field: %s", got)
+	}
+	if !strings.Contains(string(got), `"model":"gpt-4o-mini"`) || strings.Contains(string(got), `"model":"gpt-4o"`) {
+		t.Fatalf("set did not override model: %s", got)
+	}
+	if !strings.Contains(string(got), `"temperature":0.2`) || !strings.Contains(string(got), `"stream":true`) {
+		t.Fatalf("set/keep failed: %s", got)
+	}
+	empty := channelRequestOverrides{}
+	if got := string(applyRequestOverrides([]byte(`{"a":1}`), empty)); got != `{"a":1}` {
+		t.Fatalf("empty overrides must pass body through: %s", got)
+	}
+	if got := string(applyRequestOverrides([]byte(`not-json`), ov)); got != "not-json" {
+		t.Fatalf("invalid JSON must pass through: %s", got)
+	}
+	// A delete of a field that is absent must still leave the body untouched byte-for-byte.
+	noop := channelRequestOverrides{Delete: []string{"absent"}}
+	if got := string(applyRequestOverrides([]byte(`{"a":1}`), noop)); got != `{"a":1}` {
+		t.Fatalf("no-op override must not reserialize the body: %s", got)
+	}
+}
+
+func TestValidRequestOverrides(t *testing.T) {
+	if err := validRequestOverrides(nil); err != nil {
+		t.Fatalf("nil must be valid: %v", err)
+	}
+	if err := validRequestOverrides(&channelRequestOverrides{}); err != nil {
+		t.Fatalf("empty must be valid: %v", err)
+	}
+	if err := validRequestOverrides(&channelRequestOverrides{Delete: []string{"promptCacheKey"}, Set: map[string]any{"model": "m"}}); err != nil {
+		t.Fatalf("normal config must be valid: %v", err)
+	}
+	for _, ov := range []*channelRequestOverrides{
+		{Delete: []string{""}},
+		{Delete: []string{"a", "a"}},
+		{Delete: []string{strings.Repeat("a", 101)}},
+		{Set: map[string]any{"": 1}},
+		{Set: map[string]any{strings.Repeat("a", 101): 1}},
+	} {
+		if err := validRequestOverrides(ov); err == nil {
+			t.Fatalf("invalid config must be rejected: %+v", ov)
+		}
+	}
+	tooMany := make([]string, maxRequestOverrideFields+1)
+	for i := range tooMany {
+		tooMany[i] = "f" + strconv.Itoa(i)
+	}
+	if err := validRequestOverrides(&channelRequestOverrides{Delete: tooMany}); err == nil {
+		t.Fatal("oversize delete list must be rejected")
+	}
+	norm := normalizedOverrides(&channelRequestOverrides{Delete: []string{" a ", "", "b"}, Set: map[string]any{" x ": 1, "": 2}})
+	if len(norm.Delete) != 2 || norm.Delete[0] != "a" || norm.Delete[1] != "b" {
+		t.Fatalf("normalized delete = %#v", norm.Delete)
+	}
+	if _, ok := norm.Set["x"]; !ok || len(norm.Set) != 1 {
+		t.Fatalf("normalized set = %#v", norm.Set)
+	}
+	if out := normalizedOverrides(nil); out.Delete != nil || out.Set == nil {
+		t.Fatalf("nil normalization must yield empty struct: %#v", out)
 	}
 }
 
@@ -290,6 +378,48 @@ func TestResolvePricingWrapAround(t *testing.T) {
 	ti, _, _ = rule.resolvePricing(time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC))
 	if ti != 1 {
 		t.Fatalf("12:00 should use base price, got %v", ti)
+	}
+}
+
+func TestStreamCaptureWriterEmptyStream(t *testing.T) {
+	rec := httptest.NewRecorder()
+	capture := newStreamCaptureWriter(rec, false)
+	if _, err := (&Service{}).streamResponse(capture, streamBody(t, "")); err != nil {
+		t.Fatal(err)
+	}
+	if capture.wrote || capture.headerSent {
+		t.Fatalf("empty stream must dispatch nothing (wrote=%v header=%v)", capture.wrote, capture.headerSent)
+	}
+	if rec.Body.Len() != 0 || rec.Code != http.StatusOK {
+		t.Fatalf("empty stream recorded body=%d code=%d", rec.Body.Len(), rec.Code)
+	}
+}
+
+func TestStreamCaptureNonEmptyStream(t *testing.T) {
+	rec := httptest.NewRecorder()
+	capture := newStreamCaptureWriter(rec, true)
+	st, err := (&Service{}).streamResponse(capture, streamBody(t, "data: {\"x\":1}\n\ndata: [DONE]\n\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !capture.wrote {
+		t.Fatal("non-empty stream must be written through")
+	}
+	if got := string(capture.bytes()); got == "" {
+		t.Fatal("buffered stream bytes must be non-empty")
+	}
+	if st.prompt != 0 || st.completion != 0 {
+		t.Fatalf("no usage expected, got %+v", st)
+	}
+}
+
+func TestStreamCaptureWriterHeaderOnce(t *testing.T) {
+	rec := httptest.NewRecorder()
+	capture := newStreamCaptureWriter(rec, false)
+	capture.WriteHeader(200)
+	capture.WriteHeader(502)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("WriteHeader must not overwrite a dispatched status, got %d", rec.Code)
 	}
 }
 

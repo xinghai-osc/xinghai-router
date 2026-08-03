@@ -24,6 +24,9 @@ type Config struct {
 	SMTPUsername         string
 	SMTPPassword         string
 	SMTPFrom             string
+	ConversationCacheDir string
+	LocalPromptCache     bool
+	LocalPromptCacheSize int
 }
 
 // GeetestEnabled reports whether Geetest CAPTCHA verification is configured.
@@ -52,7 +55,7 @@ func isInsecureEncryptionKey(key string) bool {
 }
 
 func LoadConfig() (Config, error) {
-	c := Config{DatabaseURL: os.Getenv("DATABASE_URL"), RedisURL: os.Getenv("REDIS_URL"), EncryptionKey: os.Getenv("ENCRYPTION_KEY"), ListenAddr: env("LISTEN_ADDR", ":8080"), RequestTimeout: 90 * time.Second, RateLimitPerMinute: 60, IPRateLimitPerMinute: envInt("IP_RATE_LIMIT_PER_MINUTE", 10), DBMaxConns: envInt("DB_MAX_CONNS", 0), TrustedProxies: strings.TrimSpace(os.Getenv("TRUSTED_PROXIES")), GeetestCaptchaID: os.Getenv("GEETEST_CAPTCHA_ID"), GeetestCaptchaKey: os.Getenv("GEETEST_CAPTCHA_KEY"), SMTPHost: os.Getenv("SMTP_HOST"), SMTPPort: env("SMTP_PORT", "465"), SMTPUsername: os.Getenv("SMTP_USERNAME"), SMTPPassword: os.Getenv("SMTP_PASSWORD"), SMTPFrom: os.Getenv("SMTP_FROM")}
+	c := Config{DatabaseURL: os.Getenv("DATABASE_URL"), RedisURL: os.Getenv("REDIS_URL"), EncryptionKey: os.Getenv("ENCRYPTION_KEY"), ListenAddr: env("LISTEN_ADDR", ":8080"), RequestTimeout: 90 * time.Second, RateLimitPerMinute: 60, IPRateLimitPerMinute: envInt("IP_RATE_LIMIT_PER_MINUTE", 10), DBMaxConns: envInt("DB_MAX_CONNS", 0), TrustedProxies: strings.TrimSpace(os.Getenv("TRUSTED_PROXIES")), GeetestCaptchaID: os.Getenv("GEETEST_CAPTCHA_ID"), GeetestCaptchaKey: os.Getenv("GEETEST_CAPTCHA_KEY"), SMTPHost: os.Getenv("SMTP_HOST"), SMTPPort: env("SMTP_PORT", "465"), SMTPUsername: os.Getenv("SMTP_USERNAME"), SMTPPassword: os.Getenv("SMTP_PASSWORD"), SMTPFrom: os.Getenv("SMTP_FROM"), ConversationCacheDir: env("CONVERSATION_CACHE_DIR", "data/conversations"), LocalPromptCache: envBool("LOCAL_PROMPT_CACHE", true), LocalPromptCacheSize: envInt("LOCAL_PROMPT_CACHE_SIZE", 4096)}
 	if c.DatabaseURL == "" {
 		return c, fmt.Errorf("DATABASE_URL is required")
 	}
@@ -78,6 +81,12 @@ func envInt(k string, fallback int) int {
 		if n, err := parseInt(v); err == nil {
 			return n
 		}
+	}
+	return fallback
+}
+func envBool(k string, fallback bool) bool {
+	if v := os.Getenv(k); v != "" {
+		return v == "1" || strings.EqualFold(v, "true")
 	}
 	return fallback
 }

@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-type keyContext struct{ userID, keyID, groupID string }
+type keyContext struct{ userID, keyID, groupID string; dataUsageEnabled bool }
 type contextKey struct{}
 
 func (s *Service) routes() http.Handler {
@@ -152,6 +152,7 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("GET /me/groups", s.api(s.myGroups))
 	mux.Handle("GET /v1/models", s.api(s.models))
 	mux.Handle("POST /v1/chat/completions", s.api(s.chatCompletions))
+	mux.Handle("POST /v1/responses", s.api(s.responsesCompletions))
 	mux.Handle("POST /v1/messages", s.api(s.anthropicMessages))
 	return recoverPanic(securityHeaders(maxBodyBytes(2<<20, s.requestID(mux))))
 }
@@ -197,7 +198,7 @@ func (s *Service) api(next http.HandlerFunc) http.Handler {
 			return
 		}
 		var k keyContext
-		err := s.db.QueryRow(r.Context(), `select k.user_id,k.id,coalesce(k.group_id::text,'') from api_keys k join users u on u.id=k.user_id where k.secret_hash=$1 and k.revoked_at is null and (k.expires_at is null or k.expires_at>now()) and u.enabled and (k.group_id is null or exists(select 1 from groups g where g.id=k.group_id and g."public") or exists(select 1 from user_groups ug where ug.user_id=k.user_id and ug.group_id=k.group_id))`, hashSecret(token)).Scan(&k.userID, &k.keyID, &k.groupID)
+		err := s.db.QueryRow(r.Context(), `select k.user_id,k.id,coalesce(k.group_id::text,''),u.data_usage_enabled from api_keys k join users u on u.id=k.user_id where k.secret_hash=$1 and k.revoked_at is null and (k.expires_at is null or k.expires_at>now()) and u.enabled and (k.group_id is null or exists(select 1 from groups g where g.id=k.group_id and g."public") or exists(select 1 from user_groups ug where ug.user_id=k.user_id and ug.group_id=k.group_id))`, hashSecret(token)).Scan(&k.userID, &k.keyID, &k.groupID, &k.dataUsageEnabled)
 		if err != nil {
 			writeError(w, 401, "invalid_api_key", "invalid or expired API key")
 			return

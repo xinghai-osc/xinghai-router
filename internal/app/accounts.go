@@ -178,9 +178,9 @@ func (s *Service) logout(w http.ResponseWriter, r *http.Request) {
 func (s *Service) accountMe(w http.ResponseWriter, r *http.Request) {
 	account := r.Context().Value(accountContextKey{}).(accountContext)
 	var email, name, role, avatarURL string
-	var leaderboardOptIn, leaderboardMaskName, mustChangePassword bool
+	var leaderboardOptIn, leaderboardMaskName, mustChangePassword, dataUsageEnabled bool
 	var balance, reserved any
-	err := s.db.QueryRow(r.Context(), `select u.email,u.name,u.role,u.avatar_url,u.leaderboard_opt_in,u.leaderboard_mask_name,u.must_change_password,coalesce(w.balance,0),coalesce(w.reserved,0) from users u left join user_wallets w on w.user_id=u.id where u.id=$1`, account.userID).Scan(&email, &name, &role, &avatarURL, &leaderboardOptIn, &leaderboardMaskName, &mustChangePassword, &balance, &reserved)
+	err := s.db.QueryRow(r.Context(), `select u.email,u.name,u.role,u.avatar_url,u.leaderboard_opt_in,u.leaderboard_mask_name,u.must_change_password,u.data_usage_enabled,coalesce(w.balance,0),coalesce(w.reserved,0) from users u left join user_wallets w on w.user_id=u.id where u.id=$1`, account.userID).Scan(&email, &name, &role, &avatarURL, &leaderboardOptIn, &leaderboardMaskName, &mustChangePassword, &dataUsageEnabled, &balance, &reserved)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not load account")
 		return
@@ -190,7 +190,7 @@ func (s *Service) accountMe(w http.ResponseWriter, r *http.Request) {
 		permissions = append(permissions, permission)
 	}
 	sort.Strings(permissions)
-	writeJSON(w, http.StatusOK, map[string]any{"id": account.userID, "email": email, "name": name, "role": role, "avatar_url": avatarURL, "permissions": permissions, "balance": balance, "reserved": reserved, "leaderboard_opt_in": leaderboardOptIn, "leaderboard_mask_name": leaderboardMaskName, "must_change_password": mustChangePassword})
+	writeJSON(w, http.StatusOK, map[string]any{"id": account.userID, "email": email, "name": name, "role": role, "avatar_url": avatarURL, "permissions": permissions, "balance": balance, "reserved": reserved, "leaderboard_opt_in": leaderboardOptIn, "leaderboard_mask_name": leaderboardMaskName, "data_usage_enabled": dataUsageEnabled, "must_change_password": mustChangePassword})
 }
 
 func (s *Service) updateAccountPreferences(w http.ResponseWriter, r *http.Request) {
@@ -198,8 +198,9 @@ func (s *Service) updateAccountPreferences(w http.ResponseWriter, r *http.Reques
 	var in struct {
 		LeaderboardOptIn    *bool `json:"leaderboard_opt_in"`
 		LeaderboardMaskName *bool `json:"leaderboard_mask_name"`
+		DataUsageEnabled    *bool `json:"data_usage_enabled"`
 	}
-	if decode(r, &in) != nil || (in.LeaderboardOptIn == nil && in.LeaderboardMaskName == nil) {
+	if decode(r, &in) != nil || (in.LeaderboardOptIn == nil && in.LeaderboardMaskName == nil && in.DataUsageEnabled == nil) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "nothing to update")
 		return
 	}
@@ -215,7 +216,13 @@ func (s *Service) updateAccountPreferences(w http.ResponseWriter, r *http.Reques
 			return
 		}
 	}
-	s.audit(r, "account.preferences_updated", "user", account.userID, map[string]any{"leaderboard_opt_in": in.LeaderboardOptIn, "leaderboard_mask_name": in.LeaderboardMaskName})
+	if in.DataUsageEnabled != nil {
+		if _, err := s.db.Exec(r.Context(), `update users set data_usage_enabled=$1 where id=$2`, *in.DataUsageEnabled, account.userID); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "could not save preferences")
+			return
+		}
+	}
+	s.audit(r, "account.preferences_updated", "user", account.userID, map[string]any{"leaderboard_opt_in": in.LeaderboardOptIn, "leaderboard_mask_name": in.LeaderboardMaskName, "data_usage_enabled": in.DataUsageEnabled})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 

@@ -251,7 +251,6 @@ func streamOpenAIToAnthropic(w http.ResponseWriter, resp *http.Response) (stream
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
-	w.WriteHeader(resp.StatusCode)
 	writeEvent := func(name string, value any) {
 		data, _ := json.Marshal(value)
 		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", name, data)
@@ -575,7 +574,6 @@ func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response, prefill
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
-	w.WriteHeader(resp.StatusCode)
 	writeChunk := func(value any) {
 		data, _ := json.Marshal(value)
 		fmt.Fprintf(w, "data: %s\n\n", data)

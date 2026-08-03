@@ -139,6 +139,10 @@ func TestCreateChannelRejectsInvalidRequestBeforeDatabaseAccess(t *testing.T) {
 		`{"name":"channel","key_type":"single","api_keys":"sk1\nsk2","base_url":"https://api.example.com","models":["model"]}`,
 		`{"name":"channel","key_type":"unknown","api_keys":"sk","base_url":"https://api.example.com","models":["model"]}`,
 		`{"name":"channel","key_type":"single","api_keys":"sk","base_url":"https://` + strings.Repeat("a", 2040) + `.example.com","models":["model"]}`,
+		`{"name":"channel","key_type":"single","api_keys":"sk","base_url":"https://api.example.com","models":["model"],"request_overrides":{"delete":[""]}}`,
+		`{"name":"channel","key_type":"single","api_keys":"sk","base_url":"https://api.example.com","models":["model"],"request_overrides":{"delete":["a","a"]}}`,
+		`{"name":"channel","key_type":"single","api_keys":"sk","base_url":"https://api.example.com","models":["model"],"request_overrides":{"set":{"":"x"}}}`,
+		`{"name":"channel","key_type":"single","api_keys":"sk","base_url":"https://api.example.com","models":["model"],"request_overrides":{"delete":["` + strings.Repeat("a", 101) + `"]}}`,
 	} {
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodPost, "/admin/channels", strings.NewReader(body))

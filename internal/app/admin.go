@@ -1596,19 +1596,24 @@ func (s *Service) createChannel(w http.ResponseWriter, r *http.Request) {
 		Hidden        bool   `json:"hidden"`
 	}
 	var in struct {
-		Name        string       `json:"name"`
-		BaseURL     string       `json:"base_url"`
-		KeyType     string       `json:"key_type"`
-		APIKeys     string       `json:"api_keys"`
-		Models      []string     `json:"models"`
-		Priority    int          `json:"priority"`
-		Groups      []string     `json:"groups"`
-		Provider    string       `json:"provider"`
-		ModelRoutes []routeInput `json:"model_routes"`
-		AutoDisable *bool        `json:"auto_disable"`
+		Name        string                   `json:"name"`
+		BaseURL     string                   `json:"base_url"`
+		KeyType     string                   `json:"key_type"`
+		APIKeys     string                   `json:"api_keys"`
+		Models      []string                 `json:"models"`
+		Priority    int                      `json:"priority"`
+		Groups      []string                 `json:"groups"`
+		Provider    string                   `json:"provider"`
+		ModelRoutes []routeInput             `json:"model_routes"`
+		AutoDisable *bool                    `json:"auto_disable"`
+		Overrides   *channelRequestOverrides `json:"request_overrides"`
 	}
 	if decode(r, &in) != nil {
 		writeError(w, 400, "invalid_request", "name, key_type, api_keys, and models are required")
+		return
+	}
+	if err := validRequestOverrides(in.Overrides); err != nil {
+		writeError(w, 400, "invalid_request", err.Error())
 		return
 	}
 	name := strings.TrimSpace(in.Name)
@@ -1693,6 +1698,7 @@ func (s *Service) createChannel(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	models, _ := json.Marshal(in.Models)
+	overrides, _ := json.Marshal(normalizedOverrides(in.Overrides))
 	id, _ := randomID()
 	tx, err := s.db.Begin(r.Context())
 	if err != nil {
@@ -1704,7 +1710,7 @@ func (s *Service) createChannel(w http.ResponseWriter, r *http.Request) {
 	if in.AutoDisable != nil {
 		autoDisable = *in.AutoDisable
 	}
-	_, err = tx.Exec(r.Context(), `insert into channels(id,name,base_url,api_key,models,priority,provider,key_type,auto_disable) values($1,$2,$3,$4,$5,$6,$7,$8,$9)`, id, in.Name, strings.TrimRight(in.BaseURL, "/"), keys[0], models, in.Priority, in.Provider, in.KeyType, autoDisable)
+	_, err = tx.Exec(r.Context(), `insert into channels(id,name,base_url,api_key,models,priority,provider,key_type,auto_disable,request_overrides) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, id, in.Name, strings.TrimRight(in.BaseURL, "/"), keys[0], models, in.Priority, in.Provider, in.KeyType, autoDisable, overrides)
 	if err != nil {
 		writeError(w, 409, "conflict", "channel name already exists")
 		return
@@ -1749,19 +1755,24 @@ func (s *Service) updateChannel(w http.ResponseWriter, r *http.Request) {
 		Hidden        bool   `json:"hidden"`
 	}
 	var in struct {
-		Name        string       `json:"name"`
-		BaseURL     string       `json:"base_url"`
-		KeyType     string       `json:"key_type"`
-		APIKeys     string       `json:"api_keys"`
-		Models      []string     `json:"models"`
-		Priority    int          `json:"priority"`
-		Provider    string       `json:"provider"`
-		Groups      []string     `json:"groups"`
-		ModelRoutes []routeInput `json:"model_routes"`
-		AutoDisable *bool        `json:"auto_disable"`
+		Name        string                   `json:"name"`
+		BaseURL     string                   `json:"base_url"`
+		KeyType     string                   `json:"key_type"`
+		APIKeys     string                   `json:"api_keys"`
+		Models      []string                 `json:"models"`
+		Priority    int                      `json:"priority"`
+		Provider    string                   `json:"provider"`
+		Groups      []string                 `json:"groups"`
+		ModelRoutes []routeInput             `json:"model_routes"`
+		AutoDisable *bool                    `json:"auto_disable"`
+		Overrides   *channelRequestOverrides `json:"request_overrides"`
 	}
 	if decode(r, &in) != nil {
 		writeError(w, 400, "invalid_request", "name and models are required")
+		return
+	}
+	if err := validRequestOverrides(in.Overrides); err != nil {
+		writeError(w, 400, "invalid_request", err.Error())
 		return
 	}
 	name := strings.TrimSpace(in.Name)
@@ -1824,6 +1835,12 @@ func (s *Service) updateChannel(w http.ResponseWriter, r *http.Request) {
 	if in.AutoDisable != nil {
 		query += `,auto_disable=$` + strconv.Itoa(argIdx)
 		args = append(args, *in.AutoDisable)
+		argIdx++
+	}
+	if in.Overrides != nil {
+		overrides, _ := json.Marshal(normalizedOverrides(in.Overrides))
+		query += `,request_overrides=$` + strconv.Itoa(argIdx)
+		args = append(args, string(overrides))
 		argIdx++
 	}
 	keys := parseChannelAPIKeys(in.APIKeys)
@@ -1970,7 +1987,7 @@ func (s *Service) replaceChannelAPIKeys(ctx context.Context, channelID string, k
 	return tx.Commit(ctx)
 }
 func (s *Service) listChannels(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query(r.Context(), `select c.id,c.name,c.base_url,c.models,c.enabled,c.auto_disabled,c.disabled_reason,c.priority,c.created_at,c.updated_at,coalesce((select array_agg(cg.group_id order by cg.group_id) from channel_groups cg where cg.channel_id=c.id), '{}'),c.provider,c.key_type,(select count(*) from channel_api_keys ak where ak.channel_id=c.id and ak.enabled),c.auto_disable from channels c order by c.priority,c.id`)
+	rows, err := s.db.Query(r.Context(), `select c.id,c.name,c.base_url,c.models,c.enabled,c.auto_disabled,c.disabled_reason,c.priority,c.created_at,c.updated_at,coalesce((select array_agg(cg.group_id order by cg.group_id) from channel_groups cg where cg.channel_id=c.id), '{}'),c.provider,c.key_type,(select count(*) from channel_api_keys ak where ak.channel_id=c.id and ak.enabled),c.auto_disable,c.request_overrides from channels c order by c.priority,c.id`)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
@@ -1988,13 +2005,21 @@ func (s *Service) listChannels(w http.ResponseWriter, r *http.Request) {
 		var provider, keyType string
 		var keyCount int
 		var autoDisable bool
-		if rows.Scan(&id, &name, &base, &models, &enabled, &autoDisabled, &disabledReason, &priority, &created, &updated, &groups, &provider, &keyType, &keyCount, &autoDisable) != nil {
+		var overrides []byte
+		if rows.Scan(&id, &name, &base, &models, &enabled, &autoDisabled, &disabledReason, &priority, &created, &updated, &groups, &provider, &keyType, &keyCount, &autoDisable, &overrides) != nil {
 			continue
 		}
 		var list []string
 		json.Unmarshal(models, &list)
+		var ov map[string]any
+		if len(overrides) > 0 {
+			json.Unmarshal(overrides, &ov)
+		}
+		if ov == nil {
+			ov = map[string]any{}
+		}
 		routes := s.getChannelRoutes(r.Context(), id)
-		data = append(data, map[string]any{"id": id, "name": name, "base_url": base, "models": list, "provider": provider, "key_type": keyType, "enabled": enabled, "auto_disabled": autoDisabled, "disabled_reason": disabledReason, "priority": priority, "groups": groups, "key_count": keyCount, "created_at": created, "updated_at": updated, "model_routes": routes, "auto_disable": autoDisable})
+		data = append(data, map[string]any{"id": id, "name": name, "base_url": base, "models": list, "provider": provider, "key_type": keyType, "enabled": enabled, "auto_disabled": autoDisabled, "disabled_reason": disabledReason, "priority": priority, "groups": groups, "key_count": keyCount, "created_at": created, "updated_at": updated, "model_routes": routes, "auto_disable": autoDisable, "request_overrides": ov})
 	}
 	writeJSON(w, 200, map[string]any{"data": data})
 }
