@@ -1880,30 +1880,13 @@ func (s *Service) updateChannel(w http.ResponseWriter, r *http.Request) {
 		argIdx++
 	}
 	keys := parseChannelAPIKeys(in.APIKeys)
-	if in.KeyType != "" || in.APIKeys != "" {
-		var currentKeyType string
-		if err := s.db.QueryRow(r.Context(), `select key_type from channels where id=$1`, channelID).Scan(&currentKeyType); err != nil {
-			writeError(w, 500, "internal_error", "could not read channel key state")
-			return
-		}
+	if len(keys) > 0 {
 		if in.KeyType == "" {
 			if len(keys) == 1 {
 				in.KeyType = "single"
-			} else if len(keys) > 1 {
-				in.KeyType = "multi"
 			} else {
-				in.KeyType = currentKeyType
+				in.KeyType = "multi"
 			}
-		}
-		if len(keys) == 0 {
-			keys, _ = s.channelAPIKeys(r.Context(), channelID)
-		}
-		if in.KeyType == "single" && len(keys) > 1 {
-			keys = keys[:1]
-		}
-		if len(keys) == 0 {
-			writeError(w, 400, "invalid_request", "at least one api_key is required")
-			return
 		}
 		if in.KeyType == "single" && len(keys) > 1 {
 			writeError(w, 400, "invalid_request", "single-key channels accept only one key")
@@ -1952,27 +1935,6 @@ func (s *Service) updateChannel(w http.ResponseWriter, r *http.Request) {
 	}
 	s.audit(r, "channel.updated", "channel", channelID, map[string]any{"name": in.Name, "models": in.Models, "provider": in.Provider, "key_type": in.KeyType})
 	w.WriteHeader(http.StatusNoContent)
-}
-
-func (s *Service) channelAPIKeys(ctx context.Context, channelID string) ([]string, error) {
-	rows, err := s.db.Query(ctx, `select key_encrypted from channel_api_keys where channel_id=$1 and enabled order by created_at`, channelID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []string
-	for rows.Next() {
-		var enc string
-		if err := rows.Scan(&enc); err != nil {
-			continue
-		}
-		key, err := channelKeyValue(s.cfg.EncryptionKey, enc)
-		if err != nil {
-			continue
-		}
-		out = append(out, key)
-	}
-	return out, rows.Err()
 }
 
 func (s *Service) replaceChannelAPIKeys(ctx context.Context, channelID string, keys []string) error {

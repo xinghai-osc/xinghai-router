@@ -56,6 +56,11 @@ const typeOptions = computed(() => [
   ...PROVIDERS.map(value => ({ value, label: t(`admin.provider_${value}`) })),
 ])
 const providerOptions = computed(() => PROVIDERS.map(value => ({ value, label: t(`admin.provider_${value}`) })))
+const formatOptions = computed(() => [
+  { value: '', label: t('admin.formatAuto') },
+  { value: 'openai', label: t('admin.formatOpenAI') },
+  { value: 'anthropic', label: t('admin.formatAnthropic') },
+])
 
 function formatRelativeTime(value: string | null): string {
   if (!value) return t('admin.neverTested')

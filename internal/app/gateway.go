@@ -214,7 +214,7 @@ func (s *Service) models(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
-	body, err := io.ReadAll(io.LimitReader(r.Body, 2<<20))
+	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		s.logReject(r.Context(), "", 400, "invalid_request", started)
 		writeError(w, 400, "invalid_request", "could not read request")

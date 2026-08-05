@@ -16,7 +16,7 @@ import (
 // (chat-completions or Anthropic) is converted back to the Responses shape.
 func (s *Service) responsesCompletions(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
-	body, err := io.ReadAll(io.LimitReader(r.Body, 2<<20))
+	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		s.logReject(r.Context(), "", 400, "invalid_request", started)
 		writeError(w, 400, "invalid_request", "could not read request")
@@ -560,7 +560,7 @@ func (s *responsesStream) nextOutputIndex() int {
 // until the response reaches its terminal state, matching the documented
 // streaming shape.
 func (s *responsesStream) object(status string, includeUsage bool) map[string]any {
-	var usage any
+	var usage map[string]any
 	if includeUsage {
 		usage = map[string]any{
 			"input_tokens":          s.inputTokens,

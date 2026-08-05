@@ -26,12 +26,16 @@ const formOpen = ref(false)
 const secretOpen = ref(false)
 const revealOpen = ref(false)
 const revokeOpen = ref(false)
+const opencodeOpen = ref(false)
 const editing = ref<ApiKey | null>(null)
 const revoking = ref<ApiKey | null>(null)
 const revealing = ref<ApiKey | null>(null)
+const opencodeKey = ref<ApiKey | null>(null)
 const secret = ref('')
 const revealedSecret = ref('')
 const revealError = ref('')
+const opencodeConfig = ref('')
+const opencodeError = ref('')
 const formError = ref('')
 const form = reactive({ name: '', expiresOn: '', groupId: '' })
 
@@ -117,6 +121,44 @@ function openReveal(key: ApiKey) {
   revealedSecret.value = ''
   revealError.value = ''
   revealOpen.value = true
+}
+
+function openOpenCode(key: ApiKey) {
+  opencodeKey.value = key
+  opencodeConfig.value = ''
+  opencodeError.value = ''
+  opencodeOpen.value = true
+}
+
+async function loadOpenCodeConfig() {
+  const target = opencodeKey.value
+  if (!target) return
+  opencodeConfig.value = ''
+  opencodeError.value = ''
+  const ok = await run(async () => {
+    const [revealed, catalog] = await Promise.all([
+      endpoints.revealAccountKey(target.id),
+      endpoints.getModelCatalog(),
+    ])
+    const baseURL = `${useRequestURL().origin}/api/v1`
+    const providerId = 'xinghai'
+    const models: Record<string, { name: string }> = {}
+    for (const model of catalog.data) models[model.model] = { name: model.model }
+    const config: Record<string, unknown> = {
+      $schema: 'https://opencode.ai/config.json',
+      provider: {
+        [providerId]: {
+          npm: '@ai-sdk/openai-compatible',
+          name: providerId,
+          options: { baseURL, apiKey: revealed.key },
+          models,
+        },
+      },
+    }
+    if (catalog.data.length) config.model = `${providerId}/${catalog.data[0].model}`
+    opencodeConfig.value = JSON.stringify(config, null, 2)
+  })
+  if (!ok) opencodeError.value = t('console.opencodeConfigFailed')
 }
 
 async function loadRevealedSecret() {
@@ -241,6 +283,8 @@ function quotaProgress(used: number, max: number | null): number {
 watch(secretOpen, (open) => { if (!open) secret.value = '' })
 watch(revealOpen, (open) => { if (open && revealing.value) loadRevealedSecret() })
 watch(revealOpen, (open) => { if (!open) { revealedSecret.value = ''; revealing.value = null } })
+watch(opencodeOpen, (open) => { if (open && opencodeKey.value) loadOpenCodeConfig() })
+watch(opencodeOpen, (open) => { if (!open) { opencodeConfig.value = ''; opencodeKey.value = null } })
 
 onMounted(() => { if (route.query.create) openCreate() })
 </script>
@@ -305,6 +349,9 @@ onMounted(() => { if (route.query.create) openCreate() })
                     </UiDropdownItem>
                     <UiDropdownItem :disabled="Boolean(key.revoked_at) || !key.revealable" @select="openReveal(key)">
                       {{ t('console.revealKey') }}
+                    </UiDropdownItem>
+                    <UiDropdownItem :disabled="Boolean(key.revoked_at) || !key.revealable" @select="openOpenCode(key)">
+                      {{ t('console.opencodeConfig') }}
                     </UiDropdownItem>
                     <UiDropdownItem as="separator" />
                     <UiDropdownItem danger :disabled="Boolean(key.revoked_at)" @select="openRevoke(key)">
@@ -484,6 +531,42 @@ onMounted(() => { if (route.query.create) openCreate() })
       <template #footer>
         <UiButton variant="secondary" @click="revokeOpen = false">{{ t('common.cancel') }}</UiButton>
         <UiButton variant="danger" :loading="busy" @click="confirmRevoke">{{ t('console.revokeKey') }}</UiButton>
+      </template>
+    </UiDialog>
+
+    <UiDialog
+      v-model:open="opencodeOpen"
+      size="lg"
+      :title="t('console.opencodeConfigTitle')"
+      :description="opencodeKey?.name"
+    >
+      <div class="space-y-3">
+        <UiAlert tone="warn">{{ t('console.opencodeConfigWarning') }}</UiAlert>
+
+        <div v-if="opencodeError" class="rounded-control border border-line px-4 py-3">
+          <p class="text-[13px] text-danger">{{ opencodeError }}</p>
+        </div>
+
+        <div v-if="opencodeConfig" class="rounded-control border border-line">
+          <div class="flex items-center justify-between gap-2 border-b border-line bg-sunken px-3 py-2">
+            <code class="text-2xs text-muted">opencode.json</code>
+            <ConsoleUserCopyButton
+              :value="opencodeConfig"
+              :success-message="t('console.opencodeConfigCopied')"
+              size="icon"
+            />
+          </div>
+          <pre class="max-h-[55vh] overflow-auto px-4 py-3 font-mono text-[12.5px] leading-relaxed text-ink"><code>{{ opencodeConfig }}</code></pre>
+        </div>
+
+        <p class="text-[13px] text-muted">{{ t('console.opencodeConfigHint') }}</p>
+      </div>
+
+      <template #footer>
+        <UiButton variant="secondary" @click="opencodeOpen = false">{{ t('common.close') }}</UiButton>
+        <UiButton v-if="opencodeError" :loading="busy" @click="loadOpenCodeConfig">
+          {{ t('common.retry') }}
+        </UiButton>
       </template>
     </UiDialog>
 

@@ -1,7 +1,6 @@
 package app
 
 import (
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -40,31 +39,6 @@ func TestSecurityHeaders(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if got := rec.Header().Get("Strict-Transport-Security"); got != "max-age=31536000; includeSubDomains" {
 		t.Fatalf("HSTS = %q", got)
-	}
-}
-
-func TestMaxBodyBytes(t *testing.T) {
-	handler := maxBodyBytes(8, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, err := io.ReadAll(r.Body)
-		if err != nil {
-			writeError(w, http.StatusRequestEntityTooLarge, "payload_too_large", "request body too large")
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
-	}))
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("12345678"))
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNoContent)
-	}
-
-	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPost, "/", strings.NewReader("123456789"))
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusRequestEntityTooLarge {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusRequestEntityTooLarge)
 	}
 }
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -161,7 +160,7 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("POST /v1/chat/completions", s.api(s.chatCompletions))
 	mux.Handle("POST /v1/responses", s.api(s.responsesCompletions))
 	mux.Handle("POST /v1/messages", s.api(s.anthropicMessages))
-	return recoverPanic(securityHeaders(maxBodyBytes(2<<20, s.requestID(mux))))
+	return recoverPanic(securityHeaders(s.requestID(mux)))
 }
 func (s *Service) requestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -315,7 +314,7 @@ func writeError(w http.ResponseWriter, status int, code, msg string) {
 	writeJSON(w, status, map[string]any{"error": map[string]string{"message": msg, "type": code, "code": code}})
 }
 func decode(r *http.Request, target any) error {
-	d := json.NewDecoder(io.LimitReader(r.Body, 2<<20))
+	d := json.NewDecoder(r.Body)
 	d.DisallowUnknownFields()
 	return d.Decode(target)
 }

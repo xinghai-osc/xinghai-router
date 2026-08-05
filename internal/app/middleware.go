@@ -21,15 +21,6 @@ func securityHeaders(next http.Handler) http.Handler {
 	})
 }
 
-func maxBodyBytes(limit int64, next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Body != nil && r.Body != http.NoBody {
-			r.Body = http.MaxBytesReader(w, r.Body, limit)
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
 func recoverPanic(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {

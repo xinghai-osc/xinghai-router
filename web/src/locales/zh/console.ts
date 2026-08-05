@@ -64,6 +64,12 @@ export default {
   revokeKeyTitle: '吊销这个密钥？',
   revokeKeyBody: '吊销后使用该密钥的请求会立刻失败，且无法恢复。',
   keyNameRequired: '请填写密钥名称',
+  opencodeConfig: '生成 OpenCode 配置',
+  opencodeConfigTitle: 'OpenCode 配置',
+  opencodeConfigWarning: '配置中已嵌入完整密钥，请勿提交到代码仓库或分享给他人。',
+  opencodeConfigCopied: 'OpenCode 配置已复制',
+  opencodeConfigFailed: '生成失败，该密钥可能创建于启用恢复功能之前，无法查看完整密钥。',
+  opencodeConfigHint: '将上面的内容保存为项目根目录的 opencode.json，重启 opencode 后即可使用。',
 
   // ---- 用量限制 ----
   usageLimits: '用量限制',

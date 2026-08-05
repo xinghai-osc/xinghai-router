@@ -64,6 +64,12 @@ export default {
   revokeKeyTitle: 'Revoke this key?',
   revokeKeyBody: 'Requests using this key fail immediately and it cannot be restored.',
   keyNameRequired: 'A key name is required',
+  opencodeConfig: 'Generate OpenCode config',
+  opencodeConfigTitle: 'OpenCode config',
+  opencodeConfigWarning: 'This config embeds your full key — keep it out of your repository and don\u2019t share it.',
+  opencodeConfigCopied: 'OpenCode config copied',
+  opencodeConfigFailed: 'Could not generate — this key may predate key recovery, so its full value is unavailable.',
+  opencodeConfigHint: 'Save the snippet above as opencode.json in your project root, then restart opencode to use it.',
 
   // ---- Usage limits ----
   usageLimits: 'Usage limits',

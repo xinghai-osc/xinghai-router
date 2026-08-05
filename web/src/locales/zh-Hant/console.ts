@@ -64,6 +64,12 @@ export default {
   revokeKeyTitle: '吊銷這個密鑰？',
   revokeKeyBody: '吊銷後使用該密鑰的請求會立刻失敗，且無法恢復。',
   keyNameRequired: '請填寫密鑰名稱',
+  opencodeConfig: '生成 OpenCode 配置',
+  opencodeConfigTitle: 'OpenCode 配置',
+  opencodeConfigWarning: '配置中已嵌入完整密鑰，請勿提交到程式碼倉庫或分享給他人。',
+  opencodeConfigCopied: 'OpenCode 配置已複製',
+  opencodeConfigFailed: '生成失敗，該密鑰可能創建於啟用恢復功能之前，無法查看完整密鑰。',
+  opencodeConfigHint: '將上面的內容儲存為專案根目錄的 opencode.json，重啟 opencode 後即可使用。',
 
   // ---- 用量 ----
   usageDescription: '最近 100 條調用記錄，含每次請求的 Tokens 與費用。',

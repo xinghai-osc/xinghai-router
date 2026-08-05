@@ -212,14 +212,19 @@ func (s *Service) rankings(w http.ResponseWriter, r *http.Request) {
 // userLeaderboard ranks users by token consumption within the current period.
 // Display names are masked before they leave the server.
 func (s *Service) userLeaderboard(r *http.Request, start, previousStart, now time.Time, allTokens int64) []userRanking {
-	rows, err := s.db.Query(r.Context(), `select ur.user_id::text, u.name, u.leaderboard_mask_name, ur.model,
-		coalesce(sum(ur.prompt_tokens+ur.completion_tokens) filter(where ur.created_at >= $1),0),
-		coalesce(sum(ur.prompt_tokens+ur.completion_tokens) filter(where ur.created_at < $1),0),
-		coalesce(sum(ur.cost) filter(where ur.created_at >= $1),0)::float8,
-		count(*) filter(where ur.created_at >= $1)
-		from usage_records ur join users u on u.id = ur.user_id
-		where u.leaderboard_opt_in and ur.created_at >= $2 and ur.created_at < $3
-		group by ur.user_id, u.name, u.leaderboard_mask_name, ur.model`, start, previousStart, now)
+	rows, err := s.db.Query(r.Context(), `select g.user_id::text, u.name, u.leaderboard_mask_name, g.model,
+		g.current, g.previous, g.cost, g.requests
+		from (
+			select ur.user_id, ur.model,
+				coalesce(sum(ur.prompt_tokens+ur.completion_tokens) filter(where ur.created_at >= $1),0) as current,
+				coalesce(sum(ur.prompt_tokens+ur.completion_tokens) filter(where ur.created_at < $1),0) as previous,
+				coalesce(sum(ur.cost) filter(where ur.created_at >= $1),0)::float8 as cost,
+				count(*) filter(where ur.created_at >= $1) as requests
+			from usage_records ur
+			where ur.created_at >= $2 and ur.created_at < $3
+			group by ur.user_id, ur.model
+		) g join users u on u.id = g.user_id
+		where u.leaderboard_opt_in`, start, previousStart, now)
 	if err != nil {
 		return []userRanking{}
 	}
