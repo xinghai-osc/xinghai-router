@@ -306,22 +306,6 @@ func bearer(r *http.Request) string {
 	}
 	return strings.TrimSpace(r.Header.Get("X-API-Key"))
 }
-
-// siteOrigin returns the configured public origin (scheme://host) for links that
-// travel in emails or across OAuth redirects. When PUBLIC_BASE_URL is set it is
-// authoritative, so an attacker cannot redirect those links by forging the Host
-// header; otherwise it falls back to the request host for direct deployments.
-func (s *Service) siteOrigin(r *http.Request) string {
-	if base := strings.TrimSpace(s.cfg.PublicBaseURL); base != "" {
-		return strings.TrimRight(base, "/")
-	}
-	scheme := "http"
-	if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
-		scheme = "https"
-	}
-	return scheme + "://" + r.Host
-}
-
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

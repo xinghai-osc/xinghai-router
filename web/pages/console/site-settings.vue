@@ -22,6 +22,7 @@ const EMPTY: AdminSiteSettings = {
   smtp_username: '',
   has_smtp_password: false,
   smtp_from: '',
+  public_base_url: '',
 }
 
 const { data, pending, error, refresh } = useResource(
@@ -38,6 +39,7 @@ const form = reactive({
   smtp_port: '',
   smtp_username: '',
   smtp_from: '',
+  public_base_url: '',
 })
 
 /** Write-only: never seeded from the API, cleared again after every save. */
@@ -55,6 +57,7 @@ watch(data, (next) => {
   form.smtp_port = next.smtp_port
   form.smtp_username = next.smtp_username
   form.smtp_from = next.smtp_from
+  form.public_base_url = next.public_base_url
   geetestKey.value = ''
   smtpPassword.value = ''
 }, { immediate: true })
@@ -79,6 +82,7 @@ async function save() {
     smtp_username: form.smtp_username.trim(),
     smtp_password: smtpPassword.value,
     smtp_from: form.smtp_from.trim(),
+    public_base_url: form.public_base_url.trim(),
   } as SiteSettingsPayload
 
   const ok = await run(() => endpoints.updateAdminSiteSettings(payload))
@@ -152,6 +156,14 @@ async function save() {
                 v-model="form.auto_disable_failed_channels"
                 :label="t('system.autoDisableFailedChannels')"
               />
+            </UiField>
+
+            <UiField
+              :label="t('system.publicBaseUrl')"
+              :hint="t('system.publicBaseUrlHint')"
+              for="public-base-url"
+            >
+              <UiInput id="public-base-url" v-model="form.public_base_url" type="url" />
             </UiField>
           </div>
         </UiCard>

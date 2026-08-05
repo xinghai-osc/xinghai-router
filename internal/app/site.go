@@ -90,13 +90,13 @@ func (s *Service) siteSettings(w http.ResponseWriter, r *http.Request) {
 func (s *Service) adminSiteSettings(w http.ResponseWriter, r *http.Request) {
 	var name, iconURL string
 	var autoDisableFailedChannels bool
-	var geetestID, geetestKeyEnc, smtpHost, smtpPort, smtpUser, smtpPassEnc, smtpFrom string
-	err := s.db.QueryRow(r.Context(), `select name,icon_url,auto_disable_failed_channels,geetest_captcha_id,geetest_captcha_key_encrypted,smtp_host,smtp_port,smtp_username,smtp_password_encrypted,smtp_from from site_settings where id=true`).Scan(&name, &iconURL, &autoDisableFailedChannels, &geetestID, &geetestKeyEnc, &smtpHost, &smtpPort, &smtpUser, &smtpPassEnc, &smtpFrom)
+	var geetestID, geetestKeyEnc, smtpHost, smtpPort, smtpUser, smtpPassEnc, smtpFrom, publicBaseURL string
+	err := s.db.QueryRow(r.Context(), `select name,icon_url,auto_disable_failed_channels,geetest_captcha_id,geetest_captcha_key_encrypted,smtp_host,smtp_port,smtp_username,smtp_password_encrypted,smtp_from,public_base_url from site_settings where id=true`).Scan(&name, &iconURL, &autoDisableFailedChannels, &geetestID, &geetestKeyEnc, &smtpHost, &smtpPort, &smtpUser, &smtpPassEnc, &smtpFrom, &publicBaseURL)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not load site settings")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"name": name, "icon_url": iconURL, "auto_disable_failed_channels": autoDisableFailedChannels, "geetest_captcha_id": geetestID, "has_geetest_captcha_key": strings.TrimSpace(geetestKeyEnc) != "", "smtp_host": smtpHost, "smtp_port": smtpPort, "smtp_username": smtpUser, "has_smtp_password": strings.TrimSpace(smtpPassEnc) != "", "smtp_from": smtpFrom})
+	writeJSON(w, http.StatusOK, map[string]any{"name": name, "icon_url": iconURL, "auto_disable_failed_channels": autoDisableFailedChannels, "geetest_captcha_id": geetestID, "has_geetest_captcha_key": strings.TrimSpace(geetestKeyEnc) != "", "smtp_host": smtpHost, "smtp_port": smtpPort, "smtp_username": smtpUser, "has_smtp_password": strings.TrimSpace(smtpPassEnc) != "", "smtp_from": smtpFrom, "public_base_url": publicBaseURL})
 }
 
 func (s *Service) updateSiteSettings(w http.ResponseWriter, r *http.Request) {
@@ -111,6 +111,7 @@ func (s *Service) updateSiteSettings(w http.ResponseWriter, r *http.Request) {
 		SMTPUsername              *string `json:"smtp_username"`
 		SMTPPassword              string  `json:"smtp_password"`
 		SMTPFrom                  *string `json:"smtp_from"`
+		PublicBaseURL             *string `json:"public_base_url"`
 	}
 	if decode(r, &in) != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", "invalid site settings")
@@ -166,6 +167,18 @@ func (s *Service) updateSiteSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if in.PublicBaseURL != nil {
+		base := strings.TrimSpace(*in.PublicBaseURL)
+		if len(base) > maxPublicBaseURLLen {
+			writeError(w, http.StatusBadRequest, "invalid_request", "public_base_url must be at most 2048 characters")
+			return
+		}
+		if base != "" && validUpstreamURL(base) != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", "public_base_url must be an HTTP or HTTPS URL")
+			return
+		}
+		*in.PublicBaseURL = base
+	}
 	geetestKeyEnc, smtpPassEnc := "", ""
 	if key := strings.TrimSpace(in.GeetestCaptchaKey); key != "" {
 		if len(key) > maxGeetestFieldLen {
@@ -200,10 +213,11 @@ func (s *Service) updateSiteSettings(w http.ResponseWriter, r *http.Request) {
 		smtp_username=coalesce($8,smtp_username),
 		smtp_password_encrypted=case when $9='' then smtp_password_encrypted else $9 end,
 		smtp_from=coalesce($10,smtp_from),
+		public_base_url=coalesce($11,public_base_url),
 		updated_at=now() where id=true`,
 		in.Name, in.IconURL, in.AutoDisableFailedChannels,
 		trimmedPtr(in.GeetestCaptchaID), geetestKeyEnc,
-		trimmedPtr(in.SMTPHost), trimmedPtr(in.SMTPPort), trimmedPtr(in.SMTPUsername), smtpPassEnc, trimmedPtr(in.SMTPFrom)); err != nil {
+		trimmedPtr(in.SMTPHost), trimmedPtr(in.SMTPPort), trimmedPtr(in.SMTPUsername), smtpPassEnc, trimmedPtr(in.SMTPFrom), trimmedPtr(in.PublicBaseURL)); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not save site settings")
 		return
 	}
@@ -225,7 +239,23 @@ const (
 	maxSMTPHostLen     = 255
 	maxSMTPUsernameLen = 255
 	maxSMTPPasswordLen = 4096
+	maxPublicBaseURLLen = 2048
 )
+
+// loadPublicBaseURL returns the admin-configured public origin used for
+// password-reset email links and OAuth callback URIs. An empty result means
+// links are derived from the request host.
+func (s *Service) loadPublicBaseURL(ctx context.Context) string {
+	if s.db != nil {
+		var v string
+		if err := s.db.QueryRow(ctx, `select public_base_url from site_settings where id=true`).Scan(&v); err == nil {
+			if v = strings.TrimSpace(v); v != "" {
+				return strings.TrimRight(v, "/")
+			}
+		}
+	}
+	return ""
+}
 
 func validSMTPPort(port string) bool {
 	if len(port) == 0 || len(port) > 5 {

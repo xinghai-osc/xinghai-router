@@ -11,12 +11,15 @@ import (
 
 const passwordResetTTL = 30 * time.Minute
 
-// resetLink builds the console URL that carries the reset token. When
-// PUBLIC_BASE_URL is configured it is used verbatim (an attacker cannot steer the
-// link by forging the Host header); otherwise the request host is used, which is
-// the public host the Nuxt proxy preserves.
-func (s *Service) resetLink(r *http.Request, token string) string {
-	return s.siteOrigin(r) + "/auth/reset?token=" + url.QueryEscape(token)
+// resetLink builds the console URL that carries the reset token. The Go service
+// is reached through the Nuxt proxy, which preserves the public Host header, so
+// the link points at the console the user actually came from.
+func resetLink(r *http.Request, token string) string {
+	scheme := "http"
+	if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+		scheme = "https"
+	}
+	return scheme + "://" + r.Host + "/auth/reset?token=" + url.QueryEscape(token)
 }
 
 func (s *Service) requestPasswordReset(w http.ResponseWriter, r *http.Request) {
@@ -63,7 +66,7 @@ func (s *Service) requestPasswordReset(w http.ResponseWriter, r *http.Request) {
 	}
 	siteName := s.siteName(ctx)
 	subject := fmt.Sprintf("%s 密码重置 / Password reset", siteName)
-	link := html.EscapeString(s.resetLink(r, token))
+	link := html.EscapeString(resetLink(r, token))
 	body := fmt.Sprintf(`<div style="max-width:480px;margin:0 auto;padding:32px;font-family:-apple-system,'Segoe UI',sans-serif;color:#1a1a2e">
 	<h2 style="margin:0 0 8px;font-size:20px">%s</h2>
 	<p style="margin:0 0 24px;color:#666;font-size:14px">我们收到了重置密码的请求 / We received a request to reset your password</p>

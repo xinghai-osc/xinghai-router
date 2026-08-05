@@ -56,7 +56,7 @@ export interface RankingMover { model_name: string; vendor: string; rank_delta: 
 export interface UserRanking { rank: number; name: string; total_tokens: number; total_cost: number; share: number; growth_pct: number; requests: number; top_model: string }
 export interface Rankings { period: string; models: ModelRanking[]; vendors: VendorRanking[]; top_movers: RankingMover[]; top_droppers: RankingMover[]; users: UserRanking[]; total_tokens: number; updated_at: string }
 export interface SiteSettings { name: string; icon_url: string; auto_disable_failed_channels: boolean; geetest_enabled?: boolean; geetest_captcha_id?: string; email_verification_enabled?: boolean; oauth_providers?: string[] }
-export interface AdminSiteSettings { name: string; icon_url: string; auto_disable_failed_channels: boolean; geetest_captcha_id: string; has_geetest_captcha_key: boolean; smtp_host: string; smtp_port: string; smtp_username: string; has_smtp_password: boolean; smtp_from: string }
+export interface AdminSiteSettings { name: string; icon_url: string; auto_disable_failed_channels: boolean; geetest_captcha_id: string; has_geetest_captcha_key: boolean; smtp_host: string; smtp_port: string; smtp_username: string; has_smtp_password: boolean; smtp_from: string; public_base_url: string }
 export interface ReliabilitySettings { retry_count: number; retry_status_codes: string; health_check_mode: 'off' | 'scheduled_all' | 'passive_recovery'; health_check_interval_minutes: number; health_check_auto_recover: boolean; health_check_channel_ids: string; auto_disable_on_test_failure: boolean; auto_disable_slow_seconds: number; auto_disable_status_codes: string; auto_disable_keywords: string }
 
 export interface ConversationCacheSettings { conversation_cache_enabled: boolean }

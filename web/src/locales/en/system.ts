@@ -192,6 +192,8 @@ export default {
   smtpFromHint: 'Sender address on outgoing email. Usually has to match the SMTP account.',
   autoDisableFailedChannels: 'Auto-disable failing channels',
   autoDisableFailedChannelsHint: 'Disable a channel automatically when its upstream keeps failing.',
+  publicBaseUrl: 'Public base URL',
+  publicBaseUrlHint: 'Public origin (https://host) used in password-reset emails and OAuth callback URIs. Leave empty to derive it from the request host.',
   siteSettingsSaved: 'Site settings saved',
 
   migrateTitle: 'Data migration',

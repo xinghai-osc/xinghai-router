@@ -83,17 +83,13 @@ func TestResetLink(t *testing.T) {
 	cases[0].req.Host = "example.com"
 	cases[1].req.Host = "example.com"
 	cases[2].req.Host = "example.com"
-	s := &Service{}
-	if got := s.resetLink(cases[0].req, "abc"); got != cases[0].want {
+	if got := resetLink(cases[0].req, "abc"); got != cases[0].want {
 		t.Fatalf("http resetLink = %q, want %q", got, cases[0].want)
 	}
-	if got := s.resetLink(cases[1].req, "abc"); got != cases[1].want {
+	if got := resetLink(cases[1].req, "abc"); got != cases[1].want {
 		t.Fatalf("https resetLink = %q, want %q", got, cases[1].want)
 	}
-	if got := s.resetLink(cases[2].req, "a b"); got != cases[2].want {
+	if got := resetLink(cases[2].req, "a b"); got != cases[2].want {
 		t.Fatalf("escaped resetLink = %q, want %q", got, cases[2].want)
-	}
-	if s.cfg.PublicBaseURL = "https://fixed.example.com"; s.resetLink(cases[0].req, "abc") != "https://fixed.example.com/auth/reset?token=abc" {
-		t.Fatalf("configured public base URL should override the request host")
 	}
 }

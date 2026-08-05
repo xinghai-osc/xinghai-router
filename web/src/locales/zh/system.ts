@@ -191,6 +191,8 @@ export default {
   smtpFromHint: '邮件展示的发件地址，通常需与 SMTP 账号一致。',
   autoDisableFailedChannels: '自动停用故障渠道',
   autoDisableFailedChannelsHint: '上游持续失败时自动停用渠道，避免影响用户请求。',
+  publicBaseUrl: '公开基础地址',
+  publicBaseUrlHint: '用于密码重置邮件与 OAuth 回调地址的公开地址（https://域名）。留空则根据请求 Host 推导。',
   siteSettingsSaved: '站点设置已保存',
 
   migrateTitle: '数据迁移',

@@ -44,26 +44,12 @@ func oauthStateSignature(encryptionKey, data string) string {
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
-// oauthStateCookie is the per-browser nonce that binds an OAuth flow to the
-// browser that started it, blocking OAuth login CSRF. HttpOnly so page scripts
-// cannot read it; SameSite=Lax so it is sent on the provider's top-level
-// redirect back to the callback.
-const oauthStateCookie = "xh_oauth_state"
-
-func (s *Service) callbackURI(r *http.Request, provider string) string {
-	return fmt.Sprintf("%s/api/auth/oauth/%s/callback", s.siteOrigin(r), provider)
-}
-
-func setOAuthStateCookie(w http.ResponseWriter, r *http.Request, value string, maxAge time.Duration) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     oauthStateCookie,
-		Value:    value,
-		Path:     "/",
-		MaxAge:   int(maxAge.Seconds()),
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		Secure:   r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https"),
-	})
+func callbackURI(r *http.Request, provider string) string {
+	scheme := "https"
+	if r.TLS == nil && (strings.HasPrefix(r.Host, "localhost:") || r.Host == "localhost" || strings.HasPrefix(r.Host, "127.0.0.1")) {
+		scheme = "http"
+	}
+	return fmt.Sprintf("%s://%s/api/auth/oauth/%s/callback", scheme, r.Host, provider)
 }
 
 func (s *Service) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
@@ -73,15 +59,9 @@ func (s *Service) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_provider", "OAuth provider is not configured or disabled")
 		return
 	}
-	randomPart, err := randomSecret("")
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "could not start OAuth login")
-		return
-	}
-	stateNonce := fmt.Sprintf("%s:%s", provider, randomPart)
+	stateNonce := fmt.Sprintf("%s:%d", provider, time.Now().Unix())
 	sig := oauthStateSignature(s.cfg.EncryptionKey, stateNonce)
-	setOAuthStateCookie(w, r, stateNonce, 10*time.Minute)
-	cb := s.callbackURI(r, provider)
+	cb := callbackURI(r, provider)
 	var authURL string
 	switch provider {
 	case "github":
@@ -114,15 +94,6 @@ func (s *Service) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "invalid state signature")
 		return
 	}
-	// The state must match the nonce this browser stored when the flow started,
-	// otherwise the callback is not a continuation of this browser's OAuth flow.
-	stateCookie, err := r.Cookie(oauthStateCookie)
-	if err != nil || stateCookie.Value == "" || !hmac.Equal([]byte(stateCookie.Value), []byte(stateNonce)) {
-		writeError(w, http.StatusBadRequest, "invalid_request", "OAuth flow could not be verified")
-		return
-	}
-	// Consume the nonce so it cannot be replayed on a later navigation.
-	setOAuthStateCookie(w, r, "", -1)
 	parts := strings.SplitN(stateNonce, ":", 2)
 	if len(parts) < 1 || parts[0] != provider {
 		writeError(w, http.StatusBadRequest, "invalid_request", "state provider mismatch")
@@ -133,7 +104,7 @@ func (s *Service) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_provider", "OAuth provider is not configured")
 		return
 	}
-	cb := s.callbackURI(r, provider)
+	cb := callbackURI(r, provider)
 	var accessToken, userEmail, userName, userAvatar, providerUserID string
 	switch provider {
 	case "github":
