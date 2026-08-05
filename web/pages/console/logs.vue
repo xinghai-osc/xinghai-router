@@ -79,6 +79,7 @@ const EMPTY_STATS: UsageStats = {
   success_count: 0,
   error_count: 0,
   prompt_tokens: 0,
+  cached_prompt_tokens: 0,
   completion_tokens: 0,
   total_tokens: 0,
   total_cost: 0,
@@ -98,6 +99,7 @@ const statTiles = computed(() => [
   { key: 'statSuccess', value: formatNumber(stats.data.value.success_count) },
   { key: 'statErrors', value: formatNumber(stats.data.value.error_count) },
   { key: 'statPromptTokens', value: formatCompact(stats.data.value.prompt_tokens) },
+  { key: 'statCachedTokens', value: formatCompact(stats.data.value.cached_prompt_tokens) },
   { key: 'statCompletionTokens', value: formatCompact(stats.data.value.completion_tokens) },
   { key: 'statTotalTokens', value: formatCompact(stats.data.value.total_tokens) },
   { key: 'statCost', value: formatMoney(stats.data.value.total_cost, 4) },
@@ -115,8 +117,9 @@ async function resetFilters() {
   filters.channel_id = ''
   filters.group_id = ''
   filters.status = ''
-  filters.start = ''
-  filters.end = ''
+  filters.request_id = ''
+  range.start = startOfToday()
+  range.end = new Date()
   await applyFilters()
 }
 
@@ -148,41 +151,104 @@ const detailTarget = ref<UsageLog | RequestLog | null>(null)
           </div>
         </div>
 
-        <UiCard :title="t('common.filter')">
-          <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <UiField :label="t('admin.filterUserId')">
-              <UiInput v-model="filters.user_id" mono />
-            </UiField>
-            <UiField :label="t('admin.model')">
-              <UiInput v-model="filters.model" mono />
-            </UiField>
-            <UiField :label="t('admin.filterChannelId')">
-              <UiInput v-model="filters.channel_id" mono />
-            </UiField>
-            <UiField :label="t('admin.filterGroupId')">
-              <UiInput v-model="filters.group_id" mono />
-            </UiField>
-            <UiField :label="t('common.status')">
+        <div class="rounded-control border border-line bg-sunken/40 p-3">
+          <div class="flex flex-wrap items-end gap-2">
+            <div class="w-full sm:w-64">
+              <PopoverRoot v-model:open="rangeOpen">
+                <PopoverTrigger as-child class="block w-full">
+                  <button
+                    type="button"
+                    class="inline-flex h-10 w-full items-center gap-2 rounded-control border border-line-strong bg-surface px-3 text-sm transition-colors duration-150 hover:border-faint focus:border-clay focus:outline-none focus:ring-2 focus:ring-clay/20"
+                    :aria-label="t('admin.dateRange')"
+                  >
+                    <CalendarDays class="size-4 shrink-0 text-faint" />
+                    <span class="truncate tabular-nums" :class="range.start || range.end ? 'text-ink' : 'text-faint'">{{ rangeLabel }}</span>
+                  </button>
+                </PopoverTrigger>
+                <PopoverPortal>
+                  <PopoverContent
+                    :side-offset="6"
+                    class="animate-pop z-50 w-[min(520px,calc(100vw-2rem))] rounded-control border border-line bg-surface p-3 shadow-pop"
+                  >
+                    <div class="space-y-3">
+                      <div class="grid gap-2 sm:grid-cols-[1fr_auto_1fr] sm:items-end">
+                        <div class="space-y-1.5">
+                          <div class="text-xs text-muted">{{ t('admin.filterStart') }}</div>
+                          <UiInput v-model="rangeDraft.start" type="datetime-local" class="tabular-nums" />
+                        </div>
+                        <span class="hidden pb-2 text-xs text-muted sm:block">~</span>
+                        <div class="space-y-1.5">
+                          <div class="text-xs text-muted">{{ t('admin.filterEnd') }}</div>
+                          <UiInput v-model="rangeDraft.end" type="datetime-local" class="tabular-nums" />
+                        </div>
+                      </div>
+                      <div class="flex flex-wrap gap-1.5">
+                        <UiButton
+                          v-for="preset in DATE_PRESETS"
+                          :key="preset.labelKey"
+                          variant="secondary"
+                          size="sm"
+                          class="h-7 flex-1 px-2 text-xs"
+                          @click="applyRangePreset(preset)"
+                        >
+                          {{ t(preset.labelKey) }}
+                        </UiButton>
+                      </div>
+                      <div class="flex justify-end">
+                        <UiButton size="sm" @click="applyRangeDraft">{{ t('common.confirm') }}</UiButton>
+                      </div>
+                    </div>
+                  </PopoverContent>
+                </PopoverPortal>
+              </PopoverRoot>
+            </div>
+
+            <div class="w-full sm:w-48">
+              <UiInput v-model="filters.model" :placeholder="t('admin.filterModel')" />
+            </div>
+            <div class="w-full sm:w-48">
+              <UiInput v-model="filters.user_id" mono :placeholder="t('admin.filterUserId')" />
+            </div>
+            <div class="w-full sm:w-40">
               <UiSelect v-model="filters.status" :options="statusOptions" :placeholder="t('common.all')" />
-            </UiField>
-            <UiField :label="t('admin.filterStart')">
-              <UiInput v-model="filters.start" type="datetime-local" />
-            </UiField>
-            <UiField :label="t('admin.filterEnd')">
-              <UiInput v-model="filters.end" type="datetime-local" />
-            </UiField>
-            <UiField :label="t('admin.pageSize')">
-              <UiSelect v-model="pageSize" :options="pageSizeOptions" :placeholder="t('common.selectPlaceholder')" />
-            </UiField>
+            </div>
+            <UiButton variant="ghost" size="sm" class="sm:mb-1" @click="advancedOpen = !advancedOpen">
+              {{ t('admin.moreFilters') }}
+              <span v-if="advancedActiveCount" class="inline-flex size-5 items-center justify-center rounded-full bg-clay-soft text-[10px] text-clay">{{ advancedActiveCount }}</span>
+              <ChevronDown
+                class="size-3.5 transition-transform duration-200"
+                :class="advancedOpen && 'rotate-180'"
+              />
+            </UiButton>
           </div>
 
-          <template #footer>
-            <div class="flex justify-end gap-2">
-              <UiButton variant="secondary" size="sm" @click="resetFilters">{{ t('common.reset') }}</UiButton>
+          <div v-if="advancedOpen" class="mt-2 flex flex-wrap items-end gap-2 border-t border-line pt-3">
+            <div class="w-full sm:w-48">
+              <UiInput v-model="filters.channel_id" mono :placeholder="t('admin.filterChannelId')" />
+            </div>
+            <div class="w-full sm:w-48">
+              <UiInput v-model="filters.group_id" mono :placeholder="t('admin.filterGroupId')" />
+            </div>
+            <div class="w-full sm:w-72">
+              <UiInput v-model="filters.request_id" mono :placeholder="t('admin.requestId')" />
+            </div>
+          </div>
+
+          <div class="mt-3 flex flex-wrap items-center gap-2 border-t border-line pt-3">
+            <div class="ml-auto flex flex-wrap items-center gap-3">
+              <div class="flex items-center gap-2">
+                <span class="text-xs text-muted">{{ t('admin.pageSize') }}</span>
+                <div class="w-24">
+                  <UiSelect v-model="pageSize" :options="pageSizeOptions" size="sm" />
+                </div>
+              </div>
+              <UiButton v-if="filtersActive" variant="ghost" size="sm" @click="resetFilters">
+                {{ t('common.reset') }}
+              </UiButton>
               <UiButton size="sm" @click="applyFilters">{{ t('common.filter') }}</UiButton>
             </div>
-          </template>
-        </UiCard>
+          </div>
+        </div>
 
         <ConsoleOpsListState
           :pending="usage.pending.value"
@@ -205,6 +271,7 @@ const detailTarget = ref<UsageLog | RequestLog | null>(null)
                 <th>{{ t('admin.groups') }}</th>
                 <th>{{ t('admin.statusCode') }}</th>
                 <th class="num">{{ t('admin.statPromptTokens') }}</th>
+                <th class="num">{{ t('admin.statCachedTokens') }}</th>
                 <th class="num">{{ t('admin.statCompletionTokens') }}</th>
                 <th class="num">{{ t('admin.duration') }}</th>
                 <th class="num">{{ t('admin.cost') }}</th>
@@ -225,6 +292,7 @@ const detailTarget = ref<UsageLog | RequestLog | null>(null)
                   <UiBadge :tone="statusTone(log.status_code)">{{ log.status_code }}</UiBadge>
                 </td>
                 <td class="num">{{ formatNumber(log.prompt_tokens) }}</td>
+                <td class="num">{{ formatNumber(log.cached_prompt_tokens) }}</td>
                 <td class="num">{{ formatNumber(log.completion_tokens) }}</td>
                 <td class="num">{{ t('admin.durationMs', { value: log.duration_ms }) }}</td>
                 <td class="num">{{ formatMoney(log.cost, 4) }}</td>
@@ -334,6 +402,23 @@ const detailTarget = ref<UsageLog | RequestLog | null>(null)
         <div>
           <div class="mb-1 text-xs text-muted">{{ t('admin.userAgent') }}</div>
           <div class="break-all font-mono text-ink">{{ detailTarget?.user_agent || '—' }}</div>
+        </div>
+        <div class="rounded-control border border-line bg-sunken/40 p-3">
+          <div class="mb-2 text-xs font-medium text-muted">{{ t('admin.tokenBreakdown') }}</div>
+          <div class="grid grid-cols-2 gap-x-4 gap-y-2">
+            <div>
+              <div class="text-2xs text-faint">{{ t('admin.statPromptTokens') }}</div>
+              <div class="numeric text-[13px] text-ink">{{ detailTarget ? formatNumber(detailTarget.prompt_tokens ?? 0) : '—' }}</div>
+            </div>
+            <div>
+              <div class="text-2xs text-faint">{{ t('admin.statCachedTokens') }}</div>
+              <div class="numeric text-[13px] text-ink">{{ detailTarget ? formatNumber(detailTarget.cached_prompt_tokens ?? 0) : '—' }}</div>
+            </div>
+            <div>
+              <div class="text-2xs text-faint">{{ t('admin.statCompletionTokens') }}</div>
+              <div class="numeric text-[13px] text-ink">{{ detailTarget ? formatNumber(detailTarget.completion_tokens ?? 0) : '—' }}</div>
+            </div>
+          </div>
         </div>
         <div>
           <div class="mb-1 text-xs text-muted">{{ t('admin.errorDetail') }}</div>

@@ -27,8 +27,8 @@ const (
 )
 
 type channel struct {
-	id                                    int64
-	baseURL, apiKey, keyID, upstreamModel string
+	id                                     int64
+	baseURL, apiKey, keyID, upstreamModel  string
 	provider, upstreamPath, upstreamFormat string
 	priority, weight                       int
 	overrides                              channelRequestOverrides
@@ -38,8 +38,8 @@ type channel struct {
 // request body after every built-in rewrite: Delete removes top-level fields,
 // Set overwrites top-level fields with the configured value.
 type channelRequestOverrides struct {
-	Delete []string        `json:"delete"`
-	Set    map[string]any  `json:"set"`
+	Delete []string       `json:"delete"`
+	Set    map[string]any `json:"set"`
 }
 
 const (
@@ -241,15 +241,33 @@ func (s *Service) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_request", "max_tokens must be at most 200000")
 		return
 	}
-	s.proxyChatCompletions(w, r, body, request.Model, request.Stream, request.MaxTokens, nil, nil)
+	s.proxyChatCompletions(w, r, body, request.Model, request.Stream, request.MaxTokens, nil, nil, nil, nil, nil)
 }
 
 type responseTransform func([]byte) ([]byte, error)
+
+type requestTransform func([]byte, string) []byte
+
+type providerResponseTransform func([]byte, string) ([]byte, error)
+
+type providerStreamTransform func(http.ResponseWriter, *http.Response, string) (streamStats, error)
+
+// reasoningProvider reports whether a channel routes DeepSeek-style
+// reasoning_content verbatim. Only the DeepSeek thinking mode requires the
+// reasoning text of a prior assistant turn to be passed back unchanged; every
+// other provider (including OpenCode Go) follows OpenAI behavior and drops it.
+func reasoningProvider(provider string) bool {
+	return provider == "deepseek"
+}
 
 // streamStats carries the token counts extracted from an SSE stream's usage
 // events. These are used to bill streaming requests after the stream closes.
 type streamStats struct {
 	prompt, cached, completion int
+	usageReported              bool
+	usageComplete              bool
+	promptReported             bool
+	completionReported         bool
 }
 
 type streamTransform func(http.ResponseWriter, *http.Response) (streamStats, error)
@@ -265,7 +283,7 @@ func (s *Service) logReject(ctx context.Context, model string, status int, code 
 	s.logRequest(ctx, key, 0, "", model, status, 0, 0, 0, time.Since(started), code, "")
 }
 
-func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, body []byte, model string, stream bool, maxTokens int, transform responseTransform, streamFn streamTransform) {
+func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, body []byte, model string, stream bool, maxTokens int, transform responseTransform, streamFn streamTransform, requestFn requestTransform, providerTransform providerResponseTransform, providerStreamFn providerStreamTransform) {
 	started := time.Now()
 	ctx := r.Context()
 	key := ctx.Value(contextKey{}).(keyContext)
@@ -312,6 +330,7 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 	if maxConcurrency > 0 && !s.groupLimiter.acquire(key.groupID, maxConcurrency) {
 		s.logRequest(ctx, key, 0, "", model, 429, 0, 0, 0, time.Since(started), "group_concurrency_limit", "")
 		s.releaseReservation(ctx, key, reserved)
+		reserved = reservation{}
 		writeError(w, 429, "group_concurrency_exceeded", "group concurrency limit exceeded")
 		return
 	}
@@ -348,7 +367,7 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 	var ch channel
 	prefill := ""
 	failDetail := ""
-	tryChannels:
+tryChannels:
 	for pass := 0; pass <= reliability.RetryCount; pass++ {
 		for _, candidate := range channels {
 			ch = candidate
@@ -401,6 +420,9 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 					continue
 				}
 				prefill = prefillText
+			}
+			if requestFn != nil {
+				upstreamBody = requestFn(upstreamBody, ch.provider)
 			}
 			// Channel-configured deletes/overrides apply last, after every built-in
 			// rewrite, so the admin's configuration is authoritative.
@@ -462,7 +484,9 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 		capture := newStreamCaptureWriter(w, cacheEnabled)
 		w = capture
 		var streamErr error
-		if streamFn != nil {
+		if providerStreamFn != nil {
+			st, streamErr = providerStreamFn(w, resp, ch.provider)
+		} else if streamFn != nil {
 			// streamFn is format-aware: it converts whatever the upstream actually
 			// speaks (chat-completions chunks or Anthropic events) into the client
 			// format. For Anthropic-to-Anthropic streams it falls back to relaying
@@ -473,14 +497,20 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 		} else {
 			st, streamErr = s.streamResponse(w, resp)
 		}
-		total := st.prompt + st.completion
 		status := resp.StatusCode
-		if st.cached == 0 {
+		if !st.usageComplete && streamErr == nil {
+			// Do not let providers that omit streaming usage turn a successful request
+			// into a free request. Fall back to the same conservative token estimate
+			// used by the reservation path and charge that hold.
+			st.prompt, st.completion = estimatedStreamUsage(body, maxTokens)
+			st.cached = 0
+		} else if st.cached == 0 {
 			// The upstream did not serve this prompt from its cache. Fall back to the
 			// local prefix cache so overlapping prompts are billed at the cached rate
 			// instead of paying full input price every time.
 			st.cached = int(s.promptCache.cached(model, normalizedPrompt(body), int64(st.prompt)))
 		}
+		total := st.prompt + st.completion
 		code, detail := "", ""
 		switch {
 		case streamErr != nil && !capture.wrote && !capture.headerSent:
@@ -510,8 +540,7 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 				s.promptCache.store(model, normalizedPrompt(body), int64(st.prompt))
 			}
 			if !subscriptionAccess && (st.prompt > 0 || st.completion > 0) {
-				s.settleUsage(ctx, key, reserved, model, st.prompt, st.cached, st.completion, pricing, groupMultiplier)
-				reserved = reservation{}
+				reserved = s.settleUsage(ctx, key, reserved, model, st.prompt, st.cached, st.completion, pricing, groupMultiplier)
 			}
 			s.channelSucceeded(ctx, ch.id, ch.keyID)
 		}
@@ -562,7 +591,14 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 			reserved = s.settleUsage(ctx, key, reserved, model, prompt, cached, completion, pricing, groupMultiplier)
 		}
 		s.channelSucceeded(ctx, ch.id, ch.keyID)
-		if transform != nil {
+		if providerTransform != nil {
+			responseBody, err = providerTransform(responseBody, ch.provider)
+			if err != nil {
+				s.logRequest(ctx, key, ch.id, ch.keyID, model, 502, 0, 0, 0, time.Since(started), "upstream_convert_error", err.Error())
+				writeError(w, 502, "upstream_error", "could not convert upstream response")
+				return
+			}
+		} else if transform != nil {
 			responseBody, err = transform(responseBody)
 			if err != nil {
 				s.logRequest(ctx, key, ch.id, ch.keyID, model, 502, 0, 0, 0, time.Since(started), "upstream_convert_error", err.Error())
@@ -1026,17 +1062,18 @@ func (c *streamCaptureWriter) bytes() []byte {
 	}
 	return c.buf.Bytes()
 }
+
 // streamUsage collects token counts from the SSE chunks that pass through a
 // stream. OpenAI streams carry usage in the final chunk's "usage" object (when
 // stream_options.include_usage was requested); Anthropic streams carry
 // input/cache tokens in the message_start event and output tokens in the
 // message_delta event.
 type sseUsage struct {
-	Prompt     int `json:"prompt_tokens"`
-	Completion int `json:"completion_tokens"`
-	Total      int `json:"total_tokens"`
-	Input      int `json:"input_tokens"`
-	Output     int `json:"output_tokens"`
+	Prompt              int `json:"prompt_tokens"`
+	Completion          int `json:"completion_tokens"`
+	Total               int `json:"total_tokens"`
+	Input               int `json:"input_tokens"`
+	Output              int `json:"output_tokens"`
 	PromptTokensDetails struct {
 		Cached int `json:"cached_tokens"`
 	} `json:"prompt_tokens_details"`
@@ -1045,18 +1082,45 @@ type sseUsage struct {
 
 func parseSSEUsage(data []byte, st *streamStats) {
 	var chunk struct {
-		Usage   sseUsage `json:"usage"`
-		Type    string   `json:"type"`
+		Usage   json.RawMessage `json:"usage"`
+		Type    string          `json:"type"`
 		Message struct {
-			Usage sseUsage `json:"usage"`
+			Usage json.RawMessage `json:"usage"`
 		} `json:"message"`
 	}
 	if json.Unmarshal(data, &chunk) != nil {
 		return
 	}
-	u := chunk.Usage
-	if chunk.Type == "message_start" {
-		u = chunk.Message.Usage
+	rawUsage := chunk.Usage
+	isMessageStart := chunk.Type == "message_start"
+	if isMessageStart {
+		rawUsage = chunk.Message.Usage
+	}
+	if len(rawUsage) == 0 || string(rawUsage) == "null" {
+		return
+	}
+	var u sseUsage
+	if json.Unmarshal(rawUsage, &u) != nil {
+		return
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(rawUsage, &fields) != nil {
+		return
+	}
+	st.usageReported = true
+	if _, ok := fields["prompt_tokens"]; ok {
+		st.promptReported = true
+	}
+	if _, ok := fields["input_tokens"]; ok {
+		st.promptReported = true
+	}
+	if !isMessageStart {
+		if _, ok := fields["completion_tokens"]; ok {
+			st.completionReported = true
+		}
+		if _, ok := fields["output_tokens"]; ok {
+			st.completionReported = true
+		}
 	}
 	if u.Prompt > st.prompt {
 		st.prompt = u.Prompt
@@ -1076,6 +1140,13 @@ func parseSSEUsage(data []byte, st *streamStats) {
 	if u.CacheReadInputTokens > st.cached {
 		st.cached = u.CacheReadInputTokens
 	}
+	st.usageComplete = st.promptReported && st.completionReported && (st.prompt > 0 || st.completion > 0)
+}
+
+func estimatedStreamUsage(body []byte, maxTokens int) (prompt, completion int) {
+	completion, _ = resolveGatewayMaxTokens(maxTokens)
+	prompt = len(body) / 3
+	return prompt, completion
 }
 
 func (s *Service) streamResponse(w http.ResponseWriter, resp *http.Response) (streamStats, error) {
@@ -1147,11 +1218,11 @@ func sanitizeErrorDetail(detail string) string {
 func usage(body []byte) (prompt, completion, total, cached int) {
 	var v struct {
 		Usage struct {
-			Prompt     int `json:"prompt_tokens"`
-			Completion int `json:"completion_tokens"`
-			Total      int `json:"total_tokens"`
-			Input      int `json:"input_tokens"`
-			Output     int `json:"output_tokens"`
+			Prompt              int `json:"prompt_tokens"`
+			Completion          int `json:"completion_tokens"`
+			Total               int `json:"total_tokens"`
+			Input               int `json:"input_tokens"`
+			Output              int `json:"output_tokens"`
 			PromptTokensDetails struct {
 				Cached int `json:"cached_tokens"`
 			} `json:"prompt_tokens_details"`

@@ -105,6 +105,7 @@ export default {
   errorDetail: '報錯',
   statusFailed: '失敗',
   dateRange: '時間範圍',
+  datePresetToday: '今天',
   datePreset24h: '24 小時',
   datePreset7d: '7 天',
   datePreset14d: '14 天',

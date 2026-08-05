@@ -59,7 +59,7 @@ func (s *Service) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	s.proxyChatCompletions(w, r, body, in.Model, in.Stream, in.MaxTokens, openAIToAnthropic, streamOpenAIToAnthropic)
+	s.proxyChatCompletions(w, r, body, in.Model, in.Stream, in.MaxTokens, openAIToAnthropic, streamOpenAIToAnthropic, nil, nil, nil)
 }
 
 func anthropicToOpenAI(in anthropicRequest) ([]byte, error) {

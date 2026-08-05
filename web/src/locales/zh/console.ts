@@ -127,6 +127,7 @@ export default {
   errorDetail: '报错',
   statusFailed: '失败',
   dateRange: '时间范围',
+  datePresetToday: '今天',
   datePreset24h: '24 小时',
   datePreset7d: '7 天',
   datePreset14d: '14 天',

@@ -94,17 +94,14 @@ func TestProxyChatCompletionsPricingErrorMapping(t *testing.T) {
 	}
 }
 
-func TestStreamSkipsWalletReservationFlag(t *testing.T) {
-	// Documented product rule: stream requests are not settled; reservation must stay empty
-	// so concurrent stream traffic does not pin wallet reserved balances.
-	var reserved reservation
-	stream := true
-	subscriptionAccess := false
-	if subscriptionAccess || stream {
-		reserved = reservation{}
+func TestEstimatedStreamUsageMatchesReservationEstimate(t *testing.T) {
+	body := []byte(`{"model":"m","messages":[{"role":"user","content":"hello"}]}`)
+	prompt, completion := estimatedStreamUsage(body, 200000)
+	if prompt != len(body)/3 || completion != 200000 {
+		t.Fatalf("estimated stream usage = %d/%d, want %d/%d", prompt, completion, len(body)/3, 200000)
 	}
-	if reserved.amount != 0 {
-		t.Fatal("stream path must not hold a non-zero reservation")
+	if _, completion := estimatedStreamUsage(body, 0); completion != defaultGatewayMaxTokens {
+		t.Fatalf("default estimated completion = %d, want %d", completion, defaultGatewayMaxTokens)
 	}
 }
 
@@ -410,6 +407,32 @@ func TestStreamCaptureNonEmptyStream(t *testing.T) {
 	}
 	if st.prompt != 0 || st.completion != 0 {
 		t.Fatalf("no usage expected, got %+v", st)
+	}
+}
+
+func TestParseSSEUsageRequiresUsageObject(t *testing.T) {
+	var st streamStats
+	parseSSEUsage([]byte(`{"id":"chunk","choices":[]}`), &st)
+	if st.usageReported {
+		t.Fatal("ordinary stream chunk must not report usage")
+	}
+	parseSSEUsage([]byte(`{"usage":{"prompt_tokens":8,"completion_tokens":5,"total_tokens":13}}`), &st)
+	if !st.usageReported || !st.usageComplete || st.prompt != 8 || st.completion != 5 {
+		t.Fatalf("parsed usage = %+v, want reported 8/5", st)
+	}
+	var anthropic streamStats
+	parseSSEUsage([]byte(`{"type":"message_start","message":{"usage":{"input_tokens":10,"output_tokens":0}}}`), &anthropic)
+	if anthropic.usageComplete {
+		t.Fatal("Anthropic message_start must not complete output usage")
+	}
+	parseSSEUsage([]byte(`{"type":"message_delta","usage":{"output_tokens":12}}`), &anthropic)
+	if !anthropic.usageComplete || anthropic.prompt != 10 || anthropic.completion != 12 {
+		t.Fatalf("Anthropic usage = %+v, want complete 10/12", anthropic)
+	}
+	var zero streamStats
+	parseSSEUsage([]byte(`{"usage":{"prompt_tokens":0,"completion_tokens":0}}`), &zero)
+	if zero.usageComplete {
+		t.Fatal("zero-token usage must use the conservative billing fallback")
 	}
 }
 

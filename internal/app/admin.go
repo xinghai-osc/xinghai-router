@@ -1269,7 +1269,7 @@ func validModelName(model string) bool {
 }
 
 func validChannelProvider(provider string) bool {
-	return map[string]bool{"openai": true, "ollama": true, "kimi": true, "opencode_go": true, "anthropic": true, "custom": true}[provider]
+	return map[string]bool{"openai": true, "ollama": true, "kimi": true, "opencode_go": true, "anthropic": true, "deepseek": true, "custom": true}[provider]
 }
 
 func validChannelKeyType(keyType string) bool {

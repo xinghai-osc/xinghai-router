@@ -127,6 +127,7 @@ export default {
   errorDetail: 'Error',
   statusFailed: 'Failed',
   dateRange: 'Date range',
+  datePresetToday: 'Today',
   datePreset24h: '24h',
   datePreset7d: '7 days',
   datePreset14d: '14 days',

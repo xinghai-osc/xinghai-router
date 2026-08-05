@@ -413,3 +413,98 @@ func TestResponsesInputItemImages(t *testing.T) {
 		t.Fatalf("audio part wrong: %s", out)
 	}
 }
+
+func TestResponsesRequestForProviderKeepsReasoningOnlyForDeepSeek(t *testing.T) {
+	body := []byte(`{"model":"deepseek-reasoner","messages":[{"role":"user","content":"hi"},{"role":"assistant","content":"answer","reasoning_content":"think"},{"role":"user","content":"again"}]}`)
+	for _, provider := range []string{"deepseek"} {
+		out := responsesRequestForProvider(body, provider)
+		if !strings.Contains(string(out), "reasoning_content") {
+			t.Fatalf("provider %q must keep reasoning_content: %s", provider, out)
+		}
+	}
+	for _, provider := range []string{"openai", "opencode_go", "anthropic", "custom", "ollama", "kimi"} {
+		out := responsesRequestForProvider(body, provider)
+		if strings.Contains(string(out), "reasoning_content") {
+			t.Fatalf("provider %q must strip reasoning_content: %s", provider, out)
+		}
+		if !strings.Contains(string(out), `"content":"answer"`) {
+			t.Fatalf("provider %q must keep the assistant text: %s", provider, out)
+		}
+	}
+}
+
+func TestResponsesInputItemCarriesReasoningContent(t *testing.T) {
+	out, _, err := responsesRequestToChatCompletions([]byte(`{
+		"model": "deepseek-reasoner",
+		"input": [{"type": "message", "role": "assistant", "content": "answer", "reasoning_content": "think"}]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload struct {
+		Messages []map[string]any `json:"messages"`
+	}
+	if json.Unmarshal(out, &payload) != nil || len(payload.Messages) != 1 {
+		t.Fatalf("unexpected conversion: %s", out)
+	}
+	if reasoning, _ := payload.Messages[0]["reasoning_content"].(string); reasoning != "think" {
+		t.Fatalf("reasoning_content not carried: %s", out)
+	}
+}
+
+func TestChatCompletionsToResponsesReasoning(t *testing.T) {
+	body := []byte(`{"model":"deepseek-reasoner","choices":[{"index":0,"message":{"role":"assistant","content":"answer","reasoning_content":"think"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	out, err := chatCompletionsToResponses(body, "resp_x", responsesEcho{}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response struct {
+		Output []map[string]any `json:"output"`
+	}
+	if json.Unmarshal(out, &response) != nil || len(response.Output) != 1 {
+		t.Fatalf("unexpected conversion: %s", out)
+	}
+	if reasoning, _ := response.Output[0]["reasoning_content"].(string); reasoning != "think" {
+		t.Fatalf("reasoning_content not relayed when keepReasoning: %s", out)
+	}
+
+	out, err = chatCompletionsToResponses(body, "resp_x", responsesEcho{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var plain struct {
+		Output []map[string]any `json:"output"`
+	}
+	if err := json.Unmarshal(out, &plain); err != nil || len(plain.Output) != 1 {
+		t.Fatalf("unexpected conversion: %s", out)
+	}
+	if _, ok := plain.Output[0]["reasoning_content"]; ok {
+		t.Fatalf("reasoning_content must be dropped when keepReasoning is false: %s", out)
+	}
+}
+
+func TestStreamChatCompletionsToResponsesReasoning(t *testing.T) {
+	sse := "data: {\"id\":\"chatcmpl-1\",\"model\":\"deepseek-reasoner\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}]}\n\n" +
+		"data: {\"id\":\"chatcmpl-1\",\"model\":\"deepseek-reasoner\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"think\"},\"finish_reason\":null}]}\n\n" +
+		"data: {\"id\":\"chatcmpl-1\",\"model\":\"deepseek-reasoner\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"answer\"},\"finish_reason\":null}]}\n\n" +
+		"data: {\"id\":\"chatcmpl-1\",\"model\":\"deepseek-reasoner\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+		"data: {\"id\":\"chatcmpl-1\",\"model\":\"deepseek-reasoner\",\"choices\":[],\"usage\":{\"prompt_tokens\":8,\"completion_tokens\":5}}\n\n" +
+		"data: [DONE]\n\n"
+
+	rec := httptest.NewRecorder()
+	if _, err := streamChatCompletionsToResponses(rec, streamBody(t, sse), "resp_test", responsesEcho{}, true); err != nil {
+		t.Fatal(err)
+	}
+	out := rec.Body.String()
+	if !strings.Contains(out, `"reasoning_content":"think"`) {
+		t.Fatalf("reasoning_content missing from relayed stream:\n%s", out)
+	}
+
+	rec = httptest.NewRecorder()
+	if _, err := streamChatCompletionsToResponses(rec, streamBody(t, sse), "resp_test", responsesEcho{}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(rec.Body.String(), "reasoning_content") {
+		t.Fatalf("reasoning_content must be dropped when keepReasoning is false:\n%s", rec.Body.String())
+	}
+}

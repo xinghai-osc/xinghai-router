@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { Component } from 'vue'
-import { Server, KeyRound, Play, ArrowRightLeft, BarChart3, X, ListChecks, SortAsc, Eye, EyeOff, Sparkles, Cpu, Moon, SquareTerminal, Hexagon, Plug } from 'lucide-vue-next'
+import { Server, KeyRound, Play, ArrowRightLeft, BarChart3, X, ListChecks, SortAsc, Eye, EyeOff, Sparkles, Cpu, Moon, SquareTerminal, Hexagon, Brain, Plug } from 'lucide-vue-next'
 import { endpoints, type Channel, type ChannelForm, type ChannelKey, type ChannelKeyTestResult, type ChannelQuota, type ChannelQuotaForm, type ChannelTestResult, type ChannelUsageStats, type Group, type ModelRoute, type ModelRouteForm } from '~/src/api'
 import { formatCompact, formatNumber, formatMoney, formatDateTime } from '~/src/format'
 
@@ -14,7 +14,7 @@ const { busy, run } = useAction()
 const allowed = computed(() => can('channels.read'))
 const canManage = computed(() => can('channels.manage'))
 
-const PROVIDERS = ['openai', 'ollama', 'kimi', 'opencode_go', 'anthropic', 'custom']
+const PROVIDERS = ['openai', 'ollama', 'kimi', 'opencode_go', 'anthropic', 'deepseek', 'custom']
 const KEY_TYPES = [
   { value: 'single', label: t('admin.singleKey') },
   { value: 'multi', label: t('admin.multiKey') },
@@ -26,6 +26,7 @@ const PROVIDER_ICONS: Record<string, Component> = {
   kimi: Moon,
   opencode_go: SquareTerminal,
   anthropic: Hexagon,
+  deepseek: Brain,
   custom: Plug,
 }
 

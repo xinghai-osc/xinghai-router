@@ -51,9 +51,18 @@ func (s *Service) responsesCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	responseID := "resp_" + randomIDString()
 	s.proxyChatCompletions(w, r, converted, request.Model, request.Stream, request.MaxOutputTokens,
-		func(responseBody []byte) ([]byte, error) { return chatCompletionsToResponses(responseBody, responseID, echo) },
+		func(responseBody []byte) ([]byte, error) {
+			return chatCompletionsToResponses(responseBody, responseID, echo, false)
+		},
 		func(w http.ResponseWriter, resp *http.Response) (streamStats, error) {
-			return streamChatCompletionsToResponses(w, resp, responseID, echo)
+			return streamChatCompletionsToResponses(w, resp, responseID, echo, false)
+		},
+		responsesRequestForProvider,
+		func(responseBody []byte, provider string) ([]byte, error) {
+			return chatCompletionsToResponses(responseBody, responseID, echo, reasoningProvider(provider))
+		},
+		func(w http.ResponseWriter, resp *http.Response, provider string) (streamStats, error) {
+			return streamChatCompletionsToResponses(w, resp, responseID, echo, reasoningProvider(provider))
 		})
 }
 
@@ -250,12 +259,12 @@ func responsesInputItem(item any) map[string]any {
 		return map[string]any{"role": "user", "content": value}
 	case map[string]any:
 		if role, ok := value["role"].(string); ok {
-			return map[string]any{"role": validChatRole(role), "content": responsesContent(value["content"])}
+			return chatMessageFromResponses(role, value)
 		}
 		switch value["type"] {
 		case "message":
 			role, _ := value["role"].(string)
-			return map[string]any{"role": validChatRole(role), "content": responsesContent(value["content"])}
+			return chatMessageFromResponses(role, value)
 		case "function_call":
 			return map[string]any{
 				"role":    "assistant",
@@ -271,6 +280,54 @@ func responsesInputItem(item any) map[string]any {
 		}
 	}
 	return nil
+}
+
+// chatMessageFromResponses builds a chat message from a Responses message item,
+// carrying any reasoning_content through so DeepSeek-style thinking-mode models
+// can validate the conversation history upstream.
+func chatMessageFromResponses(role string, value map[string]any) map[string]any {
+	message := map[string]any{"role": validChatRole(role), "content": responsesContent(value["content"])}
+	if reasoning, ok := value["reasoning_content"].(string); ok && reasoning != "" {
+		message["reasoning_content"] = reasoning
+	}
+	return message
+}
+
+// responsesRequestForProvider strips the router-internal reasoning_content field
+// from every assistant message before it reaches the upstream, unless the channel
+// routes the DeepSeek provider, whose thinking mode rejects a conversation whose
+// prior assistant turns lost their reasoning text.
+func responsesRequestForProvider(body []byte, provider string) []byte {
+	if reasoningProvider(provider) {
+		return body
+	}
+	var payload map[string]any
+	if json.Unmarshal(body, &payload) != nil {
+		return body
+	}
+	messages, ok := payload["messages"].([]any)
+	if !ok {
+		return body
+	}
+	changed := false
+	for _, item := range messages {
+		message, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if _, ok := message["reasoning_content"]; ok {
+			delete(message, "reasoning_content")
+			changed = true
+		}
+	}
+	if !changed {
+		return body
+	}
+	converted, err := json.Marshal(payload)
+	if err != nil {
+		return body
+	}
+	return converted
 }
 
 func validChatRole(role string) string {
@@ -368,6 +425,11 @@ func mergeToolCallMessages(messages []any) []any {
 				calls, ok2 := current["tool_calls"].([]any)
 				if ok1 && ok2 && len(lastCalls) > 0 {
 					last["tool_calls"] = append(lastCalls, calls...)
+					if _, ok := last["reasoning_content"]; !ok {
+						if reasoning, ok := current["reasoning_content"]; ok {
+							last["reasoning_content"] = reasoning
+						}
+					}
 					continue
 				}
 			}
@@ -378,14 +440,19 @@ func mergeToolCallMessages(messages []any) []any {
 }
 
 // chatCompletionsToResponses converts a chat-completions response body into the
-// OpenAI Responses object shape.
-func chatCompletionsToResponses(body []byte, responseID string, echo responsesEcho) ([]byte, error) {
+// OpenAI Responses object shape. When keepReasoning is true (DeepSeek-style
+// providers) the assistant message's reasoning_content is relayed so the client
+// can pass it back on the next turn; otherwise it is dropped like any other
+// unknown OpenAI field.
+func chatCompletionsToResponses(body []byte, responseID string, echo responsesEcho, keepReasoning ...bool) ([]byte, error) {
+	reasoning := len(keepReasoning) > 0 && keepReasoning[0]
 	var in struct {
 		Model   string `json:"model"`
 		Choices []struct {
 			Message struct {
-				Content   any `json:"content"`
-				ToolCalls []struct {
+				Content          any    `json:"content"`
+				ReasoningContent string `json:"reasoning_content"`
+				ToolCalls        []struct {
 					ID       string `json:"id"`
 					Function struct {
 						Name      string `json:"name"`
@@ -412,14 +479,18 @@ func chatCompletionsToResponses(body []byte, responseID string, echo responsesEc
 	}
 	choice := in.Choices[0]
 	output := []any{}
-	if text := openAIMessageText(choice.Message.Content); text != "" {
-		output = append(output, map[string]any{
+	if text := openAIMessageText(choice.Message.Content); text != "" || (reasoning && choice.Message.ReasoningContent != "") {
+		item := map[string]any{
 			"id":      "msg_" + randomIDString(),
 			"type":    "message",
 			"status":  "completed",
 			"role":    "assistant",
 			"content": []any{map[string]any{"type": "output_text", "text": text, "annotations": []any{}}},
-		})
+		}
+		if reasoning && choice.Message.ReasoningContent != "" {
+			item["reasoning_content"] = choice.Message.ReasoningContent
+		}
+		output = append(output, item)
 	}
 	for _, call := range choice.Message.ToolCalls {
 		output = append(output, map[string]any{
@@ -521,24 +592,26 @@ func responseObject(id, model, status string, output []any, usage map[string]any
 // responsesStream converts an upstream SSE stream (OpenAI chat-completions
 // chunks or Anthropic events) into OpenAI Responses streaming events.
 type responsesStream struct {
-	responseID   string
-	echo         responsesEcho
-	model        string
-	output       []any
-	outputIndex  int
-	msgItemID    string
-	textOutput   int
-	textBlock    int
-	textOpen     bool
-	msgText      strings.Builder
-	tools        map[int]*responsesTool
-	toolOrder    []int
-	status       string
-	inputTokens  int
-	cached       int
-	outputTokens int
-	started      bool
-	finished     bool
+	responseID    string
+	echo          responsesEcho
+	model         string
+	output        []any
+	outputIndex   int
+	msgItemID     string
+	textOutput    int
+	textBlock     int
+	textOpen      bool
+	msgText       strings.Builder
+	reasoning     strings.Builder
+	keepReasoning bool
+	tools         map[int]*responsesTool
+	toolOrder     []int
+	status        string
+	inputTokens   int
+	cached        int
+	outputTokens  int
+	started       bool
+	finished      bool
 }
 
 type responsesTool struct {
@@ -628,6 +701,12 @@ func (s *responsesStream) closeTextItem(emit func(string, any)) {
 	}
 	text := s.msgText.String()
 	part := map[string]any{"type": "output_text", "text": text, "annotations": []any{}}
+	item := map[string]any{"id": s.msgItemID, "type": "message", "status": "completed", "role": "assistant", "content": []any{part}}
+	if s.keepReasoning {
+		if reasoning := s.reasoning.String(); reasoning != "" {
+			item["reasoning_content"] = reasoning
+		}
+	}
 	emit("response.output_text.done", map[string]any{
 		"type":          "response.output_text.done",
 		"item_id":       s.msgItemID,
@@ -645,9 +724,9 @@ func (s *responsesStream) closeTextItem(emit func(string, any)) {
 	emit("response.output_item.done", map[string]any{
 		"type":         "response.output_item.done",
 		"output_index": s.textOutput,
-		"item":         map[string]any{"id": s.msgItemID, "type": "message", "status": "completed", "role": "assistant", "content": []any{part}},
+		"item":         item,
 	})
-	s.output = append(s.output, map[string]any{"id": s.msgItemID, "type": "message", "status": "completed", "role": "assistant", "content": []any{part}})
+	s.output = append(s.output, item)
 	s.textOpen = false
 }
 
@@ -693,8 +772,9 @@ func (s *responsesStream) chatEvent(data string, st *streamStats, emit func(stri
 		ID, Model string
 		Choices   []struct {
 			Delta struct {
-				Content   string `json:"content"`
-				ToolCalls []struct {
+				Content          string `json:"content"`
+				ReasoningContent string `json:"reasoning_content"`
+				ToolCalls        []struct {
 					Index    int                              `json:"index"`
 					ID       string                           `json:"id"`
 					Function struct{ Name, Arguments string } `json:"function"`
@@ -715,6 +795,9 @@ func (s *responsesStream) chatEvent(data string, st *streamStats, emit func(stri
 		return
 	}
 	choice := chunk.Choices[0]
+	if choice.Delta.ReasoningContent != "" {
+		s.reasoning.WriteString(choice.Delta.ReasoningContent)
+	}
 	if choice.Delta.Content != "" {
 		s.startTextItem(emit)
 		s.msgText.WriteString(choice.Delta.Content)
@@ -831,7 +914,7 @@ func (s *responsesStream) anthropicEvent(data string, st *streamStats, emit func
 // streamChatCompletionsToResponses relays an upstream SSE stream to the client
 // as Responses events, converting both chat-completions chunks and Anthropic
 // events (for channels routed through the Anthropic adapter).
-func streamChatCompletionsToResponses(w http.ResponseWriter, resp *http.Response, responseID string, echo responsesEcho) (streamStats, error) {
+func streamChatCompletionsToResponses(w http.ResponseWriter, resp *http.Response, responseID string, echo responsesEcho, keepReasoning ...bool) (streamStats, error) {
 	var st streamStats
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -845,7 +928,7 @@ func streamChatCompletionsToResponses(w http.ResponseWriter, resp *http.Response
 		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", name, data)
 		flusher.Flush()
 	}
-	stream := &responsesStream{responseID: responseID, echo: echo, status: "completed", tools: map[int]*responsesTool{}}
+	stream := &responsesStream{responseID: responseID, echo: echo, status: "completed", tools: map[int]*responsesTool{}, keepReasoning: len(keepReasoning) > 0 && keepReasoning[0]}
 	decided, chatMode := false, true
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64*1024), 2<<20)

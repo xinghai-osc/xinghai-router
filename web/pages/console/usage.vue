@@ -33,13 +33,20 @@ const status = ref('')
 const advancedOpen = ref(false)
 
 const DATE_PRESETS = [
-  { days: 1, labelKey: 'console.datePreset24h' },
-  { days: 7, labelKey: 'console.datePreset7d' },
-  { days: 14, labelKey: 'console.datePreset14d' },
-  { days: 30, labelKey: 'console.datePreset30d' },
+  { labelKey: 'console.datePresetToday', start: (now: Date) => { const s = new Date(now); s.setHours(0, 0, 0, 0); return s } },
+  { labelKey: 'console.datePreset24h', start: (now: Date) => new Date(now.getTime() - 24 * 3600 * 1000) },
+  { labelKey: 'console.datePreset7d', start: (now: Date) => new Date(now.getTime() - 7 * 24 * 3600 * 1000) },
+  { labelKey: 'console.datePreset14d', start: (now: Date) => new Date(now.getTime() - 14 * 24 * 3600 * 1000) },
+  { labelKey: 'console.datePreset30d', start: (now: Date) => new Date(now.getTime() - 30 * 24 * 3600 * 1000) },
 ]
 
-const range = reactive<{ start: Date | null; end: Date | null }>({ start: null, end: null })
+function startOfToday(): Date {
+  const start = new Date()
+  start.setHours(0, 0, 0, 0)
+  return start
+}
+
+const range = reactive<{ start: Date | null; end: Date | null }>({ start: startOfToday(), end: new Date() })
 const rangeDraft = reactive({ start: '', end: '' })
 const rangeOpen = ref(false)
 
@@ -74,9 +81,9 @@ function applyRangeDraft() {
   rangeOpen.value = false
 }
 
-function applyRangePreset(days: number) {
+function applyRangePreset(preset: (typeof DATE_PRESETS)[number]) {
   const end = new Date()
-  const start = new Date(end.getTime() - days * 24 * 3600 * 1000)
+  const start = preset.start(end)
   range.start = start
   range.end = end
   rangeDraft.start = toInputValue(start)
@@ -125,8 +132,8 @@ function resetFilters() {
   key.value = ''
   requestId.value = ''
   status.value = ''
-  range.start = null
-  range.end = null
+  range.start = startOfToday()
+  range.end = new Date()
 }
 
 function isFailed(record: UsageRecord): boolean {
@@ -177,7 +184,7 @@ const clientTarget = ref<UsageRecord | null>(null)
                         variant="secondary"
                         size="sm"
                         class="h-7 flex-1 px-2 text-xs"
-                        @click="applyRangePreset(preset.days)"
+                        @click="applyRangePreset(preset)"
                       >
                         {{ t(preset.labelKey) }}
                       </UiButton>
@@ -293,7 +300,7 @@ const clientTarget = ref<UsageRecord | null>(null)
                   <span class="font-mono text-xs font-medium tabular-nums">
                     {{ formatNumber(record.prompt_tokens) }} / {{ formatNumber(record.completion_tokens) }}
                   </span>
-                  <span v-if="record.cached_prompt_tokens > 0" class="text-2xs text-faint">
+                  <span class="text-2xs text-faint">
                     {{ t('console.cacheReadTokens') }} ↓ {{ formatNumber(record.cached_prompt_tokens) }}
                   </span>
                 </div>

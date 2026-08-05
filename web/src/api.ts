@@ -6,7 +6,7 @@ export interface KeyQuota { limits: KeyQuotaLimit[]; usage: KeyQuotaUsage[] }
 export interface KeyQuotaForm { window: 'day' | 'month' | 'total'; max_requests?: number | null; max_tokens?: number | null; max_cost?: number | null }
 /** `groups` holds group ids, not names — resolve them through /admin/groups. */
 export interface RequestOverrides { delete: string[]; set: Record<string, unknown> }
-export interface Channel { id: string; name: string; base_url: string; provider: 'openai' | 'ollama' | 'kimi' | 'opencode_go' | 'anthropic' | 'custom'; models: string[]; test_model: string; enabled: boolean; auto_disabled: boolean; auto_disable: boolean; disabled_reason: string; priority: number; weight: number; last_test_time: string | null; last_error: string | null; response_time_ms: number; used_requests: number; used_tokens: number; groups: string[]; key_type: 'single' | 'multi'; key_count: number; upstream_path: string; upstream_format: string; request_overrides: RequestOverrides; created_at: string; updated_at: string; model_routes: ModelRoute[] }
+export interface Channel { id: string; name: string; base_url: string; provider: 'openai' | 'ollama' | 'kimi' | 'opencode_go' | 'anthropic' | 'deepseek' | 'custom'; models: string[]; test_model: string; enabled: boolean; auto_disabled: boolean; auto_disable: boolean; disabled_reason: string; priority: number; weight: number; last_test_time: string | null; last_error: string | null; response_time_ms: number; used_requests: number; used_tokens: number; groups: string[]; key_type: 'single' | 'multi'; key_count: number; upstream_path: string; upstream_format: string; request_overrides: RequestOverrides; created_at: string; updated_at: string; model_routes: ModelRoute[] }
 
 export interface ChannelKey { id: string; name: string; enabled: boolean; priority: number; last_checked_at: string | null; last_error: string | null; created_at: string }
 export interface ChannelKeyForm { name?: string; api_key: string; priority?: number }
@@ -99,6 +99,7 @@ export interface UsageLog {
   prompt_tokens: number | null
   completion_tokens: number | null
   total_tokens: number | null
+  cached_prompt_tokens: number
   duration_ms: number
   error_code: string | null
   error_detail: string
@@ -113,6 +114,7 @@ export interface UsageStats {
   success_count: number
   error_count: number
   prompt_tokens: number
+  cached_prompt_tokens: number
   completion_tokens: number
   total_tokens: number
   total_cost: string
@@ -124,6 +126,7 @@ export interface UsageStatBreakdown {
   period: string
   requests: number
   prompt_tokens: number
+  cached_prompt_tokens: number
   completion_tokens: number
   total_tokens: number
   cost: string

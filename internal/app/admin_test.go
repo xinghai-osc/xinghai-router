@@ -172,7 +172,7 @@ func TestUpdateChannelRejectsInvalidPriorityBeforeDatabaseAccess(t *testing.T) {
 }
 
 func TestValidChannelProviderAndPriority(t *testing.T) {
-	for _, p := range []string{"openai", "ollama", "kimi", "opencode_go", "anthropic", "custom"} {
+	for _, p := range []string{"openai", "ollama", "kimi", "opencode_go", "anthropic", "deepseek", "custom"} {
 		if !validChannelProvider(p) {
 			t.Fatalf("expected provider %q valid", p)
 		}
