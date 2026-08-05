@@ -41,13 +41,13 @@ func TestResponsesRequestToChatCompletions(t *testing.T) {
 		"max_output_tokens": 100,
 		"stream": true,
 		"tools": [
-			{"type": "function", "name": "get_weather", "description": "Weather", "parameters": {"type": "object"}},
+			{"type": "function", "name": "get_weather", "description": "Weather", "parameters": {"type": "object"}, "strict": true},
 			{"type": "web_search"}
 		],
 		"tool_choice": {"type": "function", "name": "get_weather"},
 		"text": {"format": {"type": "json_object"}}
 	}`)
-	out, err := responsesRequestToChatCompletions(body)
+	out, echo, err := responsesRequestToChatCompletions(body)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,6 +106,10 @@ func TestResponsesRequestToChatCompletions(t *testing.T) {
 	if len(payload.Tools) != 1 {
 		t.Fatalf("web_search tool should be dropped, got %d tools", len(payload.Tools))
 	}
+	function, _ := payload.Tools[0]["function"].(map[string]any)
+	if function["strict"] != true {
+		t.Fatalf("tool strict not passed through: %s", out)
+	}
 	var raw map[string]any
 	_ = json.Unmarshal(out, &raw)
 	if choiceMap, ok := raw["tool_choice"].(map[string]any); !ok || choiceMap["type"] != "function" {
@@ -114,10 +118,16 @@ func TestResponsesRequestToChatCompletions(t *testing.T) {
 	if _, ok := raw["response_format"].(map[string]any); !ok {
 		t.Fatalf("response_format not converted: %s", out)
 	}
+	if echo.instructions != "Be brief." || echo.maxOutputTokens != 100 {
+		t.Fatalf("echo fields not captured: %+v", echo)
+	}
+	if len(echo.tools) != 2 || echo.tools[0].(map[string]any)["type"] != "function" {
+		t.Fatalf("echo tools not captured: %+v", echo.tools)
+	}
 }
 
 func TestResponsesRequestToStringInput(t *testing.T) {
-	out, err := responsesRequestToChatCompletions([]byte(`{"model":"m","input":"hi there"}`))
+	out, _, err := responsesRequestToChatCompletions([]byte(`{"model":"m","input":"hi there"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +166,7 @@ func TestChatCompletionsToResponses(t *testing.T) {
 		"usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15,
 			"prompt_tokens_details": {"cached_tokens": 3}}
 	}`)
-	out, err := chatCompletionsToResponses(body, "resp_test")
+	out, err := chatCompletionsToResponses(body, "resp_test", responsesEcho{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,18 +217,61 @@ func TestChatCompletionsToResponses(t *testing.T) {
 	}
 }
 
+func TestResponseObjectEcho(t *testing.T) {
+	echo := responsesEcho{model: "gpt-4o", instructions: "Be brief", maxOutputTokens: 64, temperature: 0.5, topP: 0.9,
+		store: false, parallelToolCalls: false, previousResponseID: "resp_prev", user: "u1",
+		reasoning: map[string]any{"effort": "high", "summary": nil},
+		tools:     []any{map[string]any{"type": "function", "name": "get_weather", "strict": true}},
+	}
+	out, err := json.Marshal(responseObject("resp_x", "gpt-4o", "completed", nil, nil, echo))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response map[string]any
+	if json.Unmarshal(out, &response) != nil {
+		t.Fatalf("response body is not valid JSON: %s", out)
+	}
+	for field, want := range map[string]any{
+		"instructions":         "Be brief",
+		"max_output_tokens":    float64(64),
+		"temperature":          0.5,
+		"top_p":                0.9,
+		"store":                false,
+		"parallel_tool_calls":  false,
+		"previous_response_id": "resp_prev",
+		"user":                 "u1",
+		"truncation":           "disabled",
+	} {
+		if got := response[field]; got != want {
+			t.Fatalf("response[%q] = %v, want %v", field, got, want)
+		}
+	}
+	if effort := response["reasoning"].(map[string]any)["effort"]; effort != "high" {
+		t.Fatalf("reasoning.effort = %v, want high", effort)
+	}
+	if tools := response["tools"].([]any); len(tools) != 1 || tools[0].(map[string]any)["strict"] != true {
+		t.Fatalf("tools not echoed with strict default: %s", out)
+	}
+}
+
 func TestChatCompletionsToResponsesIncomplete(t *testing.T) {
 	body := []byte(`{"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":""},"finish_reason":"length"}],"usage":{"prompt_tokens":1,"completion_tokens":2}}`)
-	out, err := chatCompletionsToResponses(body, "resp_test")
+	out, err := chatCompletionsToResponses(body, "resp_test", responsesEcho{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	var response struct {
-		Status string `json:"status"`
-		Output []any  `json:"output"`
+		Status           string `json:"status"`
+		IncompleteDetail struct {
+			Reason string `json:"reason"`
+		} `json:"incomplete_details"`
+		Output []any `json:"output"`
 	}
 	if json.Unmarshal(out, &response) != nil || response.Status != "incomplete" || len(response.Output) != 0 {
 		t.Fatalf("unexpected conversion: %s", out)
+	}
+	if response.IncompleteDetail.Reason != "max_output_tokens" {
+		t.Fatalf("incomplete_details = %+v, want max_output_tokens", response.IncompleteDetail)
 	}
 }
 
@@ -230,12 +283,18 @@ func TestStreamChatCompletionsToResponses(t *testing.T) {
 		"data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"model\":\"gpt-4o\",\"choices\":[],\"usage\":{\"prompt_tokens\":8,\"completion_tokens\":5,\"total_tokens\":13}}\n\n" +
 		"data: [DONE]\n\n"
 	rec := httptest.NewRecorder()
-	st, err := streamChatCompletionsToResponses(rec, streamBody(t, sse), "resp_test")
+	st, err := streamChatCompletionsToResponses(rec, streamBody(t, sse), "resp_test", responsesEcho{
+		instructions: "Be brief", temperature: 1.0, topP: 1.0, truncation: "disabled",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	out := rec.Body.String()
 	if !strings.Contains(out, "event: response.created") ||
+		!strings.Contains(out, "event: response.in_progress") ||
+		!strings.Contains(out, `"usage":null`) ||
+		!strings.Contains(out, `"instructions":"Be brief"`) ||
+		!strings.Contains(out, `"truncation":"disabled"`) ||
 		!strings.Contains(out, "event: response.output_item.added") ||
 		!strings.Contains(out, "event: response.content_part.added") ||
 		strings.Count(out, "event: response.output_text.delta") != 2 ||
@@ -263,7 +322,7 @@ func TestStreamChatCompletionsToResponsesToolCalls(t *testing.T) {
 		"data: {\"id\":\"chatcmpl-1\",\"model\":\"gpt-4o\",\"choices\":[],\"usage\":{\"prompt_tokens\":8,\"completion_tokens\":5}}\n\n" +
 		"data: [DONE]\n\n"
 	rec := httptest.NewRecorder()
-	if _, err := streamChatCompletionsToResponses(rec, streamBody(t, sse), "resp_test"); err != nil {
+	if _, err := streamChatCompletionsToResponses(rec, streamBody(t, sse), "resp_test", responsesEcho{}); err != nil {
 		t.Fatal(err)
 	}
 	out := rec.Body.String()
@@ -299,7 +358,7 @@ func TestStreamChatCompletionsToResponsesAnthropicUpstream(t *testing.T) {
 		"event: message_stop\n" +
 		"data: {\"type\":\"message_stop\"}\n\n"
 	rec := httptest.NewRecorder()
-	st, err := streamChatCompletionsToResponses(rec, streamBody(t, sse), "resp_test")
+	st, err := streamChatCompletionsToResponses(rec, streamBody(t, sse), "resp_test", responsesEcho{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -319,7 +378,7 @@ func TestStreamChatCompletionsToResponsesAnthropicUpstream(t *testing.T) {
 }
 
 func TestResponsesInputItemImages(t *testing.T) {
-	out, err := responsesRequestToChatCompletions([]byte(`{
+	out, _, err := responsesRequestToChatCompletions([]byte(`{
 		"model": "gpt-4o",
 		"input": [{
 			"type": "message",

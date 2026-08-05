@@ -43,7 +43,7 @@ func (s *Service) responsesCompletions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_request", "max_output_tokens must be at most 200000")
 		return
 	}
-	converted, err := responsesRequestToChatCompletions(body)
+	converted, echo, err := responsesRequestToChatCompletions(body)
 	if err != nil {
 		s.logReject(r.Context(), request.Model, 400, "invalid_request", started)
 		writeError(w, 400, "invalid_request", err.Error())
@@ -51,68 +51,119 @@ func (s *Service) responsesCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	responseID := "resp_" + randomIDString()
 	s.proxyChatCompletions(w, r, converted, request.Model, request.Stream, request.MaxOutputTokens,
-		func(responseBody []byte) ([]byte, error) { return chatCompletionsToResponses(responseBody, responseID) },
+		func(responseBody []byte) ([]byte, error) { return chatCompletionsToResponses(responseBody, responseID, echo) },
 		func(w http.ResponseWriter, resp *http.Response) (streamStats, error) {
-			return streamChatCompletionsToResponses(w, resp, responseID)
+			return streamChatCompletionsToResponses(w, resp, responseID, echo)
 		})
 }
 
+// responsesEcho carries the request fields a Responses response object echoes
+// back, matching the shape documented for the Responses API (defaults included).
+type responsesEcho struct {
+	model              string
+	instructions       any
+	maxOutputTokens    any
+	previousResponseID any
+	store              bool
+	temperature        any
+	topP               any
+	text               any
+	reasoning          map[string]any
+	metadata           map[string]any
+	user               any
+	parallelToolCalls  bool
+	toolChoice         any
+	tools              []any
+	truncation         string
+}
+
 // responsesRequestToChatCompletions converts an OpenAI Responses request into a
-// chat-completions request. instructions becomes the system message; input
-// strings, messages, function_call and function_call_output items map to their
-// chat counterparts. Fields with no chat equivalent (store, previous_response_id,
-// truncation, ...) are dropped.
-func responsesRequestToChatCompletions(body []byte) ([]byte, error) {
+// chat-completions request, plus the request fields to echo back in the
+// response object. instructions becomes the system message; input strings,
+// messages, function_call and function_call_output items map to their chat
+// counterparts. Fields with no chat equivalent (store, previous_response_id,
+// truncation, ...) are dropped from the upstream payload but still echoed.
+func responsesRequestToChatCompletions(body []byte) ([]byte, responsesEcho, error) {
 	var in map[string]any
 	if json.Unmarshal(body, &in) != nil {
-		return nil, fmt.Errorf("invalid OpenAI Responses request")
+		return nil, responsesEcho{}, fmt.Errorf("invalid OpenAI Responses request")
 	}
 	model, _ := in["model"].(string)
+	echo := responsesEcho{model: model, store: true, parallelToolCalls: true, truncation: "disabled"}
 	out := map[string]any{"model": model}
 	if stream, ok := in["stream"].(bool); ok {
 		out["stream"] = stream
 	}
 	if maxOutput, ok := in["max_output_tokens"].(float64); ok && maxOutput > 0 {
 		out["max_tokens"] = int(maxOutput)
+		echo.maxOutputTokens = int(maxOutput)
 	}
 	if temperature, ok := in["temperature"].(float64); ok {
 		out["temperature"] = temperature
+		echo.temperature = temperature
 	}
 	if topP, ok := in["top_p"].(float64); ok {
 		out["top_p"] = topP
+		echo.topP = topP
 	}
 	if stop, ok := in["stop"]; ok {
 		out["stop"] = stop
 	}
 	if parallel, ok := in["parallel_tool_calls"].(bool); ok {
 		out["parallel_tool_calls"] = parallel
+		echo.parallelToolCalls = parallel
 	}
 	if reasoning, ok := in["reasoning"].(map[string]any); ok {
-		if effort, ok := reasoning["effort"].(string); ok && effort != "" {
+		effort, _ := reasoning["effort"].(string)
+		summary, _ := reasoning["summary"].(string)
+		if effort != "" {
 			out["reasoning_effort"] = effort
+		}
+		echo.reasoning = map[string]any{"effort": nil, "summary": nil}
+		if effort != "" {
+			echo.reasoning["effort"] = effort
+		}
+		if summary != "" {
+			echo.reasoning["summary"] = summary
 		}
 	}
 	if tools, ok := in["tools"].([]any); ok {
 		converted := []any{}
+		echoTools := []any{}
 		for _, item := range tools {
 			tool, _ := item.(map[string]any)
-			if tool["type"] != "function" {
+			if tool == nil {
 				continue
 			}
-			converted = append(converted, map[string]any{
-				"type": "function",
-				"function": map[string]any{
+			if tool["type"] == "function" {
+				function := map[string]any{
 					"name":        tool["name"],
 					"description": tool["description"],
 					"parameters":  tool["parameters"],
-				},
-			})
+				}
+				if strict, ok := tool["strict"].(bool); ok {
+					function["strict"] = strict
+				}
+				converted = append(converted, map[string]any{"type": "function", "function": function})
+				echoTool := map[string]any{}
+				for key, value := range tool {
+					echoTool[key] = value
+				}
+				if _, ok := echoTool["strict"]; !ok {
+					echoTool["strict"] = true
+				}
+				echoTools = append(echoTools, echoTool)
+			} else {
+				echoTools = append(echoTools, tool)
+			}
 		}
 		if len(converted) > 0 {
 			out["tools"] = converted
 		}
+		echo.tools = echoTools
 	}
 	if raw, ok := in["tool_choice"]; ok {
+		echo.toolChoice = raw
 		switch choice := raw.(type) {
 		case string:
 			out["tool_choice"] = choice
@@ -123,6 +174,7 @@ func responsesRequestToChatCompletions(body []byte) ([]byte, error) {
 		}
 	}
 	if text, ok := in["text"].(map[string]any); ok {
+		echo.text = text
 		if format, ok := text["format"].(map[string]any); ok {
 			switch format["type"] {
 			case "json_object":
@@ -135,22 +187,40 @@ func responsesRequestToChatCompletions(body []byte) ([]byte, error) {
 		}
 	}
 	messages := []any{}
-	if instructions, ok := in["instructions"].(string); ok && strings.TrimSpace(instructions) != "" {
-		messages = append(messages, map[string]any{"role": "system", "content": instructions})
+	if instructions, ok := in["instructions"].(string); ok {
+		echo.instructions = instructions
+		if strings.TrimSpace(instructions) != "" {
+			messages = append(messages, map[string]any{"role": "system", "content": instructions})
+		}
+	}
+	if id, ok := in["previous_response_id"].(string); ok && id != "" {
+		echo.previousResponseID = id
+	}
+	if store, ok := in["store"].(bool); ok {
+		echo.store = store
+	}
+	if metadata, ok := in["metadata"].(map[string]any); ok && len(metadata) > 0 {
+		echo.metadata = metadata
+	}
+	if user, ok := in["user"].(string); ok && user != "" {
+		echo.user = user
+	}
+	if truncation, ok := in["truncation"].(string); ok {
+		echo.truncation = truncation
 	}
 	input, ok := in["input"]
 	if !ok || input == nil {
-		return nil, fmt.Errorf("input is required")
+		return nil, responsesEcho{}, fmt.Errorf("input is required")
 	}
 	switch value := input.(type) {
 	case string:
 		if value == "" {
-			return nil, fmt.Errorf("input must not be empty")
+			return nil, responsesEcho{}, fmt.Errorf("input must not be empty")
 		}
 		messages = append(messages, map[string]any{"role": "user", "content": value})
 	case []any:
 		if len(value) == 0 {
-			return nil, fmt.Errorf("input must not be empty")
+			return nil, responsesEcho{}, fmt.Errorf("input must not be empty")
 		}
 		for _, item := range value {
 			if message := responsesInputItem(item); message != nil {
@@ -158,14 +228,15 @@ func responsesRequestToChatCompletions(body []byte) ([]byte, error) {
 			}
 		}
 		if len(messages) == 0 {
-			return nil, fmt.Errorf("input must not be empty")
+			return nil, responsesEcho{}, fmt.Errorf("input must not be empty")
 		}
 		messages = mergeToolCallMessages(messages)
 	default:
-		return nil, fmt.Errorf("input must be a string or an array of items")
+		return nil, responsesEcho{}, fmt.Errorf("input must be a string or an array of items")
 	}
 	out["messages"] = messages
-	return json.Marshal(out)
+	converted, err := json.Marshal(out)
+	return converted, echo, err
 }
 
 // responsesInputItem maps one element of a Responses input array to a chat
@@ -308,7 +379,7 @@ func mergeToolCallMessages(messages []any) []any {
 
 // chatCompletionsToResponses converts a chat-completions response body into the
 // OpenAI Responses object shape.
-func chatCompletionsToResponses(body []byte, responseID string) ([]byte, error) {
+func chatCompletionsToResponses(body []byte, responseID string, echo responsesEcho) ([]byte, error) {
 	var in struct {
 		Model   string `json:"model"`
 		Choices []struct {
@@ -331,6 +402,9 @@ func chatCompletionsToResponses(body []byte, responseID string) ([]byte, error) 
 			PromptTokensDetails struct {
 				Cached int `json:"cached_tokens"`
 			} `json:"prompt_tokens_details"`
+			CompletionTokensDetails struct {
+				Reasoning int `json:"reasoning_tokens"`
+			} `json:"completion_tokens_details"`
 		} `json:"usage"`
 	}
 	if json.Unmarshal(body, &in) != nil || len(in.Choices) == 0 {
@@ -369,48 +443,86 @@ func chatCompletionsToResponses(body []byte, responseID string) ([]byte, error) 
 		"output_tokens":         in.Usage.Completion,
 		"total_tokens":          in.Usage.Prompt + in.Usage.Completion,
 		"input_tokens_details":  map[string]any{"cached_tokens": in.Usage.PromptTokensDetails.Cached},
-		"output_tokens_details": map[string]any{"reasoning_tokens": 0},
+		"output_tokens_details": map[string]any{"reasoning_tokens": in.Usage.CompletionTokensDetails.Reasoning},
 	}
 	if in.Usage.Total > 0 {
 		usage["total_tokens"] = in.Usage.Total
 	}
-	return json.Marshal(responseObject(responseID, in.Model, status, output, usage))
+	return json.Marshal(responseObject(responseID, in.Model, status, output, usage, echo))
 }
 
 // responseObject builds the top-level Responses object shared by every
-// conversion path.
-func responseObject(id, model, status string, output []any, usage map[string]any) map[string]any {
-	return map[string]any{
+// conversion path. Fields the client set in the request are echoed back;
+// otherwise the documented Responses defaults apply.
+func responseObject(id, model, status string, output []any, usage map[string]any, echo responsesEcho) map[string]any {
+	reasoning := echo.reasoning
+	if reasoning == nil {
+		reasoning = map[string]any{"effort": nil, "summary": nil}
+	}
+	tools := echo.tools
+	if tools == nil {
+		tools = []any{}
+	}
+	toolChoice := echo.toolChoice
+	if toolChoice == nil {
+		toolChoice = "auto"
+	}
+	text := echo.text
+	if text == nil {
+		text = map[string]any{"format": map[string]any{"type": "text"}}
+	}
+	temperature := echo.temperature
+	if temperature == nil {
+		temperature = 1.0
+	}
+	topP := echo.topP
+	if topP == nil {
+		topP = 1.0
+	}
+	metadata := echo.metadata
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	truncation := echo.truncation
+	if truncation == "" {
+		truncation = "disabled"
+	}
+	obj := map[string]any{
 		"id":                   id,
 		"object":               "response",
 		"created_at":           time.Now().Unix(),
 		"status":               status,
 		"error":                nil,
 		"incomplete_details":   nil,
-		"instructions":         nil,
-		"max_output_tokens":    nil,
+		"instructions":         echo.instructions,
+		"max_output_tokens":    echo.maxOutputTokens,
 		"model":                model,
 		"output":               output,
-		"parallel_tool_calls":  true,
-		"previous_response_id": nil,
-		"reasoning":            map[string]any{"effort": nil, "summary": nil},
-		"store":                true,
-		"temperature":          nil,
-		"text":                 map[string]any{"format": map[string]any{"type": "text"}},
-		"tool_choice":          "auto",
-		"tools":                []any{},
-		"top_p":                nil,
-		"truncation":           "auto",
+		"parallel_tool_calls":  echo.parallelToolCalls,
+		"previous_response_id": echo.previousResponseID,
+		"reasoning":            reasoning,
+		"store":                echo.store,
+		"temperature":          temperature,
+		"text":                 text,
+		"tool_choice":          toolChoice,
+		"tools":                tools,
+		"top_p":                topP,
+		"truncation":           truncation,
 		"usage":                usage,
-		"user":                 nil,
-		"metadata":             map[string]any{},
+		"user":                 echo.user,
+		"metadata":             metadata,
 	}
+	if status == "incomplete" {
+		obj["incomplete_details"] = map[string]any{"reason": "max_output_tokens"}
+	}
+	return obj
 }
 
 // responsesStream converts an upstream SSE stream (OpenAI chat-completions
 // chunks or Anthropic events) into OpenAI Responses streaming events.
 type responsesStream struct {
 	responseID   string
+	echo         responsesEcho
 	model        string
 	output       []any
 	outputIndex  int
@@ -444,22 +556,30 @@ func (s *responsesStream) nextOutputIndex() int {
 	return index
 }
 
-func (s *responsesStream) object(status string) map[string]any {
-	usage := map[string]any{
-		"input_tokens":          s.inputTokens,
-		"output_tokens":         s.outputTokens,
-		"total_tokens":          s.inputTokens + s.outputTokens,
-		"input_tokens_details":  map[string]any{"cached_tokens": s.cached},
-		"output_tokens_details": map[string]any{"reasoning_tokens": 0},
+// object builds the response snapshot carried by an event. usage stays null
+// until the response reaches its terminal state, matching the documented
+// streaming shape.
+func (s *responsesStream) object(status string, includeUsage bool) map[string]any {
+	var usage any
+	if includeUsage {
+		usage = map[string]any{
+			"input_tokens":          s.inputTokens,
+			"output_tokens":         s.outputTokens,
+			"total_tokens":          s.inputTokens + s.outputTokens,
+			"input_tokens_details":  map[string]any{"cached_tokens": s.cached},
+			"output_tokens_details": map[string]any{"reasoning_tokens": 0},
+		}
 	}
-	return responseObject(s.responseID, s.model, status, s.output, usage)
+	return responseObject(s.responseID, s.model, status, s.output, usage, s.echo)
 }
 
 func (s *responsesStream) start(st *streamStats, emit func(string, any)) {
 	s.inputTokens = st.prompt
 	s.cached = st.cached
 	s.started = true
-	emit("response.created", map[string]any{"type": "response.created", "response": s.object("in_progress")})
+	object := s.object("in_progress", false)
+	emit("response.created", map[string]any{"type": "response.created", "response": object})
+	emit("response.in_progress", map[string]any{"type": "response.in_progress", "response": object})
 }
 
 func (s *responsesStream) finish(st *streamStats, emit func(string, any)) {
@@ -469,7 +589,14 @@ func (s *responsesStream) finish(st *streamStats, emit func(string, any)) {
 	s.inputTokens = st.prompt
 	s.outputTokens = st.completion
 	s.cached = st.cached
-	emit("response.completed", map[string]any{"type": "response.completed", "response": s.object(s.status)})
+	event := "response.completed"
+	switch s.status {
+	case "incomplete":
+		event = "response.incomplete"
+	case "failed":
+		event = "response.failed"
+	}
+	emit(event, map[string]any{"type": event, "response": s.object(s.status, true)})
 	s.finished = true
 }
 
@@ -704,7 +831,7 @@ func (s *responsesStream) anthropicEvent(data string, st *streamStats, emit func
 // streamChatCompletionsToResponses relays an upstream SSE stream to the client
 // as Responses events, converting both chat-completions chunks and Anthropic
 // events (for channels routed through the Anthropic adapter).
-func streamChatCompletionsToResponses(w http.ResponseWriter, resp *http.Response, responseID string) (streamStats, error) {
+func streamChatCompletionsToResponses(w http.ResponseWriter, resp *http.Response, responseID string, echo responsesEcho) (streamStats, error) {
 	var st streamStats
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -718,7 +845,7 @@ func streamChatCompletionsToResponses(w http.ResponseWriter, resp *http.Response
 		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", name, data)
 		flusher.Flush()
 	}
-	stream := &responsesStream{responseID: responseID, status: "completed", tools: map[int]*responsesTool{}}
+	stream := &responsesStream{responseID: responseID, echo: echo, status: "completed", tools: map[int]*responsesTool{}}
 	decided, chatMode := false, true
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64*1024), 2<<20)

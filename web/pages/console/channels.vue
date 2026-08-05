@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { Server, KeyRound, Play, ArrowRightLeft, BarChart3, X } from 'lucide-vue-next'
+import type { Component } from 'vue'
+import { Server, KeyRound, Play, ArrowRightLeft, BarChart3, X, ListChecks, SortAsc, Eye, EyeOff, Sparkles, Cpu, Moon, SquareTerminal, Hexagon, Plug } from 'lucide-vue-next'
 import { endpoints, type Channel, type ChannelForm, type ChannelKey, type ChannelKeyTestResult, type ChannelQuota, type ChannelQuotaForm, type ChannelTestResult, type ChannelUsageStats, type Group, type ModelRoute, type ModelRouteForm } from '~/src/api'
-import { formatCompact, formatNumber, formatMoney } from '~/src/format'
+import { formatCompact, formatNumber, formatMoney, formatDateTime } from '~/src/format'
 
 definePageMeta({ layout: 'console', middleware: 'console-auth' })
 
@@ -19,6 +20,15 @@ const KEY_TYPES = [
   { value: 'multi', label: t('admin.multiKey') },
 ]
 
+const PROVIDER_ICONS: Record<string, Component> = {
+  openai: Sparkles,
+  ollama: Cpu,
+  kimi: Moon,
+  opencode_go: SquareTerminal,
+  anthropic: Hexagon,
+  custom: Plug,
+}
+
 const channels = useResource(() => endpoints.getAdminChannels(), { data: [] as Channel[] })
 const groups = useResource(
   () => (can('users.read') ? endpoints.getAdminGroups() : Promise.resolve({ data: [] as Group[] })),
@@ -31,9 +41,49 @@ const statusFilter = ref('all')
 const typeFilter = ref('all')
 const groupFilter = ref('all')
 const selected = ref<Set<string>>(new Set())
+const batchMode = ref(false)
 const idSort = ref(false)
+const sensitiveVisible = ref(true)
 
+const STATUS_OPTIONS = computed(() => [
+  { value: 'all', label: t('common.all') },
+  { value: 'enabled', label: t('common.enabled') },
+  { value: 'disabled', label: t('common.disabled') },
+  { value: 'auto_disabled', label: t('admin.autoDisabled') },
+])
+const typeOptions = computed(() => [
+  { value: 'all', label: t('common.all') },
+  ...PROVIDERS.map(value => ({ value, label: t(`admin.provider_${value}`) })),
+])
 const providerOptions = computed(() => PROVIDERS.map(value => ({ value, label: t(`admin.provider_${value}`) })))
+
+function formatRelativeTime(value: string | null): string {
+  if (!value) return t('admin.neverTested')
+  const time = new Date(value).getTime()
+  if (Number.isNaN(time)) return t('admin.neverTested')
+  const diff = Math.max(0, Date.now() - time)
+  const seconds = Math.floor(diff / 1000)
+  if (seconds < 60) return t('admin.timeJustNow')
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return t('admin.timeMinutesAgo', { count: minutes })
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return t('admin.timeHoursAgo', { count: hours })
+  const days = Math.floor(hours / 24)
+  return t('admin.timeDaysAgo', { count: days })
+}
+
+function formatDuration(ms: number): string {
+  if (!ms) return '—'
+  if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`
+  return `${Math.round(ms)}ms`
+}
+
+function responseTone(ms: number): 'success' | 'warn' | 'danger' | 'neutral' {
+  if (!ms) return 'neutral'
+  if (ms < 500) return 'success'
+  if (ms < 1500) return 'warn'
+  return 'danger'
+}
 
 function toggleSelected(id: string) {
   const next = new Set(selected.value)
@@ -44,6 +94,10 @@ function toggleSelected(id: string) {
 
 const groupOptions = computed(() => groups.data.value.data)
 const groupNames = computed(() => new Map(groupOptions.value.map(group => [group.id, group.name])))
+const groupFilterOptions = computed(() => [
+  { value: 'all', label: t('common.all') },
+  ...groupOptions.value.map(group => ({ value: group.id, label: group.name })),
+])
 const keyTypeOptions = computed(() => KEY_TYPES)
 
 const filtered = computed(() => {
@@ -725,16 +779,41 @@ function quotaUsageForWindow(window: string) {
   <div v-else class="space-y-4">
     <ConsoleOpsPageHeader :lead="t('admin.channelsLead')">
       <template #actions>
-        <ConsoleOpsSearch v-model="search" :placeholder="t('admin.channelsSearchPlaceholder')" />
+        <div class="hidden items-center gap-2 rounded-control border border-line px-3 py-1.5 sm:flex">
+          <ListChecks class="size-4 text-muted" />
+          <label for="channel-batch-mode" class="cursor-pointer text-sm text-ink">{{ t('admin.batchOps') }}</label>
+          <UiSwitch id="channel-batch-mode" v-model="batchMode" />
+        </div>
+
+        <div class="hidden items-center gap-2 rounded-control border border-line px-3 py-1.5 sm:flex">
+          <SortAsc class="size-4 text-muted" />
+          <label for="channel-id-sort" class="cursor-pointer text-sm text-ink">{{ t('admin.idSort') }}</label>
+          <UiSwitch id="channel-id-sort" v-model="idSort" />
+        </div>
+
         <UiButton variant="secondary" size="sm" @click="channels.refresh()">{{ t('common.refresh') }}</UiButton>
-        <template v-if="canManage && selected.size > 0">
-          <UiBadge tone="outline" class="text-xs">{{ selected.size }}</UiBadge>
-          <UiButton variant="secondary" size="sm" @click="openBatchToggle(true)">{{ t('admin.batchEnable') }}</UiButton>
-          <UiButton variant="secondary" size="sm" @click="openBatchToggle(false)">{{ t('admin.batchDisable') }}</UiButton>
-        </template>
         <UiButton v-if="canManage" size="sm" @click="openCreate">{{ t('admin.createChannel') }}</UiButton>
       </template>
     </ConsoleOpsPageHeader>
+
+    <div class="flex flex-wrap items-center gap-2">
+      <ConsoleOpsSearch v-model="search" :placeholder="t('admin.channelsSearchPlaceholder')" />
+      <UiInput v-model="modelFilter" :placeholder="t('admin.channelsModelSearchPlaceholder')" class="w-full sm:w-40" />
+      <div class="w-32"><UiSelect v-model="statusFilter" size="sm" :options="STATUS_OPTIONS" /></div>
+      <div class="w-32"><UiSelect v-model="typeFilter" size="sm" :options="typeOptions" /></div>
+      <div class="w-36"><UiSelect v-model="groupFilter" size="sm" :options="groupFilterOptions" /></div>
+      <UiTooltip :content="sensitiveVisible ? t('admin.hideSensitive') : t('admin.showSensitive')">
+        <UiButton
+          variant="secondary"
+          size="sm"
+          :aria-label="sensitiveVisible ? t('admin.hideSensitive') : t('admin.showSensitive')"
+          @click="sensitiveVisible = !sensitiveVisible"
+        >
+          <EyeOff v-if="sensitiveVisible" class="size-4" />
+          <Eye v-else class="size-4" />
+        </UiButton>
+      </UiTooltip>
+    </div>
 
     <UiAlert v-if="!canManage" tone="info">{{ t('admin.readOnlyNotice') }}</UiAlert>
 
@@ -750,90 +829,104 @@ function quotaUsageForWindow(window: string) {
         <UiEmptyState :title="t('admin.noResultsTitle')" :description="t('admin.noResultsBody')" />
       </div>
 
-      <UiTable v-else>
-        <thead>
-          <tr>
-            <th class="w-10">
-              <UiCheckbox v-if="canManage" :model-value="allSelected" @update:model-value="toggleAll" />
-            </th>
-            <th>{{ t('admin.channelId') }}</th>
-            <th>{{ t('admin.channelName') }}</th>
-            <th>{{ t('admin.provider') }}</th>
-            <th>{{ t('admin.baseUrl') }}</th>
-            <th class="num">{{ t('admin.modelCount') }}</th>
-            <th class="num">{{ t('admin.keyCount') }}</th>
-            <th>{{ t('admin.keyType') }}</th>
-            <th class="num">{{ t('admin.routeCount') }}</th>
-            <th class="num">{{ t('admin.priority') }}</th>
-            <th>{{ t('admin.groups') }}</th>
-            <th>{{ t('common.status') }}</th>
-            <th>{{ t('admin.channelUsage') }}</th>
-            <th v-if="canManage">{{ t('common.actions') }}</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="channel in filtered" :key="channel.id">
-            <td>
-              <UiCheckbox v-if="canManage" :model-value="selected.has(channel.id)" @update:model-value="toggleSelected(channel.id)" />
-            </td>
-            <td class="font-mono text-[13px] text-faint">{{ channel.id }}</td>
-            <td class="font-medium text-ink">
-              <div class="flex items-center gap-2">
-                {{ channel.name }}
-              </div>
-            </td>
-            <td><UiBadge tone="outline">{{ channel.provider }}</UiBadge></td>
-            <td class="max-w-64 truncate font-mono text-[13px] text-muted">{{ channel.base_url }}</td>
-            <td class="num">{{ formatNumber(channel.models.length) }}</td>
-            <td class="num">{{ channel.key_count }}</td>
-            <td>
-              <UiBadge tone="outline" :class="channel.key_type === 'multi' ? 'text-warn' : ''">
-                {{ channel.key_type === 'multi' ? t('admin.multiKey') : t('admin.singleKey') }}
-              </UiBadge>
-            </td>
-            <td class="num">{{ formatNumber((channel.model_routes ?? []).length) }}</td>
-            <td class="num">{{ channel.priority }}</td>
-            <td>
-              <div v-if="channel.groups.length" class="flex flex-wrap gap-1">
-                <UiBadge v-for="id in channel.groups" :key="id" tone="outline">{{ groupNames.get(id) ?? id }}</UiBadge>
-              </div>
-              <span v-else class="text-faint">{{ t('common.all') }}</span>
-            </td>
-            <td>
-              <div class="flex items-center gap-2">
+      <template v-else>
+        <div v-if="batchMode && selected.size > 0" class="flex flex-wrap items-center gap-2">
+          <UiBadge tone="outline" class="text-xs">{{ t('admin.selectedCount', { count: selected.size }) }}</UiBadge>
+          <UiButton variant="secondary" size="sm" @click="openBatchToggle(true)">{{ t('admin.batchEnable') }}</UiButton>
+          <UiButton variant="secondary" size="sm" @click="openBatchToggle(false)">{{ t('admin.batchDisable') }}</UiButton>
+        </div>
+
+        <UiTable>
+          <thead>
+            <tr>
+              <th v-if="batchMode" class="w-10">
+                <UiCheckbox :model-value="allSelected" @update:model-value="toggleAll" />
+              </th>
+              <th class="num">{{ t('admin.channelId') }}</th>
+              <th>{{ t('admin.channelName') }}</th>
+              <th>{{ t('admin.provider') }}</th>
+              <th>{{ t('common.status') }}</th>
+              <th>{{ t('admin.groups') }}</th>
+              <th class="num">{{ t('admin.priority') }}</th>
+              <th class="num">{{ t('admin.weight') }}</th>
+              <th>{{ t('admin.usedTokens') }}</th>
+              <th>{{ t('admin.responseTime') }}</th>
+              <th>{{ t('admin.lastTested') }}</th>
+              <th v-if="canManage">{{ t('common.actions') }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="channel in filtered" :key="channel.id">
+              <td v-if="batchMode">
+                <UiCheckbox :model-value="selected.has(channel.id)" @update:model-value="toggleSelected(channel.id)" />
+              </td>
+              <td class="num font-mono text-[13px] text-faint">{{ sensitiveVisible ? channel.id : '••••' }}</td>
+              <td class="font-medium text-ink">
+                <div class="flex items-center gap-2">
+                  {{ sensitiveVisible ? channel.name : '••••' }}
+                  <UiTooltip v-if="channel.auto_disabled" :content="channel.disabled_reason || t('admin.autoDisabled')">
+                    <UiBadge tone="warn" dot>{{ t('admin.autoDisabled') }}</UiBadge>
+                  </UiTooltip>
+                </div>
+              </td>
+              <td>
+                <span class="inline-flex items-center gap-1.5">
+                  <component :is="PROVIDER_ICONS[channel.provider]" class="size-4 text-muted" />
+                  <UiBadge tone="outline">{{ t(`admin.provider_${channel.provider}`) }}</UiBadge>
+                </span>
+              </td>
+              <td>
                 <UiSwitch
                   :model-value="channel.enabled"
                   :disabled="!canManage || busy"
                   :label="channel.enabled ? t('common.disable') : t('common.enable')"
                   @update:model-value="toggle(channel, $event)"
                 />
-                <UiTooltip v-if="channel.auto_disabled" :content="channel.disabled_reason || t('admin.autoDisabled')">
-                  <UiBadge tone="warn" dot>{{ t('admin.autoDisabled') }}</UiBadge>
+              </td>
+              <td>
+                <div v-if="channel.groups.length" class="flex flex-wrap gap-1">
+                  <UiBadge v-for="id in channel.groups" :key="id" tone="outline">{{ sensitiveVisible ? (groupNames.get(id) ?? id) : '••••' }}</UiBadge>
+                </div>
+                <span v-else class="text-faint">{{ t('common.all') }}</span>
+              </td>
+              <td class="num">{{ channel.priority }}</td>
+              <td class="num">{{ channel.weight }}</td>
+              <td class="num">
+                <UiTooltip :content="t('admin.usedTokensDetail', { requests: formatNumber(channel.used_requests), tokens: formatCompact(channel.used_tokens) })">
+                  <span class="text-sm text-ink">{{ sensitiveVisible ? formatCompact(channel.used_tokens) : '••••' }}</span>
                 </UiTooltip>
-              </div>
-            </td>
-            <td v-if="canManage">
-              <div class="flex items-center gap-1">
-                <UiButton variant="ghost" size="sm" @click="openEdit(channel)">{{ t('common.edit') }}</UiButton>
-                <UiButton variant="ghost" size="sm" :loading="testingChannelId === channel.id" :disabled="busy" @click="testChannelRow(channel)">
-                  <Play class="h-4 w-4" />
-                </UiButton>
-                <UiButton variant="ghost" size="sm" @click="openKeys(channel)">
-                  <KeyRound class="h-4 w-4" />
-                </UiButton>
-                <UiButton variant="ghost" size="sm" @click="openRoutes(channel)">
-                  <ArrowRightLeft class="h-4 w-4" />
-                </UiButton>
-              </div>
-            </td>
-            <td>
-              <UiButton variant="ghost" size="sm" @click="openUsage(channel)">
-                <BarChart3 class="h-4 w-4" />
-              </UiButton>
-            </td>
-          </tr>
-        </tbody>
-      </UiTable>
+              </td>
+              <td>
+                <UiBadge :tone="responseTone(channel.response_time_ms)">
+                  {{ formatDuration(channel.response_time_ms) }}
+                </UiBadge>
+              </td>
+              <td class="text-muted">
+                <UiTooltip :content="formatDateTime(channel.last_test_time)">
+                  <span class="text-[13px]">{{ sensitiveVisible ? formatRelativeTime(channel.last_test_time) : '••••' }}</span>
+                </UiTooltip>
+              </td>
+              <td v-if="canManage">
+                <div class="flex items-center gap-1">
+                  <UiButton variant="ghost" size="sm" @click="openEdit(channel)">{{ t('common.edit') }}</UiButton>
+                  <UiButton variant="ghost" size="sm" :loading="testingChannelId === channel.id" :disabled="busy" @click="testChannelRow(channel)">
+                    <Play class="h-4 w-4" />
+                  </UiButton>
+                  <UiButton variant="ghost" size="sm" @click="openKeys(channel)">
+                    <KeyRound class="h-4 w-4" />
+                  </UiButton>
+                  <UiButton variant="ghost" size="sm" @click="openRoutes(channel)">
+                    <ArrowRightLeft class="h-4 w-4" />
+                  </UiButton>
+                  <UiButton variant="ghost" size="sm" @click="openUsage(channel)">
+                    <BarChart3 class="h-4 w-4" />
+                  </UiButton>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </UiTable>
+      </template>
     </ConsoleOpsListState>
 
     <UiSlidePanel
