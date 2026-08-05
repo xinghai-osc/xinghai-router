@@ -9,6 +9,7 @@ services:
       DATABASE_URL: postgres://router:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/router?sslmode=disable
       REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD}@redis:6379/0}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:?set ENCRYPTION_KEY in .env}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
       LISTEN_ADDR: :8080
       GEETEST_CAPTCHA_ID: ${GEETEST_CAPTCHA_ID:-}
       GEETEST_CAPTCHA_KEY: ${GEETEST_CAPTCHA_KEY:-}
