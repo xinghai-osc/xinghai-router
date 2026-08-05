@@ -12,3 +12,6 @@ web/dist/
 web/.nuxt/
 web/.output/
 web/*.tsbuildinfo
+web/--port/
+web/.repro/
+web/tmp.Dockerfile.web
