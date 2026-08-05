@@ -281,7 +281,7 @@ Use this before exposing the stack on a public host.
 ### Secrets and identity
 
 1. Copy `.env.example` to `.env` and set unique values for `ENCRYPTION_KEY` (≥24 characters, not a documented placeholder), `POSTGRES_PASSWORD` (URL-safe), and `REDIS_PASSWORD`. Compose and the router refuse insecure/missing secrets. **Never rotate `ENCRYPTION_KEY` without re-encrypting provider and payment secrets** — lost keys make ciphertext unrecoverable.
-2. Register the first account from the web console immediately after deployment; it becomes the administrator. Later registrations create `role=user` accounts unless an administrator promotes them.
+2. Set `BOOTSTRAP_ADMIN_EMAIL` (and ideally `BOOTSTRAP_ADMIN_PASSWORD`) in `.env` before the first start to claim the reserved administrator account. Self-registrations create `role=user` accounts and can never claim admin. Later registrations also create `role=user` accounts unless an administrator promotes them.
 3. Prefer enabling Geetest and/or SMTP email verification for public registration (`GEETEST_*`, `SMTP_*` or admin site settings).
 
 ### Network and TLS
@@ -300,7 +300,7 @@ Use this before exposing the stack on a public host.
 
 1. Liveness: `GET /healthz` (process up). Readiness: `GET /readyz` (PostgreSQL ping). Compose healthchecks use `/readyz`.
 2. Back up PostgreSQL regularly. Redis AOF is enabled in compose for limiter state durability, but Postgres is the source of truth for accounts and billing.
-3. After deploy: register the first web-console account as administrator and check `docker compose logs -f router` for migration errors; run `go test ./...` and `go vet ./...` in CI.
+3. After deploy: confirm the bootstrap administrator can sign in, and check `docker compose logs -f router` for migration errors; run `go test ./...` and `go vet ./...` in CI.
 
 ### Known production limits
 
