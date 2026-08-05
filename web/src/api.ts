@@ -43,6 +43,8 @@ export interface CatalogGroup { id: string; name: string; multiplier: number; pu
 export interface CatalogModel { id: string; model: string; provider: string; provider_slug: string; input_per_million: number | null; cached_input_per_million: number | null; output_per_million: number | null; multiplier: number | null; groups: CatalogGroup[] }
 export interface ModelProvider { id: string; name: string; slug: string; prefixes: string[]; priority: number }
 export interface UsageRecord { request_id: string; model: string; prompt_tokens: number; cached_prompt_tokens: number; completion_tokens: number; cost: string; status: string; created_at: string; client_ip: string; user_agent: string; error: string; key_name: string; subscription: boolean; duration_ms: number; group_name: string }
+
+export interface AccountUsageSummary { requests: number; tokens: number; cost: string }
 export interface ActivityLog { id: string; type: 'request' | 'login' | 'register' | 'logout' | 'topup' | 'operation'; action: string; user_id: string; user_name: string; model: string; group_id: string; group_name: string; status_code: number | null; duration_ms: number | null; prompt_tokens: number; completion_tokens: number; total_tokens: number; cost: number; details: Record<string, unknown>; created_at: string }
 export interface LedgerEntry { id: string; amount: string; balance_after: string; kind: string; request_id: string | null; note: string | null; created_at: string }
 export interface PaymentOrder { order_no: string; payment_type: string; amount: string; status: 'pending' | 'paid' | 'failed' | 'expired'; provider_trade_no?: string; paid_at: string | null; created_at: string }
@@ -395,6 +397,7 @@ export const endpoints = {
   getAccount: () => get<Account>('/account/me'),
   getAccountKeys: () => get<{ data: ApiKey[] }>('/account/keys'),
   getAccountUsage: () => get<{ data: UsageRecord[] }>('/account/usage'),
+  getAccountUsageSummary: () => get<AccountUsageSummary>('/account/usage/summary'),
   getAccountLedger: () => get<{ data: LedgerEntry[] }>('/account/ledger'),
   getAccountGroups: () => get<AccountGroups>('/account/groups'),
   getAccountPayments: () => get<{ enabled: boolean; payment_methods: PaymentMethod[]; data: PaymentOrder[] }>('/account/payments'),

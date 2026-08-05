@@ -483,6 +483,19 @@ func (s *Service) revealAccountKey(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"key": secret})
 }
 
+func (s *Service) accountUsageSummary(w http.ResponseWriter, r *http.Request) {
+	account := accountFromContext(r)
+	var requests int64
+	var prompt, completion int64
+	var cost any
+	err := s.db.QueryRow(r.Context(), `select count(*),coalesce(sum(rl.prompt_tokens),0),coalesce(sum(rl.completion_tokens),0),coalesce(sum(ur.cost),0) from request_logs rl left join usage_records ur on ur.request_id=rl.request_id where rl.user_id=$1 and rl.created_at>=date_trunc('month',now())`, account.userID).Scan(&requests, &prompt, &completion, &cost)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"requests": requests, "tokens": prompt + completion, "cost": cost})
+}
+
 func (s *Service) accountUsage(w http.ResponseWriter, r *http.Request) {
 	account := accountFromContext(r)
 	rows, err := s.db.Query(r.Context(), `select rl.request_id,rl.model,coalesce(rl.prompt_tokens,0),coalesce(ur.cached_prompt_tokens,0),coalesce(rl.completion_tokens,0),coalesce(ur.cost,0),case when ur.status is not null then ur.status when rl.status_code>=400 or rl.error_code is not null then 'failed' else 'success' end,rl.created_at,rl.client_ip,rl.user_agent,case when rl.error_code is not null or rl.status_code>=400 then rl.error_detail else '' end,coalesce(ak.name,''),rl.subscription_covered,rl.duration_ms,coalesce(g.name,'') from request_logs rl left join usage_records ur on ur.request_id=rl.request_id left join api_keys ak on ak.id=rl.api_key_id left join groups g on g.id=rl.group_id where rl.user_id=$1 order by rl.created_at desc limit 100`, account.userID)

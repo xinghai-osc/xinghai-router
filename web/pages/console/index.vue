@@ -20,28 +20,16 @@ const { data: usage, pending, error } = useResource(
   { data: [] as UsageRecord[] },
 )
 
+const { data: summary, pending: summaryPending } = useResource(
+  () => endpoints.getAccountUsageSummary(),
+  { requests: 0, tokens: 0, cost: '0' },
+)
+
 const endpointUrl = `${useRequestURL().origin}/api/v1`
 
 function dayKey(date: Date): string {
   return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`
 }
-
-const periodStart = computed(() => {
-  const now = new Date()
-  return new Date(now.getFullYear(), now.getMonth(), 1).getTime()
-})
-
-const periodRecords = computed(() =>
-  usage.value.data.filter(record => new Date(record.created_at).getTime() >= periodStart.value))
-
-const totals = computed(() => periodRecords.value.reduce(
-  (sum, record) => ({
-    requests: sum.requests + 1,
-    tokens: sum.tokens + record.prompt_tokens + record.completion_tokens,
-    cost: sum.cost + Number(record.cost ?? 0),
-  }),
-  { requests: 0, tokens: 0, cost: 0 },
-))
 
 const daily = computed<TokenPoint[]>(() => {
   const today = new Date()
@@ -96,21 +84,21 @@ const quickLinks = computed(() => [
       />
       <ConsoleUserStatCard
         :label="t('console.periodRequests')"
-        :value="formatNumber(totals.requests)"
+        :value="formatNumber(summary.requests)"
         :icon="Activity"
-        :loading="pending"
+        :loading="summaryPending"
       />
       <ConsoleUserStatCard
         :label="t('console.periodTokens')"
-        :value="formatCompact(totals.tokens)"
+        :value="formatCompact(summary.tokens)"
         :icon="Coins"
-        :loading="pending"
+        :loading="summaryPending"
       />
       <ConsoleUserStatCard
         :label="t('console.periodSpend')"
-        :value="formatMoney(totals.cost)"
+        :value="formatMoney(summary.cost)"
         :icon="Coins"
-        :loading="pending"
+        :loading="summaryPending"
       />
     </div>
 

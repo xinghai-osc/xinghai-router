@@ -42,6 +42,7 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("POST /account/keys/{id}/quota", s.account(s.keyQuotaUpsert))
 	mux.Handle("DELETE /account/keys/{id}/quota", s.account(s.keyQuotaDelete))
 	mux.Handle("GET /account/usage", s.account(s.accountUsage))
+	mux.Handle("GET /account/usage/summary", s.account(s.accountUsageSummary))
 	mux.Handle("GET /account/ledger", s.account(s.accountLedger))
 	mux.Handle("GET /account/payments", s.account(s.listAccountPayments))
 	mux.Handle("POST /account/payments", s.account(s.createAccountPayment))
