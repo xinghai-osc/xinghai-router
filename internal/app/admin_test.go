@@ -81,7 +81,10 @@ func TestUpdateUserRejectsInvalidPartialUpdatesBeforeDatabaseAccess(t *testing.T
 		body string
 	}{
 		{name: "empty update", body: `{}`},
-		{name: "unknown field", body: `{"id":"user-id"}`},
+		{name: "non-numeric id", body: `{"id":"user-id"}`},
+		{name: "zero id", body: `{"id":0}`},
+		{name: "negative id", body: `{"id":-5}`},
+		{name: "oversized id", body: `{"id":9007199254740992}`},
 		{name: "empty name", body: `{"name":"  "}`},
 		{name: "invalid email", body: `{"email":"invalid"}`},
 		{name: "invalid role", body: `{"role":"owner"}`},

@@ -8,7 +8,7 @@ import (
 
 // checkChannelQuota evaluates every matching channel quota row in one query.
 // Each row's usage window is aggregated by a lateral join on request_logs.
-func (s *Service) checkChannelQuota(ctx context.Context, channelID, model string) error {
+func (s *Service) checkChannelQuota(ctx context.Context, channelID int64, model string) error {
 	rows, err := s.db.Query(ctx, `select q.max_requests,q.max_tokens,agg.requests,agg.tokens
 	from channel_quota_limits q
 	cross join lateral (

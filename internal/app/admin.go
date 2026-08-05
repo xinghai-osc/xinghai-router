@@ -375,16 +375,16 @@ func (s *Service) listPricingTimeRules(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) savePricingTimeRule(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		ID     string  `json:"id"`
-		Model  string  `json:"model"`
-		Name   string  `json:"name"`
-		Start  int     `json:"start_minute"`
-		End    int     `json:"end_minute"`
-		Weekdays string `json:"weekdays"`
-		Input  float64 `json:"input_per_million"`
-		Cached float64 `json:"cached_input_per_million"`
-		Output float64 `json:"output_per_million"`
-		Enabled *bool  `json:"enabled"`
+		ID       string  `json:"id"`
+		Model    string  `json:"model"`
+		Name     string  `json:"name"`
+		Start    int     `json:"start_minute"`
+		End      int     `json:"end_minute"`
+		Weekdays string  `json:"weekdays"`
+		Input    float64 `json:"input_per_million"`
+		Cached   float64 `json:"cached_input_per_million"`
+		Output   float64 `json:"output_per_million"`
+		Enabled  *bool   `json:"enabled"`
 	}
 	if decode(r, &in) != nil {
 		writeError(w, 400, "invalid_request", "invalid time rule")
@@ -505,6 +505,7 @@ func (s *Service) listUsers(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) updateUser(w http.ResponseWriter, r *http.Request) {
 	var in struct {
+		ID          *int64    `json:"id"`
 		Email       *string   `json:"email"`
 		Name        *string   `json:"name"`
 		Password    *string   `json:"password"`
@@ -519,8 +520,12 @@ func (s *Service) updateUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_request", "invalid user update")
 		return
 	}
-	if in.Email == nil && in.Name == nil && in.Password == nil && in.Role == nil && in.Enabled == nil && in.Permissions == nil && in.Groups == nil && in.Balance == nil {
+	if in.ID == nil && in.Email == nil && in.Name == nil && in.Password == nil && in.Role == nil && in.Enabled == nil && in.Permissions == nil && in.Groups == nil && in.Balance == nil {
 		writeError(w, 400, "invalid_request", "at least one user field is required")
+		return
+	}
+	if in.ID != nil && (*in.ID <= 0 || *in.ID > maxEditableUserID) {
+		writeError(w, 400, "invalid_request", "user id must be a positive integer up to 9007199254740991")
 		return
 	}
 	if in.Name != nil && strings.TrimSpace(*in.Name) == "" {
@@ -748,6 +753,20 @@ func (s *Service) updateUser(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		changed["groups"] = resolvedGroups
+	}
+	if in.ID != nil {
+		if _, err = tx.Exec(r.Context(), `update users set id=$1 where id=$2`, *in.ID, userID); err != nil {
+			writeError(w, 409, "conflict", "user id already exists or could not be updated")
+			return
+		}
+		// Never move the auto-increment sequence backward so future
+		// registrations cannot collide with an admin-assigned id.
+		if _, err = tx.Exec(r.Context(), `select setval('users_id_seq', greatest((select last_value from users_id_seq), $1), true)`, *in.ID); err != nil {
+			writeError(w, 500, "internal_error", "could not update user id")
+			return
+		}
+		userID = strconv.FormatInt(*in.ID, 10)
+		changed["id"] = *in.ID
 	}
 	if err = tx.Commit(r.Context()); err != nil {
 		writeError(w, 500, "internal_error", "could not update user")
@@ -1180,6 +1199,9 @@ const maxWalletAdjustAmount = 1_000_000_000.0
 const maxWalletNoteLength = 500
 const maxQuotaLimit = int64(1_000_000_000_000)
 
+// 2^53-1: the largest integer the web console can represent exactly.
+const maxEditableUserID = int64(9007199254740991)
+
 func validPricePerQuotaUnit(value float64) bool {
 	return validNonNegativeFinite(value) && value <= maxPricePerQuotaUnit
 }
@@ -1601,6 +1623,7 @@ func (s *Service) createChannel(w http.ResponseWriter, r *http.Request) {
 		KeyType     string                   `json:"key_type"`
 		APIKeys     string                   `json:"api_keys"`
 		Models      []string                 `json:"models"`
+		TestModel   string                   `json:"test_model"`
 		Priority    int                      `json:"priority"`
 		Groups      []string                 `json:"groups"`
 		Provider    string                   `json:"provider"`
@@ -1636,6 +1659,11 @@ func (s *Service) createChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.Models = modelsList
+	in.TestModel = strings.TrimSpace(in.TestModel)
+	if in.TestModel != "" && !validModelName(in.TestModel) {
+		writeError(w, 400, "invalid_request", "test_model must be at most 200 characters")
+		return
+	}
 	if in.Provider == "" {
 		in.Provider = "openai"
 	}
@@ -1710,7 +1738,7 @@ func (s *Service) createChannel(w http.ResponseWriter, r *http.Request) {
 	if in.AutoDisable != nil {
 		autoDisable = *in.AutoDisable
 	}
-	_, err = tx.Exec(r.Context(), `insert into channels(id,name,base_url,api_key,models,priority,provider,key_type,auto_disable,request_overrides) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, id, in.Name, strings.TrimRight(in.BaseURL, "/"), keys[0], models, in.Priority, in.Provider, in.KeyType, autoDisable, overrides)
+	_, err = tx.Exec(r.Context(), `insert into channels(id,name,base_url,api_key,models,test_model,priority,provider,key_type,auto_disable,request_overrides) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, id, in.Name, strings.TrimRight(in.BaseURL, "/"), keys[0], models, in.TestModel, in.Priority, in.Provider, in.KeyType, autoDisable, overrides)
 	if err != nil {
 		writeError(w, 409, "conflict", "channel name already exists")
 		return
@@ -1755,17 +1783,20 @@ func (s *Service) updateChannel(w http.ResponseWriter, r *http.Request) {
 		Hidden        bool   `json:"hidden"`
 	}
 	var in struct {
-		Name        string                   `json:"name"`
-		BaseURL     string                   `json:"base_url"`
-		KeyType     string                   `json:"key_type"`
-		APIKeys     string                   `json:"api_keys"`
-		Models      []string                 `json:"models"`
-		Priority    int                      `json:"priority"`
-		Provider    string                   `json:"provider"`
-		Groups      []string                 `json:"groups"`
-		ModelRoutes []routeInput             `json:"model_routes"`
-		AutoDisable *bool                    `json:"auto_disable"`
-		Overrides   *channelRequestOverrides `json:"request_overrides"`
+		Name           string                   `json:"name"`
+		BaseURL        string                   `json:"base_url"`
+		KeyType        string                   `json:"key_type"`
+		APIKeys        string                   `json:"api_keys"`
+		Models         []string                 `json:"models"`
+		TestModel      string                   `json:"test_model"`
+		Priority       int                      `json:"priority"`
+		Provider       string                   `json:"provider"`
+		Groups         []string                 `json:"groups"`
+		ModelRoutes    []routeInput             `json:"model_routes"`
+		AutoDisable    *bool                    `json:"auto_disable"`
+		Overrides      *channelRequestOverrides `json:"request_overrides"`
+		UpstreamPath   string                   `json:"upstream_path"`
+		UpstreamFormat string                   `json:"upstream_format"`
 	}
 	if decode(r, &in) != nil {
 		writeError(w, 400, "invalid_request", "name and models are required")
@@ -1792,6 +1823,11 @@ func (s *Service) updateChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.Models = modelsList
+	in.TestModel = strings.TrimSpace(in.TestModel)
+	if in.TestModel != "" && !validModelName(in.TestModel) {
+		writeError(w, 400, "invalid_request", "test_model must be at most 200 characters")
+		return
+	}
 	if in.Provider == "" {
 		in.Provider = "openai"
 	}
@@ -1829,9 +1865,9 @@ func (s *Service) updateChannel(w http.ResponseWriter, r *http.Request) {
 	}
 	channelID := r.PathValue("id")
 	models, _ := json.Marshal(in.Models)
-	query := `update channels set name=$1,base_url=$2,models=$3,priority=$4,provider=$5`
-	args := []any{in.Name, strings.TrimRight(in.BaseURL, "/"), models, in.Priority, in.Provider}
-	argIdx := 6
+	query := `update channels set name=$1,base_url=$2,models=$3,priority=$4,provider=$5,test_model=$6,upstream_path=$7,upstream_format=$8`
+	args := []any{in.Name, strings.TrimRight(in.BaseURL, "/"), models, in.Priority, in.Provider, in.TestModel, in.UpstreamPath, in.UpstreamFormat}
+	argIdx := 9
 	if in.AutoDisable != nil {
 		query += `,auto_disable=$` + strconv.Itoa(argIdx)
 		args = append(args, *in.AutoDisable)
@@ -1987,7 +2023,7 @@ func (s *Service) replaceChannelAPIKeys(ctx context.Context, channelID string, k
 	return tx.Commit(ctx)
 }
 func (s *Service) listChannels(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query(r.Context(), `select c.id,c.name,c.base_url,c.models,c.enabled,c.auto_disabled,c.disabled_reason,c.priority,c.created_at,c.updated_at,coalesce((select array_agg(cg.group_id order by cg.group_id) from channel_groups cg where cg.channel_id=c.id), '{}'),c.provider,c.key_type,(select count(*) from channel_api_keys ak where ak.channel_id=c.id and ak.enabled),c.auto_disable,c.request_overrides from channels c order by c.priority,c.id`)
+	rows, err := s.db.Query(r.Context(), `select c.id,c.name,c.base_url,c.models,c.test_model,c.enabled,c.auto_disabled,c.disabled_reason,c.priority,c.weight,c.last_checked_at,c.last_error,c.created_at,c.updated_at,coalesce((select array_agg(cg.group_id order by cg.group_id) from channel_groups cg where cg.channel_id=c.id), '{}'),c.provider,c.key_type,(select count(*) from channel_api_keys ak where ak.channel_id=c.id and ak.enabled),c.auto_disable,c.request_overrides,coalesce(agg.avg_duration_ms,0),coalesce(agg.used_requests,0),coalesce(agg.used_tokens,0) from channels c left join (select rl.channel_id,avg(rl.duration_ms) as avg_duration_ms,count(*) as used_requests,coalesce(sum(rl.total_tokens),0) as used_tokens from request_logs rl group by rl.channel_id) agg on agg.channel_id=c.id order by c.priority desc,c.id`)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
@@ -1997,16 +2033,20 @@ func (s *Service) listChannels(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var id, name, base string
 		var models []byte
+		var testModel string
 		var enabled, autoDisabled bool
 		var disabledReason string
-		var priority int
+		var priority, weight int
+		var lastChecked, lastError any
 		var created, updated any
 		var groups []string
 		var provider, keyType string
 		var keyCount int
 		var autoDisable bool
 		var overrides []byte
-		if rows.Scan(&id, &name, &base, &models, &enabled, &autoDisabled, &disabledReason, &priority, &created, &updated, &groups, &provider, &keyType, &keyCount, &autoDisable, &overrides) != nil {
+		var avgDuration float64
+		var usedRequests, usedTokens int64
+		if rows.Scan(&id, &name, &base, &models, &testModel, &enabled, &autoDisabled, &disabledReason, &priority, &weight, &lastChecked, &lastError, &created, &updated, &groups, &provider, &keyType, &keyCount, &autoDisable, &overrides, &avgDuration, &usedRequests, &usedTokens) != nil {
 			continue
 		}
 		var list []string
@@ -2019,13 +2059,13 @@ func (s *Service) listChannels(w http.ResponseWriter, r *http.Request) {
 			ov = map[string]any{}
 		}
 		routes := s.getChannelRoutes(r.Context(), id)
-		data = append(data, map[string]any{"id": id, "name": name, "base_url": base, "models": list, "provider": provider, "key_type": keyType, "enabled": enabled, "auto_disabled": autoDisabled, "disabled_reason": disabledReason, "priority": priority, "groups": groups, "key_count": keyCount, "created_at": created, "updated_at": updated, "model_routes": routes, "auto_disable": autoDisable, "request_overrides": ov})
+		data = append(data, map[string]any{"id": id, "name": name, "base_url": base, "models": list, "test_model": testModel, "provider": provider, "key_type": keyType, "enabled": enabled, "auto_disabled": autoDisabled, "disabled_reason": disabledReason, "priority": priority, "weight": weight, "last_test_time": lastChecked, "last_error": lastError, "response_time_ms": avgDuration, "used_requests": usedRequests, "used_tokens": usedTokens, "groups": groups, "key_count": keyCount, "created_at": created, "updated_at": updated, "model_routes": routes, "auto_disable": autoDisable, "request_overrides": ov})
 	}
 	writeJSON(w, 200, map[string]any{"data": data})
 }
 
 func (s *Service) getChannelRoutes(ctx context.Context, channelID string) []map[string]any {
-	rows, err := s.db.Query(ctx, `select id,public_model,upstream_model,priority,weight,enabled,hidden,created_at from model_routes where channel_id=$1 order by public_model,priority`, channelID)
+	rows, err := s.db.Query(ctx, `select id,public_model,upstream_model,priority,weight,enabled,hidden,created_at from model_routes where channel_id=$1 order by public_model,priority desc`, channelID)
 	if err != nil {
 		return nil
 	}
@@ -2088,7 +2128,7 @@ func (s *Service) syncChannelKeyType(ctx context.Context, channelID string) {
 }
 
 func (s *Service) listChannelKeys(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query(r.Context(), `select id,name,enabled,priority,last_checked_at,last_error,created_at from channel_api_keys where channel_id=$1 order by priority,created_at`, r.PathValue("id"))
+	rows, err := s.db.Query(r.Context(), `select id,name,enabled,priority,last_checked_at,last_error,created_at from channel_api_keys where channel_id=$1 order by priority desc,created_at`, r.PathValue("id"))
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
@@ -2220,8 +2260,8 @@ func (s *Service) testChannelKey(w http.ResponseWriter, r *http.Request) {
 	channelID := r.PathValue("id")
 	keyID := r.PathValue("keyId")
 
-	var baseURL, provider string
-	if err := s.db.QueryRow(r.Context(), `select base_url,provider from channels where id=$1`, channelID).Scan(&baseURL, &provider); err != nil {
+	var baseURL, provider, testModel string
+	if err := s.db.QueryRow(r.Context(), `select base_url,provider,test_model from channels where id=$1`, channelID).Scan(&baseURL, &provider, &testModel); err != nil {
 		writeError(w, http.StatusNotFound, "not_found", "channel not found")
 		return
 	}
@@ -2239,7 +2279,7 @@ func (s *Service) testChannelKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	settings := s.reliabilitySettings(r.Context())
-	status, body, latency, testErr := s.testChannel(r.Context(), baseURL, apiKey, provider)
+	status, body, latency, testErr := s.testChannel(r.Context(), baseURL, apiKey, provider, testModel)
 	success := testErr == nil && status >= 200 && status < 300
 	reason := healthFailureReason(status, testErr)
 
@@ -2277,8 +2317,8 @@ func (s *Service) testChannelKey(w http.ResponseWriter, r *http.Request) {
 func (s *Service) testChannelHandler(w http.ResponseWriter, r *http.Request) {
 	channelID := r.PathValue("id")
 
-	var baseURL, provider, legacyKey string
-	if err := s.db.QueryRow(r.Context(), `select base_url,provider,api_key from channels where id=$1`, channelID).Scan(&baseURL, &provider, &legacyKey); err != nil {
+	var baseURL, provider, legacyKey, testModel string
+	if err := s.db.QueryRow(r.Context(), `select base_url,provider,api_key,test_model from channels where id=$1`, channelID).Scan(&baseURL, &provider, &legacyKey, &testModel); err != nil {
 		writeError(w, http.StatusNotFound, "not_found", "channel not found")
 		return
 	}
@@ -2307,12 +2347,12 @@ func (s *Service) testChannelHandler(w http.ResponseWriter, r *http.Request) {
 
 	settings := s.reliabilitySettings(r.Context())
 	type keyResult struct {
-		ID        string `json:"key_id"`
-		Success   bool   `json:"success"`
-		StatusCode int    `json:"status_code"`
-		LatencyMs int64  `json:"latency_ms"`
-		Reason    string `json:"reason,omitempty"`
-		AutoDisabled bool `json:"auto_disabled"`
+		ID           string `json:"key_id"`
+		Success      bool   `json:"success"`
+		StatusCode   int    `json:"status_code"`
+		LatencyMs    int64  `json:"latency_ms"`
+		Reason       string `json:"reason,omitempty"`
+		AutoDisabled bool   `json:"auto_disabled"`
 	}
 
 	keyResults := make([]keyResult, 0, len(keys))
@@ -2328,7 +2368,7 @@ func (s *Service) testChannelHandler(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		status, body, latency, testErr := s.testChannel(r.Context(), baseURL, apiKey, provider)
+		status, body, latency, testErr := s.testChannel(r.Context(), baseURL, apiKey, provider, testModel)
 		success := testErr == nil && status >= 200 && status < 300
 		reason := healthFailureReason(status, testErr)
 		if success && settings.AutoDisableSlowSeconds > 0 && latency > time.Duration(settings.AutoDisableSlowSeconds)*time.Second {
@@ -2458,7 +2498,7 @@ func (s *Service) adjustBalance(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) listModelRoutes(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query(r.Context(), `select id,public_model,upstream_model,channel_id,priority,weight,enabled,hidden,created_at from model_routes order by public_model,priority`)
+	rows, err := s.db.Query(r.Context(), `select id,public_model,upstream_model,channel_id,priority,weight,enabled,hidden,created_at from model_routes order by public_model,priority desc`)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
@@ -2594,7 +2634,7 @@ func (s *Service) updateModelRoute(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) listChannelRoutes(w http.ResponseWriter, r *http.Request) {
 	channelID := r.PathValue("id")
-	rows, err := s.db.Query(r.Context(), `select id,public_model,upstream_model,priority,weight,enabled,hidden,created_at from model_routes where channel_id=$1 order by public_model,priority`, channelID)
+	rows, err := s.db.Query(r.Context(), `select id,public_model,upstream_model,priority,weight,enabled,hidden,created_at from model_routes where channel_id=$1 order by public_model,priority desc`, channelID)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return

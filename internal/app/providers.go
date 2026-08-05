@@ -16,7 +16,7 @@ type modelProvider struct {
 }
 
 func (s *Service) providers(r *http.Request) []modelProvider {
-	rows, err := s.db.Query(r.Context(), `select id::text,name,slug,prefixes,priority from model_providers order by priority,name`)
+	rows, err := s.db.Query(r.Context(), `select id::text,name,slug,prefixes,priority from model_providers order by priority desc,name`)
 	if err != nil {
 		return nil
 	}
@@ -34,7 +34,7 @@ func (s *Service) providers(r *http.Request) []modelProvider {
 }
 
 func (s *Service) listProviders(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query(r.Context(), `select id::text,name,slug,prefixes,priority from model_providers order by priority,name`)
+	rows, err := s.db.Query(r.Context(), `select id::text,name,slug,prefixes,priority from model_providers order by priority desc,name`)
 	if err != nil {
 		writeError(w, 500, "internal_error", "could not load providers")
 		return
@@ -123,7 +123,7 @@ func (s *Service) deleteProvider(w http.ResponseWriter, r *http.Request) {
 func providerForModel(model string, providers []modelProvider) modelProvider {
 	name := strings.ToLower(model)
 	matches := append([]modelProvider(nil), providers...)
-	sort.SliceStable(matches, func(i, j int) bool { return matches[i].Priority < matches[j].Priority })
+	sort.SliceStable(matches, func(i, j int) bool { return matches[i].Priority > matches[j].Priority })
 	for _, item := range matches {
 		for _, prefix := range item.Prefixes {
 			if strings.HasPrefix(name, strings.ToLower(prefix)) {

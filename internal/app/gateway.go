@@ -27,10 +27,11 @@ const (
 )
 
 type channel struct {
-	id, baseURL, apiKey, keyID, upstreamModel, provider string
-	upstreamPath, upstreamFormat                        string
-	priority, weight                                    int
-	overrides                                           channelRequestOverrides
+	id                                    int64
+	baseURL, apiKey, keyID, upstreamModel string
+	provider, upstreamPath, upstreamFormat string
+	priority, weight                       int
+	overrides                              channelRequestOverrides
 }
 
 // channelRequestOverrides configures per-channel edits applied to the upstream
@@ -261,7 +262,7 @@ func (s *Service) logReject(ctx context.Context, model string, status int, code 
 	if !ok {
 		return
 	}
-	s.logRequest(ctx, key, "", "", model, status, 0, 0, 0, time.Since(started), code, "")
+	s.logRequest(ctx, key, 0, "", model, status, 0, 0, 0, time.Since(started), code, "")
 }
 
 func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, body []byte, model string, stream bool, maxTokens int, transform responseTransform, streamFn streamTransform) {
@@ -309,7 +310,7 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 		maxConcurrency = s.groupConcurrencyLimitFor(ctx, key.groupID)
 	}
 	if maxConcurrency > 0 && !s.groupLimiter.acquire(key.groupID, maxConcurrency) {
-		s.logRequest(ctx, key, "", "", model, 429, 0, 0, 0, time.Since(started), "group_concurrency_limit", "")
+		s.logRequest(ctx, key, 0, "", model, 429, 0, 0, 0, time.Since(started), "group_concurrency_limit", "")
 		s.releaseReservation(ctx, key, reserved)
 		writeError(w, 429, "group_concurrency_exceeded", "group concurrency limit exceeded")
 		return
@@ -322,7 +323,7 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 	channels, err := s.channelsForModel(ctx, key, model)
 	if err != nil {
 		if errors.Is(err, errChannelCredentials) {
-			s.logRequest(ctx, key, "", "", model, 503, 0, 0, 0, time.Since(started), "channel_credentials", "channel credentials unavailable")
+			s.logRequest(ctx, key, 0, "", model, 503, 0, 0, 0, time.Since(started), "channel_credentials", "channel credentials unavailable")
 			log.Printf("gateway: model %q has enabled channels but no usable credentials (ENCRYPTION_KEY mismatch or missing keys)", model)
 			writeError(w, 503, "credential_unavailable", "enabled channels for this model have no usable credentials")
 			return
@@ -330,7 +331,7 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 		if !errors.Is(err, errInvalid) {
 			log.Printf("gateway: channel lookup for model %q failed: %v", model, err)
 		}
-		s.logRequest(ctx, key, "", "", model, 503, 0, 0, 0, time.Since(started), "no_channel", "no usable channel supports this model")
+		s.logRequest(ctx, key, 0, "", model, 503, 0, 0, 0, time.Since(started), "no_channel", "no usable channel supports this model")
 		writeError(w, 503, "model_unavailable", "no usable channel supports this model")
 		return
 	}
@@ -747,7 +748,7 @@ func (s *Service) checkQuota(ctx context.Context, key keyContext, model string) 
 	return rows.Err()
 }
 func (s *Service) channelsForModel(ctx context.Context, key keyContext, model string) ([]channel, error) {
-	rows, err := s.db.Query(ctx, `select c.id,c.base_url,c.api_key,coalesce(m.priority,c.priority),coalesce(m.weight,c.weight),coalesce(m.upstream_model,''),c.provider,c.upstream_path,c.upstream_format,c.request_overrides from channels c left join model_routes m on m.channel_id=c.id and m.public_model=$1 and m.enabled where (c.enabled or c.auto_disabled) and (c.models ? $1 or m.public_model is not null) and (not exists(select 1 from channel_groups cg where cg.channel_id=c.id) or exists(select 1 from channel_groups cg join groups g on g.id=cg.group_id where cg.channel_id=c.id and g."public") or ($3<>'' and exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($3,'')::uuid)) or ($3='' and exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$2))) order by (c.enabled and not c.auto_disabled) desc, coalesce(m.priority,c.priority), c.priority, c.id`, model, key.userID, key.groupID)
+	rows, err := s.db.Query(ctx, `select c.id,c.base_url,c.api_key,coalesce(m.priority,c.priority),coalesce(m.weight,c.weight),coalesce(m.upstream_model,''),c.provider,c.upstream_path,c.upstream_format,c.request_overrides from channels c left join model_routes m on m.channel_id=c.id and m.public_model=$1 and m.enabled where (c.enabled or c.auto_disabled) and (c.models ? $1 or m.public_model is not null) and (not exists(select 1 from channel_groups cg where cg.channel_id=c.id) or exists(select 1 from channel_groups cg join groups g on g.id=cg.group_id where cg.channel_id=c.id and g."public") or ($3<>'' and exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($3,'')::uuid)) or ($3='' and exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$2))) order by (c.enabled and not c.auto_disabled) desc, coalesce(m.priority,c.priority) desc, c.priority desc, c.id`, model, key.userID, key.groupID)
 	if err != nil {
 		return nil, err
 	}
@@ -806,8 +807,8 @@ func (s *Service) channelsForModel(ctx context.Context, key keyContext, model st
 	return result, nil
 }
 
-func (s *Service) selectChannelKey(ctx context.Context, channelID, fallbackEncrypted string, seed []byte) (string, string, error) {
-	krows, err := s.db.Query(ctx, `select id,key_encrypted,priority from channel_api_keys where channel_id=$1 and enabled order by priority,created_at`, channelID)
+func (s *Service) selectChannelKey(ctx context.Context, channelID int64, fallbackEncrypted string, seed []byte) (string, string, error) {
+	krows, err := s.db.Query(ctx, `select id,key_encrypted,priority from channel_api_keys where channel_id=$1 and enabled order by priority desc,created_at`, channelID)
 	if err != nil {
 		return "", "", err
 	}
@@ -848,7 +849,7 @@ func (s *Service) selectChannelKey(ctx context.Context, channelID, fallbackEncry
 // channelSucceeded clears failure bookkeeping in the background. The WHERE clause makes
 // the common case (an already-healthy channel checked recently) touch no rows, which
 // keeps a shared channel row from becoming a write hotspot under concurrent traffic.
-func (s *Service) channelSucceeded(ctx context.Context, id, keyID string) {
+func (s *Service) channelSucceeded(ctx context.Context, id int64, keyID string) {
 	s.background.submit(func(ctx context.Context) {
 		if keyID != "" {
 			_, _ = s.db.Exec(ctx, `update channel_api_keys set failure_count=0,last_error=null,last_checked_at=now() where id=$1 and channel_id=$2 and (failure_count<>0 or last_error is not null or last_checked_at is null or last_checked_at < now()-interval '30 seconds')`, keyID, id)
@@ -860,7 +861,7 @@ func (s *Service) channelSucceeded(ctx context.Context, id, keyID string) {
 // channelFailed counts a failure against the channel or, when the failing key is
 // known (multi-key channels), against that key. Three failures on the same key
 // trigger an out-of-request verification test of exactly that key.
-func (s *Service) channelFailed(ctx context.Context, channelID, keyID, reason string) {
+func (s *Service) channelFailed(ctx context.Context, channelID int64, keyID, reason string) {
 	if keyID != "" {
 		var failureCount int
 		err := s.db.QueryRow(ctx, `update channel_api_keys set failure_count=failure_count+1,last_error=$2,last_checked_at=now() where id=$1 and channel_id=$3 returning failure_count`, keyID, reason, channelID).Scan(&failureCount)
@@ -879,7 +880,7 @@ func (s *Service) channelFailed(ctx context.Context, channelID, keyID, reason st
 // testFailedChannel verifies a newly unhealthy channel outside the client request.
 // Used for legacy channels without channel_api_keys rows; multi-key channels go
 // through testFailedChannelKey so only the failing key is retired.
-func (s *Service) testFailedChannel(id string) {
+func (s *Service) testFailedChannel(id int64) {
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.RequestTimeout)
 	defer cancel()
 	var baseURL, encrypted, provider, upstreamFormat string
@@ -887,7 +888,7 @@ func (s *Service) testFailedChannel(id string) {
 	if err := s.db.QueryRow(ctx, `select c.base_url,c.api_key,c.provider,c.upstream_format,c.enabled,ss.auto_disable_failed_channels from channels c cross join site_settings ss where c.id=$1 and ss.id=true`, id).Scan(&baseURL, &encrypted, &provider, &upstreamFormat, &enabled, &autoDisable); err != nil || !enabled || !autoDisable {
 		return
 	}
-	seed := sha256.Sum256([]byte(id + "test"))
+	seed := sha256.Sum256([]byte(strconv.FormatInt(id, 10) + "test"))
 	apiKey, _, err := s.selectChannelKey(ctx, id, encrypted, seed[:])
 	if err != nil {
 		s.disableFailedChannel(ctx, id, "", "credential_decryption_failed")
@@ -898,7 +899,7 @@ func (s *Service) testFailedChannel(id string) {
 
 // testFailedChannelKey verifies a channel API key that failed repeatedly, so only
 // that key is auto-disabled when the upstream really rejects it.
-func (s *Service) testFailedChannelKey(channelID, keyID string) {
+func (s *Service) testFailedChannelKey(channelID int64, keyID string) {
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.RequestTimeout)
 	defer cancel()
 	var baseURL, encrypted, provider, upstreamFormat string
@@ -917,7 +918,7 @@ func (s *Service) testFailedChannelKey(channelID, keyID string) {
 // testFailedCredential probes a channel credential with GET /v1/models three
 // times. Success clears the failure bookkeeping for the channel or key; three
 // failed attempts auto-disable the credential.
-func (s *Service) testFailedCredential(ctx context.Context, channelID, keyID, baseURL, apiKey, provider, upstreamFormat string) {
+func (s *Service) testFailedCredential(ctx context.Context, channelID int64, keyID, baseURL, apiKey, provider, upstreamFormat string) {
 	for attempt := 0; attempt < 3; attempt++ {
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/v1/models", nil)
 		if err != nil {
@@ -948,13 +949,13 @@ func (s *Service) testFailedCredential(ctx context.Context, channelID, keyID, ba
 
 // disableFailedChannel marks a channel or, when the failing key is known, just
 // that channel API key as automatically disabled after repeated failures.
-func (s *Service) disableFailedChannel(ctx context.Context, channelID, keyID, reason string) {
+func (s *Service) disableFailedChannel(ctx context.Context, channelID int64, keyID, reason string) {
 	if keyID != "" {
 		result, err := s.db.Exec(ctx, `update channel_api_keys set enabled=false,failure_count=0,last_error=$1,last_checked_at=now() where id=$2 and channel_id=$3 and enabled and failure_count>=3 and exists(select 1 from channels c where c.id=channel_api_keys.channel_id and c.enabled and c.auto_disable)`, reason, keyID, channelID)
 		if err != nil || result.RowsAffected() != 1 {
 			return
 		}
-		s.syncChannelKeyType(ctx, channelID)
+		s.syncChannelKeyType(ctx, strconv.FormatInt(channelID, 10))
 		details, _ := json.Marshal(map[string]string{"reason": reason})
 		auditID, _ := randomID()
 		_, _ = s.db.Exec(ctx, `insert into audit_logs(id,action,actor,entity_type,entity_id,details,request_method,request_path) values($1,'channel_key.auto_disabled','system','channel_api_key',$2,$3,'SYSTEM','/system/channel-test')`, auditID, keyID, details)
@@ -1112,7 +1113,7 @@ func (s *Service) streamResponse(w http.ResponseWriter, resp *http.Response) (st
 // middleware.
 type subscriptionCoveredKey struct{}
 
-func (s *Service) logRequest(ctx context.Context, key keyContext, channelID, channelKeyID, model string, status, prompt, completion, total int, d time.Duration, errorCode, detail string) {
+func (s *Service) logRequest(ctx context.Context, key keyContext, channelID int64, channelKeyID, model string, status, prompt, completion, total int, d time.Duration, errorCode, detail string) {
 	if s.db == nil {
 		return
 	}
@@ -1122,7 +1123,7 @@ func (s *Service) logRequest(ctx context.Context, key keyContext, channelID, cha
 	subscriptionCovered, _ := ctx.Value(subscriptionCoveredKey{}).(bool)
 	logCtx, cancel := detach(ctx, settlementTimeout)
 	defer cancel()
-	_, err := s.db.Exec(logCtx, `insert into request_logs(id,request_id,user_id,api_key_id,channel_id,channel_key_id,group_id,model,status_code,prompt_tokens,completion_tokens,total_tokens,duration_ms,error_code,client_ip,user_agent,error_detail,subscription_covered) values($1::uuid,$2::text,$3::bigint,$4::uuid,nullif($5,'')::uuid,nullif($6,'')::uuid,nullif($7,'')::uuid,$8,$9::int,$10::int,$11::int,$12::int,$13::int,nullif($14,''),$15,$16,$17,$18)`, id, requestID(ctx), key.userID, key.keyID, channelID, channelKeyID, key.groupID, model, status, prompt, completion, total, d.Milliseconds(), errorCode, info.ip, info.userAgent, detail, subscriptionCovered)
+	_, err := s.db.Exec(logCtx, `insert into request_logs(id,request_id,user_id,api_key_id,channel_id,channel_key_id,group_id,model,status_code,prompt_tokens,completion_tokens,total_tokens,duration_ms,error_code,client_ip,user_agent,error_detail,subscription_covered) values($1::uuid,$2::text,$3::bigint,$4::uuid,nullif($5,0),nullif($6,'')::uuid,nullif($7,'')::uuid,$8,$9::int,$10::int,$11::int,$12::int,$13::int,nullif($14,''),$15,$16,$17,$18)`, id, requestID(ctx), key.userID, key.keyID, channelID, channelKeyID, key.groupID, model, status, prompt, completion, total, d.Milliseconds(), errorCode, info.ip, info.userAgent, detail, subscriptionCovered)
 	if err != nil {
 		log.Printf("logRequest failed: %v", err)
 	}

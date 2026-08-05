@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Users } from 'lucide-vue-next'
-import { endpoints, type Group, type User, type UserUpdate } from '~/src/api'
+import { endpoints, type AdminUserSubscription, type Group, type SubscriptionPlan, type User, type UserUpdate } from '~/src/api'
 import { formatDateTime, formatMoney } from '~/src/format'
 
 definePageMeta({ layout: 'console', middleware: 'console-auth' })
@@ -60,6 +60,7 @@ const dialogOpen = ref(false)
 const editing = ref<User | null>(null)
 const formError = ref('')
 const form = reactive({
+  id: '',
   name: '',
   email: '',
   role: 'user',
@@ -74,6 +75,7 @@ const form = reactive({
 function openManage(user: User) {
   editing.value = user
   formError.value = ''
+  form.id = ''
   form.name = user.name
   form.email = user.email
   form.role = user.role
@@ -110,6 +112,13 @@ function buildUpdate(): UserUpdate | null {
   }
   if (form.password) update.password = form.password
 
+  const id = String(form.id ?? '').trim()
+  if (id) {
+    const value = Number(id)
+    if (!Number.isSafeInteger(value) || value <= 0) { formError.value = t('admin.idInvalid'); return null }
+    update.id = value
+  }
+
   const balance = String(form.balance ?? '').trim()
   if (balance) {
     const amount = Number(balance)
@@ -137,6 +146,149 @@ async function save() {
   toast.success(t('admin.userSaved'))
   dialogOpen.value = false
   await users.refresh()
+}
+
+const STATUS_KEYS = {
+  pending: 'system.statusPending',
+  active: 'system.statusActive',
+  expired: 'system.statusExpired',
+  cancelled: 'system.statusCancelled',
+} as const
+
+const STATUS_TONES = {
+  pending: 'warn',
+  active: 'success',
+  expired: 'neutral',
+  cancelled: 'danger',
+} as const
+
+const subscriptionsOpen = ref(false)
+const subsUser = ref<User | null>(null)
+const subs = ref<AdminUserSubscription[]>([])
+const subsPending = ref(false)
+const subsError = ref('')
+const subPlans = ref<SubscriptionPlan[]>([])
+const editingSub = ref<AdminUserSubscription | null>(null)
+const voidTarget = ref<AdminUserSubscription | null>(null)
+const deleteTarget = ref<AdminUserSubscription | null>(null)
+const subForm = reactive({ plan_id: '', start_at: '', end_at: '', auto_renew: false })
+const subFormError = ref('')
+
+const subPlanOptions = computed(() => subPlans.value.map(plan => ({ value: plan.id, label: plan.name })))
+
+function toLocalInput(iso: string | null): string {
+  if (!iso) return ''
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return ''
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
+function resetSubForm() {
+  subForm.plan_id = ''
+  subForm.start_at = ''
+  subForm.end_at = ''
+  subForm.auto_renew = false
+  subFormError.value = ''
+}
+
+async function loadSubscriptions() {
+  if (!subsUser.value) return
+  subsPending.value = true
+  subsError.value = ''
+  try {
+    const result = await endpoints.getAdminUserSubscriptions(subsUser.value.id)
+    subs.value = result.data
+  } catch {
+    subsError.value = t('common.actionFailed')
+  } finally {
+    subsPending.value = false
+  }
+}
+
+async function openSubscriptions(user: User) {
+  subsUser.value = user
+  editingSub.value = null
+  resetSubForm()
+  subscriptionsOpen.value = true
+  await loadSubscriptions()
+  try {
+    const result = await endpoints.getAdminSubscriptionPlans()
+    subPlans.value = result.data
+  } catch {
+    subPlans.value = []
+  }
+}
+
+function startEditSubscription(sub: AdminUserSubscription) {
+  editingSub.value = sub
+  subFormError.value = ''
+  subForm.plan_id = sub.plan_id
+  subForm.start_at = toLocalInput(sub.current_period_start)
+  subForm.end_at = toLocalInput(sub.current_period_end)
+  subForm.auto_renew = sub.auto_renew
+}
+
+async function saveSubscription() {
+  subFormError.value = ''
+  if (subForm.start_at && Number.isNaN(new Date(subForm.start_at).getTime())) {
+    subFormError.value = t('admin.invalidTime')
+    return
+  }
+  if (subForm.end_at && Number.isNaN(new Date(subForm.end_at).getTime())) {
+    subFormError.value = t('admin.invalidTime')
+    return
+  }
+  const startIso = subForm.start_at ? new Date(subForm.start_at).toISOString() : ''
+  const endIso = subForm.end_at ? new Date(subForm.end_at).toISOString() : ''
+  if (startIso && endIso && new Date(endIso) <= new Date(startIso)) {
+    subFormError.value = t('admin.startAfterEnd')
+    return
+  }
+  const target = subsUser.value
+  if (!target) return
+  if (editingSub.value) {
+    const ok = await run(() => endpoints.updateAdminSubscription(editingSub.value!.id, {
+      current_period_start: startIso,
+      current_period_end: endIso,
+      auto_renew: subForm.auto_renew,
+    }))
+    if (!ok) { toast.error(t('common.actionFailed')); return }
+    toast.success(t('admin.subscriptionUpdated'))
+  } else {
+    if (!subForm.plan_id) { subFormError.value = t('admin.planRequired'); return }
+    const ok = await run(() => endpoints.createAdminUserSubscription(target.id, {
+      plan_id: subForm.plan_id,
+      start_at: startIso,
+      end_at: endIso,
+      auto_renew: subForm.auto_renew,
+    }))
+    if (!ok) { toast.error(t('common.actionFailed')); return }
+    toast.success(t('admin.subscriptionAdded'))
+  }
+  editingSub.value = null
+  resetSubForm()
+  await loadSubscriptions()
+}
+
+async function voidSubscription() {
+  const target = voidTarget.value
+  if (!target) return
+  voidTarget.value = null
+  const ok = await run(() => endpoints.voidAdminSubscription(target.id))
+  if (!ok) { toast.error(t('common.actionFailed')); return }
+  toast.success(t('admin.subscriptionVoided'))
+  await loadSubscriptions()
+}
+
+async function deleteSubscription() {
+  const target = deleteTarget.value
+  if (!target) return
+  deleteTarget.value = null
+  const ok = await run(() => endpoints.deleteAdminSubscription(target.id))
+  if (!ok) { toast.error(t('common.actionFailed')); return }
+  toast.success(t('admin.subscriptionDeleted'))
+  await loadSubscriptions()
 }
 </script>
 
@@ -199,7 +351,10 @@ async function save() {
             </td>
             <td class="text-muted whitespace-nowrap">{{ formatDateTime(user.created_at) }}</td>
             <td v-if="canManage">
-              <UiButton variant="ghost" size="sm" @click="openManage(user)">{{ t('admin.manage') }}</UiButton>
+              <div class="flex gap-1">
+                <UiButton variant="ghost" size="sm" @click="openManage(user)">{{ t('admin.manage') }}</UiButton>
+                <UiButton variant="ghost" size="sm" @click="openSubscriptions(user)">{{ t('admin.subscriptions') }}</UiButton>
+              </div>
             </td>
           </tr>
         </tbody>
@@ -216,6 +371,9 @@ async function save() {
           </UiField>
           <UiField :label="t('admin.email')" required>
             <UiInput v-model="form.email" type="email" autocomplete="off" />
+          </UiField>
+          <UiField :label="t('admin.id')" :hint="t('admin.idHint')">
+            <UiInput v-model="form.id" type="number" mono :placeholder="editing?.id" />
           </UiField>
           <UiField :label="t('admin.role')">
             <UiSelect v-model="form.role" :options="roleOptions" :placeholder="t('common.selectPlaceholder')" />
@@ -256,5 +414,108 @@ async function save() {
         <UiButton :loading="busy" @click="save">{{ t('common.save') }}</UiButton>
       </template>
     </UiSlidePanel>
+
+    <UiSlidePanel
+      v-model:open="subscriptionsOpen"
+      size="lg"
+      :title="t('admin.manageSubscriptions')"
+      :description="t('admin.manageSubscriptionsLead')"
+    >
+      <div class="space-y-4">
+        <UiAlert v-if="subsError" tone="danger">{{ subsError }}</UiAlert>
+
+        <UiCard :title="editingSub ? t('admin.editSubscription') : t('admin.addSubscription')">
+          <div class="space-y-4">
+            <UiAlert v-if="subFormError" tone="danger">{{ subFormError }}</UiAlert>
+            <div class="grid gap-4 sm:grid-cols-2">
+              <UiField v-if="editingSub" :label="t('admin.plan')">
+                <UiInput :model-value="editingSub.plan_name" disabled />
+              </UiField>
+              <UiField v-else :label="t('admin.plan')" required>
+                <UiSelect
+                  v-model="subForm.plan_id"
+                  :options="subPlanOptions"
+                  :placeholder="t('common.selectPlaceholder')"
+                />
+              </UiField>
+              <UiField :label="t('admin.periodStart')">
+                <UiInput v-model="subForm.start_at" type="datetime-local" />
+              </UiField>
+              <UiField :label="t('admin.periodEnd')">
+                <UiInput v-model="subForm.end_at" type="datetime-local" />
+              </UiField>
+            </div>
+            <UiCheckbox v-model="subForm.auto_renew">{{ t('admin.autoRenew') }}</UiCheckbox>
+            <div class="flex justify-end gap-2">
+              <UiButton v-if="editingSub" variant="secondary" @click="editingSub = null; resetSubForm()">
+                {{ t('common.cancel') }}
+              </UiButton>
+              <UiButton :loading="busy" @click="saveSubscription">
+                {{ editingSub ? t('common.save') : t('admin.addSubscription') }}
+              </UiButton>
+            </div>
+          </div>
+        </UiCard>
+
+        <div class="min-w-0 space-y-1">
+          <h3 class="text-sm font-semibold text-ink">{{ t('admin.subscriptions') }}</h3>
+        </div>
+
+        <UiSkeleton v-if="subsPending" :rows="3" />
+
+        <div v-else-if="!subsError && !subs.length" class="rounded-card border border-line bg-surface p-6 text-center">
+          <p class="text-[13px] text-muted">{{ t('admin.noSubscriptionsBody') }}</p>
+        </div>
+
+        <UiTable v-else-if="subs.length">
+          <thead>
+            <tr>
+              <th>{{ t('admin.plan') }}</th>
+              <th>{{ t('common.status') }}</th>
+              <th class="num">{{ t('admin.periodStart') }}</th>
+              <th class="num">{{ t('admin.periodEnd') }}</th>
+              <th>{{ t('admin.autoRenew') }}</th>
+              <th>{{ t('common.actions') }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="sub in subs" :key="sub.id">
+              <td class="font-medium text-ink">{{ sub.plan_name }}</td>
+              <td>
+                <UiBadge :tone="STATUS_TONES[sub.status]" dot>{{ t(STATUS_KEYS[sub.status]) }}</UiBadge>
+              </td>
+              <td class="num text-muted whitespace-nowrap">{{ formatDateTime(sub.current_period_start) }}</td>
+              <td class="num text-muted whitespace-nowrap">{{ formatDateTime(sub.current_period_end) }}</td>
+              <td>{{ sub.auto_renew ? t('system.yes') : t('system.no') }}</td>
+              <td>
+                <div class="flex gap-1">
+                  <UiButton variant="ghost" size="sm" @click="startEditSubscription(sub)">{{ t('common.edit') }}</UiButton>
+                  <UiButton variant="ghost" size="sm" @click="voidTarget = sub">{{ t('admin.void') }}</UiButton>
+                  <UiButton variant="ghost" size="sm" class="text-danger" @click="deleteTarget = sub">
+                    {{ t('admin.delete') }}
+                  </UiButton>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </UiTable>
+      </div>
+    </UiSlidePanel>
+
+    <UiDialog :open="voidTarget !== null" size="sm" :title="t('admin.void')">
+      <p class="text-sm text-muted">{{ t('admin.confirmVoidSubscription') }}</p>
+      <template #footer>
+        <UiButton variant="secondary" @click="voidTarget = null">{{ t('common.cancel') }}</UiButton>
+        <UiButton variant="danger" :loading="busy" @click="voidSubscription">{{ t('admin.void') }}</UiButton>
+      </template>
+    </UiDialog>
+
+    <UiDialog :open="deleteTarget !== null" size="sm" :title="t('common.delete')">
+      <p class="text-sm text-muted">{{ t('admin.confirmDeleteSubscription') }}</p>
+      <template #footer>
+        <UiButton variant="secondary" @click="deleteTarget = null">{{ t('common.cancel') }}</UiButton>
+        <UiButton variant="danger" :loading="busy" @click="deleteSubscription">{{ t('common.delete') }}</UiButton>
+      </template>
+    </UiDialog>
   </div>
 </template>

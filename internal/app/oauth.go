@@ -129,6 +129,10 @@ func (s *Service) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.auditActor(r, userID, "account.oauth_login", "user", userID, map[string]any{"provider": provider})
+	var email string
+	if err := s.db.QueryRow(r.Context(), `select email from users where id=$1`, userID).Scan(&email); err == nil {
+		s.notifyLogin(r.Context(), email, requestMetadata(r))
+	}
 	s.createSession(w, r, userID, http.StatusOK)
 }
 
@@ -144,10 +148,6 @@ func (s *Service) findOrCreateOAuthUser(ctx context.Context, provider, providerU
 			_, _ = s.db.Exec(ctx, `insert into user_oauth_connections(user_id,provider,provider_user_id,provider_username,provider_avatar_url) values($1,$2,$3,$4,$5) on conflict do nothing`, userID, provider, providerUserID, name, avatar)
 			return userID, nil
 		}
-	}
-	id, err := randomID()
-	if err != nil {
-		return "", err
 	}
 	email = strings.ToLower(strings.TrimSpace(email))
 	if email == "" {
@@ -169,7 +169,7 @@ func (s *Service) findOrCreateOAuthUser(ctx context.Context, provider, providerU
 	if _, err = tx.Exec(ctx, `select pg_advisory_xact_lock(458110)`); err != nil {
 		return "", err
 	}
-	err = tx.QueryRow(ctx, `insert into users(id,email,name,role,avatar_url) values($1,$2,$3,$4,$5) returning id`, id, email, displayName, role, avatar).Scan(&userID)
+	err = tx.QueryRow(ctx, `insert into users(email,name,role,avatar_url) values($1,$2,$3,$4) returning id`, email, displayName, role, avatar).Scan(&userID)
 	if err != nil {
 		return "", err
 	}

@@ -12,15 +12,17 @@ const { signIn } = useAccount()
 const { toast } = useToast()
 const { challenge } = useGeetest()
 
-const mode = ref(route.query.mode === 'register' ? 'register' : 'signin')
+const mode = ref(route.query.mode === 'register' ? 'register' : route.query.mode === 'reset' ? 'reset' : 'signin')
 const form = reactive({ name: '', email: '', password: '', code: '' })
 const formError = ref('')
 const busy = ref(false)
 const sending = ref(false)
 const cooldown = ref(0)
+const resetSent = ref(false)
 let cooldownTimer: ReturnType<typeof setInterval> | null = null
 
 const isRegister = computed(() => mode.value === 'register')
+const isReset = computed(() => mode.value === 'reset')
 const plan = computed(() => (typeof route.query.plan === 'string' ? route.query.plan : ''))
 const captchaId = computed(() => settings.value.geetest_captcha_id ?? '')
 const captchaEnabled = computed(() => Boolean(settings.value.geetest_enabled) && captchaId.value !== '')
@@ -35,14 +37,15 @@ const tabs = computed(() => [
   { value: 'register', label: t('common.signUp') },
 ])
 
-const title = computed(() => (isRegister.value ? t('auth.signUpTitle') : t('auth.signInTitle')))
-const lead = computed(() => (isRegister.value ? t('auth.signUpLead') : t('auth.signInLead')))
+const title = computed(() => (isRegister.value ? t('auth.signUpTitle') : isReset.value ? t('auth.resetTitle') : t('auth.signInTitle')))
+const lead = computed(() => (isRegister.value ? t('auth.signUpLead') : isReset.value ? t('auth.resetLead') : t('auth.signInLead')))
 
 useHead({ title: () => `${title.value} · ${settings.value.name}` })
 
 watch(mode, (next) => {
   formError.value = ''
-  router.replace({ query: { ...route.query, mode: next === 'register' ? 'register' : undefined } })
+  resetSent.value = false
+  router.replace({ query: { ...route.query, mode: next === 'register' ? 'register' : next === 'reset' ? 'reset' : undefined } })
 })
 
 function stopCooldown() {
@@ -116,6 +119,30 @@ async function sendCode() {
   }
 }
 
+async function submitReset() {
+  if (busy.value || resetSent.value) return
+  formError.value = ''
+  const email = form.email.trim()
+  if (!email) {
+    formError.value = t('auth.emailInvalid')
+    return
+  }
+  busy.value = true
+  try {
+    let captcha: GeetestResult | null = null
+    if (captchaEnabled.value) {
+      captcha = await runCaptcha()
+      if (!captcha) return
+    }
+    await endpoints.requestPasswordReset(email, captcha ?? undefined)
+    resetSent.value = true
+  } catch (cause) {
+    formError.value = describe(cause)
+  } finally {
+    busy.value = false
+  }
+}
+
 async function submit() {
   if (busy.value) return
   formError.value = ''
@@ -159,7 +186,7 @@ async function submit() {
 
       <UiCard flush class="mt-8">
         <UiTabs v-model="mode" :items="tabs">
-          <form class="space-y-4 px-5 py-5" novalidate @submit.prevent="submit">
+          <form v-if="!isReset" class="space-y-4 px-5 py-5" novalidate @submit.prevent="submit">
             <UiField v-if="isRegister" :label="t('auth.displayName')" for="auth-name" required>
               <UiInput
                 id="auth-name"
@@ -192,6 +219,16 @@ async function submit() {
                 :autocomplete="isRegister ? 'new-password' : 'current-password'"
               />
             </UiField>
+
+            <div v-if="!isRegister && emailCodeEnabled" class="-mt-2 flex justify-end">
+              <button
+                type="button"
+                class="text-xs text-muted transition-colors duration-150 hover:text-clay"
+                @click="mode = 'reset'"
+              >
+                {{ t('auth.forgotPassword') }}
+              </button>
+            </div>
 
             <UiField v-if="isRegister && emailCodeEnabled" :label="t('auth.emailCode')" for="auth-code" required>
               <div class="flex items-center gap-2">
@@ -242,6 +279,30 @@ async function submit() {
               </a>
             </div>
           </form>
+
+          <form v-else class="space-y-4 px-5 py-5" novalidate @submit.prevent="submitReset">
+            <UiField :label="t('auth.email')" for="auth-reset-email" required>
+              <UiInput
+                id="auth-reset-email"
+                v-model="form.email"
+                type="text"
+                autocomplete="email"
+                :placeholder="t('auth.emailPlaceholder')"
+              />
+            </UiField>
+
+            <UiAlert v-if="formError" tone="danger" dismissible @dismiss="formError = ''">
+              {{ formError }}
+            </UiAlert>
+
+            <UiAlert v-if="resetSent" tone="success" dismissible @dismiss="resetSent = false">
+              {{ t('auth.resetSent') }}
+            </UiAlert>
+
+            <UiButton type="submit" size="lg" block :loading="busy" :disabled="resetSent">
+              {{ t('auth.sendResetLink') }}
+            </UiButton>
+          </form>
         </UiTabs>
       </UiCard>
 
@@ -249,9 +310,9 @@ async function submit() {
         <button
           type="button"
           class="text-clay underline-offset-4 transition-opacity duration-150 hover:underline"
-          @click="mode = isRegister ? 'signin' : 'register'"
+          @click="mode = isReset ? 'signin' : isRegister ? 'signin' : 'register'"
         >
-          {{ isRegister ? t('auth.toSignIn') : t('auth.toSignUp') }}
+          {{ isReset ? t('auth.resetBackToSignIn') : isRegister ? t('auth.toSignIn') : t('auth.toSignUp') }}
         </button>
       </p>
     </div>

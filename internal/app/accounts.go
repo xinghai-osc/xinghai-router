@@ -146,14 +146,14 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "captcha_failed", err.Error())
 		return
 	}
-	var userID, passwordHash string
+	var userID, email, passwordHash string
 	var query string
 	if isEmail {
-		query = `select id,password_hash from users where email=$1 and enabled and password_hash is not null`
+		query = `select id,email,password_hash from users where email=$1 and enabled and password_hash is not null`
 	} else {
-		query = `select id,password_hash from users where name=$1 and enabled and password_hash is not null`
+		query = `select id,email,password_hash from users where name=$1 and enabled and password_hash is not null`
 	}
-	err := s.db.QueryRow(r.Context(), query, identifier).Scan(&userID, &passwordHash)
+	err := s.db.QueryRow(r.Context(), query, identifier).Scan(&userID, &email, &passwordHash)
 	if err != nil {
 		// Spend comparable time to a real bcrypt check so missing users are not free to probe.
 		_ = passwordMatches(dummyPasswordHash, in.Password)
@@ -165,6 +165,7 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.auditActor(r, userID, "account.logged_in", "user", userID, nil)
+	s.notifyLogin(r.Context(), email, requestMetadata(r))
 	s.createSession(w, r, userID, http.StatusOK)
 }
 

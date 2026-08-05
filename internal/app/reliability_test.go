@@ -88,6 +88,19 @@ func TestAutoDisableKeyword(t *testing.T) {
 	}
 }
 
+func TestMatchedKeyword(t *testing.T) {
+	s := defaultReliabilitySettings()
+	if got := s.matchedKeyword(`{"error":{"message":"Your credit balance is too low, please recharge"}}`); got != "your credit balance is too low" {
+		t.Errorf("matchedKeyword = %q, want %q", got, "your credit balance is too low")
+	}
+	if got := s.matchedKeyword(`{"error":"TOO MANY REQUESTS"}`); got != "too many requests" {
+		t.Errorf("matchedKeyword = %q, want %q", got, "too many requests")
+	}
+	if got := s.matchedKeyword(`{"choices":[{"message":{"content":"hello"}}]}`); got != "" {
+		t.Errorf("matchedKeyword = %q, want empty", got)
+	}
+}
+
 func TestSplitKeywordsTrimsAndSkipsEmpty(t *testing.T) {
 	keywords := splitKeywords("  Foo Bar  \n\n Baz \n")
 	if len(keywords) != 2 || keywords[0] != "foo bar" || keywords[1] != "baz" {

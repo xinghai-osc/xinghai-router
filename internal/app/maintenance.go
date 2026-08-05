@@ -34,7 +34,7 @@ func (s *Service) cleanupExpiredAuthState(ctx context.Context) {
 	if s.db == nil {
 		return
 	}
-	sessionN, codeN := int64(0), int64(0)
+	sessionN, codeN, resetN := int64(0), int64(0), int64(0)
 	if tag, err := s.db.Exec(ctx, `delete from user_sessions where expires_at < now()`); err != nil {
 		log.Printf("auth cleanup: delete expired sessions: %v", err)
 	} else {
@@ -45,8 +45,13 @@ func (s *Service) cleanupExpiredAuthState(ctx context.Context) {
 	} else {
 		codeN = tag.RowsAffected()
 	}
-	if sessionN > 0 || codeN > 0 {
-		log.Printf("auth cleanup: removed %d expired sessions and %d email verification codes", sessionN, codeN)
+	if tag, err := s.db.Exec(ctx, `delete from password_reset_tokens where expires_at < now() or consumed_at is not null`); err != nil {
+		log.Printf("auth cleanup: delete expired password reset tokens: %v", err)
+	} else {
+		resetN = tag.RowsAffected()
+	}
+	if sessionN > 0 || codeN > 0 || resetN > 0 {
+		log.Printf("auth cleanup: removed %d expired sessions, %d email verification codes, and %d password reset tokens", sessionN, codeN, resetN)
 	}
 }
 

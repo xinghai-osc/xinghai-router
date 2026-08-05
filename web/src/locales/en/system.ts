@@ -63,6 +63,7 @@ export default {
   statusActive: 'Active',
   statusExpired: 'Expired',
   statusCancelled: 'Cancelled',
+  statusDisabled: 'Disabled',
   periodStart: 'Period start',
   periodEnd: 'Period end',
   autoRenew: 'Auto-renew',

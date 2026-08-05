@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -90,6 +91,18 @@ func (s reliabilitySettings) autoDisableKeyword(body string) bool {
 		}
 	}
 	return false
+}
+
+// matchedKeyword returns the first configured keyword present in the response
+// body, or the empty string when no keyword matches.
+func (s reliabilitySettings) matchedKeyword(body string) string {
+	lower := strings.ToLower(body)
+	for _, keyword := range s.parsedKeywords {
+		if strings.Contains(lower, keyword) {
+			return keyword
+		}
+	}
+	return ""
 }
 
 type statusMatcher struct {
@@ -314,13 +327,13 @@ func (s *Service) updateReliabilitySettings(w http.ResponseWriter, r *http.Reque
 // channels), just that channel API key as automatically disabled with an audit
 // record. A key is disabled only if the channel allows auto-disable; when the last
 // enabled key of a channel is disabled the whole channel is disabled too.
-func (s *Service) autoDisableChannel(ctx context.Context, channelID, keyID, reason string) {
+func (s *Service) autoDisableChannel(ctx context.Context, channelID int64, keyID, reason string) {
 	if keyID != "" {
 		result, err := s.db.Exec(ctx, `update channel_api_keys set enabled=false,failure_count=0,last_error=$1,last_checked_at=now() where id=$2 and channel_id=$3 and enabled and exists(select 1 from channels c where c.id=channel_api_keys.channel_id and c.enabled and c.auto_disable)`, reason, keyID, channelID)
 		if err != nil || result.RowsAffected() != 1 {
 			return
 		}
-		s.syncChannelKeyType(ctx, channelID)
+		s.syncChannelKeyType(ctx, strconv.FormatInt(channelID, 10))
 		details, _ := json.Marshal(map[string]string{"reason": reason})
 		auditID, _ := randomID()
 		_, _ = s.db.Exec(ctx, `insert into audit_logs(id,action,actor,entity_type,entity_id,details,request_method,request_path) values($1,'channel_key.auto_disabled','system','channel_api_key',$2,$3,'SYSTEM','/gateway')`, auditID, keyID, details)
@@ -338,7 +351,7 @@ func (s *Service) autoDisableChannel(ctx context.Context, channelID, keyID, reas
 
 // disableChannelIfKeyless auto-disables a channel when all of its API keys are
 // disabled, so a channel left without usable credentials is retired as a whole.
-func (s *Service) disableChannelIfKeyless(ctx context.Context, channelID, reason string) {
+func (s *Service) disableChannelIfKeyless(ctx context.Context, channelID int64, reason string) {
 	var left int
 	if err := s.db.QueryRow(ctx, `select count(*) from channel_api_keys where channel_id=$1 and enabled`, channelID).Scan(&left); err != nil || left > 0 {
 		return
@@ -352,11 +365,31 @@ func (s *Service) disableChannelIfKeyless(ctx context.Context, channelID, reason
 	_, _ = s.db.Exec(ctx, `insert into audit_logs(id,action,actor,entity_type,entity_id,details,request_method,request_path) values($1,'channel.auto_disabled','system','channel',$2,$3,'SYSTEM','/system/channel-test')`, auditID, channelID, details)
 }
 
-// testChannel probes a channel with GET /v1/models and returns the status code and latency.
-func (s *Service) testChannel(ctx context.Context, baseURL, apiKey, provider string) (int, []byte, time.Duration, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/v1/models", nil)
+// testChannel probes a channel and returns the status code and latency. When
+// testModel is set it issues a real chat completion with that model; otherwise
+// it falls back to GET /v1/models.
+func (s *Service) testChannel(ctx context.Context, baseURL, apiKey, provider, testModel string) (int, []byte, time.Duration, error) {
+	path, method := "/v1/models", http.MethodGet
+	var requestBody []byte
+	if testModel != "" {
+		payload := map[string]any{
+			"model":      testModel,
+			"max_tokens": 16,
+			"messages":   []map[string]any{{"role": "user", "content": "ping"}},
+		}
+		requestBody, _ = json.Marshal(payload)
+		if provider == "anthropic" {
+			path, method = "/v1/messages", http.MethodPost
+		} else {
+			path, method = "/v1/chat/completions", http.MethodPost
+		}
+	}
+	request, err := http.NewRequestWithContext(ctx, method, baseURL+path, bytes.NewReader(requestBody))
 	if err != nil {
 		return 0, nil, 0, err
+	}
+	if testModel != "" {
+		request.Header.Set("Content-Type", "application/json")
 	}
 	if provider == "anthropic" {
 		request.Header.Set("X-API-Key", apiKey)
@@ -389,25 +422,25 @@ func (s *Service) runHealthChecks(ctx context.Context) {
 	if settings.HealthCheckMode == "scheduled_all" {
 		// Scheduled full tests only probe channels not manually disabled and
 		// only their enabled keys.
-		query = `select c.id,c.base_url,c.provider,k.id,k.key_encrypted from channels c left join channel_api_keys k on k.channel_id=c.id and k.enabled where c.enabled and not c.auto_disabled order by c.id,k.priority,k.created_at`
+		query = `select c.id,c.base_url,c.provider,c.test_model,k.id,k.key_encrypted from channels c left join channel_api_keys k on k.channel_id=c.id and k.enabled where c.enabled and not c.auto_disabled order by c.id,k.priority,k.created_at`
 		if len(settings.parsedChannelIDs) > 0 {
 			ids := make([]string, 0, len(settings.parsedChannelIDs))
 			for id := range settings.parsedChannelIDs {
 				ids = append(ids, id)
 			}
-			query = `select c.id,c.base_url,c.provider,k.id,k.key_encrypted from channels c left join channel_api_keys k on k.channel_id=c.id and k.enabled where c.enabled and not c.auto_disabled and c.id::text = any($1) order by c.id,k.priority,k.created_at`
+			query = `select c.id,c.base_url,c.provider,c.test_model,k.id,k.key_encrypted from channels c left join channel_api_keys k on k.channel_id=c.id and k.enabled where c.enabled and not c.auto_disabled and c.id::text = any($1) order by c.id,k.priority,k.created_at`
 			args = append(args, ids)
 		}
 	} else {
 		// Passive recovery checks channels auto-disabled by failed real requests
 		// and individual keys auto-disabled while their channel stayed enabled.
-		query = `select c.id,c.base_url,c.provider,k.id,k.key_encrypted from channels c left join channel_api_keys k on k.channel_id=c.id where (not c.enabled and c.auto_disabled) or (c.enabled and k.enabled=false) order by c.id,k.priority,k.created_at`
+		query = `select c.id,c.base_url,c.provider,c.test_model,k.id,k.key_encrypted from channels c left join channel_api_keys k on k.channel_id=c.id where (not c.enabled and c.auto_disabled) or (c.enabled and k.enabled=false) order by c.id,k.priority,k.created_at`
 		if len(settings.parsedChannelIDs) > 0 {
 			ids := make([]string, 0, len(settings.parsedChannelIDs))
 			for id := range settings.parsedChannelIDs {
 				ids = append(ids, id)
 			}
-			query = `select c.id,c.base_url,c.provider,k.id,k.key_encrypted from channels c left join channel_api_keys k on k.channel_id=c.id where ((not c.enabled and c.auto_disabled) or (c.enabled and k.enabled=false)) and c.id::text = any($1) order by c.id,k.priority,k.created_at`
+			query = `select c.id,c.base_url,c.provider,c.test_model,k.id,k.key_encrypted from channels c left join channel_api_keys k on k.channel_id=c.id where ((not c.enabled and c.auto_disabled) or (c.enabled and k.enabled=false)) and c.id::text = any($1) order by c.id,k.priority,k.created_at`
 			args = append(args, ids)
 		}
 	}
@@ -416,18 +449,20 @@ func (s *Service) runHealthChecks(ctx context.Context) {
 		return
 	}
 	type target struct {
-		id, baseURL, provider, keyID, encrypted string
-		hasKey                                  bool
+		id                                  int64
+		baseURL, provider, testModel, keyID string
+		encrypted                           string
+		hasKey                              bool
 	}
 	var targets []target
 	for rows.Next() {
 		var t target
-		var keyID, encrypted any
-		if rows.Scan(&t.id, &t.baseURL, &t.provider, &keyID, &encrypted) == nil {
+		var keyID, encrypted *string
+		if rows.Scan(&t.id, &t.baseURL, &t.provider, &t.testModel, &keyID, &encrypted) == nil {
 			t.hasKey = keyID != nil
 			if t.hasKey {
-				t.keyID = keyID.(string)
-				t.encrypted = encrypted.(string)
+				t.keyID = *keyID
+				t.encrypted = *encrypted
 			}
 			targets = append(targets, t)
 		}
@@ -447,7 +482,7 @@ func (s *Service) runHealthChecks(ctx context.Context) {
 		if err != nil {
 			continue
 		}
-		status, _, latency, testErr := s.testChannel(ctx, t.baseURL, apiKey, t.provider)
+		status, _, latency, testErr := s.testChannel(ctx, t.baseURL, apiKey, t.provider, t.testModel)
 		success := testErr == nil && status >= 200 && status < 300
 		if success {
 			if settings.HealthCheckAutoRecover {

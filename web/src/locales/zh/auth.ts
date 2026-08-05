@@ -30,6 +30,18 @@ export default {
   orContinueWith: '或使用第三方登录',
   captchaUnavailable: '人机验证加载失败，请稍后重试',
 
+  forgotPassword: '忘记密码？',
+  resetTitle: '重置密码',
+  resetLead: '输入注册邮箱，我们将发送重置链接。',
+  resetSent: '如果该邮箱已注册，重置链接已发送，请查收邮件',
+  resetBackToSignIn: '返回登录',
+  sendResetLink: '发送重置链接',
+  newPassword: '新密码',
+  confirmPassword: '确认新密码',
+  passwordsMismatch: '两次输入的密码不一致',
+  resetInvalidToken: '链接无效或已过期，请重新申请',
+  resetSuccess: '密码已重置，请使用新密码登录',
+
   accountMenu: '账号菜单',
   balance: '账户余额',
   accountSettings: '账号设置',

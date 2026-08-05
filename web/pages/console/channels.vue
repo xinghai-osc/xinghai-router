@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Server, KeyRound, Play, ArrowRightLeft, BarChart3 } from 'lucide-vue-next'
+import { Server, KeyRound, Play, ArrowRightLeft, BarChart3, X } from 'lucide-vue-next'
 import { endpoints, type Channel, type ChannelForm, type ChannelKey, type ChannelKeyTestResult, type ChannelQuota, type ChannelQuotaForm, type ChannelTestResult, type ChannelUsageStats, type Group, type ModelRoute, type ModelRouteForm } from '~/src/api'
 import { formatCompact, formatNumber, formatMoney } from '~/src/format'
 
@@ -26,7 +26,14 @@ const groups = useResource(
 )
 
 const search = ref('')
+const modelFilter = ref('')
+const statusFilter = ref('all')
+const typeFilter = ref('all')
+const groupFilter = ref('all')
 const selected = ref<Set<string>>(new Set())
+const idSort = ref(false)
+
+const providerOptions = computed(() => PROVIDERS.map(value => ({ value, label: t(`admin.provider_${value}`) })))
 
 function toggleSelected(id: string) {
   const next = new Set(selected.value)
@@ -37,16 +44,25 @@ function toggleSelected(id: string) {
 
 const groupOptions = computed(() => groups.data.value.data)
 const groupNames = computed(() => new Map(groupOptions.value.map(group => [group.id, group.name])))
-const providerOptions = computed(() => PROVIDERS.map(value => ({ value, label: value })))
 const keyTypeOptions = computed(() => KEY_TYPES)
 
 const filtered = computed(() => {
   const term = search.value.trim().toLowerCase()
-  if (!term) return channels.data.value.data
-  return channels.data.value.data.filter(channel =>
-    channel.name.toLowerCase().includes(term) ||
-    channel.base_url.toLowerCase().includes(term) ||
-    channel.models.some(m => m.toLowerCase().includes(term)))
+  const model = modelFilter.value.trim().toLowerCase()
+  let list = channels.data.value.data.filter(channel => {
+    if (term && !(channel.name.toLowerCase().includes(term) || channel.id.includes(term) || channel.base_url.toLowerCase().includes(term))) return false
+    if (model && !channel.models.some(m => m.toLowerCase().includes(model))) return false
+    if (statusFilter.value === 'enabled' && !channel.enabled) return false
+    if (statusFilter.value === 'disabled' && channel.enabled) return false
+    if (statusFilter.value === 'auto_disabled' && !channel.auto_disabled) return false
+    if (typeFilter.value !== 'all' && channel.provider !== typeFilter.value) return false
+    if (groupFilter.value !== 'all' && !channel.groups.includes(groupFilter.value)) return false
+    return true
+  })
+  if (idSort.value) {
+    list = [...list].sort((a, b) => Number(a.id) - Number(b.id))
+  }
+  return list
 })
 
 const allSelected = computed(() => filtered.value.length > 0 && filtered.value.every(ch => selected.value.has(ch.id)))
@@ -86,6 +102,7 @@ const form = reactive({
   key_type: 'single' as 'single' | 'multi',
   api_keys: '',
   models: '',
+  test_model: '',
   priority: '0',
   groups: [] as string[],
   auto_disable: true,
@@ -94,6 +111,36 @@ const form = reactive({
   delete_fields: '',
   set_fields: '',
 })
+
+const keyDraft = ref('')
+const keyInputError = ref('')
+const keyChips = computed(() => parseApiKeys(form.api_keys))
+
+function addKey() {
+  keyInputError.value = ''
+  const key = keyDraft.value.trim()
+  if (!key) return
+  if (key.length > 4096) {
+    keyInputError.value = t('admin.apiKeyInvalid')
+    return
+  }
+  const keys = keyChips.value
+  if (keys.includes(key)) {
+    keyInputError.value = t('admin.duplicateApiKey')
+    return
+  }
+  if (form.key_type === 'single' && keys.length > 0) {
+    keyInputError.value = t('admin.singleKeyOnlyOne')
+    return
+  }
+  form.api_keys = [...keys, key].join('\n')
+  keyDraft.value = ''
+}
+
+function removeKey(index: number) {
+  form.api_keys = keyChips.value.filter((_, i) => i !== index).join('\n')
+  keyInputError.value = ''
+}
 
 const keysDialogOpen = ref(false)
 const keysChannelId = ref('')
@@ -205,7 +252,10 @@ function openCreate() {
   form.base_url = ''
   form.key_type = 'single'
   form.api_keys = ''
+  keyDraft.value = ''
+  keyInputError.value = ''
   form.models = ''
+  form.test_model = ''
   form.priority = '0'
   form.groups = []
   form.auto_disable = true
@@ -224,6 +274,8 @@ function openEdit(channel: Channel) {
   form.base_url = channel.base_url
   form.key_type = channel.key_type
   form.api_keys = ''
+  keyDraft.value = ''
+  keyInputError.value = ''
   form.models = channel.models.join('\n')
   form.priority = String(channel.priority)
   form.groups = [...channel.groups]
@@ -805,6 +857,15 @@ function quotaUsageForWindow(window: string) {
           <UiInput v-model="form.base_url" mono :placeholder="t('admin.baseUrlPlaceholder')" />
         </UiField>
 
+        <div v-if="form.provider === 'custom'" class="grid gap-4 sm:grid-cols-2">
+          <UiField :label="t('admin.upstreamFormat')" :hint="t('admin.upstreamFormatHint')">
+            <UiSelect v-model="form.upstream_format" :options="formatOptions" />
+          </UiField>
+          <UiField :label="t('admin.upstreamPath')" :hint="t('admin.upstreamPathHint')">
+            <UiInput v-model="form.upstream_path" mono :placeholder="t('admin.upstreamPathPlaceholder')" />
+          </UiField>
+        </div>
+
         <div class="grid gap-4 sm:grid-cols-2">
           <UiField :label="t('admin.keyType')" required>
             <UiSelect v-model="form.key_type" :options="keyTypeOptions" />
@@ -816,10 +877,35 @@ function quotaUsageForWindow(window: string) {
 
         <UiField
           :label="t('admin.apiKey')"
-          :hint="editingId ? t('admin.apiKeyHintEdit') : t('admin.apiKeyHintCreate')"
+          :hint="editingId ? t('admin.apiKeyHintChannelEdit') : t('admin.apiKeyHintChannelCreate')"
           :required="!editingId"
         >
-          <UiTextarea v-model="form.api_keys" mono :rows="3" :placeholder="t('admin.apiKeysPlaceholder')" />
+          <div class="rounded-control border border-line-strong bg-surface p-2">
+            <div v-if="keyChips.length" class="flex flex-wrap gap-1.5">
+              <span
+                v-for="(key, index) in keyChips" :key="`${key}-${index}`"
+                class="inline-flex items-center gap-1 rounded-full border border-line bg-sunken py-0.5 pl-2.5 pr-1 font-mono text-[13px] text-ink"
+              >
+                <span class="max-w-48 truncate">{{ key }}</span>
+                <button
+                  type="button"
+                  class="flex size-4 items-center justify-center rounded-full text-faint transition-colors hover:bg-danger-soft hover:text-danger"
+                  :aria-label="t('admin.removeKey')"
+                  @click="removeKey(index)"
+                >
+                  <X class="size-3" />
+                </button>
+              </span>
+            </div>
+            <p v-else class="px-1 pb-1 text-2xs text-faint">{{ t('admin.keyListEmpty') }}</p>
+            <UiInput
+              v-model="keyDraft"
+              mono
+              :placeholder="t('admin.apiKeyInputPlaceholder')"
+              @keydown.enter.prevent="addKey"
+            />
+          </div>
+          <p v-if="keyInputError" class="mt-1 text-xs text-danger">{{ keyInputError }}</p>
         </UiField>
 
         <UiField :label="t('admin.models')" :hint="t('admin.modelsHint')" required>

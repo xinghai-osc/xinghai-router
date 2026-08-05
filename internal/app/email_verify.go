@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"net/http"
 	"net/smtp"
 	"strings"
@@ -190,6 +191,47 @@ func (s *Service) verifyEmailCode(ctx context.Context, email, code string) error
 		return fmt.Errorf("could not confirm the code")
 	}
 	return nil
+}
+
+// notifyLogin emails the account owner about a successful sign-in. It is best-effort
+// and asynchronous: delivery failures are logged and never affect the login response.
+func (s *Service) notifyLogin(parent context.Context, email string, meta requestMetadataInfo) {
+	if strings.TrimSpace(email) == "" || !s.loadSystemConfig(parent).emailVerificationEnabled() {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), 30*time.Second)
+		defer cancel()
+		if err := s.sendLoginNotification(ctx, email, meta); err != nil {
+			log.Printf("login notification email failed: %v", err)
+		}
+	}()
+}
+
+func (s *Service) sendLoginNotification(ctx context.Context, to string, meta requestMetadataInfo) error {
+	device := meta.browser
+	if meta.browserVersion != "" {
+		device += " " + meta.browserVersion
+	}
+	if meta.operatingSystem != "" && meta.operatingSystem != "Other" {
+		device += " / " + meta.operatingSystem
+	}
+	if device == "" {
+		device = "Unknown"
+	}
+	siteName := s.siteName(ctx)
+	subject := fmt.Sprintf("%s 登录通知 / Login notification", siteName)
+	body := fmt.Sprintf(`<div style="max-width:480px;margin:0 auto;padding:32px;font-family:-apple-system,'Segoe UI',sans-serif;color:#1a1a2e">
+	<h2 style="margin:0 0 8px;font-size:20px">%s</h2>
+	<p style="margin:0 0 24px;color:#666;font-size:14px">您的账户刚刚登录 / Your account just signed in</p>
+	<table style="width:100%%;border-collapse:collapse;font-size:14px;color:#444">
+		<tr><td style="padding:8px 0;color:#999;width:120px">时间 / Time</td><td style="padding:8px 0">%s</td></tr>
+		<tr><td style="padding:8px 0;color:#999">IP 地址 / IP address</td><td style="padding:8px 0">%s</td></tr>
+		<tr><td style="padding:8px 0;color:#999">设备 / Device</td><td style="padding:8px 0">%s</td></tr>
+	</table>
+	<p style="margin:24px 0 0;color:#999;font-size:12px">若非本人操作，请立即修改密码。<br/>If this was not you, change your password immediately.</p>
+</div>`, siteName, time.Now().Format("2006-01-02 15:04:05 MST"), meta.clientIP, device)
+	return s.sendEmail(ctx, to, subject, body)
 }
 
 // siteName resolves the public site name for email templates.

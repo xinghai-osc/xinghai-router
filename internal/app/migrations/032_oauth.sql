@@ -9,7 +9,8 @@ create table if not exists oauth_providers (
 
 create table if not exists user_oauth_connections (
   id uuid primary key default gen_random_uuid(),
-  user_id bigint not null references users(id) on delete cascade,
+  -- uuid here to match users.id on fresh installs; 056 converts both to bigint.
+  user_id uuid not null references users(id) on delete cascade,
   provider text not null,
   provider_user_id text not null,
   provider_username text not null default '',

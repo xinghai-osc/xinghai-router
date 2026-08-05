@@ -30,6 +30,18 @@ export default {
   orContinueWith: 'Or continue with',
   captchaUnavailable: 'Could not load the captcha, please try again later',
 
+  forgotPassword: 'Forgot password?',
+  resetTitle: 'Reset password',
+  resetLead: 'Enter your registered email and we will send you a reset link.',
+  resetSent: 'If that email is registered, a reset link has been sent. Check your inbox.',
+  resetBackToSignIn: 'Back to sign in',
+  sendResetLink: 'Send reset link',
+  newPassword: 'New password',
+  confirmPassword: 'Confirm new password',
+  passwordsMismatch: 'Passwords do not match',
+  resetInvalidToken: 'This link is invalid or has expired. Request a new one.',
+  resetSuccess: 'Password reset. Sign in with your new password.',
+
   accountMenu: 'Account menu',
   balance: 'Balance',
   accountSettings: 'Account settings',

@@ -8,9 +8,11 @@ import (
 )
 
 const (
-	authLoginPerMinute     = 10
-	authRegisterPerMinute  = 5
-	authEmailCodePerMinute = 5
+	authLoginPerMinute                = 10
+	authRegisterPerMinute             = 5
+	authEmailCodePerMinute            = 5
+	authPasswordResetPerMinute        = 3
+	authPasswordResetConfirmPerMinute = 5
 )
 
 type rateLimiter interface {
