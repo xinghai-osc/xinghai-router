@@ -28,9 +28,9 @@ const captchaId = computed(() => settings.value.geetest_captcha_id ?? '')
 const captchaEnabled = computed(() => Boolean(settings.value.geetest_enabled) && captchaId.value !== '')
 const emailCodeEnabled = computed(() => Boolean(settings.value.email_verification_enabled))
 
-// The register handler verifies the email code *instead of* the captcha, so a
-// second challenge at submit time would be dead weight there.
-const captchaOnSubmit = computed(() => captchaEnabled.value && !(isRegister.value && emailCodeEnabled.value))
+// Registration always verifies the captcha at submit (like sign-in and reset);
+// when email verification is also on, the code is verified in addition.
+const captchaOnSubmit = computed(() => captchaEnabled.value)
 
 const tabs = computed(() => [
   { value: 'signin', label: t('common.signIn') },

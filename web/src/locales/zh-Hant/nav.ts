@@ -26,6 +26,7 @@ export default {
   adminSubscriptions: '訂閱管理',
   reliability: '可靠性',
   paymentSettings: '支付設定',
+  oauthSettings: '第三方登入',
   siteSettings: '站點設定',
   migrate: '數據遷移',
 

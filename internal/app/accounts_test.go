@@ -6,8 +6,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-
-	"github.com/jackc/pgx/v5"
 )
 
 func TestOptionalAccountAllowsAnonymousRequest(t *testing.T) {
@@ -52,47 +50,24 @@ func TestValidatePasswordChange(t *testing.T) {
 	}
 }
 
-type registrationRoleRow struct {
-	role string
-	err  error
-}
-
-func (r registrationRoleRow) Scan(dest ...any) error {
-	if r.err != nil {
-		return r.err
+func TestBootstrapAdmin(t *testing.T) {
+	cfg := func(mut func(*Config)) Config {
+		c := Config{BootstrapAdminEmail: "admin@example.com", BootstrapAdminPass: "password123"}
+		mut(&c)
+		return c
 	}
-	*(dest[0].(*string)) = r.role
-	return nil
-}
-
-type registrationRoleQuerierStub struct {
-	row pgx.Row
-}
-
-func (q registrationRoleQuerierStub) QueryRow(context.Context, string, ...any) pgx.Row {
-	return q.row
-}
-
-func TestRegistrationRole(t *testing.T) {
-	cases := []struct {
-		name string
-		row  pgx.Row
-		want string
-	}{
-		{name: "empty users", row: registrationRoleRow{role: "admin"}, want: "admin"},
-		{name: "existing users", row: registrationRoleRow{role: "user"}, want: "user"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := registrationRole(context.Background(), registrationRoleQuerierStub{row: tc.row})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got != tc.want {
-				t.Fatalf("role = %q, want %q", got, tc.want)
-			}
-		})
-	}
+	t.Run("unset email is a no-op", func(t *testing.T) {
+		s := &Service{cfg: cfg(func(c *Config) { c.BootstrapAdminEmail = "" })}
+		if err := s.bootstrapAdmin(context.Background()); err != nil {
+			t.Fatalf("bootstrapAdmin() error = %v", err)
+		}
+	})
+	t.Run("invalid email rejected before touching the database", func(t *testing.T) {
+		s := &Service{cfg: cfg(func(c *Config) { c.BootstrapAdminEmail = "not-an-email" })}
+		if err := s.bootstrapAdmin(context.Background()); err == nil {
+			t.Fatal("bootstrapAdmin() expected error for invalid email")
+		}
+	})
 }
 
 type sequenceLimiter struct {

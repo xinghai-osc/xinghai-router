@@ -117,6 +117,10 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 		keyTouchCache:   newTTLCache[string, struct{}](keyTouchInterval),
 		migration:       migrationStatus{mu: &sync.Mutex{}},
 	}
+	if err := s.bootstrapAdmin(ctx); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("bootstrap admin: %w", err)
+	}
 	schedulerCtx, cancel := context.WithCancel(context.Background())
 	s.scheduler = cancel
 	s.startHealthCheckScheduler(schedulerCtx)

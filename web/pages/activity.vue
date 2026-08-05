@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ScrollText } from 'lucide-vue-next'
-import { api, type PublicActivityItem } from '~/src/api'
+import { Lock, ScrollText } from 'lucide-vue-next'
+import { api, getToken, type PublicActivityItem } from '~/src/api'
 import { formatDateTime, formatNumber } from '~/src/format'
 
 const { t } = useI18n()
@@ -14,15 +14,21 @@ useHead({
 const data = ref<PublicActivityItem[]>([])
 const pending = ref(false)
 const failure = ref('')
+const signedIn = ref(!!getToken())
 
 async function load() {
+  if (!signedIn.value) return
   pending.value = true
   failure.value = ''
   try {
     const res = await api<{ data: PublicActivityItem[] }>('/public/activity')
     data.value = res.data
   } catch (cause) {
-    failure.value = cause instanceof Error ? cause.message : t('common.loadFailed')
+    if (cause instanceof Error && cause.message === 'invalid or expired session') {
+      signedIn.value = false
+    } else {
+      failure.value = cause instanceof Error ? cause.message : t('common.loadFailed')
+    }
   } finally {
     pending.value = false
   }
@@ -49,6 +55,16 @@ onMounted(load)
         {{ failure }}
         <UiButton variant="link" size="sm" class="ml-1 h-auto p-0" @click="load">{{ t('common.retry') }}</UiButton>
       </UiAlert>
+
+      <UiEmptyState
+        v-else-if="!signedIn"
+        class="rounded-card border border-line bg-surface"
+        :icon="Lock"
+        :title="t('site.activitySignInTitle')"
+        :description="t('site.activitySignInBody')"
+      >
+        <UiButton to="/auth" size="sm">{{ t('common.signIn') }}</UiButton>
+      </UiEmptyState>
 
       <div v-else-if="pending && !data.length" class="rounded-card border border-line bg-surface p-5">
         <UiSkeleton :rows="8" />

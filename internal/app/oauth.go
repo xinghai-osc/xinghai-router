@@ -157,10 +157,6 @@ func (s *Service) findOrCreateOAuthUser(ctx context.Context, provider, providerU
 	if displayName == "" {
 		displayName = email
 	}
-	role, err := registrationRole(ctx, s.db)
-	if err != nil {
-		return "", err
-	}
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return "", err
@@ -169,7 +165,7 @@ func (s *Service) findOrCreateOAuthUser(ctx context.Context, provider, providerU
 	if _, err = tx.Exec(ctx, `select pg_advisory_xact_lock(458110)`); err != nil {
 		return "", err
 	}
-	err = tx.QueryRow(ctx, `insert into users(email,name,role,avatar_url) values($1,$2,$3,$4) returning id`, email, displayName, role, avatar).Scan(&userID)
+	err = tx.QueryRow(ctx, `insert into users(email,name,role,avatar_url) values($1,$2,'user',$3) returning id`, email, displayName, avatar).Scan(&userID)
 	if err != nil {
 		return "", err
 	}

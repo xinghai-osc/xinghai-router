@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { KeyRound, MoreHorizontal, Plus } from 'lucide-vue-next'
-import { endpoints, type AccountKeyForm, type ApiKey, type Group, type KeyQuota, type KeyQuotaForm, type KeyQuotaLimit } from '~/src/api'
+import { endpoints, type AccountKeyForm, type ApiKey, type CatalogModel, type Group, type KeyQuota, type KeyQuotaForm, type KeyQuotaLimit } from '~/src/api'
 import { formatCompact, formatDateTime, formatMoney, formatNumber } from '~/src/format'
 
 definePageMeta({ layout: 'console', middleware: 'console-auth' })
@@ -36,6 +36,8 @@ const revealedSecret = ref('')
 const revealError = ref('')
 const opencodeConfig = ref('')
 const opencodeError = ref('')
+const opencodeFormat = ref<'opencode' | 'codex'>('opencode')
+const opencodeThinking = ref<'none' | 'low' | 'medium' | 'high'>('medium')
 const formError = ref('')
 const form = reactive({ name: '', expiresOn: '', groupId: '' })
 
@@ -127,8 +129,13 @@ function openOpenCode(key: ApiKey) {
   opencodeKey.value = key
   opencodeConfig.value = ''
   opencodeError.value = ''
+  opencodeFormat.value = 'opencode'
+  opencodeThinking.value = 'medium'
   opencodeOpen.value = true
 }
+
+const opencodeSecret = ref('')
+const opencodeCatalog = ref<CatalogModel[]>([])
 
 async function loadOpenCodeConfig() {
   const target = opencodeKey.value
@@ -140,25 +147,59 @@ async function loadOpenCodeConfig() {
       endpoints.revealAccountKey(target.id),
       endpoints.getModelCatalog(),
     ])
-    const baseURL = `${useRequestURL().origin}/api/v1`
-    const providerId = 'xinghai'
-    const models: Record<string, { name: string }> = {}
-    for (const model of catalog.data) models[model.model] = { name: model.model }
-    const config: Record<string, unknown> = {
-      $schema: 'https://opencode.ai/config.json',
-      provider: {
-        [providerId]: {
-          npm: '@ai-sdk/openai-compatible',
-          name: providerId,
-          options: { baseURL, apiKey: revealed.key },
-          models,
-        },
-      },
-    }
-    if (catalog.data.length) config.model = `${providerId}/${catalog.data[0].model}`
-    opencodeConfig.value = JSON.stringify(config, null, 2)
+    opencodeSecret.value = revealed.key
+    opencodeCatalog.value = catalog.data
+    opencodeConfig.value = opencodeFormat.value === 'codex' ? buildCodeXConfig() : buildOpenCodeConfig()
   })
   if (!ok) opencodeError.value = t('console.opencodeConfigFailed')
+}
+
+function buildOpenCodeConfig(): string {
+  const baseURL = `${useRequestURL().origin}/api/v1`
+  const providerId = 'xinghai'
+  const models: Record<string, { name: string; options?: { reasoningEffort: string } }> = {}
+  for (const model of opencodeCatalog.value) {
+    const entry: { name: string; options?: { reasoningEffort: string } } = { name: model.model }
+    if (opencodeThinking.value !== 'none') entry.options = { reasoningEffort: opencodeThinking.value }
+    models[model.model] = entry
+  }
+  const config: Record<string, unknown> = {
+    $schema: 'https://opencode.ai/config.json',
+    provider: {
+      [providerId]: {
+        npm: '@ai-sdk/openai-compatible',
+        name: providerId,
+        options: { baseURL, apiKey: opencodeSecret.value },
+        models,
+      },
+    },
+  }
+  if (opencodeCatalog.value.length) config.model = `${providerId}/${opencodeCatalog.value[0].model}`
+  return JSON.stringify(config, null, 2)
+}
+
+function buildCodeXConfig(): string {
+  const baseURL = `${useRequestURL().origin}/api/v1`
+  const providerId = 'xinghai'
+  const model = opencodeCatalog.value[0]?.model ?? ''
+  const effort = opencodeThinking.value
+  const lines = [
+    `model = "${model}"`,
+    `model_provider = "${providerId}"`,
+    `model_reasoning_effort = "${effort}"`,
+    '',
+    `[model_providers.${providerId}]`,
+    `name = "Xinghai"`,
+    `base_url = "${baseURL}"`,
+    `env_key = "XINGHAI_API_KEY"`,
+    `wire_api = "responses"`,
+  ]
+  return lines.join('\n')
+}
+
+function rebuildOpenCodeConfig() {
+  if (!opencodeSecret.value) return
+  opencodeConfig.value = opencodeFormat.value === 'codex' ? buildCodeXConfig() : buildOpenCodeConfig()
 }
 
 async function loadRevealedSecret() {
@@ -284,7 +325,9 @@ watch(secretOpen, (open) => { if (!open) secret.value = '' })
 watch(revealOpen, (open) => { if (open && revealing.value) loadRevealedSecret() })
 watch(revealOpen, (open) => { if (!open) { revealedSecret.value = ''; revealing.value = null } })
 watch(opencodeOpen, (open) => { if (open && opencodeKey.value) loadOpenCodeConfig() })
-watch(opencodeOpen, (open) => { if (!open) { opencodeConfig.value = ''; opencodeKey.value = null } })
+watch(opencodeOpen, (open) => { if (!open) { opencodeConfig.value = ''; opencodeKey.value = null; opencodeSecret.value = ''; opencodeCatalog.value = [] } })
+watch(opencodeFormat, () => rebuildOpenCodeConfig())
+watch(opencodeThinking, () => rebuildOpenCodeConfig())
 
 onMounted(() => { if (route.query.create) openCreate() })
 </script>
@@ -540,8 +583,32 @@ onMounted(() => { if (route.query.create) openCreate() })
       :title="t('console.opencodeConfigTitle')"
       :description="opencodeKey?.name"
     >
-      <div class="space-y-3">
+      <div class="space-y-4">
         <UiAlert tone="warn">{{ t('console.opencodeConfigWarning') }}</UiAlert>
+
+        <div class="grid gap-4 sm:grid-cols-2">
+          <UiField :label="t('console.opencodeConfigFormat')">
+            <UiSelect
+              v-model="opencodeFormat"
+              :options="[
+                { value: 'opencode', label: 'OpenCode' },
+                { value: 'codex', label: 'CodeX' },
+              ]"
+            />
+          </UiField>
+
+          <UiField :label="t('console.opencodeThinking')" :hint="t('console.opencodeThinkingHint')">
+            <UiSelect
+              v-model="opencodeThinking"
+              :options="[
+                { value: 'none', label: t('console.opencodeThinkingNone') },
+                { value: 'low', label: t('console.opencodeThinkingLow') },
+                { value: 'medium', label: t('console.opencodeThinkingMedium') },
+                { value: 'high', label: t('console.opencodeThinkingHigh') },
+              ]"
+            />
+          </UiField>
+        </div>
 
         <div v-if="opencodeError" class="rounded-control border border-line px-4 py-3">
           <p class="text-[13px] text-danger">{{ opencodeError }}</p>
@@ -549,7 +616,7 @@ onMounted(() => { if (route.query.create) openCreate() })
 
         <div v-if="opencodeConfig" class="rounded-control border border-line">
           <div class="flex items-center justify-between gap-2 border-b border-line bg-sunken px-3 py-2">
-            <code class="text-2xs text-muted">opencode.json</code>
+            <code class="text-2xs text-muted">{{ opencodeFormat === 'codex' ? 'config.toml' : 'opencode.json' }}</code>
             <ConsoleUserCopyButton
               :value="opencodeConfig"
               :success-message="t('console.opencodeConfigCopied')"
@@ -559,7 +626,7 @@ onMounted(() => { if (route.query.create) openCreate() })
           <pre class="max-h-[55vh] overflow-auto px-4 py-3 font-mono text-[12.5px] leading-relaxed text-ink"><code>{{ opencodeConfig }}</code></pre>
         </div>
 
-        <p class="text-[13px] text-muted">{{ t('console.opencodeConfigHint') }}</p>
+        <p class="text-[13px] text-muted">{{ opencodeFormat === 'codex' ? t('console.codexConfigHint') : t('console.opencodeConfigHint') }}</p>
       </div>
 
       <template #footer>

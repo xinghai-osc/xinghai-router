@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ImageOff, Trash2 } from 'lucide-vue-next'
-import { endpoints, type AdminSiteSettings, type OAuthProvider } from '~/src/api'
+import { ImageOff } from 'lucide-vue-next'
+import { endpoints, type AdminSiteSettings } from '~/src/api'
 
 definePageMeta({ layout: 'console', middleware: 'console-auth' })
 
@@ -28,49 +28,6 @@ const { data, pending, error, refresh } = useResource(
   () => endpoints.getAdminSiteSettings(),
   { ...EMPTY },
 )
-
-const { data: oauthProviders, refresh: refreshOAuth } = useResource(
-  () => endpoints.getOAuthProviders(),
-  { data: [] as OAuthProvider[] },
-)
-
-const oauthFormOpen = ref(false)
-const oauthFormError = ref('')
-const editingOAuth = ref('')
-const oauthForm = reactive({
-  client_id: '',
-  client_secret: '',
-  enabled: true,
-})
-
-function openOAuthForm(provider: OAuthProvider | null) {
-  editingOAuth.value = provider?.id ?? ''
-  oauthFormError.value = ''
-  oauthForm.client_id = provider?.client_id ?? ''
-  oauthForm.client_secret = ''
-  oauthForm.enabled = provider?.enabled ?? true
-  oauthFormOpen.value = true
-}
-
-async function saveOAuth() {
-  oauthFormError.value = ''
-  const provider = editingOAuth.value
-  if (!provider) { oauthFormError.value = 'Provider not set'; return }
-  if (!oauthForm.client_id.trim()) { oauthFormError.value = t('system.oauthClientIdRequired'); return }
-  const ok = await run(() => endpoints.saveOAuthProvider(provider, { ...oauthForm }))
-  if (!ok) { oauthFormError.value = t('common.actionFailed'); return }
-  oauthFormOpen.value = false
-  toast.success(t('system.oauthProviderSaved'))
-  await refreshOAuth()
-}
-
-async function deleteOAuth(provider: string) {
-  if (!confirm(t('system.oauthDeleteConfirm'))) return
-  const ok = await run(() => endpoints.deleteOAuthProvider(provider))
-  if (!ok) { toast.error(t('common.actionFailed')); return }
-  toast.success(t('system.oauthProviderDeleted'))
-  await refreshOAuth()
-}
 
 const form = reactive({
   name: '',
@@ -241,66 +198,10 @@ async function save() {
           </div>
         </UiCard>
 
-        <UiCard :title="t('system.oauthSection')" :description="t('system.oauthSectionHint')">
-          <div class="space-y-3">
-            <div v-if="!oauthProviders.data.value.data.length" class="text-sm text-muted py-2">
-              {{ t('system.oauthNoProviders') }}
-            </div>
-            <div
-              v-for="provider in oauthProviders.data.value.data"
-              :key="provider.id"
-              class="flex items-center justify-between rounded-control border border-line px-3 py-2"
-            >
-              <div class="flex items-center gap-2">
-                <span class="text-sm font-medium text-ink">{{ provider.id }}</span>
-                <UiBadge :tone="provider.enabled ? 'success' : 'neutral'" dot>
-                  {{ provider.enabled ? t('common.enabled') : t('common.disabled') }}
-                </UiBadge>
-              </div>
-              <div class="flex items-center gap-1">
-                <UiButton variant="ghost" size="sm" @click="openOAuthForm(provider)">{{ t('common.edit') }}</UiButton>
-                <UiButton variant="danger" size="sm" @click="deleteOAuth(provider.id)">
-                  <Trash2 class="size-4" />
-                </UiButton>
-              </div>
-            </div>
-            <UiButton variant="secondary" size="sm" @click="openOAuthForm(null)">{{ t('system.oauthAddProvider') }}</UiButton>
-          </div>
-        </UiCard>
-
         <div class="flex justify-end">
           <UiButton type="submit" :loading="busy">{{ t('common.save') }}</UiButton>
         </div>
       </form>
     </div>
-
-    <UiSlidePanel
-      v-model:open="oauthFormOpen"
-      size="sm"
-      :title="editingOAuth ? t('system.oauthEditProvider', { provider: editingOAuth }) : t('system.oauthAddProvider')"
-    >
-      <div class="space-y-4">
-        <UiAlert v-if="oauthFormError" tone="danger">{{ oauthFormError }}</UiAlert>
-
-        <UiField :label="t('system.oauthProviderId')" required>
-          <UiInput v-model="editingOAuth" :disabled="!!editingOAuth" mono :placeholder="t('system.oauthProviderIdPlaceholder')" />
-        </UiField>
-
-        <UiField :label="t('system.oauthClientId')" required>
-          <UiInput v-model="oauthForm.client_id" mono />
-        </UiField>
-
-        <UiField :label="t('system.oauthClientSecret')" :hint="t('system.oauthClientSecretHint')">
-          <UiInput v-model="oauthForm.client_secret" type="password" mono autocomplete="off" />
-        </UiField>
-
-        <UiCheckbox v-model="oauthForm.enabled">{{ t('system.oauthEnabled') }}</UiCheckbox>
-      </div>
-
-      <template #footer>
-        <UiButton variant="secondary" @click="oauthFormOpen = false">{{ t('common.cancel') }}</UiButton>
-        <UiButton :loading="busy" @click="saveOAuth">{{ t('common.save') }}</UiButton>
-      </template>
-    </UiSlidePanel>
   </ConsoleSystemGate>
 </template>

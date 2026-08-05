@@ -28,6 +28,7 @@ export default {
   reliability: '可靠性',
   conversationCacheSettings: '对话缓存设置',
   paymentSettings: '支付设置',
+  oauthSettings: '第三方登录',
   siteSettings: '站点设置',
   migrate: '数据迁移',
 

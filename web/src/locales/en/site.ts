@@ -177,6 +177,8 @@ export default {
   activityEmptyTitle: 'No activity yet',
   activityEmptyBody: 'No API requests have been recorded yet. They will appear once traffic starts.',
   activityErrorTitle: 'Failed to load activity',
+  activitySignInTitle: 'Sign in to view activity',
+  activitySignInBody: 'The activity feed is available to signed-in members only.',
 
   // Legal documents
   legalUpdated: 'Last updated {date}',

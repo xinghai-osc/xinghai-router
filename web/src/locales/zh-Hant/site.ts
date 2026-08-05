@@ -177,6 +177,8 @@ export default {
   activityEmptyTitle: '暫無活動記錄',
   activityEmptyBody: '還沒有 API 請求記錄，等待首批請求進入。',
   activityErrorTitle: '活動數據載入失敗',
+  activitySignInTitle: '登入後檢視活動',
+  activitySignInBody: '活動動態僅對已登入用戶開放。',
 
   // 法律文檔
   legalUpdated: '最後更新：{date}',

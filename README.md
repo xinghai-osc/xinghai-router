@@ -34,7 +34,7 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-The web console is available at `http://localhost:3000`; the OpenAI/Anthropic gateway is available at `http://localhost:8080`. PostgreSQL and Redis are internal-only (no published ports). Data paths default to `/mnt/data/AI-Router/{postgres,redis}` and can be overridden with `POSTGRES_DATA_PATH` / `REDIS_DATA_PATH`. Redis requires a password (`REDIS_PASSWORD`); the router receives `REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0` by default. Migrations run automatically when the router starts. Register the first account from the web console; that account becomes the administrator.
+The web console is available at `http://localhost:3000`; the OpenAI/Anthropic gateway is available at `http://localhost:8080`. PostgreSQL and Redis are internal-only (no published ports). Data paths default to `/mnt/data/AI-Router/{postgres,redis}` and can be overridden with `POSTGRES_DATA_PATH` / `REDIS_DATA_PATH`. Redis requires a password (`REDIS_PASSWORD`); the router receives `REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0` by default. Migrations run automatically when the router starts. User id 1 is reserved for the administrator; claim it by setting `BOOTSTRAP_ADMIN_EMAIL` (and optionally `BOOTSTRAP_ADMIN_PASSWORD`) in `.env` before the first start. Self-registrations always create normal user accounts and can never claim admin.
 
 For an external reverse-proxy network (e.g. Baota `baota_net`):
 
@@ -55,7 +55,7 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:5173/auth` and create an account or sign in with email and password. On first database initialization, the first registered account becomes the administrator. Later public registrations create normal user accounts; administrators can promote users or grant individual permissions. Browser sessions are retained only in session storage. Nuxt proxies browser requests from `/api/*` to `http://127.0.0.1:8080/*`, so this development setup does not require a CORS policy. `npm run generate` emits prerendered HTML for the public home and authentication pages; deploy the Nuxt `.output` directory for the full application.
+Open `http://localhost:5173/auth` and create an account or sign in with email and password. The first registered account is a normal user; the administrator is bootstrapped from `BOOTSTRAP_ADMIN_EMAIL`/`BOOTSTRAP_ADMIN_PASSWORD` in the environment (see `.env.example`). Later public registrations create normal user accounts; administrators can promote users or grant individual permissions. Browser sessions are retained only in session storage. Nuxt proxies browser requests from `/api/*` to `http://127.0.0.1:8080/*`, so this development setup does not require a CORS policy. `npm run generate` emits prerendered HTML for the public home and authentication pages; deploy the Nuxt `.output` directory for the full application.
 
 The service performs migrations automatically at startup. `base_url` for a channel must be an HTTPS origin or path prefix without `/v1`; for example, `https://api.openai.com`. Loopback HTTP URLs are also accepted for local services such as Ollama, for example `http://127.0.0.1:11434`. Provider secrets are encrypted in the database using `ENCRYPTION_KEY`, so keep this value stable and securely backed up.
 

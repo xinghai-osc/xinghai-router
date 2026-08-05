@@ -26,7 +26,7 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("GET /model-catalog", s.optionalAccount(s.modelCatalog))
 	mux.HandleFunc("GET /site-settings", s.siteSettings)
 	mux.HandleFunc("GET /rankings", s.rankings)
-	mux.HandleFunc("GET /public/activity", s.publicActivity)
+	mux.Handle("GET /public/activity", s.account(s.publicActivity))
 	mux.Handle("POST /auth/logout", s.account(s.logout))
 	mux.Handle("GET /account/me", s.account(s.accountMe))
 	mux.Handle("PUT /account/profile", s.account(s.updateAccountProfile))

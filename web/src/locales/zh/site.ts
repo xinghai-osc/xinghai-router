@@ -177,6 +177,8 @@ export default {
   activityEmptyTitle: '暂无活动记录',
   activityEmptyBody: '还没有 API 请求记录，等待首批请求进入。',
   activityErrorTitle: '活动数据加载失败',
+  activitySignInTitle: '登录后查看活动',
+  activitySignInBody: '活动动态仅对已登录用户开放。',
 
   // 法律文档
   legalUpdated: '最后更新：{date}',

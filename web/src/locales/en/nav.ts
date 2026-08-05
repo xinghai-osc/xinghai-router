@@ -28,6 +28,7 @@ export default {
   reliability: 'Reliability',
   conversationCacheSettings: 'Conversation cache',
   paymentSettings: 'Payments',
+  oauthSettings: 'OAuth',
   siteSettings: 'Site',
   migrate: 'Migration',
 
