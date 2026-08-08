@@ -27,6 +27,7 @@ type Service struct {
 	streamClient    *http.Client
 	limiter         rateLimiter
 	ipLimiter       rateLimiter
+	rankingsLimiter rateLimiter
 	background      *backgroundWriter
 	pricingCache    *ttlCache[string, pricingRule]
 	groupCache      *ttlCache[string, float64]
@@ -34,6 +35,7 @@ type Service struct {
 	groupLimiter    *GroupLimiter
 	reliabilityData *ttlCache[struct{}, reliabilitySettings]
 	conversationCacheData *ttlCache[struct{}, conversationCacheSettings]
+	rankingsCache *ttlCache[string, rankingsPayload]
 	promptCache    *promptPrefixCache
 	keyTouchCache   *ttlCache[string, struct{}]
 	scheduler       context.CancelFunc
@@ -94,6 +96,7 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 	}
 	limiter, mode := newRateLimiter(cfg.RedisURL, cfg.RateLimitPerMinute)
 	ipLimiter, ipMode := newRateLimiter(cfg.RedisURL, cfg.IPRateLimitPerMinute)
+	rankingsLimiter, _ := newRateLimiter(cfg.RedisURL, rankingsPerMinute)
 	if mode == "redis" || ipMode == "redis" {
 		log.Printf("rate limiter backend: redis (memory fallback on redis errors)")
 	} else {
@@ -106,6 +109,7 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 		streamClient:    newStreamClient(cfg.RequestTimeout),
 		limiter:         limiter,
 		ipLimiter:       ipLimiter,
+		rankingsLimiter: rankingsLimiter,
 		background:      newBackgroundWriter(),
 		pricingCache:    newTTLCache[string, pricingRule](pricingCacheTTL),
 		groupCache:      newTTLCache[string, float64](groupCacheTTL),
@@ -113,6 +117,7 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 		groupLimiter:    NewGroupLimiter(),
 		reliabilityData: newTTLCache[struct{}, reliabilitySettings](reliabilityCacheTTL),
 		conversationCacheData: newTTLCache[struct{}, conversationCacheSettings](reliabilityCacheTTL),
+		rankingsCache: newTTLCache[string, rankingsPayload](rankingsCacheTTL),
 		promptCache:    newPromptPrefixCache(cfg.LocalPromptCache, cfg.LocalPromptCacheSize),
 		keyTouchCache:   newTTLCache[string, struct{}](keyTouchInterval),
 		migration:       migrationStatus{mu: &sync.Mutex{}},
@@ -142,6 +147,7 @@ func (s *Service) limiterCleanup(ctx context.Context) {
 		case <-ticker.C:
 			s.limiter.cleanup()
 			s.ipLimiter.cleanup()
+			s.rankingsLimiter.cleanup()
 		}
 	}
 }
@@ -152,6 +158,9 @@ func (s *Service) Close() {
 	s.background.close()
 	if s.limiter != nil {
 		s.limiter.close()
+	}
+	if s.rankingsLimiter != nil {
+		s.rankingsLimiter.close()
 	}
 	s.db.Close()
 }

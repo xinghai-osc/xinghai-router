@@ -13,7 +13,19 @@ const { busy, run } = useAction()
 const allowed = computed(() => can('users.read'))
 const canManage = computed(() => can('system.manage'))
 
-const groups = useResource(() => endpoints.getAdminGroups(), { data: [] as Group[] })
+const page = ref(1)
+const pageSize = ref('50')
+
+function pageQuery(): string {
+  const params = new URLSearchParams()
+  params.set('page', String(page.value))
+  params.set('page_size', pageSize.value)
+  return `?${params.toString()}`
+}
+
+watch(pageSize, async () => { page.value = 1; await groups.refresh() })
+
+const groups = useResource(() => endpoints.getAdminGroups(pageQuery()), { data: [] as Group[], total: 0, page: 1, page_size: 50 })
 
 const selected = ref<Set<string>>(new Set())
 
@@ -311,6 +323,12 @@ async function remove() {
           </tr>
         </tbody>
       </UiTable>
+
+      <ConsoleOpsPagination
+        v-model:page="page"
+        v-model:pageSize="pageSize"
+        :total="groups.data.value.total"
+      />
     </ConsoleOpsListState>
 
     <UiSlidePanel v-model:open="createOpen" size="sm" :title="t('admin.createGroup')">

@@ -30,10 +30,22 @@ const PROVIDER_ICONS: Record<string, Component> = {
   custom: Plug,
 }
 
-const channels = useResource(() => endpoints.getAdminChannels(), { data: [] as Channel[] })
+const page = ref(1)
+const pageSize = ref('50')
+
+function pageQuery(): string {
+  const params = new URLSearchParams()
+  params.set('page', String(page.value))
+  params.set('page_size', pageSize.value)
+  return `?${params.toString()}`
+}
+
+watch(pageSize, async () => { page.value = 1; await channels.refresh() })
+
+const channels = useResource(() => endpoints.getAdminChannels(pageQuery()), { data: [] as Channel[], total: 0, page: 1, page_size: 50 })
 const groups = useResource(
-  () => (can('users.read') ? endpoints.getAdminGroups() : Promise.resolve({ data: [] as Group[] })),
-  { data: [] as Group[] },
+  () => (can('users.read') ? endpoints.getAdminGroups('?page_size=100') : Promise.resolve({ data: [] as Group[], total: 0, page: 1, page_size: 100 })),
+  { data: [] as Group[], total: 0, page: 1, page_size: 100 },
 )
 
 const search = ref('')
@@ -936,6 +948,12 @@ function quotaUsageForWindow(window: string) {
             </tr>
           </tbody>
         </UiTable>
+
+        <ConsoleOpsPagination
+          v-model:page="page"
+          v-model:pageSize="pageSize"
+          :total="channels.data.value.total"
+        />
       </template>
     </ConsoleOpsListState>
 

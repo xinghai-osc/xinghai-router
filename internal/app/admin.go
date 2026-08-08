@@ -483,7 +483,13 @@ func (s *Service) auditActor(r *http.Request, actor, action, entityType, entityI
 }
 
 func (s *Service) listUsers(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query(r.Context(), `select u.id,u.email,u.name,u.role,u.enabled,u.created_at,coalesce(w.balance,0),coalesce(w.reserved,0),coalesce(array_agg(p.permission) filter (where p.permission is not null), '{}'),coalesce((select array_agg(ug.group_id order by ug.group_id) from user_groups ug where ug.user_id=u.id), '{}') from users u left join user_permissions p on p.user_id=u.id left join user_wallets w on w.user_id=u.id group by u.id,w.balance,w.reserved order by u.created_at desc`)
+	page, pageSize, offset := listPage(r)
+	var total int
+	if err := s.db.QueryRow(r.Context(), `select count(*) from users`).Scan(&total); err != nil {
+		writeError(w, 500, "internal_error", "query failed")
+		return
+	}
+	rows, err := s.db.Query(r.Context(), `select u.id,u.email,u.name,u.role,u.enabled,u.created_at,coalesce(w.balance,0),coalesce(w.reserved,0),coalesce(array_agg(p.permission) filter (where p.permission is not null), '{}'),coalesce((select array_agg(ug.group_id order by ug.group_id) from user_groups ug where ug.user_id=u.id), '{}') from users u left join user_permissions p on p.user_id=u.id left join user_wallets w on w.user_id=u.id group by u.id,w.balance,w.reserved order by u.created_at desc limit $1 offset $2`, pageSize, offset)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
@@ -500,7 +506,7 @@ func (s *Service) listUsers(w http.ResponseWriter, r *http.Request) {
 		rows.Scan(&id, &email, &name, &role, &enabled, &created, &balance, &reserved, &permissions, &groups)
 		out = append(out, map[string]any{"id": id, "email": email, "name": name, "role": role, "enabled": enabled, "balance": balance, "reserved": reserved, "permissions": permissions, "groups": groups, "created_at": created})
 	}
-	writeJSON(w, 200, map[string]any{"data": out})
+	writePaged(w, out, total, page, pageSize)
 }
 
 func (s *Service) updateUser(w http.ResponseWriter, r *http.Request) {
@@ -784,7 +790,13 @@ func (s *Service) updateUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) listGroups(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query(r.Context(), `select id,name,multiplier,max_concurrency,"public",created_at from groups order by name`)
+	page, pageSize, offset := listPage(r)
+	var total int
+	if err := s.db.QueryRow(r.Context(), `select count(*) from groups`).Scan(&total); err != nil {
+		writeError(w, 500, "internal_error", "query failed")
+		return
+	}
+	rows, err := s.db.Query(r.Context(), `select id,name,multiplier,max_concurrency,"public",created_at from groups order by name limit $1 offset $2`, pageSize, offset)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
@@ -799,7 +811,7 @@ func (s *Service) listGroups(w http.ResponseWriter, r *http.Request) {
 			data = append(data, map[string]any{"id": id, "name": name, "multiplier": multiplier, "max_concurrency": maxConcurrency, "public": public, "created_at": created})
 		}
 	}
-	writeJSON(w, 200, map[string]any{"data": data})
+	writePaged(w, data, total, page, pageSize)
 }
 
 func (s *Service) listGroupNames(w http.ResponseWriter, r *http.Request) {
@@ -1523,7 +1535,13 @@ func (s *Service) createKey(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 201, map[string]any{"id": id, "name": name, "key": secret, "expires_at": expires, "group_id": groupID})
 }
 func (s *Service) listKeys(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query(r.Context(), `select k.id,k.user_id,k.name,k.key_prefix,k.expires_at,k.revoked_at,k.last_used_at,k.created_at,coalesce(k.group_id::text,''),coalesce(g.name,''),k.secret_encrypted<>'' from api_keys k left join groups g on g.id=k.group_id order by k.created_at desc`)
+	page, pageSize, offset := listPage(r)
+	var total int
+	if err := s.db.QueryRow(r.Context(), `select count(*) from api_keys`).Scan(&total); err != nil {
+		writeError(w, 500, "internal_error", "query failed")
+		return
+	}
+	rows, err := s.db.Query(r.Context(), `select k.id,k.user_id,k.name,k.key_prefix,k.expires_at,k.revoked_at,k.last_used_at,k.created_at,coalesce(k.group_id::text,''),coalesce(g.name,''),k.secret_encrypted<>'' from api_keys k left join groups g on g.id=k.group_id order by k.created_at desc limit $1 offset $2`, pageSize, offset)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
@@ -1538,7 +1556,7 @@ func (s *Service) listKeys(w http.ResponseWriter, r *http.Request) {
 		rows.Scan(&id, &uid, &name, &prefix, &expiry, &revoked, &used, &created, &groupID, &groupName, &revealable)
 		data = append(data, map[string]any{"id": id, "user_id": uid, "name": name, "key_prefix": prefix, "expires_at": expiry, "revoked_at": revoked, "last_used_at": used, "created_at": created, "group_id": groupID, "group_name": groupName, "revealable": revealable})
 	}
-	writeJSON(w, 200, map[string]any{"data": data})
+	writePaged(w, data, total, page, pageSize)
 }
 
 func (s *Service) validKeyGroup(ctx context.Context, userID, groupRef string) (any, error) {
@@ -1985,7 +2003,13 @@ func (s *Service) replaceChannelAPIKeys(ctx context.Context, channelID string, k
 	return tx.Commit(ctx)
 }
 func (s *Service) listChannels(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query(r.Context(), `select c.id,c.name,c.base_url,c.models,c.test_model,c.enabled,c.auto_disabled,c.disabled_reason,c.priority,c.weight,c.last_checked_at,c.last_error,c.created_at,c.updated_at,coalesce((select array_agg(cg.group_id order by cg.group_id) from channel_groups cg where cg.channel_id=c.id), '{}'),c.provider,c.key_type,(select count(*) from channel_api_keys ak where ak.channel_id=c.id and ak.enabled),c.auto_disable,c.request_overrides,coalesce(agg.avg_duration_ms,0),coalesce(agg.used_requests,0),coalesce(agg.used_tokens,0) from channels c left join (select rl.channel_id,avg(rl.duration_ms) as avg_duration_ms,count(*) as used_requests,coalesce(sum(rl.total_tokens),0) as used_tokens from request_logs rl group by rl.channel_id) agg on agg.channel_id=c.id order by c.priority desc,c.id`)
+	page, pageSize, offset := listPage(r)
+	var total int
+	if err := s.db.QueryRow(r.Context(), `select count(*) from channels`).Scan(&total); err != nil {
+		writeError(w, 500, "internal_error", "query failed")
+		return
+	}
+	rows, err := s.db.Query(r.Context(), `select c.id,c.name,c.base_url,c.models,c.test_model,c.enabled,c.auto_disabled,c.disabled_reason,c.priority,c.weight,c.last_checked_at,c.last_error,c.created_at,c.updated_at,coalesce((select array_agg(cg.group_id order by cg.group_id) from channel_groups cg where cg.channel_id=c.id), '{}'),c.provider,c.key_type,(select count(*) from channel_api_keys ak where ak.channel_id=c.id and ak.enabled),c.auto_disable,c.request_overrides,coalesce(agg.avg_duration_ms,0),coalesce(agg.used_requests,0),coalesce(agg.used_tokens,0) from channels c left join lateral (select avg(rl.duration_ms) as avg_duration_ms,count(*) as used_requests,coalesce(sum(rl.total_tokens),0) as used_tokens from request_logs rl where rl.channel_id=c.id) agg on true order by c.priority desc,c.id limit $1 offset $2`, pageSize, offset)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
@@ -2023,7 +2047,7 @@ func (s *Service) listChannels(w http.ResponseWriter, r *http.Request) {
 		routes := s.getChannelRoutes(r.Context(), id)
 		data = append(data, map[string]any{"id": id, "name": name, "base_url": base, "models": list, "test_model": testModel, "provider": provider, "key_type": keyType, "enabled": enabled, "auto_disabled": autoDisabled, "disabled_reason": disabledReason, "priority": priority, "weight": weight, "last_test_time": lastChecked, "last_error": lastError, "response_time_ms": avgDuration, "used_requests": usedRequests, "used_tokens": usedTokens, "groups": groups, "key_count": keyCount, "created_at": created, "updated_at": updated, "model_routes": routes, "auto_disable": autoDisable, "request_overrides": ov})
 	}
-	writeJSON(w, 200, map[string]any{"data": data})
+	writePaged(w, data, total, page, pageSize)
 }
 
 func (s *Service) getChannelRoutes(ctx context.Context, channelID string) []map[string]any {
@@ -2880,6 +2904,10 @@ func (s *Service) runMigration(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.SourceDriver == "" {
 		in.SourceDriver = "mysql"
+	}
+	if err := validateSourceDSN(in.SourceDSN); err != nil {
+		writeError(w, 400, "invalid_source_dsn", err.Error())
+		return
 	}
 	in.SourceDSN = strings.TrimPrefix(in.SourceDSN, "mysql://")
 

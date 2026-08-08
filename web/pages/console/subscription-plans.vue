@@ -16,7 +16,7 @@ const { data: plansData, pending, error, refresh } = useResource(
   () => endpoints.getAdminSubscriptionPlans(),
   { data: [] as SubscriptionPlan[] },
 )
-const { data: groupsData } = useResource(() => endpoints.getAdminGroups(), { data: [] as Group[] })
+const { data: groupsData } = useResource(() => endpoints.getAdminGroups('?page_size=100'), { data: [] as Group[], total: 0, page: 1, page_size: 100 })
 
 const plans = computed(() => [...plansData.value.data].sort((a, b) => a.sort_order - b.sort_order))
 const groups = computed(() => groupsData.value.data)

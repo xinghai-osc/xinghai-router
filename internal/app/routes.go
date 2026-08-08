@@ -25,7 +25,7 @@ func (s *Service) routes() http.Handler {
 	mux.HandleFunc("GET /auth/oauth/{provider}/callback", s.oauthCallback)
 	mux.Handle("GET /model-catalog", s.optionalAccount(s.modelCatalog))
 	mux.HandleFunc("GET /site-settings", s.siteSettings)
-	mux.HandleFunc("GET /rankings", s.rankings)
+	mux.Handle("GET /rankings", s.ipRateLimitBy(s.rankingsLimiter, s.rankings))
 	mux.Handle("GET /public/activity", s.account(s.publicActivity))
 	mux.Handle("POST /auth/logout", s.account(s.logout))
 	mux.Handle("GET /account/me", s.account(s.accountMe))

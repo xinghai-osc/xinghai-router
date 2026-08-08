@@ -1,4 +1,5 @@
 export interface User { id: string; email: string; name: string; role: string; enabled: boolean; balance: number; reserved: number; permissions: string[]; groups: string[]; created_at: string }
+export interface Page<T> { data: T[]; total: number; page: number; page_size: number }
 export interface ApiKey { id: string; user_id: string; name: string; key_prefix: string; group_id: string; group_name: string; expires_at: string | null; revoked_at: string | null; last_used_at: string | null; created_at: string; revealable: boolean }
 export interface KeyQuotaLimit { id: string; window: 'day' | 'month' | 'total'; max_requests: number | null; max_tokens: number | null; max_cost: number | null; created_at: string }
 export interface KeyQuotaUsage { window: string; requests: number; tokens: number; cost: number }
@@ -431,19 +432,19 @@ export const endpoints = {
   logout: () => send('/auth/logout', 'POST'),
   sendEmailCode: (email: string, captcha?: Record<string, string>) => send('/auth/email-code', 'POST', { email, ...captcha }),
 
-  getAdminUsers: () => get<{ data: User[] }>('/admin/users'),
+  getAdminUsers: (query = '') => get<Page<User>>(`/admin/users${query}`),
   updateUser: (id: string, update: UserUpdate) => send(`/admin/users/${encodeURIComponent(id)}`, 'PUT', update),
-  getAdminGroups: () => get<{ data: Group[] }>('/admin/groups'),
+  getAdminGroups: (query = '') => get<Page<Group>>(`/admin/groups${query}`),
   createGroup: (name: string, multiplier: number, maxConcurrency: number | null, publicGroup: boolean) => send('/admin/groups', 'POST', { name, multiplier, max_concurrency: maxConcurrency, public: publicGroup }),
   updateGroup: (id: string, multiplier: number, maxConcurrency: number | null, publicGroup: boolean) => send(`/admin/groups/${encodeURIComponent(id)}`, 'PUT', { multiplier, max_concurrency: maxConcurrency, public: publicGroup }),
   deleteGroup: (id: string) => send(`/admin/groups/${encodeURIComponent(id)}`, 'DELETE'),
   importGroups: (entries: Record<string, number>) => send('/admin/groups/import', 'POST', entries),
   batchUpdateGroups: (ids: string[], multiplier: number, maxConcurrency: number | null, publicGroup: boolean) => post<{ affected: number }>('/admin/groups/batch-update', { ids, multiplier, max_concurrency: maxConcurrency, public: publicGroup }),
-  getAdminKeys: () => get<{ data: ApiKey[] }>('/admin/keys'),
+  getAdminKeys: (query = '') => get<Page<ApiKey>>(`/admin/keys${query}`),
   createKey: (form: KeyForm) => post<{ key: string }>('/admin/keys', form),
   revokeKey: (id: string) => send(`/admin/keys/${encodeURIComponent(id)}/revoke`, 'POST'),
   revealKey: (id: string) => get<{ key: string }>(`/admin/keys/${encodeURIComponent(id)}/secret`),
-  getAdminChannels: () => get<{ data: Channel[] }>('/admin/channels'),
+  getAdminChannels: (query = '') => get<Page<Channel>>(`/admin/channels${query}`),
   batchToggleChannels: (ids: string[], enabled: boolean) => post<{ affected: number }>('/admin/channels/batch-status', { ids, enabled }),
   createChannel: (form: ChannelForm) => send('/admin/channels', 'POST', form),
   fetchChannelModels: (baseUrl: string, apiKey: string) => post<{ models: string[] }>('/admin/channels/models', { base_url: baseUrl, api_key: apiKey }),

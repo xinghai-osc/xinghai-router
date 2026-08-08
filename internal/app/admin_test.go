@@ -444,6 +444,60 @@ func TestRedactDSN(t *testing.T) {
 		t.Fatal("empty dsn should stay empty")
 	}
 }
+
+func TestValidateSourceDSN(t *testing.T) {
+	allowed := []string{
+		"user:pass@tcp(localhost:3306)/db",
+		"user:pass@tcp(127.0.0.1:3306)/db",
+		"user:pass@127.0.0.1:3306/db",
+		"user:pass@tcp([::1]:3306)/db",
+		"mysql://user:pass@db.example.com:3306/db",
+		"postgres://user:pass@104.26.7.174:5432/db",
+		"postgres://user:pass@db.example.com:5432/db",
+		"user:pass@unix(/var/run/mysqld/mysqld.sock)/db",
+		"user:pass@/db",
+		"/tmp/migrate.db",
+		"host=db.example.com port=5432 dbname=mydb user=app",
+		"host=/var/run/postgresql dbname=mydb",
+	}
+	for _, dsn := range allowed {
+		if err := validateSourceDSN(dsn); err != nil {
+			t.Fatalf("validateSourceDSN(%q) = %v, want nil", dsn, err)
+		}
+	}
+	blocked := []string{
+		"user:pass@tcp(10.0.0.5:3306)/db",
+		"user:pass@172.16.1.10:3306/db",
+		"user:pass@192.168.1.5:3306/db",
+		"user:pass@tcp(169.254.169.254:3306)/db",
+		"mysql://user:pass@10.1.2.3:3306/db",
+		"postgres://user:pass@192.168.0.4:5432/db",
+		"user:pass@100.64.0.10:3306/db",
+		"user:pass@198.18.0.1:3306/db",
+		"user:pass@tcp(fc00::1:3306)/db",
+	}
+	for _, dsn := range blocked {
+		if err := validateSourceDSN(dsn); err == nil {
+			t.Fatalf("validateSourceDSN(%q) = nil, want error", dsn)
+		}
+	}
+}
+
+func TestRedactMigrationError(t *testing.T) {
+	cases := []struct{ in, out string }{
+		{"", ""},
+		{"ping source database: dial tcp 10.0.0.5:3306: connect: connection refused", "ping source database: dial tcp 10.0.0.5:3306: connect: connection refused"},
+		{`invalid DSN "user:pass@tcp(127.0.0.1:3306)/db" ...`, `invalid DSN "user:***@tcp(127.0.0.1:3306)/db" ...`},
+	}
+	for _, c := range cases {
+		if got := redactMigrationError(c.in, ""); got != c.out {
+			t.Fatalf("redactMigrationError(%q) = %q, want %q", c.in, got, c.out)
+		}
+	}
+	if got := redactMigrationError("failed to open user:sek:ret@mysql:3306/db", "user:sek:ret@mysql:3306/db"); strings.Contains(got, "sek:ret") {
+		t.Fatalf("exact DSN not stripped: %q", got)
+	}
+}
 func TestSetUserRoleRejectsInvalidRoleBeforeDatabaseAccess(t *testing.T) {
 	for _, body := range []string{`{}`, `{"role":"owner"}`, `{"role":""}`} {
 		recorder := httptest.NewRecorder()

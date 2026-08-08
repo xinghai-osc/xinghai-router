@@ -13,7 +13,7 @@ const { busy, run } = useAction()
 const allowed = computed(() => can('routes.manage'))
 
 const routes = useResource(() => endpoints.getModelRoutes(), { data: [] as ModelRoute[] })
-const channels = useResource(() => endpoints.getAdminChannels(), { data: [] as Channel[] })
+const channels = useResource(() => endpoints.getAdminChannels('?page_size=100'), { data: [] as Channel[], total: 0, page: 1, page_size: 100 })
 
 const channelNames = computed(() => new Map(channels.data.value.data.map(c => [c.id, c.name])))
 

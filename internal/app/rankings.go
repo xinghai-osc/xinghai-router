@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"net/http"
 	"sort"
 	"strings"
@@ -93,24 +94,46 @@ func growthPercent(current, previous int64) float64 {
 	return float64(current-previous) / float64(previous) * 100
 }
 
+// rankingsPayload is the full response body for one period; it is memoised so
+// bursts of public requests cannot force repeated full-table aggregations.
+type rankingsPayload struct {
+	Models      []modelRanking
+	Vendors     []vendorRanking
+	Movers      []rankingMover
+	Droppers    []rankingMover
+	Users       []userRanking
+	TotalTokens int64
+	UpdatedAt   time.Time
+}
+
 func (s *Service) rankings(w http.ResponseWriter, r *http.Request) {
 	period := r.URL.Query().Get("period")
 	if period == "" {
 		period = "week"
 	}
-	duration, ok := rankingDuration(period)
-	if !ok {
+	if _, ok := rankingDuration(period); !ok {
 		writeError(w, 400, "invalid_request", "period must be today, week, month, or year")
 		return
 	}
+	payload, err := s.rankingsCache.get(r.Context(), period, func(_ context.Context) (rankingsPayload, error) {
+		return s.computeRankings(r, period)
+	})
+	if err != nil {
+		writeError(w, 500, "internal_error", "could not load rankings")
+		return
+	}
+	writeJSON(w, 200, map[string]any{"period": period, "models": payload.Models, "vendors": payload.Vendors, "top_movers": payload.Movers, "top_droppers": payload.Droppers, "users": payload.Users, "total_tokens": payload.TotalTokens, "updated_at": payload.UpdatedAt})
+}
+
+func (s *Service) computeRankings(r *http.Request, period string) (rankingsPayload, error) {
+	duration, _ := rankingDuration(period)
 	now := time.Now().UTC()
 	providers := s.providers(r)
 	start := now.Add(-duration)
 	previousStart := start.Add(-duration)
-	rows, err := s.db.Query(r.Context(), `select model,coalesce(sum(prompt_tokens+completion_tokens) filter(where created_at >= $1),0),coalesce(sum(prompt_tokens+completion_tokens) filter(where created_at < $1),0) from usage_records where created_at >= $2 and created_at < $3 group by model`, start, previousStart, now)
+	rows, err := s.db.Query(r.Context(), `select rl.model,coalesce(sum(rl.prompt_tokens+rl.completion_tokens) filter(where rl.created_at >= $1),0),coalesce(sum(rl.prompt_tokens+rl.completion_tokens) filter(where rl.created_at < $1),0) from request_logs rl where rl.created_at >= $2 and rl.created_at < $3 and rl.status_code >= 200 and rl.status_code < 400 group by rl.model`, start, previousStart, now)
 	if err != nil {
-		writeError(w, 500, "internal_error", "could not load rankings")
-		return
+		return rankingsPayload{}, err
 	}
 	defer rows.Close()
 	totals := []rankingTotals{}
@@ -121,8 +144,7 @@ func (s *Service) rankings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if rows.Err() != nil {
-		writeError(w, 500, "internal_error", "could not load rankings")
-		return
+		return rankingsPayload{}, rows.Err()
 	}
 	previous := append([]rankingTotals(nil), totals...)
 	sort.Slice(previous, func(i, j int) bool { return previous[i].previous > previous[j].previous })
@@ -206,23 +228,26 @@ func (s *Service) rankings(w http.ResponseWriter, r *http.Request) {
 		droppers = droppers[:6]
 	}
 	users := s.userLeaderboard(r, start, previousStart, now, allTokens)
-	writeJSON(w, 200, map[string]any{"period": period, "models": models, "vendors": vendors, "top_movers": movers, "top_droppers": droppers, "users": users, "total_tokens": allTokens, "updated_at": now})
+	return rankingsPayload{Models: models, Vendors: vendors, Movers: movers, Droppers: droppers, Users: users, TotalTokens: allTokens, UpdatedAt: now}, nil
 }
 
 // userLeaderboard ranks users by token consumption within the current period.
-// Display names are masked before they leave the server.
+// It reads successful requests from request_logs (including subscription-covered
+// requests, which never get a usage_record) and joins usage_records only for the
+// billed cost. Display names are masked before they leave the server.
 func (s *Service) userLeaderboard(r *http.Request, start, previousStart, now time.Time, allTokens int64) []userRanking {
 	rows, err := s.db.Query(r.Context(), `select g.user_id::text, u.name, u.leaderboard_mask_name, g.model,
 		g.current, g.previous, g.cost, g.requests
 		from (
-			select ur.user_id, ur.model,
-				coalesce(sum(ur.prompt_tokens+ur.completion_tokens) filter(where ur.created_at >= $1),0) as current,
-				coalesce(sum(ur.prompt_tokens+ur.completion_tokens) filter(where ur.created_at < $1),0) as previous,
-				coalesce(sum(ur.cost) filter(where ur.created_at >= $1),0)::float8 as cost,
-				count(*) filter(where ur.created_at >= $1) as requests
-			from usage_records ur
-			where ur.created_at >= $2 and ur.created_at < $3
-			group by ur.user_id, ur.model
+			select rl.user_id, rl.model,
+				coalesce(sum(rl.prompt_tokens+rl.completion_tokens) filter(where rl.created_at >= $1),0) as current,
+				coalesce(sum(rl.prompt_tokens+rl.completion_tokens) filter(where rl.created_at < $1),0) as previous,
+				coalesce(sum(ur.cost) filter(where rl.created_at >= $1),0)::float8 as cost,
+				count(*) filter(where rl.created_at >= $1) as requests
+			from request_logs rl
+			left join usage_records ur on ur.request_id = rl.request_id
+			where rl.created_at >= $2 and rl.created_at < $3 and rl.status_code >= 200 and rl.status_code < 400
+			group by rl.user_id, rl.model
 		) g join users u on u.id = g.user_id
 		where u.leaderboard_opt_in`, start, previousStart, now)
 	if err != nil {

@@ -15,6 +15,10 @@ const (
 	pricingCacheTTL     = 10 * time.Second
 	groupCacheTTL       = 30 * time.Second
 	reliabilityCacheTTL = 10 * time.Second
+	// rankingsCacheTTL short-circuits repeated multi-table rankings aggregations.
+	// Leaders change slowly, so the drift from a 30s window is acceptable for a
+	// public page and it protects the database against request floods.
+	rankingsCacheTTL = 30 * time.Second
 	// keyTouchInterval is how often api_keys.last_used_at is refreshed for a busy key.
 	keyTouchInterval = time.Minute
 )

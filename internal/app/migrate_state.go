@@ -66,7 +66,7 @@ func (s *Service) runMigrationAsync(ctx context.Context, sourceDSN, sourceDriver
 	var status, errMsg string
 	if err != nil {
 		status = "failed"
-		errMsg = err.Error()
+		errMsg = redactMigrationError(err.Error(), sourceDSN)
 		s.migration.Status = "failed"
 		s.migration.Error = errMsg
 		s.migration.FinishedAt = time.Now()
@@ -108,6 +108,7 @@ func (s *Service) listMigrationRequests(w http.ResponseWriter, r *http.Request) 
 		var startedAt, createdAt any
 		var finishedAt any
 		if rows.Scan(&id, &status, &driver, &step, &current, &total, &detail, &errMsg, &startedAt, &finishedAt, &createdAt) == nil {
+			errMsg = redactMigrationError(errMsg, "")
 			data = append(data, map[string]any{
 				"id": id, "status": status, "source_driver": driver,
 				"step": step, "current": current, "total": total,

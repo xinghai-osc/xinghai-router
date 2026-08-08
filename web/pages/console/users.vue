@@ -31,8 +31,20 @@ const PERMISSIONS = [
   { value: 'system.manage', labelKey: 'admin.permSystemManage' },
 ]
 
-const users = useResource(() => endpoints.getAdminUsers(), { data: [] as User[] })
-const groups = useResource(() => endpoints.getAdminGroups(), { data: [] as Group[] })
+const page = ref(1)
+const pageSize = ref('50')
+
+function pageQuery(): string {
+  const params = new URLSearchParams()
+  params.set('page', String(page.value))
+  params.set('page_size', pageSize.value)
+  return `?${params.toString()}`
+}
+
+watch(pageSize, async () => { page.value = 1; await users.refresh() })
+
+const users = useResource(() => endpoints.getAdminUsers(pageQuery()), { data: [] as User[], total: 0, page: 1, page_size: 50 })
+const groups = useResource(() => endpoints.getAdminGroups('?page_size=100'), { data: [] as Group[], total: 0, page: 1, page_size: 100 })
 
 const search = ref('')
 
@@ -359,6 +371,13 @@ async function deleteSubscription() {
           </tr>
         </tbody>
       </UiTable>
+
+      <ConsoleOpsPagination
+        v-model:page="page"
+        v-model:pageSize="pageSize"
+        :total="users.data.value.total"
+        :page-size-options="['20', '50', '100']"
+      />
     </ConsoleOpsListState>
 
     <UiSlidePanel v-model:open="dialogOpen" size="lg" :title="t('admin.manageUser')" :description="t('admin.manageUserLead')">

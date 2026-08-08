@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -14,6 +15,8 @@ import (
 	"strings"
 	"time"
 )
+
+var errOAuthEmailNotVerified = errors.New("refusing to use an unverified email for account matching or binding")
 
 type oauthProviderConfig struct {
 	ClientID     string
@@ -106,6 +109,7 @@ func (s *Service) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	cb := callbackURI(r, provider)
 	var accessToken, userEmail, userName, userAvatar, providerUserID string
+	var emailVerified bool
 	switch provider {
 	case "github":
 		accessToken, err = s.githubExchangeToken(r.Context(), cfg, code, cb)
@@ -113,7 +117,7 @@ func (s *Service) oauthCallback(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadGateway, "oauth_error", fmt.Sprintf("token exchange failed: %v", err))
 			return
 		}
-		providerUserID, userEmail, userName, userAvatar, err = s.githubFetchUser(r.Context(), accessToken)
+		providerUserID, userEmail, userName, userAvatar, emailVerified, err = s.githubFetchUser(r.Context(), accessToken)
 		if err != nil {
 			writeError(w, http.StatusBadGateway, "oauth_error", fmt.Sprintf("failed to fetch user info: %v", err))
 			return
@@ -122,8 +126,12 @@ func (s *Service) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "unsupported_provider", "unsupported OAuth provider")
 		return
 	}
-	userID, err := s.findOrCreateOAuthUser(r.Context(), provider, providerUserID, userEmail, userName, userAvatar)
+	userID, err := s.findOrCreateOAuthUser(r.Context(), provider, providerUserID, userEmail, emailVerified, userName, userAvatar)
 	if err != nil {
+		if errors.Is(err, errOAuthEmailNotVerified) {
+			writeError(w, http.StatusConflict, "email_not_verified", "cannot bind an unverified provider email to an existing account")
+			return
+		}
 		log.Printf("oauth findOrCreateOAuthUser: %v", err)
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not process OAuth login")
 		return
@@ -136,20 +144,23 @@ func (s *Service) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	s.createSession(w, r, userID, http.StatusOK)
 }
 
-func (s *Service) findOrCreateOAuthUser(ctx context.Context, provider, providerUserID, email, name, avatar string) (string, error) {
+func (s *Service) findOrCreateOAuthUser(ctx context.Context, provider, providerUserID, email string, emailVerified bool, name, avatar string) (string, error) {
 	var userID string
 	err := s.db.QueryRow(ctx, `select user_id from user_oauth_connections where provider=$1 and provider_user_id=$2`, provider, providerUserID).Scan(&userID)
 	if err == nil {
 		return userID, nil
 	}
+	email = strings.ToLower(strings.TrimSpace(email))
 	if email != "" {
+		if !emailVerified {
+			return "", errOAuthEmailNotVerified
+		}
 		err = s.db.QueryRow(ctx, `select id from users where email=$1`, email).Scan(&userID)
 		if err == nil {
 			_, _ = s.db.Exec(ctx, `insert into user_oauth_connections(user_id,provider,provider_user_id,provider_username,provider_avatar_url) values($1,$2,$3,$4,$5) on conflict do nothing`, userID, provider, providerUserID, name, avatar)
 			return userID, nil
 		}
 	}
-	email = strings.ToLower(strings.TrimSpace(email))
 	if email == "" {
 		email = fmt.Sprintf("%s-%s@oauth.local", provider, providerUserID)
 	}
@@ -209,13 +220,13 @@ func (s *Service) githubExchangeToken(ctx context.Context, cfg *oauthProviderCon
 	return result.AccessToken, nil
 }
 
-func (s *Service) githubFetchUser(ctx context.Context, accessToken string) (id, email, name, avatar string, err error) {
+func (s *Service) githubFetchUser(ctx context.Context, accessToken string) (id, email, name, avatar string, emailVerified bool, err error) {
 	req, _ := http.NewRequestWithContext(ctx, "GET", "https://api.github.com/user", nil)
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		return "", "", "", "", err
+		return "", "", "", "", false, err
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
@@ -223,46 +234,40 @@ func (s *Service) githubFetchUser(ctx context.Context, accessToken string) (id, 
 		ID        int    `json:"id"`
 		Login     string `json:"login"`
 		Name      string `json:"name"`
-		Email     string `json:"email"`
 		AvatarURL string `json:"avatar_url"`
 	}
 	if err := json.Unmarshal(raw, &user); err != nil {
-		return "", "", "", "", fmt.Errorf("unmarshal user: %w", err)
+		return "", "", "", "", false, fmt.Errorf("unmarshal user: %w", err)
 	}
 	id = fmt.Sprintf("%d", user.ID)
 	name = user.Name
 	if name == "" {
 		name = user.Login
 	}
-	email = user.Email
 	avatar = user.AvatarURL
-	if email == "" {
-		req2, _ := http.NewRequestWithContext(ctx, "GET", "https://api.github.com/user/emails", nil)
-		req2.Header.Set("Authorization", "Bearer "+accessToken)
-		req2.Header.Set("Accept", "application/vnd.github.v3+json")
-		resp2, err := s.httpClient.Do(req2)
-		if err == nil {
-			defer resp2.Body.Close()
-			raw2, _ := io.ReadAll(io.LimitReader(resp2.Body, 2<<20))
-			var emails []struct {
-				Email    string `json:"email"`
-				Primary  bool   `json:"primary"`
-				Verified bool   `json:"verified"`
-			}
-			if json.Unmarshal(raw2, &emails) == nil {
-				for _, e := range emails {
-					if e.Primary && e.Verified {
-						email = e.Email
-						break
-					}
-				}
-				if email == "" && len(emails) > 0 {
-					email = emails[0].Email
-				}
-			}
+	req2, _ := http.NewRequestWithContext(ctx, "GET", "https://api.github.com/user/emails", nil)
+	req2.Header.Set("Authorization", "Bearer "+accessToken)
+	req2.Header.Set("Accept", "application/vnd.github.v3+json")
+	resp2, err := s.httpClient.Do(req2)
+	if err != nil {
+		return id, "", name, avatar, false, nil
+	}
+	defer resp2.Body.Close()
+	raw2, _ := io.ReadAll(io.LimitReader(resp2.Body, 2<<20))
+	var emails []struct {
+		Email    string `json:"email"`
+		Primary  bool   `json:"primary"`
+		Verified bool   `json:"verified"`
+	}
+	if json.Unmarshal(raw2, &emails) != nil {
+		return id, "", name, avatar, false, nil
+	}
+	for _, e := range emails {
+		if e.Primary && e.Verified {
+			return id, e.Email, name, avatar, true, nil
 		}
 	}
-	return id, email, name, avatar, nil
+	return id, "", name, avatar, false, nil
 }
 
 func (s *Service) listOAuthProviders(w http.ResponseWriter, r *http.Request) {

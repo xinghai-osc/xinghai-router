@@ -13,6 +13,10 @@ const (
 	authEmailCodePerMinute            = 5
 	authPasswordResetPerMinute        = 3
 	authPasswordResetConfirmPerMinute = 5
+	// rankingsPerMinute bounds the unauthenticated /rankings endpoint, which lands
+	// an expensive multi-table aggregation on every direct hit. The 30s response
+	// cache absorbs repeats, so the limiter need only stop deliberate floods.
+	rankingsPerMinute = 60
 )
 
 type rateLimiter interface {
@@ -121,8 +125,14 @@ func commaIndex(s string) int {
 
 // ipRateLimit is middleware that rate-limits by client IP.
 func (s *Service) ipRateLimit(next http.HandlerFunc) http.HandlerFunc {
+	return s.ipRateLimitBy(s.ipLimiter, next)
+}
+
+// ipRateLimitBy rate-limits a handler by client IP using the given limiter, so
+// public endpoints can carry a looser budget than login-style routes.
+func (s *Service) ipRateLimitBy(limit rateLimiter, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !s.ipLimiter.allow(clientIP(r)) {
+		if !limit.allow(clientIP(r)) {
 			writeError(w, http.StatusTooManyRequests, "rate_limit_exceeded", "too many requests from this IP address")
 			return
 		}
