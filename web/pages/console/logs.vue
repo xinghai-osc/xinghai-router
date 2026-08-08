@@ -1,5 +1,8 @@
 <script setup lang="ts">
-import { ScrollText } from 'lucide-vue-next'
+import { CalendarDays, ChevronDown, ScrollText } from 'lucide-vue-next'
+import {
+  PopoverContent, PopoverPortal, PopoverRoot, PopoverTrigger,
+} from 'reka-ui'
 import { endpoints, type RequestLog, type UsageLog, type UsageStats } from '~/src/api'
 import { formatCompact, formatDateTime, formatMoney, formatNumber, shortId } from '~/src/format'
 
@@ -22,9 +25,76 @@ const filters = reactive({
   channel_id: '',
   group_id: '',
   status: '',
-  start: '',
-  end: '',
+  request_id: '',
 })
+
+const advancedOpen = ref(false)
+const advancedActiveCount = computed(() => [filters.channel_id.trim(), filters.group_id.trim(), filters.request_id.trim()].filter(Boolean).length)
+
+const DATE_PRESETS = [
+  { labelKey: 'admin.datePresetToday', start: (now: Date) => { const s = new Date(now); s.setHours(0, 0, 0, 0); return s } },
+  { labelKey: 'admin.datePreset24h', start: (now: Date) => new Date(now.getTime() - 24 * 3600 * 1000) },
+  { labelKey: 'admin.datePreset7d', start: (now: Date) => new Date(now.getTime() - 7 * 24 * 3600 * 1000) },
+  { labelKey: 'admin.datePreset14d', start: (now: Date) => new Date(now.getTime() - 14 * 24 * 3600 * 1000) },
+  { labelKey: 'admin.datePreset30d', start: (now: Date) => new Date(now.getTime() - 30 * 24 * 3600 * 1000) },
+]
+
+function startOfToday(): Date {
+  const start = new Date()
+  start.setHours(0, 0, 0, 0)
+  return start
+}
+
+const range = reactive<{ start: Date | null; end: Date | null }>({ start: startOfToday(), end: new Date() })
+const rangeDraft = reactive({ start: '', end: '' })
+const rangeOpen = ref(false)
+
+function pad(n: number): string {
+  return String(n).padStart(2, '0')
+}
+
+function toInputValue(date: Date): string {
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
+function compactDate(date: Date): string {
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
+const rangeLabel = computed(() => {
+  if (!range.start && !range.end) return t('admin.dateRange')
+  if (range.start && range.end) return `${compactDate(range.start)} ~ ${compactDate(range.end)}`
+  return `${range.start ? compactDate(range.start) : '-'} ~ ${range.end ? compactDate(range.end) : '-'}`
+})
+
+watch(rangeOpen, (open) => {
+  if (open) {
+    rangeDraft.start = range.start ? toInputValue(range.start) : ''
+    rangeDraft.end = range.end ? toInputValue(range.end) : ''
+  }
+})
+
+function applyRangeDraft() {
+  range.start = rangeDraft.start ? new Date(rangeDraft.start) : null
+  range.end = rangeDraft.end ? new Date(rangeDraft.end) : null
+  rangeOpen.value = false
+}
+
+function applyRangePreset(preset: (typeof DATE_PRESETS)[number]) {
+  const end = new Date()
+  const start = preset.start(end)
+  range.start = start
+  range.end = end
+  rangeDraft.start = toInputValue(start)
+  rangeDraft.end = toInputValue(end)
+  rangeOpen.value = false
+}
+
+const filtersActive = computed(() => Boolean(
+  filters.user_id.trim() || filters.model.trim() || filters.channel_id.trim()
+  || filters.group_id.trim() || filters.status || filters.request_id.trim()
+  || range.start || range.end,
+))
 
 const page = ref(1)
 const pageSize = ref('50')
@@ -37,10 +107,9 @@ const statusOptions = computed(() => [
 const pageSizeOptions = ['20', '50', '100', '200'].map(value => ({ value, label: value }))
 
 /** `datetime-local` yields a local wall-clock string; the API wants RFC 3339. */
-function toRfc3339(value: string): string {
-  if (!value) return ''
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? '' : date.toISOString()
+function toRfc3339(value: Date | null): string {
+  if (!value || Number.isNaN(value.getTime())) return ''
+  return value.toISOString()
 }
 
 function filterParams(): URLSearchParams {
@@ -50,9 +119,10 @@ function filterParams(): URLSearchParams {
   if (filters.channel_id.trim()) params.set('channel_id', filters.channel_id.trim())
   if (filters.group_id.trim()) params.set('group_id', filters.group_id.trim())
   if (filters.status) params.set('status', filters.status)
-  const start = toRfc3339(filters.start)
+  if (filters.request_id.trim()) params.set('request_id', filters.request_id.trim())
+  const start = toRfc3339(range.start)
   if (start) params.set('start', start)
-  const end = toRfc3339(filters.end)
+  const end = toRfc3339(range.end)
   if (end) params.set('end', end)
   return params
 }

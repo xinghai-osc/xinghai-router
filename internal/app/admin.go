@@ -2260,8 +2260,14 @@ func (s *Service) testChannelKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if success {
-		_, _ = s.db.Exec(r.Context(), `update channel_api_keys set last_checked_at=now(),last_error=null where id=$1 and channel_id=$2`, keyID, channelID)
-		_, _ = s.db.Exec(r.Context(), `update channels set last_checked_at=now(),last_error=null,updated_at=now() where id=$1`, channelID)
+		_, _ = s.db.Exec(r.Context(), `update channel_api_keys set enabled=true,failure_count=0,last_error=null,last_checked_at=now() where id=$1 and channel_id=$2`, keyID, channelID)
+		var remaining int
+		if err := s.db.QueryRow(r.Context(), `select count(*) from channel_api_keys where channel_id=$1 and enabled`, channelID).Scan(&remaining); err == nil && remaining <= 1 {
+			_, _ = s.db.Exec(r.Context(), `update channels set enabled=true,auto_disabled=false,disabled_reason='',failure_count=0,cooldown_until=null,last_error=null,last_checked_at=now(),updated_at=now() where id=$1`, channelID)
+		} else {
+			_, _ = s.db.Exec(r.Context(), `update channels set last_checked_at=now(),last_error=null,updated_at=now() where id=$1`, channelID)
+		}
+		s.syncChannelKeyType(r.Context(), channelID)
 		result["auto_disabled"] = false
 		writeJSON(w, http.StatusOK, result)
 		return
@@ -2273,6 +2279,12 @@ func (s *Service) testChannelKey(w http.ResponseWriter, r *http.Request) {
 	s.syncChannelKeyType(r.Context(), channelID)
 	result["auto_disabled"] = true
 	s.audit(r, "channel_key.auto_disabled", "channel_api_key", keyID, map[string]any{"channel_id": channelID, "reason": reason})
+	var remaining int
+	if err := s.db.QueryRow(r.Context(), `select count(*) from channel_api_keys where channel_id=$1 and enabled`, channelID).Scan(&remaining); err == nil && remaining == 0 {
+		_, _ = s.db.Exec(r.Context(), `update channels set enabled=false,auto_disabled=true,disabled_reason=$1,last_error=$1,last_checked_at=now(),updated_at=now() where id=$2`, reason, channelID)
+		s.audit(r, "channel.auto_disabled", "channel", channelID, map[string]any{"key_id": keyID, "reason": reason})
+		result["channel_disabled"] = true
+	}
 	writeJSON(w, http.StatusOK, result)
 }
 
@@ -2370,7 +2382,7 @@ func (s *Service) testChannelHandler(w http.ResponseWriter, r *http.Request) {
 
 	channelDisabled := false
 	if anySuccess {
-		_, _ = s.db.Exec(r.Context(), `update channels set last_checked_at=now(),last_error=null,updated_at=now() where id=$1`, channelID)
+		_, _ = s.db.Exec(r.Context(), `update channels set enabled=true,auto_disabled=false,disabled_reason='',failure_count=0,cooldown_until=null,last_error=null,last_checked_at=now(),updated_at=now() where id=$1`, channelID)
 		s.syncChannelKeyType(r.Context(), channelID)
 	} else {
 		_, _ = s.db.Exec(r.Context(), `update channels set enabled=false,auto_disabled=true,disabled_reason=$1,last_checked_at=now(),last_error=$1,updated_at=now() where id=$2`, channelReason, channelID)

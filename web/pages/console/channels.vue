@@ -527,7 +527,11 @@ async function testKey(key: ChannelKey) {
   if (result.success) {
     toast.success(t('admin.keyTestSuccess', { status_code: result.status_code, latency_ms: result.latency_ms }))
   } else if (result.auto_disabled) {
-    toast.error(t('admin.keyTestFailedAndDisabled', { reason: result.reason ?? '' }))
+    if (result.channel_disabled) {
+      toast.error(t('admin.keyTestFailedAndChannelDisabled', { reason: result.reason ?? '' }))
+    } else {
+      toast.error(t('admin.keyTestFailedAndDisabled', { reason: result.reason ?? '' }))
+    }
   } else {
     toast.error(t('admin.keyTestFailed', { status_code: result.status_code, reason: result.reason ?? '' }))
   }

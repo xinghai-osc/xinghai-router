@@ -15,6 +15,7 @@ export default {
   keyTestSuccess: 'Test passed, status {status_code}, {latency_ms} ms',
   keyTestFailed: 'Test failed, status {status_code}: {reason}',
   keyTestFailedAndDisabled: 'Test failed, key auto-disabled: {reason}',
+  keyTestFailedAndChannelDisabled: 'Test failed, channel auto-disabled: {reason}',
   testChannel: 'Test',
   channelTestSuccess: 'Test passed, status {status_code}, {latency_ms} ms',
   channelTestFailed: 'Test failed, status {status_code}: {reason}',

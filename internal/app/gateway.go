@@ -32,6 +32,15 @@ type channel struct {
 	provider, upstreamPath, upstreamFormat string
 	priority, weight                       int
 	overrides                              channelRequestOverrides
+	keys                                   []channelKeyCredential
+	keyIndex                               int
+}
+
+// channelKeyCredential is one enabled API key of a channel, in priority order.
+type channelKeyCredential struct {
+	id       string
+	key      string
+	priority int
 }
 
 // channelRequestOverrides configures per-channel edits applied to the upstream
@@ -369,8 +378,8 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 	failDetail := ""
 tryChannels:
 	for pass := 0; pass <= reliability.RetryCount; pass++ {
-		for _, candidate := range channels {
-			ch = candidate
+		for i := range channels {
+			ch = channels[i]
 			if s.checkChannelQuota(ctx, ch.id, model) != nil {
 				continue
 			}
@@ -462,6 +471,9 @@ tryChannels:
 				resp = nil
 			}
 			s.channelFailed(ctx, ch.id, ch.keyID, failureReason)
+			// Retries rotate to the next credential in priority order so a
+			// multi-key channel is not replayed with the same key.
+			channels[i].rotateKey()
 		}
 	}
 	if resp == nil {
@@ -802,8 +814,22 @@ func (s *Service) channelsForModel(ctx context.Context, key keyContext, model st
 		if len(overrides) > 0 {
 			_ = json.Unmarshal(overrides, &ch.overrides)
 		}
-		ch.apiKey, ch.keyID, err = s.selectChannelKey(ctx, ch.id, encrypted, seed[:])
+		keys, err := s.channelKeys(ctx, ch.id)
 		if err != nil {
+			return nil, err
+		}
+		if len(keys) > 0 {
+			ch.keys = keys
+			ch.keyIndex = initialKeyIndex(keys, seed[:])
+			ch.apiKey = keys[ch.keyIndex].key
+			ch.keyID = keys[ch.keyIndex].id
+		} else if encrypted != "" {
+			ch.apiKey, err = channelKeyValue(s.cfg.EncryptionKey, encrypted)
+			if err != nil {
+				skipped++
+				continue
+			}
+		} else {
 			skipped++
 			continue
 		}
@@ -843,18 +869,15 @@ func (s *Service) channelsForModel(ctx context.Context, key keyContext, model st
 	return result, nil
 }
 
-func (s *Service) selectChannelKey(ctx context.Context, channelID int64, fallbackEncrypted string, seed []byte) (string, string, error) {
+// channelKeys returns every enabled key of a channel in priority order
+// (descending priority, then creation time).
+func (s *Service) channelKeys(ctx context.Context, channelID int64) ([]channelKeyCredential, error) {
 	krows, err := s.db.Query(ctx, `select id,key_encrypted,priority from channel_api_keys where channel_id=$1 and enabled order by priority desc,created_at`, channelID)
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
 	defer krows.Close()
-	type keyCandidate struct {
-		id       string
-		key      string
-		priority int
-	}
-	var keys []keyCandidate
+	var keys []channelKeyCredential
 	for krows.Next() {
 		var id, enc string
 		var priority int
@@ -865,14 +888,43 @@ func (s *Service) selectChannelKey(ctx context.Context, channelID int64, fallbac
 		if err != nil {
 			continue
 		}
-		keys = append(keys, keyCandidate{id, key, priority})
+		keys = append(keys, channelKeyCredential{id, key, priority})
+	}
+	return keys, krows.Err()
+}
+
+// initialKeyIndex picks the starting credential for a request deterministically
+// from the request seed, preferring the highest-priority group so lower-priority
+// keys are only used once the primary group is exhausted (e.g. after keys are
+// disabled). Retries rotate from this index through every key in order.
+func initialKeyIndex(keys []channelKeyCredential, seed []byte) int {
+	if len(keys) <= 1 {
+		return 0
+	}
+	end := 1
+	for end < len(keys) && keys[end].priority == keys[0].priority {
+		end++
+	}
+	return int(seed[0]) % end
+}
+
+// rotateKey advances a multi-key channel to the next credential in priority
+// order for a retry attempt; single-key and legacy channels are unchanged.
+func (ch *channel) rotateKey() {
+	if len(ch.keys) > 1 {
+		ch.keyIndex = (ch.keyIndex + 1) % len(ch.keys)
+		ch.apiKey = ch.keys[ch.keyIndex].key
+		ch.keyID = ch.keys[ch.keyIndex].id
+	}
+}
+
+func (s *Service) selectChannelKey(ctx context.Context, channelID int64, fallbackEncrypted string, seed []byte) (string, string, error) {
+	keys, err := s.channelKeys(ctx, channelID)
+	if err != nil {
+		return "", "", err
 	}
 	if len(keys) > 0 {
-		end := 0
-		for end < len(keys) && keys[end].priority == keys[0].priority {
-			end++
-		}
-		picked := keys[int(seed[0])%end]
+		picked := keys[initialKeyIndex(keys, seed)]
 		return picked.key, picked.id, nil
 	}
 	if fallbackEncrypted != "" {

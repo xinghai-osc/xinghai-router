@@ -72,6 +72,62 @@ func TestFirstGroupAndSortedKeys(t *testing.T) {
 	}
 }
 
+func TestInitialKeyIndex(t *testing.T) {
+	keys := []channelKeyCredential{
+		{id: "k1", key: "a", priority: 10},
+		{id: "k2", key: "b", priority: 10},
+		{id: "k3", key: "c", priority: 5},
+	}
+	// All same priority -> index = seed[0] % len.
+	same := []channelKeyCredential{{id: "k1", key: "a", priority: 7}, {id: "k2", key: "b", priority: 7}}
+	for seed, want := range map[byte]int{0: 0, 1: 1, 2: 0} {
+		if got := initialKeyIndex(same, []byte{seed}); got != want {
+			t.Fatalf("same-priority seed %d index = %d, want %d", seed, got, want)
+		}
+	}
+	// Mixed priority -> index within the top-priority group only.
+	for seed, want := range map[byte]int{0: 0, 1: 1} {
+		if got := initialKeyIndex(keys, []byte{seed}); got != want {
+			t.Fatalf("mixed-priority seed %d index = %d, want %d", seed, got, want)
+		}
+	}
+	if got := initialKeyIndex(keys[:1], []byte{7}); got != 0 {
+		t.Fatalf("single key index = %d, want 0", got)
+	}
+}
+
+func TestRotateKey(t *testing.T) {
+	keys := []channelKeyCredential{
+		{id: "k1", key: "a", priority: 10},
+		{id: "k2", key: "b", priority: 10},
+		{id: "k3", key: "c", priority: 5},
+	}
+	ch := channel{apiKey: "a", keyID: "k1", keys: keys}
+	ch.rotateKey()
+	if ch.keyID != "k2" || ch.apiKey != "b" {
+		t.Fatalf("after first rotate = %s/%s, want k2/b", ch.keyID, ch.apiKey)
+	}
+	ch.rotateKey()
+	if ch.keyID != "k3" || ch.apiKey != "c" {
+		t.Fatalf("after second rotate = %s/%s, want k3/c", ch.keyID, ch.apiKey)
+	}
+	ch.rotateKey()
+	if ch.keyID != "k1" || ch.apiKey != "a" {
+		t.Fatalf("rotate must wrap = %s/%s, want k1/a", ch.keyID, ch.apiKey)
+	}
+	// Single-key and legacy channels stay fixed.
+	single := channel{apiKey: "a", keyID: "k1", keys: keys[:1]}
+	single.rotateKey()
+	if single.keyID != "k1" || single.apiKey != "a" {
+		t.Fatalf("single-key rotate changed = %s/%s", single.keyID, single.apiKey)
+	}
+	legacy := channel{apiKey: "legacy"}
+	legacy.rotateKey()
+	if legacy.apiKey != "legacy" {
+		t.Fatalf("legacy rotate changed = %s", legacy.apiKey)
+	}
+}
+
 func TestProxyChatCompletionsRequiresPricingWithoutSubscription(t *testing.T) {
 	// Without a DB, reserveUsage panics; exercise error classification only.
 	if !errors.Is(errPricingUnavailable, errPricingUnavailable) {

@@ -10,7 +10,7 @@ export interface Channel { id: string; name: string; base_url: string; provider:
 
 export interface ChannelKey { id: string; name: string; enabled: boolean; priority: number; last_checked_at: string | null; last_error: string | null; created_at: string }
 export interface ChannelKeyForm { name?: string; api_key: string; priority?: number }
-export interface ChannelKeyTestResult { success: boolean; status_code: number; latency_ms: number; reason?: string; auto_disabled: boolean }
+export interface ChannelKeyTestResult { success: boolean; status_code: number; latency_ms: number; reason?: string; auto_disabled: boolean; channel_disabled?: boolean }
 export interface ChannelTestKeyResult { key_id: string; success: boolean; status_code: number; latency_ms: number; reason?: string; auto_disabled: boolean }
 export interface ChannelTestResult { success: boolean; status_code: number; latency_ms: number; reason?: string; channel_disabled: boolean; keys: ChannelTestKeyResult[] }
 

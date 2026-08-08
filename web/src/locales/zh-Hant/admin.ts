@@ -14,6 +14,7 @@ export default {
   keyTestSuccess: '測試通過，狀態碼 {status_code}，耗時 {latency_ms} ms',
   keyTestFailed: '測試失敗，狀態碼 {status_code}，原因：{reason}',
   keyTestFailedAndDisabled: '測試失敗，已自動停用該密鑰：{reason}',
+  keyTestFailedAndChannelDisabled: '測試失敗，已自動停用渠道：{reason}',
   priority: '優先級',
   multiplier: '倍率',
   models: '模型',

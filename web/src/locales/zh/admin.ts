@@ -15,6 +15,7 @@ export default {
   keyTestSuccess: '测试通过，状态码 {status_code}，耗时 {latency_ms} ms',
   keyTestFailed: '测试失败，状态码 {status_code}，原因：{reason}',
   keyTestFailedAndDisabled: '测试失败，已自动停用该密钥：{reason}',
+  keyTestFailedAndChannelDisabled: '测试失败，已自动停用渠道：{reason}',
   testChannel: '测试',
   channelTestSuccess: '测试通过，状态码 {status_code}，耗时 {latency_ms} ms',
   channelTestFailed: '测试失败，状态码 {status_code}，原因：{reason}',
