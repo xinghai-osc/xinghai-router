@@ -136,6 +136,9 @@ export default {
   cacheReadTokens: '缓存读取',
   requestDetail: '请求详情',
   tokenBreakdown: 'Token 明细',
+  viewMode: '视图切换',
+  viewMine: '个人视图',
+  viewAdmin: '管理员视图',
 
   // ---- 账单流水 ----
   ledgerDescription: '最近 100 条钱包变动，含每笔扣费对应的请求。',

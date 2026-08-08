@@ -136,6 +136,9 @@ export default {
   cacheReadTokens: 'Cache read',
   requestDetail: 'Request details',
   tokenBreakdown: 'Token breakdown',
+  viewMode: 'View mode',
+  viewMine: 'Personal view',
+  viewAdmin: 'Admin view',
 
   // ---- Ledger ----
   ledgerDescription: 'The latest 100 wallet movements, linked to the request that caused them.',

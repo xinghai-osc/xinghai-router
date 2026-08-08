@@ -3,27 +3,39 @@ import { CalendarDays, ChevronDown, KeyRound, Search } from 'lucide-vue-next'
 import {
   PopoverContent, PopoverPortal, PopoverRoot, PopoverTrigger,
 } from 'reka-ui'
-import { endpoints, type UsageRecord } from '~/src/api'
+import { endpoints, type UsageLog, type UsageRecord, type UsageStats } from '~/src/api'
 import { formatCompact, formatDateTime, formatMoney, formatNumber, shortId } from '~/src/format'
 
 definePageMeta({ layout: 'console', middleware: 'console-auth' })
 
 const { t } = useI18n()
 const { settings } = useSiteSettings()
+const { isAdmin } = useAccount()
 
 useHead({ title: () => `${t('nav.usage')} · ${settings.value.name}` })
+
+const adminView = ref(false)
 
 const { data: usage, pending, error } = useResource(
   () => endpoints.getAccountUsage(),
   { data: [] as UsageRecord[] },
 )
 
-const statusOptions = computed(() => [
-  { value: '', label: t('console.statusAll') },
-  { value: 'success', label: t('console.statusSuccess') },
-  { value: 'failed', label: t('console.statusFailed') },
-  { value: 'settled', label: t('console.statusSettled') },
-])
+const statusOptions = computed(() => {
+  if (adminView.value) {
+    return [
+      { value: '', label: t('console.statusAll') },
+      { value: 'success', label: t('console.statusSuccess') },
+      { value: 'error', label: t('admin.statusError') },
+    ]
+  }
+  return [
+    { value: '', label: t('console.statusAll') },
+    { value: 'success', label: t('console.statusSuccess') },
+    { value: 'failed', label: t('console.statusFailed') },
+    { value: 'settled', label: t('console.statusSettled') },
+  ]
+})
 
 const model = ref('')
 const group = ref('')
@@ -121,26 +133,146 @@ const stats = computed(() => filtered.value.reduce(
   { cost: 0, requests: 0, tokens: 0 },
 ))
 
+const userId = ref('')
+const page = ref(1)
+const pageSize = ref('50')
+const pageSizeOptions = ['20', '50', '100', '200']
+
+function toRfc3339(value: Date | null): string {
+  if (!value || Number.isNaN(value.getTime())) return ''
+  return value.toISOString()
+}
+
+function adminLogsQuery(): string {
+  const params = new URLSearchParams()
+  if (userId.value.trim()) params.set('user_id', userId.value.trim())
+  if (model.value.trim()) params.set('model', model.value.trim())
+  if (status.value) params.set('status', status.value)
+  if (requestId.value.trim()) params.set('request_id', requestId.value.trim())
+  const start = toRfc3339(range.start)
+  if (start) params.set('start', start)
+  const end = toRfc3339(range.end)
+  if (end) params.set('end', end)
+  params.set('page', String(page.value))
+  params.set('page_size', pageSize.value)
+  return `?${params.toString()}`
+}
+
+function adminStatsQuery(): string {
+  const params = new URLSearchParams()
+  if (userId.value.trim()) params.set('user_id', userId.value.trim())
+  if (model.value.trim()) params.set('model', model.value.trim())
+  const start = toRfc3339(range.start)
+  if (start) params.set('start', start)
+  const end = toRfc3339(range.end)
+  if (end) params.set('end', end)
+  const query = params.toString()
+  return query ? `?${query}` : ''
+}
+
+const EMPTY_STATS: UsageStats = {
+  total_requests: 0,
+  success_count: 0,
+  error_count: 0,
+  prompt_tokens: 0,
+  cached_prompt_tokens: 0,
+  completion_tokens: 0,
+  total_tokens: 0,
+  total_cost: '0',
+  avg_duration_ms: 0,
+}
+
+const adminUsage = useResource(
+  () => endpoints.getUsageLogs(adminLogsQuery()),
+  { data: [] as UsageLog[], total: 0, page: 1, page_size: 50 },
+)
+const adminStats = useResource(() => endpoints.getUsageStats(adminStatsQuery()), EMPTY_STATS)
+
+const totalPages = computed(() => Math.max(1, Math.ceil(adminUsage.data.value.total / Math.max(1, adminUsage.data.value.page_size))))
+
+type UsageRow = UsageRecord & { user_id?: string | null; user_name?: string }
+
+function normalizeRow(log: UsageLog): UsageRow {
+  return {
+    request_id: log.request_id,
+    model: log.model,
+    prompt_tokens: log.prompt_tokens ?? 0,
+    cached_prompt_tokens: log.cached_prompt_tokens,
+    completion_tokens: log.completion_tokens ?? 0,
+    cost: log.cost,
+    status: log.status_code >= 400 ? 'failed' : 'success',
+    created_at: log.created_at,
+    client_ip: log.client_ip,
+    user_agent: log.user_agent,
+    error: log.error_detail,
+    key_name: log.key_name,
+    subscription: false,
+    duration_ms: log.duration_ms,
+    group_name: log.group_name,
+    user_name: log.user_name,
+    user_id: log.user_id,
+  }
+}
+
+const rows = computed<UsageRow[]>(() => (adminView.value ? adminUsage.data.value.data.map(normalizeRow) : filtered.value))
+
+const displayStats = computed(() => {
+  if (adminView.value) {
+    const admin = adminStats.data.value
+    return {
+      cost: Number(admin.total_cost ?? 0),
+      requests: admin.total_requests,
+      tokens: admin.total_tokens,
+    }
+  }
+  return stats.value
+})
+
 const filtersActive = computed(() => Boolean(
   model.value.trim() || group.value.trim() || key.value.trim()
-  || requestId.value.trim() || status.value || range.start || range.end,
+  || requestId.value.trim() || status.value || range.start || range.end || userId.value.trim(),
 ))
 
-function resetFilters() {
+async function applyAdminFilters() {
+  page.value = 1
+  await Promise.all([adminUsage.refresh(), adminStats.refresh()])
+}
+
+async function resetFilters() {
   model.value = ''
   group.value = ''
   key.value = ''
   requestId.value = ''
   status.value = ''
+  userId.value = ''
   range.start = startOfToday()
   range.end = new Date()
+  if (adminView.value) await applyAdminFilters()
 }
 
-function isFailed(record: UsageRecord): boolean {
+async function setAdminView(on: boolean) {
+  if (adminView.value === on) return
+  adminView.value = on
+  status.value = ''
+  page.value = 1
+  if (on) await applyAdminFilters()
+}
+
+async function goToPage(next: number) {
+  if (next < 1 || next > totalPages.value) return
+  page.value = next
+  await adminUsage.refresh()
+}
+
+watch(pageSize, () => {
+  if (adminView.value) void applyAdminFilters()
+})
+
+function isFailed(record: UsageRow): boolean {
   return record.status === 'failed'
 }
 
-const clientTarget = ref<UsageRecord | null>(null)
+const clientTarget = ref<UsageRow | null>(null)
 </script>
 
 <template>
@@ -202,7 +334,8 @@ const clientTarget = ref<UsageRecord | null>(null)
             <UiInput v-model="model" :placeholder="t('console.model')" />
           </div>
           <div class="w-full sm:w-44">
-            <UiInput v-model="group" :placeholder="t('console.group')" />
+            <UiInput v-if="!adminView" v-model="group" :placeholder="t('console.group')" />
+            <UiInput v-else v-model="userId" mono :placeholder="t('admin.filterUserId')" />
           </div>
           <div class="w-full sm:w-40">
             <UiSelect v-model="status" :options="statusOptions" :placeholder="t('console.statusAll')" />
@@ -215,10 +348,29 @@ const clientTarget = ref<UsageRecord | null>(null)
               :class="advancedOpen && 'rotate-180'"
             />
           </UiButton>
+
+          <div v-if="isAdmin" class="ml-auto flex items-center gap-0.5 self-center rounded-control border border-line bg-surface p-0.5 sm:mb-1" role="group" :aria-label="t('console.viewMode')">
+            <button
+              type="button"
+              class="rounded-[7px] px-3 py-1.5 text-[13px] transition-colors duration-150"
+              :class="adminView ? 'text-muted hover:text-ink' : 'bg-clay text-clay-ink'"
+              @click="setAdminView(false)"
+            >
+              {{ t('console.viewMine') }}
+            </button>
+            <button
+              type="button"
+              class="rounded-[7px] px-3 py-1.5 text-[13px] transition-colors duration-150"
+              :class="adminView ? 'bg-clay text-clay-ink' : 'text-muted hover:text-ink'"
+              @click="setAdminView(true)"
+            >
+              {{ t('console.viewAdmin') }}
+            </button>
+          </div>
         </div>
 
         <div v-if="advancedOpen" class="mt-2 flex flex-wrap items-end gap-2 border-t border-line pt-3">
-          <div class="w-full sm:w-52">
+          <div v-if="!adminView" class="w-full sm:w-52">
             <UiInput v-model="key" :placeholder="t('console.keyUsed')" />
           </div>
           <div class="w-full sm:w-72">
@@ -231,40 +383,54 @@ const clientTarget = ref<UsageRecord | null>(null)
             <span class="inline-flex h-7 items-center gap-2 rounded-md border border-line bg-surface px-2.5 text-xs">
               <span class="h-3.5 w-0.5 rounded-full bg-clay" />
               <span class="text-muted">{{ t('console.cost') }}</span>
-              <span class="numeric font-semibold text-ink">{{ formatMoney(stats.cost, 4) }}</span>
+              <span class="numeric font-semibold text-ink">{{ formatMoney(displayStats.cost, 4) }}</span>
             </span>
             <span class="inline-flex h-7 items-center gap-2 rounded-md border border-line bg-surface px-2.5 text-xs">
               <span class="h-3.5 w-0.5 rounded-full bg-success" />
               <span class="text-muted">{{ t('console.requests') }}</span>
-              <span class="numeric font-semibold text-ink">{{ formatNumber(stats.requests) }}</span>
+              <span class="numeric font-semibold text-ink">{{ formatNumber(displayStats.requests) }}</span>
             </span>
             <span class="inline-flex h-7 items-center gap-2 rounded-md border border-line bg-surface px-2.5 text-xs">
               <span class="h-3.5 w-0.5 rounded-full bg-warn" />
               <span class="text-muted">{{ t('console.tokens') }}</span>
-              <span class="numeric font-semibold text-ink">{{ formatCompact(stats.tokens) }}</span>
+              <span class="numeric font-semibold text-ink">{{ formatCompact(displayStats.tokens) }}</span>
+            </span>
+            <span v-if="adminView" class="inline-flex h-7 items-center gap-2 rounded-md border border-line bg-surface px-2.5 text-xs">
+              <span class="h-3.5 w-0.5 rounded-full bg-success" />
+              <span class="text-muted">{{ t('admin.statSuccess') }}</span>
+              <span class="numeric font-semibold text-ink">{{ formatNumber(adminStats.data.value.success_count) }}</span>
+            </span>
+            <span v-if="adminView" class="inline-flex h-7 items-center gap-2 rounded-md border border-line bg-surface px-2.5 text-xs">
+              <span class="h-3.5 w-0.5 rounded-full bg-danger" />
+              <span class="text-muted">{{ t('admin.statErrors') }}</span>
+              <span class="numeric font-semibold text-ink">{{ formatNumber(adminStats.data.value.error_count) }}</span>
             </span>
           </div>
           <div class="ml-auto">
             <UiButton v-if="filtersActive" variant="ghost" size="sm" @click="resetFilters">
               {{ t('common.reset') }}
             </UiButton>
+            <UiButton v-if="adminView" size="sm" class="ml-2" @click="applyAdminFilters">
+              {{ t('common.filter') }}
+            </UiButton>
           </div>
         </div>
       </div>
 
       <ConsoleUserDataState
-        :pending="pending"
-        :error="error"
-        :empty="!filtered.length"
+        :pending="adminView ? adminUsage.pending.value : pending"
+        :error="adminView ? adminUsage.error.value : error"
+        :empty="!rows.length"
         :rows="6"
         :empty-icon="Search"
-        :empty-title="filtersActive ? t('console.noMatchTitle') : t('console.usageEmptyTitle')"
-        :empty-description="filtersActive ? t('console.noMatchBody') : t('console.usageEmptyBody')"
+        :empty-title="adminView ? t('admin.usageEmptyTitle') : (filtersActive ? t('console.noMatchTitle') : t('console.usageEmptyTitle'))"
+        :empty-description="adminView ? t('admin.usageEmptyBody') : (filtersActive ? t('console.noMatchBody') : t('console.usageEmptyBody'))"
       >
         <UiTable dense>
           <thead>
             <tr>
               <th>{{ t('console.time') }}</th>
+              <th v-if="adminView">{{ t('admin.user') }}</th>
               <th>{{ t('console.keyUsed') }}</th>
               <th>{{ t('console.model') }}</th>
               <th class="num">{{ t('console.promptTokens') }} / {{ t('console.completionTokens') }}</th>
@@ -275,7 +441,7 @@ const clientTarget = ref<UsageRecord | null>(null)
           </thead>
           <tbody>
             <tr
-              v-for="record in filtered"
+              v-for="record in rows"
               :key="record.request_id"
               :class="isFailed(record) && 'bg-danger-soft/40'"
             >
@@ -285,6 +451,7 @@ const clientTarget = ref<UsageRecord | null>(null)
                   <ConsoleUserStatusBadge :status="record.status" />
                 </div>
               </td>
+              <td v-if="adminView" class="text-[13px] text-muted">{{ record.user_name || (record.user_id ? shortId(record.user_id) : '-') }}</td>
               <td>
                 <div class="flex max-w-56 flex-col gap-1">
                   <span class="inline-flex w-fit max-w-full items-center gap-1.5 overflow-hidden rounded-md border border-line bg-sunken px-2 py-0.5 text-[13px] text-ink">
@@ -328,12 +495,26 @@ const clientTarget = ref<UsageRecord | null>(null)
             </tr>
           </tbody>
         </UiTable>
+
+        <ConsoleOpsPagination
+          v-if="adminView"
+          :page="adminUsage.data.value.page"
+          :page-size="pageSize"
+          :total="adminUsage.data.value.total"
+          :page-size-options="pageSizeOptions"
+          @update:page="goToPage"
+          @update:page-size="pageSize = $event"
+        />
       </ConsoleUserDataState>
     </div>
 
     <UiDialog v-model:open="clientTarget" :title="t('console.requestDetail')">
       <div class="space-y-4 text-sm">
         <div class="space-y-1.5">
+          <div v-if="adminView">
+            <div class="mb-1 text-xs text-muted">{{ t('admin.user') }}</div>
+            <div class="break-all text-[13px] text-ink">{{ clientTarget?.user_name || (clientTarget?.user_id ? shortId(clientTarget.user_id) : '-') }}</div>
+          </div>
           <div>
             <div class="mb-1 text-xs text-muted">{{ t('console.requestId') }}</div>
             <div class="break-all font-mono text-[13px] text-ink">{{ clientTarget?.request_id || '-' }}</div>

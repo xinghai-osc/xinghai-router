@@ -114,6 +114,9 @@ export default {
   cacheReadTokens: '緩存讀取',
   requestDetail: '請求詳情',
   tokenBreakdown: 'Token 明細',
+  viewMode: '視圖切換',
+  viewMine: '個人視圖',
+  viewAdmin: '管理員視圖',
 
   // ---- 帳單流水 ----
   ledgerDescription: '最近 100 條錢包變動，含每筆扣費對應的請求。',
