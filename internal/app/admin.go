@@ -685,27 +685,6 @@ func (s *Service) updateUser(w http.ResponseWriter, r *http.Request) {
 		}
 		changed["enabled"] = *in.Enabled
 	}
-	if in.LeaderboardOptIn != nil {
-		if _, err = tx.Exec(r.Context(), `update users set leaderboard_opt_in=$1 where id=$2`, *in.LeaderboardOptIn, userID); err != nil {
-			writeError(w, 500, "internal_error", "could not update leaderboard opt-in")
-			return
-		}
-		changed["leaderboard_opt_in"] = *in.LeaderboardOptIn
-	}
-	if in.LeaderboardMaskName != nil {
-		if _, err = tx.Exec(r.Context(), `update users set leaderboard_mask_name=$1 where id=$2`, *in.LeaderboardMaskName, userID); err != nil {
-			writeError(w, 500, "internal_error", "could not update leaderboard name masking")
-			return
-		}
-		changed["leaderboard_mask_name"] = *in.LeaderboardMaskName
-	}
-	if in.DataUsageEnabled != nil {
-		if _, err = tx.Exec(r.Context(), `update users set data_usage_enabled=$1 where id=$2`, *in.DataUsageEnabled, userID); err != nil {
-			writeError(w, 500, "internal_error", "could not update data usage setting")
-			return
-		}
-		changed["data_usage_enabled"] = *in.DataUsageEnabled
-	}
 	var oldBalance float64
 	if in.Balance != nil {
 		if _, err = tx.Exec(r.Context(), `insert into user_wallets(user_id) values($1) on conflict(user_id) do nothing`, userID); err != nil {
