@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,58 @@ import (
 	"testing"
 	"time"
 )
+
+func TestClientUpstreamErrorHidesKeywordErrors(t *testing.T) {
+	s := &Service{}
+	ctx := context.Background()
+	reliability := defaultReliabilitySettings()
+	for _, body := range []string{
+		`{"error":{"message":"Your credit balance is too low, please recharge at https://auth.openai.com"}}`,
+		`Your credit balance is too low, please recharge`,
+		`error: 订阅额度不足或未配置订阅`,
+	} {
+		out := s.clientUpstreamError(ctx, body, reliability)
+		if strings.Contains(out, "credit balance") || strings.Contains(out, "auth.openai.com") || strings.Contains(out, "订阅") {
+			t.Fatalf("keyword error still leaked as %q", out)
+		}
+		if !strings.Contains(out, noChannelAvailableDetail) {
+			t.Fatalf("keyword error missing generic notice: %q", out)
+		}
+	}
+	var parsed struct {
+		Error struct {
+			Message string `json:"message"`
+			Type    string `json:"type"`
+		} `json:"error"`
+	}
+	out := s.clientUpstreamError(ctx, `{"error":{"message":"Your credit balance is too low","type":"insufficient_quota"}}`, reliability)
+	if err := json.Unmarshal([]byte(out), &parsed); err != nil {
+		t.Fatalf("replacement is not JSON: %v (%s)", err, out)
+	}
+	if parsed.Error.Message != noChannelAvailableDetail || parsed.Error.Type != "insufficient_quota" {
+		t.Fatalf("replacement = %#v", parsed.Error)
+	}
+	// A normal error body must pass through untouched when no public URL is
+	// configured (nil DB) and no keyword applies.
+	normal := `{"error":{"message":"model not found","type":"invalid_request_error"}}`
+	if got := s.clientUpstreamError(ctx, normal, reliability); got != normal {
+		t.Fatalf("normal error altered: %q", got)
+	}
+}
+
+func TestRewriteUpstreamURLs(t *testing.T) {
+	detail := `{"error":{"message":"see https://docs.anthropic.com/support for help at http://help.deepseek.com"}}`
+	out := rewriteUpstreamURLs(detail, "https://xinghai.example.com")
+	if strings.Contains(out, "anthropic.com") || strings.Contains(out, "deepseek.com") || strings.Contains(out, "http://help") {
+		t.Fatalf("upstream URLs leaked: %q", out)
+	}
+	if strings.Count(out, "https://xinghai.example.com") != 2 {
+		t.Fatalf("expected both URLs replaced, got %q", out)
+	}
+	if got := rewriteUpstreamURLs(detail, ""); got != detail {
+		t.Fatal("empty public base must leave the text untouched")
+	}
+}
 
 func TestErrorCode(t *testing.T) {
 	if got := errorCode(200); got != "" {

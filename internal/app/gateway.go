@@ -543,7 +543,7 @@ tryChannels:
 			}
 			s.logRequest(ctx, key, ch.id, ch.keyID, model, status, st.prompt, st.completion, total, time.Since(started), code, detail)
 			if !capture.wrote && !capture.headerSent {
-				writeError(w, status, "upstream_error", detail)
+				writeError(w, status, "upstream_error", s.clientUpstreamError(ctx, detail, reliability))
 			}
 			s.channelFailed(ctx, ch.id, ch.keyID, code)
 		} else {
@@ -621,11 +621,14 @@ tryChannels:
 	} else if resp.StatusCode >= 400 {
 		// Mirror the streaming path: real-request failures are counted and can
 		// auto-disable the channel, so a persistently broken upstream is retired.
+		// The body the client receives runs through the keyword/URL rewrites;
+		// the request log keeps the original upstream text.
 		failureReason := "upstream_status_" + strconv.Itoa(resp.StatusCode)
 		if reliability.autoDisableStatus(resp.StatusCode) || reliability.autoDisableKeyword(detail) {
 			s.autoDisableChannel(ctx, ch.id, ch.keyID, failureReason)
 		}
 		s.channelFailed(ctx, ch.id, ch.keyID, failureReason)
+		responseBody = []byte(s.clientUpstreamError(ctx, detail, reliability))
 	}
 	w.Header().Set("Content-Type", contentType(resp.Header.Get("Content-Type")))
 	w.WriteHeader(resp.StatusCode)
@@ -1253,6 +1256,53 @@ func (s *Service) logRequest(ctx context.Context, key keyContext, channelID int6
 }
 
 var upstreamURLPattern = regexp.MustCompile(`https?://[^\s"'\])\}]+`)
+
+// noChannelAvailableDetail is the generic message relayed to clients when an
+// upstream error matches an auto-disable keyword, so the upstream's specific
+// account, quota, or token text is never shown verbatim.
+const noChannelAvailableDetail = "no channel is currently available"
+
+// clientUpstreamError rewrites an upstream error before it is relayed to the
+// client. Errors matching an auto-disable keyword have their message replaced by
+// the generic no-channel notice (the OpenAI-style JSON error shape is preserved
+// when present, so clients that parse error.message keep working); URLs in any
+// other error are swapped for the site's public origin so upstream endpoints are
+// never exposed. The request log still records the caller's original detail.
+func (s *Service) clientUpstreamError(ctx context.Context, detail string, reliability reliabilitySettings) string {
+	if reliability.autoDisableKeyword(detail) {
+		return rewriteErrorMessage(detail, noChannelAvailableDetail)
+	}
+	if upstreamURLPattern.MatchString(detail) {
+		if base := s.loadPublicBaseURL(ctx); base != "" {
+			detail = rewriteUpstreamURLs(detail, base)
+		}
+	}
+	return detail
+}
+
+// rewriteErrorMessage replaces the "message" field of an OpenAI-style JSON error
+// body; non-JSON bodies are replaced wholesale with the message itself.
+func rewriteErrorMessage(body, message string) string {
+	var payload map[string]any
+	if json.Unmarshal([]byte(body), &payload) == nil {
+		if errObj, ok := payload["error"].(map[string]any); ok {
+			errObj["message"] = message
+			if out, err := json.Marshal(payload); err == nil {
+				return string(out)
+			}
+		}
+	}
+	return message
+}
+
+// rewriteUpstreamURLs swaps every URL in an upstream error text for the site's
+// public origin. An empty publicBase leaves the text untouched.
+func rewriteUpstreamURLs(detail, publicBase string) string {
+	if publicBase == "" {
+		return detail
+	}
+	return upstreamURLPattern.ReplaceAllString(detail, publicBase)
+}
 
 // sanitizeErrorDetail strips URLs (which would leak upstream endpoints) and bounds the
 // length before an upstream error message is stored on the request log.

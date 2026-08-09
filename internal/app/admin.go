@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"math"
@@ -13,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func (s *Service) fetchChannelModels(w http.ResponseWriter, r *http.Request) {
@@ -489,7 +492,7 @@ func (s *Service) listUsers(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "internal_error", "query failed")
 		return
 	}
-	rows, err := s.db.Query(r.Context(), `select u.id,u.email,u.name,u.role,u.enabled,u.created_at,coalesce(w.balance,0),coalesce(w.reserved,0),coalesce(array_agg(p.permission) filter (where p.permission is not null), '{}'),coalesce((select array_agg(ug.group_id order by ug.group_id) from user_groups ug where ug.user_id=u.id), '{}') from users u left join user_permissions p on p.user_id=u.id left join user_wallets w on w.user_id=u.id group by u.id,w.balance,w.reserved order by u.created_at desc limit $1 offset $2`, pageSize, offset)
+	rows, err := s.db.Query(r.Context(), `select u.id,u.email,u.name,u.role,u.enabled,u.created_at,coalesce(w.balance,0),coalesce(w.reserved,0),coalesce(array_agg(p.permission) filter (where p.permission is not null), '{}'),coalesce((select array_agg(ug.group_id order by ug.group_id) from user_groups ug where ug.user_id=u.id), '{}'),u.leaderboard_opt_in,u.leaderboard_mask_name,u.data_usage_enabled from users u left join user_permissions p on p.user_id=u.id left join user_wallets w on w.user_id=u.id group by u.id,w.balance,w.reserved order by u.created_at desc limit $1 offset $2`, pageSize, offset)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
@@ -503,8 +506,9 @@ func (s *Service) listUsers(w http.ResponseWriter, r *http.Request) {
 		var balance, reserved any
 		var permissions []string
 		var groups []string
-		rows.Scan(&id, &email, &name, &role, &enabled, &created, &balance, &reserved, &permissions, &groups)
-		out = append(out, map[string]any{"id": id, "email": email, "name": name, "role": role, "enabled": enabled, "balance": balance, "reserved": reserved, "permissions": permissions, "groups": groups, "created_at": created})
+		var leaderboardOptIn, leaderboardMaskName, dataUsageEnabled bool
+		rows.Scan(&id, &email, &name, &role, &enabled, &created, &balance, &reserved, &permissions, &groups, &leaderboardOptIn, &leaderboardMaskName, &dataUsageEnabled)
+		out = append(out, map[string]any{"id": id, "email": email, "name": name, "role": role, "enabled": enabled, "balance": balance, "reserved": reserved, "permissions": permissions, "groups": groups, "created_at": created, "leaderboard_opt_in": leaderboardOptIn, "leaderboard_mask_name": leaderboardMaskName, "data_usage_enabled": dataUsageEnabled})
 	}
 	writePaged(w, out, total, page, pageSize)
 }
@@ -521,12 +525,15 @@ func (s *Service) updateUser(w http.ResponseWriter, r *http.Request) {
 		Groups      *[]string `json:"groups"`
 		Balance     *float64  `json:"balance"`
 		Note        *string   `json:"note"`
+		LeaderboardOptIn    *bool `json:"leaderboard_opt_in"`
+		LeaderboardMaskName *bool `json:"leaderboard_mask_name"`
+		DataUsageEnabled    *bool `json:"data_usage_enabled"`
 	}
 	if decode(r, &in) != nil {
 		writeError(w, 400, "invalid_request", "invalid user update")
 		return
 	}
-	if in.ID == nil && in.Email == nil && in.Name == nil && in.Password == nil && in.Role == nil && in.Enabled == nil && in.Permissions == nil && in.Groups == nil && in.Balance == nil {
+	if in.ID == nil && in.Email == nil && in.Name == nil && in.Password == nil && in.Role == nil && in.Enabled == nil && in.Permissions == nil && in.Groups == nil && in.Balance == nil && in.LeaderboardOptIn == nil && in.LeaderboardMaskName == nil && in.DataUsageEnabled == nil {
 		writeError(w, 400, "invalid_request", "at least one user field is required")
 		return
 	}
@@ -677,6 +684,27 @@ func (s *Service) updateUser(w http.ResponseWriter, r *http.Request) {
 			changed["api_keys_revoked"] = true
 		}
 		changed["enabled"] = *in.Enabled
+	}
+	if in.LeaderboardOptIn != nil {
+		if _, err = tx.Exec(r.Context(), `update users set leaderboard_opt_in=$1 where id=$2`, *in.LeaderboardOptIn, userID); err != nil {
+			writeError(w, 500, "internal_error", "could not update leaderboard opt-in")
+			return
+		}
+		changed["leaderboard_opt_in"] = *in.LeaderboardOptIn
+	}
+	if in.LeaderboardMaskName != nil {
+		if _, err = tx.Exec(r.Context(), `update users set leaderboard_mask_name=$1 where id=$2`, *in.LeaderboardMaskName, userID); err != nil {
+			writeError(w, 500, "internal_error", "could not update leaderboard name masking")
+			return
+		}
+		changed["leaderboard_mask_name"] = *in.LeaderboardMaskName
+	}
+	if in.DataUsageEnabled != nil {
+		if _, err = tx.Exec(r.Context(), `update users set data_usage_enabled=$1 where id=$2`, *in.DataUsageEnabled, userID); err != nil {
+			writeError(w, 500, "internal_error", "could not update data usage setting")
+			return
+		}
+		changed["data_usage_enabled"] = *in.DataUsageEnabled
 	}
 	var oldBalance float64
 	if in.Balance != nil {
@@ -1745,7 +1773,6 @@ func (s *Service) createChannel(w http.ResponseWriter, r *http.Request) {
 	}
 	models, _ := json.Marshal(in.Models)
 	overrides, _ := json.Marshal(normalizedOverrides(in.Overrides))
-	id, _ := randomID()
 	tx, err := s.db.Begin(r.Context())
 	if err != nil {
 		writeError(w, 500, "internal_error", "could not create channel")
@@ -1756,9 +1783,15 @@ func (s *Service) createChannel(w http.ResponseWriter, r *http.Request) {
 	if in.AutoDisable != nil {
 		autoDisable = *in.AutoDisable
 	}
-	_, err = tx.Exec(r.Context(), `insert into channels(id,name,base_url,api_key,models,test_model,priority,provider,key_type,auto_disable,request_overrides) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, id, in.Name, strings.TrimRight(in.BaseURL, "/"), keys[0], models, in.TestModel, in.Priority, in.Provider, in.KeyType, autoDisable, overrides)
+	var id string
+	err = tx.QueryRow(r.Context(), `insert into channels(name,base_url,api_key,models,test_model,priority,provider,key_type,auto_disable,request_overrides) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning id`, in.Name, strings.TrimRight(in.BaseURL, "/"), keys[0], models, in.TestModel, in.Priority, in.Provider, in.KeyType, autoDisable, overrides).Scan(&id)
 	if err != nil {
-		writeError(w, 409, "conflict", "channel name already exists")
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			writeError(w, 409, "conflict", "channel name already exists")
+			return
+		}
+		writeError(w, 500, "internal_error", "could not create channel")
 		return
 	}
 	for i, rawKey := range keys {
@@ -1928,7 +1961,12 @@ func (s *Service) updateChannel(w http.ResponseWriter, r *http.Request) {
 	args = append(args, channelID)
 	result, err := s.db.Exec(r.Context(), query, args...)
 	if err != nil {
-		writeError(w, 409, "conflict", "channel name already exists")
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			writeError(w, 409, "conflict", "channel name already exists")
+			return
+		}
+		writeError(w, 500, "internal_error", "could not update channel")
 		return
 	}
 	if result.RowsAffected() != 1 {
@@ -2890,6 +2928,9 @@ func (s *Service) listLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer rows.Close()
+	// Log views apply the same keyword rewrite as the gateway so an upstream's
+	// specific account/quota error text never shows up here either.
+	reliability := s.reliabilitySettings(r.Context())
 	data := []map[string]any{}
 	for rows.Next() {
 		var requestID, userID, userName, apiKeyID, keyName, channelID, channelName, channelKeyID, channelKeyName, groupID, groupName, model, errorCode, errorDetail, clientIP, userAgent string
@@ -2899,6 +2940,7 @@ func (s *Service) listLogs(w http.ResponseWriter, r *http.Request) {
 		if err := rows.Scan(&requestID, &userID, &userName, &apiKeyID, &keyName, &channelID, &channelName, &channelKeyID, &channelKeyName, &groupID, &groupName, &model, &status, &prompt, &completion, &total, &duration, &errorCode, &errorDetail, &clientIP, &userAgent, &created); err != nil {
 			continue
 		}
+		errorDetail = s.clientUpstreamError(r.Context(), errorDetail, reliability)
 		data = append(data, map[string]any{"request_id": requestID, "user_id": userID, "user_name": userName, "api_key_id": apiKeyID, "key_name": keyName, "channel_id": channelID, "channel_name": channelName, "channel_key_id": channelKeyID, "channel_key_name": channelKeyName, "group_id": groupID, "group_name": groupName, "model": model, "status_code": status, "prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": total, "duration_ms": duration, "error_code": errorCode, "error_detail": errorDetail, "client_ip": clientIP, "user_agent": userAgent, "created_at": created})
 	}
 	writeJSON(w, 200, map[string]any{"data": data})

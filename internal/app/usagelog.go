@@ -108,6 +108,10 @@ func (s *Service) listUsageLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
+	// Error details matching an auto-disable keyword are replaced with the same
+	// generic no-channel notice the gateway relays, so the log view never shows
+	// the upstream's specific account/quota text either.
+	reliability := s.reliabilitySettings(r.Context())
 	data := []map[string]any{}
 	for rows.Next() {
 		var requestID, userID, userName, apiKeyID, keyName, channelID, channelName, channelKeyID, channelKeyName, groupID, groupName, model, errorCode, errorDetail, clientIP, userAgent string
@@ -117,6 +121,7 @@ func (s *Service) listUsageLogs(w http.ResponseWriter, r *http.Request) {
 			log.Printf("scan usage log row: %v", err)
 			continue
 		}
+		errorDetail = s.clientUpstreamError(r.Context(), errorDetail, reliability)
 		data = append(data, map[string]any{
 			"request_id":           requestID,
 			"user_id":              userID,
