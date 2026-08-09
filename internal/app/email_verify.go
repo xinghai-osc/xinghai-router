@@ -110,6 +110,7 @@ func (s *Service) sendEmailCode(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Email string `json:"email"`
 		geetestPayload
+		corptchaPayload
 	}
 	if decode(r, &in) != nil || !validEmail(in.Email) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "a valid email is required")
@@ -123,7 +124,7 @@ func (s *Service) sendEmailCode(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := s.verifyGeetest(r.Context(), in.geetestPayload); err != nil {
+	if err := s.verifyCaptcha(r.Context(), in.geetestPayload, in.corptchaPayload, captchaPurposeEmailCode); err != nil {
 		writeError(w, http.StatusForbidden, "captcha_failed", err.Error())
 		return
 	}

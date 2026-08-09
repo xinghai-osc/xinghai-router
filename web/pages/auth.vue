@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { endpoints, getToken } from '~/src/api'
-import { GEETEST_CANCELLED, type GeetestResult } from '~/composables/useGeetest'
+import { GEETEST_CANCELLED } from '~/composables/useGeetest'
+import { CORPTCHA_CANCELLED, CORPTCHA_UNAVAILABLE } from '~/composables/useCorptcha'
 
 const RESEND_SECONDS = 60
 
@@ -10,7 +11,8 @@ const { t } = useI18n()
 const { settings } = useSiteSettings()
 const { signIn } = useAccount()
 const { toast } = useToast()
-const { challenge } = useGeetest()
+const { challenge: geetestChallenge } = useGeetest()
+const { challenge: corptchaChallenge } = useCorptcha()
 
 const mode = ref(route.query.mode === 'register' ? 'register' : route.query.mode === 'reset' ? 'reset' : 'signin')
 const form = reactive({ name: '', email: '', password: '', code: '' })
@@ -24,8 +26,13 @@ let cooldownTimer: ReturnType<typeof setInterval> | null = null
 const isRegister = computed(() => mode.value === 'register')
 const isReset = computed(() => mode.value === 'reset')
 const plan = computed(() => (typeof route.query.plan === 'string' ? route.query.plan : ''))
-const captchaId = computed(() => settings.value.geetest_captcha_id ?? '')
-const captchaEnabled = computed(() => Boolean(settings.value.geetest_enabled) && captchaId.value !== '')
+/** Effective captcha provider as resolved by the Go service. */
+const captchaProvider = computed(() => settings.value.captcha_provider ?? '')
+const geetestCaptchaId = computed(() => settings.value.geetest_captcha_id ?? '')
+const corptchaSiteKey = computed(() => settings.value.corptcha_site_id ?? '')
+const captchaEnabled = computed(() =>
+  captchaProvider.value === 'geetest' ? geetestCaptchaId.value !== '' : captchaProvider.value === 'corptcha' ? corptchaSiteKey.value !== '' : false,
+)
 const emailCodeEnabled = computed(() => Boolean(settings.value.email_verification_enabled))
 
 // Registration always verifies the captcha at submit (like sign-in and reset);
@@ -83,13 +90,22 @@ function validate(): string {
   return ''
 }
 
-/** Resolves to null when the challenge was dismissed or could not be shown. */
-async function runCaptcha(): Promise<GeetestResult | null> {
+/**
+ * Runs the active provider's challenge and resolves with the payload the Go
+ * handlers expect: captcha_token/captcha_purpose for Corptcha, the Geetest
+ * fields otherwise. Resolves to null when the challenge was dismissed or
+ * could not be shown.
+ */
+async function runCaptcha(purpose: string): Promise<Record<string, string> | null> {
   try {
-    return await challenge(captchaId.value)
+    if (captchaProvider.value === 'corptcha') {
+      return await corptchaChallenge(corptchaSiteKey.value, purpose)
+    }
+    return await geetestChallenge(geetestCaptchaId.value)
   } catch (cause) {
     const reason = cause instanceof Error ? cause.message : ''
-    formError.value = reason === GEETEST_CANCELLED ? t('auth.captchaRequired') : t('auth.captchaUnavailable')
+    const cancelled = reason === GEETEST_CANCELLED || reason === CORPTCHA_CANCELLED
+    formError.value = cancelled || reason === CORPTCHA_UNAVAILABLE ? t('auth.captchaRequired') : t('auth.captchaUnavailable')
     return null
   }
 }
@@ -104,9 +120,9 @@ async function sendCode() {
   const email = form.email.trim()
   sending.value = true
   try {
-    let captcha: GeetestResult | null = null
+    let captcha: Record<string, string> | null = null
     if (captchaEnabled.value) {
-      captcha = await runCaptcha()
+      captcha = await runCaptcha('email_code')
       if (!captcha) return
     }
     await endpoints.sendEmailCode(email, captcha ?? undefined)
@@ -129,9 +145,9 @@ async function submitReset() {
   }
   busy.value = true
   try {
-    let captcha: GeetestResult | null = null
+    let captcha: Record<string, string> | null = null
     if (captchaEnabled.value) {
-      captcha = await runCaptcha()
+      captcha = await runCaptcha('reset')
       if (!captcha) return
     }
     await endpoints.requestPasswordReset(email, captcha ?? undefined)
@@ -153,9 +169,9 @@ async function submit() {
   }
   busy.value = true
   try {
-    let captcha: GeetestResult | null = null
+    let captcha: Record<string, string> | null = null
     if (captchaOnSubmit.value) {
-      captcha = await runCaptcha()
+      captcha = await runCaptcha(isRegister.value ? 'register' : 'login')
       if (!captcha) return
     }
     const email = form.email.trim()

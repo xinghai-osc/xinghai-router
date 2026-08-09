@@ -2242,6 +2242,21 @@ func (s *Service) updateChannelKey(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *Service) revealChannelKey(w http.ResponseWriter, r *http.Request) {
+	var encrypted string
+	if err := s.db.QueryRow(r.Context(), `select key_encrypted from channel_api_keys where id=$1 and channel_id=$2`, r.PathValue("keyId"), r.PathValue("id")).Scan(&encrypted); err != nil {
+		writeError(w, 404, "not_found", "channel API key not found")
+		return
+	}
+	key, err := channelKeyValue(s.cfg.EncryptionKey, encrypted)
+	if err != nil {
+		writeError(w, 500, "internal_error", "could not read channel API key")
+		return
+	}
+	s.audit(r, "channel_key.revealed", "channel_api_key", r.PathValue("keyId"), map[string]any{"channel_id": r.PathValue("id")})
+	writeJSON(w, 200, map[string]any{"key": key})
+}
+
 func (s *Service) testChannelKey(w http.ResponseWriter, r *http.Request) {
 	channelID := r.PathValue("id")
 	keyID := r.PathValue("keyId")

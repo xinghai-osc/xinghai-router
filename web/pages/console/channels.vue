@@ -228,6 +228,29 @@ const keyForm = reactive({
   priority: '100',
 })
 
+const keyRevealOpen = ref(false)
+const revealingKey = ref<ChannelKey | null>(null)
+const revealedSecret = ref('')
+const revealError = ref('')
+
+function openRevealKey(key: ChannelKey) {
+  revealingKey.value = key
+  revealedSecret.value = ''
+  revealError.value = ''
+  keyRevealOpen.value = true
+  loadRevealedSecret()
+}
+
+async function loadRevealedSecret() {
+  const target = revealingKey.value
+  if (!target) return
+  revealError.value = ''
+  const ok = await run(async () => {
+    revealedSecret.value = (await endpoints.revealChannelKey(keysChannelId.value, target.id)).key
+  })
+  if (!ok) revealError.value = t('console.keyRevealFailed')
+}
+
 function openCreateKey() {
   editingKeyId.value = ''
   keyFormError.value = ''
@@ -418,6 +441,8 @@ function validateBaseUrl(value: string): string {
 }
 
 async function fetchModels() {
+  if (keyDraft.value.trim()) addKey()
+  if (keyInputError.value) { formError.value = keyInputError.value; return }
   const baseUrl = form.base_url.trim()
   const apiKey = parseApiKeys(form.api_keys)[0] || ''
   formError.value = ''
@@ -439,6 +464,8 @@ async function fetchModels() {
 
 async function save() {
   formError.value = ''
+  if (keyDraft.value.trim()) addKey()
+  if (keyInputError.value) { formError.value = keyInputError.value; return }
   const name = form.name.trim()
   if (!name) { formError.value = t('admin.nameRequired'); return }
 
@@ -1094,6 +1121,9 @@ function quotaUsageForWindow(window: string) {
               :disabled="busy"
               @update:model-value="toggleKey(key)"
             />
+            <UiButton v-if="canManage" variant="ghost" size="sm" :disabled="busy" :title="t('console.revealKey')" @click="openRevealKey(key)">
+              <Eye class="h-4 w-4" />
+            </UiButton>
             <UiButton variant="ghost" size="sm" :disabled="busy" @click="openEditKey(key)">
               {{ t('common.edit') }}
             </UiButton>
@@ -1143,6 +1173,34 @@ function quotaUsageForWindow(window: string) {
         <UiButton :loading="busy" @click="saveKey">{{ t('common.save') }}</UiButton>
       </template>
     </UiSlidePanel>
+
+    <UiDialog v-model:open="keyRevealOpen" size="sm" :title="t('console.revealKeyTitle')">
+      <div class="space-y-3">
+        <UiAlert tone="warn">{{ t('console.revealKeyWarning') }}</UiAlert>
+
+        <UiField :label="t('console.keySecret')">
+          <div class="flex items-center gap-2">
+            <code class="min-w-0 flex-1 truncate rounded-control bg-sunken px-3 py-2 font-mono text-[13px] text-ink">
+              {{ revealedSecret || '••••••••' }}
+            </code>
+            <ConsoleUserCopyButton
+              v-if="revealedSecret"
+              :value="revealedSecret"
+              :success-message="t('console.keySecretCopied')"
+            />
+          </div>
+        </UiField>
+
+        <p v-if="revealError" class="text-[13px] text-danger">{{ revealError }}</p>
+      </div>
+
+      <template #footer>
+        <UiButton variant="secondary" @click="keyRevealOpen = false">{{ t('common.close') }}</UiButton>
+        <UiButton v-if="revealError" :loading="busy" @click="loadRevealedSecret">
+          {{ t('common.retry') }}
+        </UiButton>
+      </template>
+    </UiDialog>
 
     <UiSlidePanel
       v-model:open="routesDialogOpen"

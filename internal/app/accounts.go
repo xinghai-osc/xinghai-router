@@ -28,6 +28,7 @@ func (s *Service) register(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 		Code     string `json:"code"`
 		geetestPayload
+		corptchaPayload
 	}
 	if decode(r, &in) != nil || !validAccountInput(in.Email, in.Name, in.Password) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "a valid email, name, and password of at least 8 characters are required")
@@ -51,7 +52,7 @@ func (s *Service) register(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := s.verifyGeetest(r.Context(), in.geetestPayload); err != nil {
+	if err := s.verifyCaptcha(r.Context(), in.geetestPayload, in.corptchaPayload, captchaPurposeRegister); err != nil {
 		writeError(w, http.StatusForbidden, "captcha_failed", err.Error())
 		return
 	}
@@ -102,6 +103,7 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 		Email    string `json:"email"`
 		Password string `json:"password"`
 		geetestPayload
+		corptchaPayload
 	}
 	if decode(r, &in) != nil || strings.TrimSpace(in.Email) == "" || in.Password == "" {
 		writeError(w, http.StatusBadRequest, "invalid_request", "email or username and password are required")
@@ -125,7 +127,7 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := s.verifyGeetest(r.Context(), in.geetestPayload); err != nil {
+	if err := s.verifyCaptcha(r.Context(), in.geetestPayload, in.corptchaPayload, captchaPurposeLogin); err != nil {
 		writeError(w, http.StatusForbidden, "captcha_failed", err.Error())
 		return
 	}

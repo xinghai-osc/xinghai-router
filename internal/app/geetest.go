@@ -31,8 +31,7 @@ func (p geetestPayload) complete() bool {
 
 // verifyGeetest validates a Geetest v4 challenge result with the Geetest
 // server. See https://docs.geetest.com/gt4/apirefer/api/server.
-func (s *Service) verifyGeetest(ctx context.Context, payload geetestPayload) error {
-	sys := s.loadSystemConfig(ctx)
+func (s *Service) verifyGeetest(ctx context.Context, sys systemConfig, payload geetestPayload) error {
 	if !sys.geetestEnabled() {
 		return nil
 	}

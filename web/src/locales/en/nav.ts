@@ -11,6 +11,7 @@ export default {
   wallet: 'Top up',
   ledger: 'Transactions',
   subscriptions: 'Subscriptions',
+  invoices: 'Invoices',
   account: 'Settings',
 
   users: 'Users',
@@ -28,6 +29,7 @@ export default {
   reliability: 'Reliability',
   conversationCacheSettings: 'Conversation cache',
   paymentSettings: 'Payments',
+  invoiceSettings: 'Invoicing',
   oauthSettings: 'OAuth',
   siteSettings: 'Site',
   migrate: 'Migration',

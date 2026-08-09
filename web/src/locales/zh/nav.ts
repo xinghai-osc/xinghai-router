@@ -11,6 +11,7 @@ export default {
   wallet: '钱包充值',
   ledger: '账单流水',
   subscriptions: '我的订阅',
+  invoices: '发票管理',
   account: '账户设置',
 
   users: '用户',
@@ -28,6 +29,7 @@ export default {
   reliability: '可靠性',
   conversationCacheSettings: '对话缓存设置',
   paymentSettings: '支付设置',
+  invoiceSettings: '发票设置',
   oauthSettings: '第三方登录',
   siteSettings: '站点设置',
   migrate: '数据迁移',

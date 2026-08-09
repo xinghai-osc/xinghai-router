@@ -15,8 +15,11 @@ const EMPTY: AdminSiteSettings = {
   name: '',
   icon_url: '',
   auto_disable_failed_channels: false,
+  captcha_provider: '',
   geetest_captcha_id: '',
   has_geetest_captcha_key: false,
+  corptcha_site_id: '',
+  has_corptcha_secret: false,
   smtp_host: '',
   smtp_port: '',
   smtp_username: '',
@@ -34,7 +37,9 @@ const form = reactive({
   name: '',
   icon_url: '',
   auto_disable_failed_channels: false,
+  captcha_provider: '',
   geetest_captcha_id: '',
+  corptcha_site_id: '',
   smtp_host: '',
   smtp_port: '',
   smtp_username: '',
@@ -44,21 +49,31 @@ const form = reactive({
 
 /** Write-only: never seeded from the API, cleared again after every save. */
 const geetestKey = ref('')
+const corptchaSecret = ref('')
 const smtpPassword = ref('')
 
 const iconBroken = ref(false)
+
+const captchaProviderOptions = [
+  { value: '', label: t('system.captchaProviderAuto') },
+  { value: 'geetest', label: t('system.captchaProviderGeetest') },
+  { value: 'corptcha', label: t('system.captchaProviderCorptcha') },
+]
 
 watch(data, (next) => {
   form.name = next.name
   form.icon_url = next.icon_url
   form.auto_disable_failed_channels = next.auto_disable_failed_channels
+  form.captcha_provider = next.captcha_provider
   form.geetest_captcha_id = next.geetest_captcha_id
+  form.corptcha_site_id = next.corptcha_site_id
   form.smtp_host = next.smtp_host
   form.smtp_port = next.smtp_port
   form.smtp_username = next.smtp_username
   form.smtp_from = next.smtp_from
   form.public_base_url = next.public_base_url
   geetestKey.value = ''
+  corptchaSecret.value = ''
   smtpPassword.value = ''
 }, { immediate: true })
 
@@ -66,7 +81,7 @@ watch(() => form.icon_url, () => { iconBroken.value = false })
 
 const iconPreviewUrl = computed(() => form.icon_url.trim())
 
-type SiteSettingsPayload = AdminSiteSettings & { geetest_captcha_key: string; smtp_password: string }
+type SiteSettingsPayload = AdminSiteSettings & { geetest_captcha_key: string; corptcha_secret: string; smtp_password: string }
 
 async function save() {
   // The handler rejects unknown fields, so the read-only `has_*` flags that the
@@ -75,8 +90,11 @@ async function save() {
     name: form.name.trim(),
     icon_url: form.icon_url.trim(),
     auto_disable_failed_channels: form.auto_disable_failed_channels,
+    captcha_provider: form.captcha_provider,
     geetest_captcha_id: form.geetest_captcha_id.trim(),
     geetest_captcha_key: geetestKey.value,
+    corptcha_site_id: form.corptcha_site_id.trim(),
+    corptcha_secret: corptchaSecret.value,
     smtp_host: form.smtp_host.trim(),
     smtp_port: form.smtp_port.trim(),
     smtp_username: form.smtp_username.trim(),
@@ -91,6 +109,7 @@ async function save() {
     return
   }
   geetestKey.value = ''
+  corptchaSecret.value = ''
   smtpPassword.value = ''
   toast.success(t('system.siteSettingsSaved'))
   await refresh()
@@ -169,17 +188,34 @@ async function save() {
         </UiCard>
 
         <UiCard :title="t('system.captcha')">
-          <div class="grid gap-4 sm:grid-cols-2">
-            <UiField :label="t('system.geetestId')" :hint="t('system.geetestIdHint')" for="geetest-id">
-              <UiInput id="geetest-id" v-model="form.geetest_captcha_id" mono />
+          <div class="space-y-4">
+            <UiField :label="t('system.captchaProvider')" :hint="t('system.captchaProviderHint')" for="captcha-provider">
+              <UiSelect id="captcha-provider" v-model="form.captcha_provider" :options="captchaProviderOptions" />
             </UiField>
 
-            <ConsoleSystemSecretField
-              id="geetest-key"
-              v-model="geetestKey"
-              :label="t('system.geetestKey')"
-              :configured="data.has_geetest_captcha_key"
-            />
+            <div class="grid gap-4 sm:grid-cols-2">
+              <UiField :label="t('system.geetestId')" :hint="t('system.geetestIdHint')" for="geetest-id">
+                <UiInput id="geetest-id" v-model="form.geetest_captcha_id" mono />
+              </UiField>
+
+              <ConsoleSystemSecretField
+                id="geetest-key"
+                v-model="geetestKey"
+                :label="t('system.geetestKey')"
+                :configured="data.has_geetest_captcha_key"
+              />
+
+              <UiField :label="t('system.corptchaSiteId')" :hint="t('system.corptchaSiteIdHint')" for="corptcha-site-id">
+                <UiInput id="corptcha-site-id" v-model="form.corptcha_site_id" mono />
+              </UiField>
+
+              <ConsoleSystemSecretField
+                id="corptcha-secret"
+                v-model="corptchaSecret"
+                :label="t('system.corptchaSecret')"
+                :configured="data.has_corptcha_secret"
+              />
+            </div>
           </div>
         </UiCard>
 

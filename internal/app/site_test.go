@@ -7,6 +7,38 @@ import (
 	"testing"
 )
 
+func TestSystemConfigCaptchaProvider(t *testing.T) {
+	geetest := systemConfig{GeetestCaptchaID: "gid", GeetestCaptchaKey: "gkey"}
+	corptcha := systemConfig{CorptchaSiteID: "cpt_abc", CorptchaSecret: "secret"}
+
+	if got := (systemConfig{}).captchaProvider(); got != "" {
+		t.Fatalf("empty config provider = %q, want empty", got)
+	}
+	if got := geetest.captchaProvider(); got != "geetest" {
+		t.Fatalf("geetest-only auto provider = %q, want geetest", got)
+	}
+	if got := corptcha.captchaProvider(); got != "corptcha" {
+		t.Fatalf("corptcha-only auto provider = %q, want corptcha", got)
+	}
+	if got := (systemConfig{GeetestCaptchaID: "k", GeetestCaptchaKey: "gkey", CorptchaSiteID: "cpt_abc", CorptchaSecret: "secret"}).captchaProvider(); got != "geetest" {
+		t.Fatalf("both-configured auto provider = %q, want geetest", got)
+	}
+
+	both := systemConfig{CaptchaProvider: "corptcha", GeetestCaptchaID: "k", GeetestCaptchaKey: "gkey", CorptchaSiteID: "cpt_abc", CorptchaSecret: "secret"}
+	if got := both.captchaProvider(); got != "corptcha" {
+		t.Fatalf("explicit corptcha provider = %q, want corptcha", got)
+	}
+	// Missing credentials degrade to the other configured provider.
+	explicit := systemConfig{CaptchaProvider: "corptcha"}
+	if got := explicit.captchaProvider(); got != "" {
+		t.Fatalf("explicit provider without credentials = %q, want empty", got)
+	}
+	degraded := systemConfig{CaptchaProvider: "geetest", CorptchaSiteID: "cpt_abc", CorptchaSecret: "secret"}
+	if got := degraded.captchaProvider(); got != "corptcha" {
+		t.Fatalf("degraded provider = %q, want corptcha", got)
+	}
+}
+
 func TestValidIconURL(t *testing.T) {
 	for _, value := range []string{"https://cdn.example.com/icon.png", "http://127.0.0.1:3000/i.png", "http://localhost/icon.png"} {
 		if !validIconURL(value) {
@@ -32,6 +64,9 @@ func TestUpdateSiteSettingsRejectsInvalidBeforeDatabase(t *testing.T) {
 		`{"name":"Site","smtp_host":"` + strings.Repeat("h", 256) + `"}`,
 		`{"name":"Site","geetest_captcha_id":"` + strings.Repeat("g", 257) + `"}`,
 		`{"name":"Site","geetest_captcha_key":"` + strings.Repeat("k", 257) + `"}`,
+		`{"name":"Site","captcha_provider":"weird"}`,
+		`{"name":"Site","corptcha_site_id":"` + strings.Repeat("c", 257) + `"}`,
+		`{"name":"Site","corptcha_secret":"` + strings.Repeat("s", 257) + `"}`,
 		`{"name":"Site","smtp_password":"` + strings.Repeat("p", 4097) + `"}`,
 		`not-json`,
 	}

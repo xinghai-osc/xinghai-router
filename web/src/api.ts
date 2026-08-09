@@ -56,8 +56,8 @@ export interface VendorRanking { rank: number; vendor: string; total_tokens: num
 export interface RankingMover { model_name: string; vendor: string; rank_delta: number; current_rank: number; growth_pct: number }
 export interface UserRanking { rank: number; name: string; total_tokens: number; total_cost: number; share: number; growth_pct: number; requests: number; top_model: string }
 export interface Rankings { period: string; models: ModelRanking[]; vendors: VendorRanking[]; top_movers: RankingMover[]; top_droppers: RankingMover[]; users: UserRanking[]; total_tokens: number; updated_at: string }
-export interface SiteSettings { name: string; icon_url: string; auto_disable_failed_channels: boolean; geetest_enabled?: boolean; geetest_captcha_id?: string; email_verification_enabled?: boolean; oauth_providers?: string[] }
-export interface AdminSiteSettings { name: string; icon_url: string; auto_disable_failed_channels: boolean; geetest_captcha_id: string; has_geetest_captcha_key: boolean; smtp_host: string; smtp_port: string; smtp_username: string; has_smtp_password: boolean; smtp_from: string; public_base_url: string }
+export interface SiteSettings { name: string; icon_url: string; auto_disable_failed_channels: boolean; captcha_provider?: string; geetest_enabled?: boolean; geetest_captcha_id?: string; corptcha_site_id?: string; email_verification_enabled?: boolean; oauth_providers?: string[] }
+export interface AdminSiteSettings { name: string; icon_url: string; auto_disable_failed_channels: boolean; captcha_provider: string; geetest_captcha_id: string; has_geetest_captcha_key: boolean; corptcha_site_id: string; has_corptcha_secret: boolean; smtp_host: string; smtp_port: string; smtp_username: string; has_smtp_password: boolean; smtp_from: string; public_base_url: string }
 export interface ReliabilitySettings { retry_count: number; retry_status_codes: string; health_check_mode: 'off' | 'scheduled_all' | 'passive_recovery'; health_check_interval_minutes: number; health_check_auto_recover: boolean; health_check_channel_ids: string; auto_disable_on_test_failure: boolean; auto_disable_slow_seconds: number; auto_disable_status_codes: string; auto_disable_keywords: string }
 
 export interface ConversationCacheSettings { conversation_cache_enabled: boolean }
@@ -204,6 +204,38 @@ export interface SubscriptionOrder {
   paid_at: string | null
   created_at: string
 }
+
+export interface InvoiceSettings { enabled: boolean; need_pay_tax: boolean }
+export interface AdminInvoiceSettings { enabled: boolean; base_url: string; client_id: string; has_client_secret: boolean; need_pay_tax: boolean }
+export interface AdminInvoiceSettingsForm { enabled: boolean; base_url: string; client_id: string; client_secret: string; need_pay_tax: boolean }
+export interface InvoiceEligibleOrder { order_no: string; invoice_no: string; order_type: 'payment' | 'subscription'; plan_name: string; amount: string; paid_at: string | null }
+export interface InvoiceCheckout { taxOrderNo: string; payUrl: string }
+export interface InvoiceValidatedOrder { platformOrderId: number | null; orderNo: string; externalNo: string; productName: string; amount: string; currency: string; paidAt: string; verifiedAt: string; transactionId?: string }
+export interface InvoiceValidation {
+  orders: InvoiceValidatedOrder[]
+  totalAmount: string
+  currency: string
+  taxAmount: string
+  taxPaidAmount: string
+  taxDueAmount: string
+  taxPayments: Record<string, InvoiceCheckout>
+  taxOrderNo: string
+  payUrl: string
+}
+export interface InvoiceApplication {
+  id: string
+  application_id: string
+  status: 'pending' | 'approved' | 'rejected' | 'completed' | 'canceled'
+  buyer_type: 'individual' | 'company'
+  title: string
+  recipient_email: string
+  total_amount: string
+  currency: string
+  need_pay_tax: boolean
+  created_at: string
+}
+export interface InvoiceCreateResult { id: string; application_id: string; status: 'pending' }
+export interface InvoiceTaxStatus { paid: boolean }
 
 export interface AdminSubscription {
   id: string
@@ -357,8 +389,18 @@ async function post<T>(path: string, body?: unknown): Promise<T> { return api<T>
 async function put<T>(path: string, body?: unknown): Promise<T> { return api<T>(path, { method: 'PUT', body: body === undefined ? undefined : JSON.stringify(body) }) }
 async function send(path: string, method: 'POST' | 'PUT' | 'DELETE', body?: unknown): Promise<void> { await api<unknown>(path, { method, body: body === undefined ? undefined : JSON.stringify(body) }) }
 
-export interface LoginBody { email: string; password: string; code?: string; captcha_id?: string; lot_number?: string; captcha_output?: string; pass_token?: string; gen_time?: string }
-export interface RegisterBody { name: string; email: string; password: string; code?: string; captcha_id?: string; lot_number?: string; captcha_output?: string; pass_token?: string; gen_time?: string }
+/** Downloads a binary response (invoice PDF) as a Blob, keeping the auth header. */
+async function download(path: string): Promise<Blob> {
+  const response = await fetch(`/api${path}`, { headers: { Authorization: `Bearer ${token}` } })
+  if (!response.ok) {
+    const body = await response.json().catch(() => null)
+    throw new Error(body?.error?.message ?? `请求失败 (${response.status})`)
+  }
+  return response.blob()
+}
+
+export interface LoginBody { email: string; password: string; code?: string; captcha_id?: string; lot_number?: string; captcha_output?: string; pass_token?: string; gen_time?: string; captcha_token?: string; captcha_purpose?: string }
+export interface RegisterBody { name: string; email: string; password: string; code?: string; captcha_id?: string; lot_number?: string; captcha_output?: string; pass_token?: string; gen_time?: string; captcha_token?: string; captcha_purpose?: string }
 export interface KeyForm { user_id?: string; name: string; expires_at: string; group_id: string }
 export interface AccountKeyForm { name: string; expires_at: string; group_id: string }
 export interface ChannelForm { name: string; provider: string; base_url: string; key_type: 'single' | 'multi'; api_keys: string; models: string[]; test_model?: string; priority: number; groups: string[]; upstream_path?: string; upstream_format?: string; model_routes?: ModelRouteForm[]; auto_disable: boolean; request_overrides?: RequestOverrides }
@@ -393,8 +435,8 @@ export interface MigrationStatus {
  * indicators must not be echoed back in the update body.
  */
 export type SiteSettingsForm =
-  Omit<AdminSiteSettings, 'has_geetest_captcha_key' | 'has_smtp_password'>
-  & { geetest_captcha_key: string; smtp_password: string }
+  Omit<AdminSiteSettings, 'has_geetest_captcha_key' | 'has_corptcha_secret' | 'has_smtp_password'>
+  & { geetest_captcha_key: string; corptcha_secret: string; smtp_password: string }
 
 export const endpoints = {
   getSiteSettings: () => get<SiteSettings>('/site-settings'),
@@ -412,6 +454,16 @@ export const endpoints = {
   cancelAccountSubscription: (id: string) => send(`/account/subscriptions/${encodeURIComponent(id)}/cancel`, 'POST'),
   getAccountSubscriptionOrders: () => get<{ data: SubscriptionOrder[] }>('/account/subscription-orders'),
   getAccountSubscriptionOrder: (orderNo: string) => get<SubscriptionOrder>(`/account/subscription-orders/${encodeURIComponent(orderNo)}`),
+  getInvoiceSettings: () => get<InvoiceSettings>('/account/invoice/settings'),
+  getInvoiceEligibleOrders: () => get<{ data: InvoiceEligibleOrder[] }>('/account/invoices/eligible-orders'),
+  validateInvoiceOrders: (orderNos: string[], needPayTax: boolean, taxOrderNos: string[] = []) => post<InvoiceValidation>('/account/invoices/validate', { orderNos, needPayTax, ...(taxOrderNos.length ? { taxOrderNos } : {}) }),
+  getInvoiceTaxStatus: (taxOrderNo: string) => post<InvoiceTaxStatus>('/account/invoices/tax-status', { taxOrderNo }),
+  createInvoiceApplication: (body: Record<string, unknown>) => post<InvoiceCreateResult>('/account/invoices', body),
+  getInvoices: (sync = false) => get<{ data: InvoiceApplication[] }>(`/account/invoices${sync ? '?sync=1' : ''}`),
+  cancelInvoice: (id: string) => post<{ id: string; status: string }>(`/account/invoices/${encodeURIComponent(id)}/cancel`),
+  downloadInvoicePDF: (id: string) => download(`/account/invoices/${encodeURIComponent(id)}/pdf`),
+  getAdminInvoiceSettings: () => get<AdminInvoiceSettings>('/admin/invoice-settings'),
+  updateAdminInvoiceSettings: (form: AdminInvoiceSettingsForm) => put<AdminInvoiceSettings>('/admin/invoice-settings', form),
   updateAccountProfile: (avatarUrl: string) => send('/account/profile', 'PUT', { avatar_url: avatarUrl }),
   changeAccountPassword: (currentPassword: string, newPassword: string) => send('/account/password', 'PUT', { current_password: currentPassword, new_password: newPassword }),
   revokeAccountKey: (id: string) => send(`/account/keys/${encodeURIComponent(id)}/revoke`, 'POST'),
@@ -456,6 +508,7 @@ export const endpoints = {
   deleteChannelKey: (channelId: string, keyId: string) => send(`/admin/channels/${encodeURIComponent(channelId)}/keys/${encodeURIComponent(keyId)}`, 'DELETE'),
   toggleChannelKey: (channelId: string, keyId: string, enabled: boolean) => send(`/admin/channels/${encodeURIComponent(channelId)}/keys/${encodeURIComponent(keyId)}/status`, 'POST', { enabled }),
   updateChannelKey: (channelId: string, keyId: string, form: { name?: string; priority?: number }) => send(`/admin/channels/${encodeURIComponent(channelId)}/keys/${encodeURIComponent(keyId)}`, 'PUT', form),
+  revealChannelKey: (channelId: string, keyId: string) => get<{ key: string }>(`/admin/channels/${encodeURIComponent(channelId)}/keys/${encodeURIComponent(keyId)}/secret`),
   testChannelKey: (channelId: string, keyId: string) => post<ChannelKeyTestResult>(`/admin/channels/${encodeURIComponent(channelId)}/keys/${encodeURIComponent(keyId)}/test`),
   testChannel: (id: string) => post<ChannelTestResult>(`/admin/channels/${encodeURIComponent(id)}/test`),
   migrateChannelKeys: (id: string) => post<{ migrated: boolean }>(`/admin/channels/${encodeURIComponent(id)}/keys/migrate`),

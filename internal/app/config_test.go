@@ -42,6 +42,9 @@ func TestLoadConfigDefaultsAndFlags(t *testing.T) {
 	t.Setenv("SMTP_PORT", "")
 	t.Setenv("GEETEST_CAPTCHA_ID", "")
 	t.Setenv("GEETEST_CAPTCHA_KEY", "")
+	t.Setenv("CORPTCHA_SITE_ID", "")
+	t.Setenv("CORPTCHA_SECRET", "")
+	t.Setenv("CAPTCHA_PROVIDER", "")
 	t.Setenv("SMTP_HOST", "")
 	t.Setenv("SMTP_FROM", "")
 
@@ -75,6 +78,34 @@ func TestLoadConfigDefaultsAndFlags(t *testing.T) {
 	}
 	if !cfg.EmailVerificationEnabled() {
 		t.Fatal("expected email verification enabled")
+	}
+}
+
+func TestLoadConfigCorptchaEnabled(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://router:pass@localhost:5432/router")
+	t.Setenv("ENCRYPTION_KEY", "unit-test-encryption-key-not-for-prod")
+	t.Setenv("GEETEST_CAPTCHA_ID", "")
+	t.Setenv("GEETEST_CAPTCHA_KEY", "")
+	t.Setenv("CORPTCHA_SITE_ID", "")
+	t.Setenv("CORPTCHA_SECRET", "")
+	t.Setenv("CAPTCHA_PROVIDER", "")
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.CorptchaEnabled() {
+		t.Fatal("expected Corptcha disabled without both credentials")
+	}
+
+	t.Setenv("CORPTCHA_SITE_ID", "cpt_abc")
+	t.Setenv("CORPTCHA_SECRET", "secret")
+	cfg, err = LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.CorptchaEnabled() {
+		t.Fatal("expected Corptcha enabled")
 	}
 }
 
