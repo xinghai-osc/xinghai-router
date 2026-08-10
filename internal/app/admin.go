@@ -492,7 +492,7 @@ func (s *Service) listUsers(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "internal_error", "query failed")
 		return
 	}
-	rows, err := s.db.Query(r.Context(), `select u.id,u.email,u.name,u.role,u.enabled,u.created_at,coalesce(w.balance,0),coalesce(w.reserved,0),coalesce(array_agg(p.permission) filter (where p.permission is not null), '{}'),coalesce((select array_agg(ug.group_id order by ug.group_id) from user_groups ug where ug.user_id=u.id), '{}'),u.leaderboard_opt_in,u.leaderboard_mask_name,u.data_usage_enabled from users u left join user_permissions p on p.user_id=u.id left join user_wallets w on w.user_id=u.id group by u.id,w.balance,w.reserved order by u.created_at desc limit $1 offset $2`, pageSize, offset)
+	rows, err := s.db.Query(r.Context(), `select u.id,u.email,u.name,u.role,u.enabled,u.created_at,coalesce(w.balance,0),coalesce(w.reserved,0),coalesce(array_agg(p.permission) filter (where p.permission is not null), '{}'),coalesce((select array_agg(ug.group_id order by ug.group_id) from user_groups ug where ug.user_id=u.id), '{}') from users u left join user_permissions p on p.user_id=u.id left join user_wallets w on w.user_id=u.id group by u.id,w.balance,w.reserved order by u.created_at desc limit $1 offset $2`, pageSize, offset)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
@@ -506,9 +506,8 @@ func (s *Service) listUsers(w http.ResponseWriter, r *http.Request) {
 		var balance, reserved any
 		var permissions []string
 		var groups []string
-		var leaderboardOptIn, leaderboardMaskName, dataUsageEnabled bool
-		rows.Scan(&id, &email, &name, &role, &enabled, &created, &balance, &reserved, &permissions, &groups, &leaderboardOptIn, &leaderboardMaskName, &dataUsageEnabled)
-		out = append(out, map[string]any{"id": id, "email": email, "name": name, "role": role, "enabled": enabled, "balance": balance, "reserved": reserved, "permissions": permissions, "groups": groups, "created_at": created, "leaderboard_opt_in": leaderboardOptIn, "leaderboard_mask_name": leaderboardMaskName, "data_usage_enabled": dataUsageEnabled})
+		rows.Scan(&id, &email, &name, &role, &enabled, &created, &balance, &reserved, &permissions, &groups)
+		out = append(out, map[string]any{"id": id, "email": email, "name": name, "role": role, "enabled": enabled, "balance": balance, "reserved": reserved, "permissions": permissions, "groups": groups, "created_at": created})
 	}
 	writePaged(w, out, total, page, pageSize)
 }
@@ -525,15 +524,12 @@ func (s *Service) updateUser(w http.ResponseWriter, r *http.Request) {
 		Groups      *[]string `json:"groups"`
 		Balance     *float64  `json:"balance"`
 		Note        *string   `json:"note"`
-		LeaderboardOptIn    *bool `json:"leaderboard_opt_in"`
-		LeaderboardMaskName *bool `json:"leaderboard_mask_name"`
-		DataUsageEnabled    *bool `json:"data_usage_enabled"`
 	}
 	if decode(r, &in) != nil {
 		writeError(w, 400, "invalid_request", "invalid user update")
 		return
 	}
-	if in.ID == nil && in.Email == nil && in.Name == nil && in.Password == nil && in.Role == nil && in.Enabled == nil && in.Permissions == nil && in.Groups == nil && in.Balance == nil && in.LeaderboardOptIn == nil && in.LeaderboardMaskName == nil && in.DataUsageEnabled == nil {
+	if in.ID == nil && in.Email == nil && in.Name == nil && in.Password == nil && in.Role == nil && in.Enabled == nil && in.Permissions == nil && in.Groups == nil && in.Balance == nil {
 		writeError(w, 400, "invalid_request", "at least one user field is required")
 		return
 	}

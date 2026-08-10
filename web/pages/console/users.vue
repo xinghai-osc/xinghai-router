@@ -38,6 +38,8 @@ function pageQuery(): string {
   const params = new URLSearchParams()
   params.set('page', String(page.value))
   params.set('page_size', pageSize.value)
+  const term = search.value.trim()
+  if (term) params.set('q', term)
   return `?${params.toString()}`
 }
 
@@ -48,15 +50,10 @@ const groups = useResource(() => endpoints.getAdminGroups('?page_size=100'), { d
 
 const search = ref('')
 
+watch(search, () => { page.value = 1; void users.refresh() })
+
 const groupOptions = computed(() => groups.data.value.data)
 const groupNames = computed(() => new Map(groupOptions.value.map(group => [group.id, group.name])))
-
-const filtered = computed(() => {
-  const term = search.value.trim().toLowerCase()
-  if (!term) return users.data.value.data
-  return users.data.value.data.filter(user =>
-    user.email.toLowerCase().includes(term) || user.name.toLowerCase().includes(term))
-})
 
 const roleOptions = computed(() => [
   { value: 'user', label: t('admin.roleUser') },
@@ -325,7 +322,7 @@ async function deleteSubscription() {
       :empty-title="t('admin.usersEmptyTitle')"
       :empty-description="t('admin.usersEmptyBody')"
     >
-      <div v-if="!filtered.length" class="rounded-card border border-line bg-surface">
+      <div v-if="!users.data.value.data.length" class="rounded-card border border-line bg-surface">
         <UiEmptyState :title="t('admin.noResultsTitle')" :description="t('admin.noResultsBody')" />
       </div>
 
@@ -344,7 +341,7 @@ async function deleteSubscription() {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="user in filtered" :key="user.id">
+          <tr v-for="user in users.data.value.data" :key="user.id">
             <td class="font-mono text-[13px] text-faint">{{ user.id }}</td>
             <td class="font-medium text-ink">{{ user.email }}</td>
             <td class="text-muted">{{ user.name }}</td>

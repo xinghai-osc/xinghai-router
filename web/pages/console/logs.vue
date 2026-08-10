@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { CalendarDays, ChevronDown, ScrollText } from 'lucide-vue-next'
+import { CalendarDays, ChevronDown, ScrollText, Search } from 'lucide-vue-next'
 import {
   PopoverContent, PopoverPortal, PopoverRoot, PopoverTrigger,
 } from 'reka-ui'
@@ -290,6 +290,10 @@ const detailTarget = ref<UsageLog | RequestLog | null>(null)
                 :class="advancedOpen && 'rotate-180'"
               />
             </UiButton>
+            <UiButton size="sm" class="sm:mb-1" @click="applyFilters">
+              <Search class="size-4" />
+              {{ t('common.search') }}
+            </UiButton>
           </div>
 
           <div v-if="advancedOpen" class="mt-2 flex flex-wrap items-end gap-2 border-t border-line pt-3">
@@ -315,7 +319,6 @@ const detailTarget = ref<UsageLog | RequestLog | null>(null)
               <UiButton v-if="filtersActive" variant="ghost" size="sm" @click="resetFilters">
                 {{ t('common.reset') }}
               </UiButton>
-              <UiButton size="sm" @click="applyFilters">{{ t('common.filter') }}</UiButton>
             </div>
           </div>
         </div>

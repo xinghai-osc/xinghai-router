@@ -44,6 +44,14 @@ const requestId = ref('')
 const status = ref('')
 const advancedOpen = ref(false)
 
+const applied = reactive({
+  model: '',
+  group: '',
+  key: '',
+  requestId: '',
+  status: '',
+})
+
 const DATE_PRESETS = [
   { labelKey: 'console.datePresetToday', start: (now: Date) => { const s = new Date(now); s.setHours(0, 0, 0, 0); return s } },
   { labelKey: 'console.datePreset24h', start: (now: Date) => new Date(now.getTime() - 24 * 3600 * 1000) },
@@ -107,12 +115,12 @@ const advancedActiveCount = computed(() => [key.value.trim(), requestId.value.tr
 
 const filtered = computed(() => {
   const keyword = (value: string) => value.trim().toLowerCase()
-  const needleModel = keyword(model.value)
-  const needleGroup = keyword(group.value)
-  const needleKey = keyword(key.value)
-  const needleRequestId = keyword(requestId.value)
+  const needleModel = keyword(applied.model)
+  const needleGroup = keyword(applied.group)
+  const needleKey = keyword(applied.key)
+  const needleRequestId = keyword(applied.requestId)
   return usage.value.data.filter((record) => {
-    if (status.value && record.status !== status.value) return false
+    if (applied.status && record.status !== applied.status) return false
     if (needleModel && !record.model.toLowerCase().includes(needleModel)) return false
     if (needleGroup && !(record.group_name || '').toLowerCase().includes(needleGroup)) return false
     if (needleKey && !(record.key_name || '').toLowerCase().includes(needleKey)) return false
@@ -238,6 +246,19 @@ async function applyAdminFilters() {
   await Promise.all([adminUsage.refresh(), adminStats.refresh()])
 }
 
+function commitClientFilters() {
+  applied.model = model.value
+  applied.group = group.value
+  applied.key = key.value
+  applied.requestId = requestId.value
+  applied.status = status.value
+}
+
+async function applySearch() {
+  if (adminView.value) await applyAdminFilters()
+  else commitClientFilters()
+}
+
 async function resetFilters() {
   model.value = ''
   group.value = ''
@@ -247,6 +268,11 @@ async function resetFilters() {
   userId.value = ''
   range.start = startOfToday()
   range.end = new Date()
+  applied.model = ''
+  applied.group = ''
+  applied.key = ''
+  applied.requestId = ''
+  applied.status = ''
   if (adminView.value) await applyAdminFilters()
 }
 
@@ -256,6 +282,7 @@ async function setAdminView(on: boolean) {
   status.value = ''
   page.value = 1
   if (on) await applyAdminFilters()
+  else commitClientFilters()
 }
 
 async function goToPage(next: number) {
@@ -349,6 +376,11 @@ const clientTarget = ref<UsageRow | null>(null)
             />
           </UiButton>
 
+          <UiButton size="sm" class="sm:mb-1" @click="applySearch">
+            <Search class="size-4" />
+            {{ t('common.search') }}
+          </UiButton>
+
           <div v-if="isAdmin" class="ml-auto flex items-center gap-0.5 self-center rounded-control border border-line bg-surface p-0.5 sm:mb-1" role="group" :aria-label="t('console.viewMode')">
             <button
               type="button"
@@ -409,9 +441,6 @@ const clientTarget = ref<UsageRow | null>(null)
           <div class="ml-auto">
             <UiButton v-if="filtersActive" variant="ghost" size="sm" @click="resetFilters">
               {{ t('common.reset') }}
-            </UiButton>
-            <UiButton v-if="adminView" size="sm" class="ml-2" @click="applyAdminFilters">
-              {{ t('common.filter') }}
             </UiButton>
           </div>
         </div>

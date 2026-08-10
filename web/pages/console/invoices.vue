@@ -227,11 +227,7 @@ async function syncStatuses() {
       <UiAlert tone="danger" :title="t('common.loadFailed')">{{ settingsError }}</UiAlert>
     </UiCard>
 
-    <UiCard v-else-if="settingsPending" :title="t('nav.invoices')">
-      <UiSkeleton :rows="4" />
-    </UiCard>
-
-    <UiCard v-else-if="!settings.enabled" :title="t('nav.invoices')">
+    <UiCard v-else-if="!settingsPending && !settings.enabled" :title="t('nav.invoices')">
       <UiEmptyState
         :icon="FileText"
         :title="t('console.invoiceDisabledTitle')"
@@ -265,7 +261,7 @@ async function syncStatuses() {
                     <UiCheckbox
                       :model-value="selectedCount > 0"
                       :disabled="!allEligible.length"
-                      @update:model-value="toggleAll"
+                      @update:model-value="toggleAll($event ? true : false)"
                     />
                   </th>
                   <th>{{ t('console.invoiceOrderNo') }}</th>
@@ -389,7 +385,7 @@ async function syncStatuses() {
 
         <template #footer>
           <UiButton :disabled="!canSubmit" :loading="busy" @click="submit">
-            {{ t('console.invoiceSubmit') }} · {{ formatAmount(validation.totalAmount) }}
+            {{ t('console.invoiceSubmit') }} · {{ validation.totalAmount ? formatAmount(validation.totalAmount) : formatAmount(0) }}
           </UiButton>
         </template>
       </UiCard>
