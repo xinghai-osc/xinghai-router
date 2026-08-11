@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Check } from 'lucide-vue-next'
 import type { PublicSubscriptionPlan } from '~/src/api'
+import { formatMoney, formatNumber } from '~/src/format'
 
 const props = withDefaults(defineProps<{
   plans: PublicSubscriptionPlan[]
@@ -29,8 +30,18 @@ function benefits(plan: PublicSubscriptionPlan): string[] {
   const list: string[] = []
   if (plan.credit_amount) {
     list.push(t('site.planCredit', { amount: Number(plan.credit_amount).toFixed(2) }))
-  } else {
+  } else if (plan.max_credit_per_period === null
+    && !(plan.model_quotas ?? []).some(quota => quota.max_credit_per_period !== null)) {
     list.push(t('site.planUnlimitedCredit'))
+  }
+  if (plan.max_requests_per_period !== null) {
+    list.push(t('site.planQuotaRequests', { count: formatNumber(plan.max_requests_per_period) }))
+  }
+  if (plan.max_credit_per_period !== null) {
+    list.push(t('site.planQuotaCredit', { amount: formatMoney(plan.max_credit_per_period) }))
+  }
+  for (const quota of plan.model_quotas ?? []) {
+    list.push(t('site.planModelQuota', { model: quota.model }))
   }
   if (plan.group_name) list.push(t('site.planGroup', { group: plan.group_name }))
   list.push(plan.model_whitelist.length
@@ -60,7 +71,7 @@ function benefits(plan: PublicSubscriptionPlan): string[] {
       v-for="(plan, index) in sorted"
       :key="plan.id"
       :class="[
-        'relative flex flex-col gap-5 rounded-card border bg-surface p-6 transition-colors duration-150',
+        'relative flex flex-col gap-5 rounded-card border bg-surface p-6 transition-[border-color,transform,background-color] duration-150 ease-out hover:-translate-y-px hover:bg-surface',
         index === featured ? 'border-clay' : 'border-line hover:border-line-strong',
       ]"
     >

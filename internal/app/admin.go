@@ -487,12 +487,24 @@ func (s *Service) auditActor(r *http.Request, actor, action, entityType, entityI
 
 func (s *Service) listUsers(w http.ResponseWriter, r *http.Request) {
 	page, pageSize, offset := listPage(r)
+	term := strings.TrimSpace(r.URL.Query().Get("q"))
+	where := ""
+	args := []any{}
+	if term != "" {
+		where = ` where u.email ilike $1 or u.name ilike $1`
+		args = append(args, "%"+term+"%")
+	}
+	countRow := `select count(*) from users u` + where
+	countArgs := make([]any, len(args))
+	copy(countArgs, args)
 	var total int
-	if err := s.db.QueryRow(r.Context(), `select count(*) from users`).Scan(&total); err != nil {
+	if err := s.db.QueryRow(r.Context(), countRow, countArgs...).Scan(&total); err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
 	}
-	rows, err := s.db.Query(r.Context(), `select u.id,u.email,u.name,u.role,u.enabled,u.created_at,coalesce(w.balance,0),coalesce(w.reserved,0),coalesce(array_agg(p.permission) filter (where p.permission is not null), '{}'),coalesce((select array_agg(ug.group_id order by ug.group_id) from user_groups ug where ug.user_id=u.id), '{}') from users u left join user_permissions p on p.user_id=u.id left join user_wallets w on w.user_id=u.id group by u.id,w.balance,w.reserved order by u.created_at desc limit $1 offset $2`, pageSize, offset)
+	args = append(args, pageSize, offset)
+	query := `select u.id,u.email,u.name,u.role,u.enabled,u.leaderboard_opt_in,u.leaderboard_mask_name,u.data_usage_enabled,u.created_at,coalesce(w.balance,0),coalesce(w.reserved,0),coalesce(array_agg(p.permission) filter (where p.permission is not null), '{}'),coalesce((select array_agg(ug.group_id order by ug.group_id) from user_groups ug where ug.user_id=u.id), '{}') from users u left join user_permissions p on p.user_id=u.id left join user_wallets w on w.user_id=u.id` + where + ` group by u.id,w.balance,w.reserved order by u.created_at desc limit $` + strconv.Itoa(len(args)-1) + ` offset $` + strconv.Itoa(len(args))
+	rows, err := s.db.Query(r.Context(), query, args...)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
@@ -502,12 +514,13 @@ func (s *Service) listUsers(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var id, email, name, role string
 		var enabled bool
+		var leaderboardOptIn, leaderboardMaskName, dataUsageEnabled bool
 		var created any
 		var balance, reserved any
 		var permissions []string
 		var groups []string
-		rows.Scan(&id, &email, &name, &role, &enabled, &created, &balance, &reserved, &permissions, &groups)
-		out = append(out, map[string]any{"id": id, "email": email, "name": name, "role": role, "enabled": enabled, "balance": balance, "reserved": reserved, "permissions": permissions, "groups": groups, "created_at": created})
+		rows.Scan(&id, &email, &name, &role, &enabled, &leaderboardOptIn, &leaderboardMaskName, &dataUsageEnabled, &created, &balance, &reserved, &permissions, &groups)
+		out = append(out, map[string]any{"id": id, "email": email, "name": name, "role": role, "enabled": enabled, "leaderboard_opt_in": leaderboardOptIn, "leaderboard_mask_name": leaderboardMaskName, "data_usage_enabled": dataUsageEnabled, "balance": balance, "reserved": reserved, "permissions": permissions, "groups": groups, "created_at": created})
 	}
 	writePaged(w, out, total, page, pageSize)
 }
@@ -519,17 +532,20 @@ func (s *Service) updateUser(w http.ResponseWriter, r *http.Request) {
 		Name        *string   `json:"name"`
 		Password    *string   `json:"password"`
 		Role        *string   `json:"role"`
-		Enabled     *bool     `json:"enabled"`
-		Permissions *[]string `json:"permissions"`
-		Groups      *[]string `json:"groups"`
-		Balance     *float64  `json:"balance"`
-		Note        *string   `json:"note"`
+		Enabled             *bool     `json:"enabled"`
+		Permissions         *[]string `json:"permissions"`
+		Groups              *[]string `json:"groups"`
+		Balance             *float64  `json:"balance"`
+		Note                *string   `json:"note"`
+		LeaderboardOptIn    *bool     `json:"leaderboard_opt_in"`
+		LeaderboardMaskName *bool     `json:"leaderboard_mask_name"`
+		DataUsageEnabled    *bool     `json:"data_usage_enabled"`
 	}
 	if decode(r, &in) != nil {
 		writeError(w, 400, "invalid_request", "invalid user update")
 		return
 	}
-	if in.ID == nil && in.Email == nil && in.Name == nil && in.Password == nil && in.Role == nil && in.Enabled == nil && in.Permissions == nil && in.Groups == nil && in.Balance == nil {
+	if in.ID == nil && in.Email == nil && in.Name == nil && in.Password == nil && in.Role == nil && in.Enabled == nil && in.Permissions == nil && in.Groups == nil && in.Balance == nil && in.LeaderboardOptIn == nil && in.LeaderboardMaskName == nil && in.DataUsageEnabled == nil {
 		writeError(w, 400, "invalid_request", "at least one user field is required")
 		return
 	}
@@ -680,6 +696,27 @@ func (s *Service) updateUser(w http.ResponseWriter, r *http.Request) {
 			changed["api_keys_revoked"] = true
 		}
 		changed["enabled"] = *in.Enabled
+	}
+	if in.LeaderboardOptIn != nil {
+		if _, err = tx.Exec(r.Context(), `update users set leaderboard_opt_in=$1 where id=$2`, *in.LeaderboardOptIn, userID); err != nil {
+			writeError(w, 500, "internal_error", "could not update leaderboard opt-in")
+			return
+		}
+		changed["leaderboard_opt_in"] = *in.LeaderboardOptIn
+	}
+	if in.LeaderboardMaskName != nil {
+		if _, err = tx.Exec(r.Context(), `update users set leaderboard_mask_name=$1 where id=$2`, *in.LeaderboardMaskName, userID); err != nil {
+			writeError(w, 500, "internal_error", "could not update leaderboard name masking")
+			return
+		}
+		changed["leaderboard_mask_name"] = *in.LeaderboardMaskName
+	}
+	if in.DataUsageEnabled != nil {
+		if _, err = tx.Exec(r.Context(), `update users set data_usage_enabled=$1 where id=$2`, *in.DataUsageEnabled, userID); err != nil {
+			writeError(w, 500, "internal_error", "could not update data usage setting")
+			return
+		}
+		changed["data_usage_enabled"] = *in.DataUsageEnabled
 	}
 	var oldBalance float64
 	if in.Balance != nil {
@@ -1734,6 +1771,7 @@ func (s *Service) createChannel(w http.ResponseWriter, r *http.Request) {
 		TestModel   string                   `json:"test_model"`
 		Priority    int                      `json:"priority"`
 		Groups      []string                 `json:"groups"`
+		UserEmail   *string                  `json:"user_email"`
 		Provider    string                   `json:"provider"`
 		ModelRoutes []routeInput             `json:"model_routes"`
 		AutoDisable *bool                    `json:"auto_disable"`
@@ -1797,6 +1835,15 @@ func (s *Service) createChannel(w http.ResponseWriter, r *http.Request) {
 			groupIDs = append(groupIDs, groupID)
 		}
 	}
+	var userID *string
+	if in.UserEmail != nil && strings.TrimSpace(*in.UserEmail) != "" {
+		var resolved string
+		if s.db.QueryRow(r.Context(), `select id from users where lower(email)=lower($1)`, strings.TrimSpace(*in.UserEmail)).Scan(&resolved) != nil {
+			writeError(w, 400, "invalid_request", "unknown user")
+			return
+		}
+		userID = &resolved
+	}
 	in.BaseURL = strings.TrimSpace(in.BaseURL)
 	if !validChannelBaseURL(in.BaseURL) {
 		writeError(w, 400, "invalid_request", "base_url must be 1-2048 characters and use HTTP or HTTPS")
@@ -1846,7 +1893,7 @@ func (s *Service) createChannel(w http.ResponseWriter, r *http.Request) {
 		autoDisable = *in.AutoDisable
 	}
 	var id string
-	err = tx.QueryRow(r.Context(), `insert into channels(name,base_url,api_key,models,test_model,priority,provider,key_type,auto_disable,request_overrides) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning id`, in.Name, strings.TrimRight(in.BaseURL, "/"), keys[0], models, in.TestModel, in.Priority, in.Provider, in.KeyType, autoDisable, overrides).Scan(&id)
+	err = tx.QueryRow(r.Context(), `insert into channels(name,base_url,api_key,models,test_model,priority,provider,key_type,auto_disable,request_overrides,user_id) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) returning id`, in.Name, strings.TrimRight(in.BaseURL, "/"), keys[0], models, in.TestModel, in.Priority, in.Provider, in.KeyType, autoDisable, overrides, userID).Scan(&id)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -1906,6 +1953,7 @@ func (s *Service) updateChannel(w http.ResponseWriter, r *http.Request) {
 		Priority       int                      `json:"priority"`
 		Provider       string                   `json:"provider"`
 		Groups         []string                 `json:"groups"`
+		UserEmail      *string                  `json:"user_email"`
 		ModelRoutes    []routeInput             `json:"model_routes"`
 		AutoDisable    *bool                    `json:"auto_disable"`
 		Overrides      *channelRequestOverrides `json:"request_overrides"`
@@ -1978,10 +2026,26 @@ func (s *Service) updateChannel(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	channelID := r.PathValue("id")
+	var userID *string
+	if in.UserEmail != nil {
+		if strings.TrimSpace(*in.UserEmail) != "" {
+			var resolved string
+			if s.db.QueryRow(r.Context(), `select id from users where lower(email)=lower($1)`, strings.TrimSpace(*in.UserEmail)).Scan(&resolved) != nil {
+				writeError(w, 400, "invalid_request", "unknown user")
+				return
+			}
+			userID = &resolved
+		}
+	}
 	models, _ := json.Marshal(in.Models)
 	query := `update channels set name=$1,base_url=$2,models=$3,priority=$4,provider=$5,test_model=$6,upstream_path=$7,upstream_format=$8`
 	args := []any{in.Name, strings.TrimRight(in.BaseURL, "/"), models, in.Priority, in.Provider, in.TestModel, in.UpstreamPath, in.UpstreamFormat}
 	argIdx := 9
+	if in.UserEmail != nil {
+		query += `,user_id=$` + strconv.Itoa(argIdx)
+		args = append(args, userID)
+		argIdx++
+	}
 	if in.AutoDisable != nil {
 		query += `,auto_disable=$` + strconv.Itoa(argIdx)
 		args = append(args, *in.AutoDisable)
@@ -2115,7 +2179,7 @@ func (s *Service) listChannels(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "internal_error", "query failed")
 		return
 	}
-	rows, err := s.db.Query(r.Context(), `select c.id,c.name,c.base_url,c.models,c.test_model,c.enabled,c.auto_disabled,c.disabled_reason,c.priority,c.weight,c.last_checked_at,c.last_error,c.created_at,c.updated_at,coalesce((select array_agg(cg.group_id order by cg.group_id) from channel_groups cg where cg.channel_id=c.id), '{}'),c.provider,c.key_type,(select count(*) from channel_api_keys ak where ak.channel_id=c.id and ak.enabled),c.auto_disable,c.request_overrides,coalesce(agg.avg_duration_ms,0),coalesce(agg.used_requests,0),coalesce(agg.used_tokens,0) from channels c left join lateral (select avg(rl.duration_ms) as avg_duration_ms,count(*) as used_requests,coalesce(sum(rl.total_tokens),0) as used_tokens from request_logs rl where rl.channel_id=c.id) agg on true order by c.priority desc,c.id limit $1 offset $2`, pageSize, offset)
+	rows, err := s.db.Query(r.Context(), `select c.id,c.name,c.base_url,c.models,c.test_model,c.enabled,c.auto_disabled,c.disabled_reason,c.priority,c.weight,c.last_checked_at,c.last_error,c.created_at,c.updated_at,coalesce((select array_agg(cg.group_id order by cg.group_id) from channel_groups cg where cg.channel_id=c.id), '{}'),c.provider,c.key_type,(select count(*) from channel_api_keys ak where ak.channel_id=c.id and ak.enabled),c.auto_disable,c.request_overrides,coalesce(u.id::text,''),coalesce(u.email,''),coalesce(u.name,''),coalesce(agg.avg_duration_ms,0),coalesce(agg.used_requests,0),coalesce(agg.used_tokens,0) from channels c left join users u on u.id=c.user_id left join lateral (select avg(rl.duration_ms) as avg_duration_ms,count(*) as used_requests,coalesce(sum(rl.total_tokens),0) as used_tokens from request_logs rl where rl.channel_id=c.id) agg on true order by c.priority desc,c.id limit $1 offset $2`, pageSize, offset)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
@@ -2136,9 +2200,10 @@ func (s *Service) listChannels(w http.ResponseWriter, r *http.Request) {
 		var keyCount int
 		var autoDisable bool
 		var overrides []byte
+		var userID, userEmail, userName string
 		var avgDuration float64
 		var usedRequests, usedTokens int64
-		if rows.Scan(&id, &name, &base, &models, &testModel, &enabled, &autoDisabled, &disabledReason, &priority, &weight, &lastChecked, &lastError, &created, &updated, &groups, &provider, &keyType, &keyCount, &autoDisable, &overrides, &avgDuration, &usedRequests, &usedTokens) != nil {
+		if rows.Scan(&id, &name, &base, &models, &testModel, &enabled, &autoDisabled, &disabledReason, &priority, &weight, &lastChecked, &lastError, &created, &updated, &groups, &provider, &keyType, &keyCount, &autoDisable, &overrides, &userID, &userEmail, &userName, &avgDuration, &usedRequests, &usedTokens) != nil {
 			continue
 		}
 		var list []string
@@ -2151,7 +2216,7 @@ func (s *Service) listChannels(w http.ResponseWriter, r *http.Request) {
 			ov = map[string]any{}
 		}
 		routes := s.getChannelRoutes(r.Context(), id)
-		data = append(data, map[string]any{"id": id, "name": name, "base_url": base, "models": list, "test_model": testModel, "provider": provider, "key_type": keyType, "enabled": enabled, "auto_disabled": autoDisabled, "disabled_reason": disabledReason, "priority": priority, "weight": weight, "last_test_time": lastChecked, "last_error": lastError, "response_time_ms": avgDuration, "used_requests": usedRequests, "used_tokens": usedTokens, "groups": groups, "key_count": keyCount, "created_at": created, "updated_at": updated, "model_routes": routes, "auto_disable": autoDisable, "request_overrides": ov})
+		data = append(data, map[string]any{"id": id, "name": name, "base_url": base, "models": list, "test_model": testModel, "provider": provider, "key_type": keyType, "enabled": enabled, "auto_disabled": autoDisabled, "disabled_reason": disabledReason, "priority": priority, "weight": weight, "last_test_time": lastChecked, "last_error": lastError, "response_time_ms": avgDuration, "used_requests": usedRequests, "used_tokens": usedTokens, "groups": groups, "key_count": keyCount, "created_at": created, "updated_at": updated, "model_routes": routes, "auto_disable": autoDisable, "request_overrides": ov, "user_id": userID, "user_email": userEmail, "user_name": userName})
 	}
 	writePaged(w, data, total, page, pageSize)
 }

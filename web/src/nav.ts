@@ -1,7 +1,7 @@
 import {
   Activity, ArrowRightLeft, BadgeDollarSign, Blocks, CreditCard, Database, FileClock, FileText,
   KeyRound, LayoutDashboard, Layers, LogIn, MessageSquareText, Receipt, Repeat, ScrollText, Server,
-  Settings, ShieldCheck, Sparkles, Stamp, UserCog, Users, Wallet,
+  Settings, ShieldCheck, ShoppingCart, Sparkles, Stamp, UserCog, Users, Wallet,
 } from 'lucide-vue-next'
 import type { Component } from 'vue'
 
@@ -31,6 +31,7 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     titleKey: 'nav.sectionBilling',
     items: [
+      { to: '/console/orders', labelKey: 'nav.orders', icon: ShoppingCart },
       { to: '/console/wallet', labelKey: 'nav.wallet', icon: Wallet },
       { to: '/console/ledger', labelKey: 'nav.ledger', icon: Receipt },
       { to: '/console/subscriptions', labelKey: 'nav.subscriptions', icon: Sparkles },

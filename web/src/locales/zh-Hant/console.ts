@@ -28,7 +28,6 @@ export default {
   quickTopUpHint: '在線充值，到賬後繼續調用',
   quickUsage: '查看用量明細',
   quickUsageHint: '按模型查看每次請求的 Tokens 與費用',
-  usageWindowNote: '統計基於最近 100條用量記錄。',
 
   // ---- API 密鑰 ----
   keysDescription: '密鑰用於調用網關，請妥善保管，不要提交到代碼倉庫。',
@@ -161,6 +160,13 @@ export default {
   statusPaid: '已支付',
   statusExpired: '已過期',
 
+  // ---- 我的訂單 ----
+  ordersDescription: '全部歷史訂單，包含充值訂單與訂閱訂單。',
+  orderTypePayment: '充值',
+  orderTypeSubscription: '訂閱',
+  allOrdersEmptyTitle: '還沒有訂單',
+  allOrdersEmptyBody: '完成一次充值或訂閱後，訂單會出現在這裡。',
+
   // ---- 我的訂閱 ----
   subscriptionsDescription: '訂閱計劃可獲得贈送額度與專屬分組倍率。',
   currentSubscriptions: '當前訂閱',
@@ -200,7 +206,14 @@ export default {
   planWhitelist: '{count} 個可用模型',
   planAllModels: '全部模型可用',
   planQuotaRequests: '每週期 {count} 次請求',
-  planQuotaTokens: '每週期 {count} Tokens',
+  planQuotaCredit: '每週期 {amount} 額度',
+  planModelQuota: '模型 {model} 有獨立額度',
+  planQuotaBlocked: '額度耗盡後拒絕請求',
+  periodQuota: '週期額度',
+  quotaRequests: '請求次數',
+  quotaCredit: '額度',
+  quotaModelRequests: '{model} 請求',
+  quotaModelCredit: '{model} 額度',
   orderKind: '類型',
   orderKindNew: '新購',
   orderKindRenewal: '續訂',

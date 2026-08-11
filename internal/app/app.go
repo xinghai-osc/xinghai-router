@@ -28,6 +28,7 @@ type Service struct {
 	limiter         rateLimiter
 	ipLimiter       rateLimiter
 	rankingsLimiter rateLimiter
+	performanceLimiter rateLimiter
 	background      *backgroundWriter
 	pricingCache    *ttlCache[string, pricingRule]
 	groupCache      *ttlCache[string, float64]
@@ -36,8 +37,10 @@ type Service struct {
 	reliabilityData *ttlCache[struct{}, reliabilitySettings]
 	conversationCacheData *ttlCache[struct{}, conversationCacheSettings]
 	rankingsCache *ttlCache[string, rankingsPayload]
+	performanceCache *ttlCache[string, modelPerformancePayload]
 	channelCache  *ttlCache[channelRouteKey, []channel]
 	channelKeyCache *ttlCache[int64, []channelKeyCredential]
+	subscriptionCache *ttlCache[subscriptionRouteKey, subscriptionAccess]
 	promptCache    *promptPrefixCache
 	keyTouchCache   *ttlCache[string, struct{}]
 	scheduler       context.CancelFunc
@@ -99,6 +102,7 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 	limiter, mode := newRateLimiter(cfg.RedisURL, cfg.RateLimitPerMinute)
 	ipLimiter, ipMode := newRateLimiter(cfg.RedisURL, cfg.IPRateLimitPerMinute)
 	rankingsLimiter, _ := newRateLimiter(cfg.RedisURL, rankingsPerMinute)
+	performanceLimiter, _ := newRateLimiter(cfg.RedisURL, performancePerMinute)
 	if mode == "redis" || ipMode == "redis" {
 		log.Printf("rate limiter backend: redis (memory fallback on redis errors)")
 	} else {
@@ -112,6 +116,7 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 		limiter:         limiter,
 		ipLimiter:       ipLimiter,
 		rankingsLimiter: rankingsLimiter,
+		performanceLimiter: performanceLimiter,
 		background:      newBackgroundWriter(),
 		pricingCache:    newTTLCache[string, pricingRule](pricingCacheTTL),
 		groupCache:      newTTLCache[string, float64](groupCacheTTL),
@@ -120,8 +125,10 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 		reliabilityData: newTTLCache[struct{}, reliabilitySettings](reliabilityCacheTTL),
 		conversationCacheData: newTTLCache[struct{}, conversationCacheSettings](reliabilityCacheTTL),
 		rankingsCache: newTTLCache[string, rankingsPayload](rankingsCacheTTL),
+		performanceCache: newTTLCache[string, modelPerformancePayload](performanceCacheTTL),
 		channelCache:  newTTLCache[channelRouteKey, []channel](channelCacheTTL),
 		channelKeyCache: newTTLCache[int64, []channelKeyCredential](channelCacheTTL),
+		subscriptionCache: newTTLCache[subscriptionRouteKey, subscriptionAccess](subscriptionCacheTTL),
 		promptCache:    newPromptPrefixCache(cfg.LocalPromptCache, cfg.LocalPromptCacheSize),
 		keyTouchCache:   newTTLCache[string, struct{}](keyTouchInterval),
 		migration:       migrationStatus{mu: &sync.Mutex{}},
@@ -152,6 +159,7 @@ func (s *Service) limiterCleanup(ctx context.Context) {
 			s.limiter.cleanup()
 			s.ipLimiter.cleanup()
 			s.rankingsLimiter.cleanup()
+			s.performanceLimiter.cleanup()
 		}
 	}
 }
@@ -165,6 +173,9 @@ func (s *Service) Close() {
 	}
 	if s.rankingsLimiter != nil {
 		s.rankingsLimiter.close()
+	}
+	if s.performanceLimiter != nil {
+		s.performanceLimiter.close()
 	}
 	s.db.Close()
 }

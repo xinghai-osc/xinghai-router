@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Activity, Coins, KeyRound, Lock, Wallet } from 'lucide-vue-next'
-import { endpoints, type UsageRecord } from '~/src/api'
+import { endpoints, type DailyUsageRecord } from '~/src/api'
 import { formatCompact, formatMoney, formatNumber } from '~/src/format'
 
 definePageMeta({ layout: 'console', middleware: 'console-auth' })
@@ -15,9 +15,9 @@ const { settings } = useSiteSettings()
 
 useHead({ title: () => `${t('nav.overview')} · ${settings.value.name}` })
 
-const { data: usage, pending, error } = useResource(
-  () => endpoints.getAccountUsage(),
-  { data: [] as UsageRecord[] },
+const { data: dailyUsage, pending, error } = useResource(
+  () => endpoints.getAccountUsageDaily(CHART_DAYS, -new Date().getTimezoneOffset()),
+  { data: [] as DailyUsageRecord[] },
 )
 
 const { data: summary, pending: summaryPending } = useResource(
@@ -28,7 +28,7 @@ const { data: summary, pending: summaryPending } = useResource(
 const endpointUrl = `${useRequestURL().origin}/api/v1`
 
 function dayKey(date: Date): string {
-  return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
 }
 
 const daily = computed<TokenPoint[]>(() => {
@@ -45,11 +45,10 @@ const daily = computed<TokenPoint[]>(() => {
     points.push({ key, label: `${day.getMonth() + 1}/${day.getDate()}`, value: 0 })
   }
 
-  for (const record of usage.value.data) {
-    const key = dayKey(new Date(record.created_at))
-    const current = buckets.get(key)
+  for (const record of dailyUsage.value.data) {
+    const current = buckets.get(record.day)
     if (current !== undefined) {
-      buckets.set(key, current + record.prompt_tokens + record.completion_tokens)
+      buckets.set(record.day, current + record.prompt_tokens + record.completion_tokens)
     }
   }
 
@@ -101,8 +100,6 @@ const quickLinks = computed(() => [
         :loading="summaryPending"
       />
     </div>
-
-    <p class="text-[13px] text-faint">{{ t('console.usageWindowNote') }}</p>
 
     <UiCard :title="t('console.dailyTokens')" :description="t('console.dailyTokensHint')">
       <ConsoleUserDataState

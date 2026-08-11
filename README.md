@@ -123,11 +123,15 @@ curl -X POST http://localhost:8080/account/subscriptions/{id}/cancel -H "Authori
   "group_id": "",
   "model_whitelist": [],
   "max_requests_per_period": null,
-  "max_tokens_per_period": null,
+  "max_credit_per_period": null,
+  "overage_policy": "allow_wallet",
+  "model_quotas": [],
   "sort_order": 10,
   "enabled": true
 }
 ```
+
+`max_requests_per_period` 限制每个计费周期的请求数；`max_credit_per_period` 按成本限制周期内订阅覆盖请求的总消耗（数值来自定价规则）。`overage_policy` 为 `allow_wallet`（默认，额度耗尽后按钱包计费）或 `block`（耗尽后拒绝请求，返回 402 `subscription_quota_exceeded`）。`model_quotas` 可按模型单独设置 `max_requests_per_period` / `max_credit_per_period`，未填写的维度继承套餐全局值。
 
 ## Administration API
 

@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"log"
 	"net/http"
 	"net/mail"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -479,6 +481,45 @@ func (s *Service) accountUsageSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"requests": requests, "tokens": prompt + completion, "cost": cost})
+}
+
+// accountUsageDaily aggregates token usage per local day for the daily chart on
+// the account overview. It aggregates in the database (grouping by the client's
+// UTC offset) instead of shipping raw request rows, so days do not silently drop
+// out once a user's request count exceeds the latest-100 window used elsewhere.
+func (s *Service) accountUsageDaily(w http.ResponseWriter, r *http.Request) {
+	account := accountFromContext(r)
+	days := 14
+	if v := strings.TrimSpace(r.URL.Query().Get("days")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 1 && n <= 90 {
+			days = n
+		}
+	}
+	offset := 0
+	if v := strings.TrimSpace(r.URL.Query().Get("offset")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= -720 && n <= 840 {
+			offset = n
+		}
+	}
+	// Shifting by the client offset and reading the result as UTC wall-clock
+	// yields the local day, independent of the session timezone. The window has
+	// one day of slack so clients ahead of UTC still see a full window.
+	rows, err := s.db.Query(r.Context(), `select (date_trunc('day', (rl.created_at + make_interval(mins => $2)) at time zone 'UTC'))::date as day,coalesce(sum(rl.prompt_tokens),0),coalesce(sum(rl.completion_tokens),0) from request_logs rl where rl.user_id=$1 and rl.created_at>=now()-make_interval(days => $3) group by day order by day`, account.userID, offset, days+1)
+	if err != nil {
+		log.Printf("account usage daily: %v", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
+		return
+	}
+	defer rows.Close()
+	data := []map[string]any{}
+	for rows.Next() {
+		var day time.Time
+		var prompt, completion int64
+		if rows.Scan(&day, &prompt, &completion) == nil {
+			data = append(data, map[string]any{"day": day.Format("2006-01-02"), "prompt_tokens": prompt, "completion_tokens": completion})
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": data})
 }
 
 func (s *Service) accountUsage(w http.ResponseWriter, r *http.Request) {

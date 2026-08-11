@@ -11,6 +11,7 @@ export default {
   wallet: '錢包充值',
   ledger: '帳單流水',
   subscriptions: '我的訂閱',
+  orders: '我的訂單',
   account: '賬戶設定',
 
   users: '用戶',

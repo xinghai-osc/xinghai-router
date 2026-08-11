@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { formatRatio, formatSquarePrice, groupPrice, type SquareModel, type TokenUnit } from '~/src/marketplace'
+import { endpoints, type ModelPerformance, type ModelPerformanceGroup } from '~/src/api'
+import { formatLatency, formatRatio, formatSquarePrice, formatSuccessRate, formatTPS, groupPrice, type SquareModel, type TokenUnit } from '~/src/marketplace'
 
 const open = defineModel<boolean>('open', { required: true })
 
@@ -24,10 +25,35 @@ const rows = computed(() => {
 
 const unitHint = computed(() =>
   props.unit === 'K' ? t('site.sqUnitHintThousand') : t('site.sqUnitHintMillion'))
+
+const performance = ref<ModelPerformance | null>(null)
+const performancePending = ref(false)
+const performanceError = ref('')
+
+const performanceRows = computed<ModelPerformanceGroup[]>(() =>
+  performance.value?.groups ?? [])
+
+async function loadPerformance() {
+  const model = props.model
+  if (!model) return
+  performancePending.value = true
+  performanceError.value = ''
+  try {
+    performance.value = await endpoints.getModelPerformance(model.model)
+  } catch (cause) {
+    performanceError.value = cause instanceof Error ? cause.message : t('common.loadFailed')
+  } finally {
+    performancePending.value = false
+  }
+}
+
+watch(open, (next) => {
+  if (next) loadPerformance()
+})
 </script>
 
 <template>
-  <UiDialog v-model:open="open" size="lg" :description="t('site.sqDetailDescription')">
+  <UiSlidePanel v-model:open="open" size="lg" :description="t('site.sqDetailDescription')">
     <template #title>
       <span class="font-mono">{{ model?.model }}</span>
     </template>
@@ -78,6 +104,55 @@ const unitHint = computed(() =>
         </UiTable>
       </section>
 
+      <section class="space-y-3">
+        <div class="flex flex-wrap items-baseline justify-between gap-2">
+          <h3 class="text-[13px] font-medium text-ink">{{ t('site.sqDetailPerfTitle') }}</h3>
+          <p class="text-2xs text-faint">
+            {{ t('site.sqDetailPerfWindow', { hours: performance?.window_hours ?? 24 }) }}
+          </p>
+        </div>
+
+        <UiAlert
+          v-if="performanceError"
+          tone="danger"
+          :title="t('site.sqDetailPerfErrorTitle')"
+        >
+          {{ performanceError }}
+        </UiAlert>
+
+        <div v-else-if="performancePending" class="rounded-control border border-line bg-sunken px-4 py-5">
+          <UiSkeleton :rows="3" />
+        </div>
+
+        <UiEmptyState
+          v-else-if="!performanceRows.length"
+          class="rounded-control border border-line bg-sunken"
+          :title="t('site.sqDetailPerfEmptyTitle')"
+          :description="t('site.sqDetailPerfEmptyBody')"
+        />
+
+        <UiTable v-else dense>
+          <thead>
+            <tr>
+              <th>{{ t('site.sqColGroup') }}</th>
+              <th class="num">{{ t('site.sqDetailPerfRequests') }}</th>
+              <th class="num">{{ t('site.sqDetailPerfTps') }}</th>
+              <th class="num">{{ t('site.sqDetailPerfLatency') }}</th>
+              <th class="num">{{ t('site.sqDetailPerfSuccess') }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="row in performanceRows" :key="row.group_id">
+              <td class="text-[13px]">{{ row.group_name }}</td>
+              <td class="num text-muted">{{ row.requests }}</td>
+              <td class="num">{{ formatTPS(row.tps) }}</td>
+              <td class="num">{{ formatLatency(row.avg_latency_ms) }}</td>
+              <td class="num text-muted">{{ formatSuccessRate(row.success_rate) }}</td>
+            </tr>
+          </tbody>
+        </UiTable>
+      </section>
+
       <p class="rounded-control border border-line bg-sunken px-3.5 py-2.5 text-2xs leading-relaxed text-muted">
         {{ t('site.sqDetailNote') }}
       </p>
@@ -87,5 +162,5 @@ const unitHint = computed(() =>
       <UiButton variant="secondary" @click="open = false">{{ t('common.close') }}</UiButton>
       <UiButton to="/auth?mode=register">{{ t('site.sqDetailCta') }}</UiButton>
     </template>
-  </UiDialog>
+  </UiSlidePanel>
 </template>

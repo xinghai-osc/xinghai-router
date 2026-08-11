@@ -1,4 +1,4 @@
-export interface User { id: string; email: string; name: string; role: string; enabled: boolean; balance: number; reserved: number; permissions: string[]; groups: string[]; created_at: string }
+export interface User { id: string; email: string; name: string; role: string; enabled: boolean; leaderboard_opt_in: boolean; leaderboard_mask_name: boolean; data_usage_enabled: boolean; balance: number; reserved: number; permissions: string[]; groups: string[]; created_at: string }
 export interface Page<T> { data: T[]; total: number; page: number; page_size: number }
 export interface ApiKey { id: string; user_id: string; name: string; key_prefix: string; group_id: string; group_name: string; expires_at: string | null; revoked_at: string | null; last_used_at: string | null; created_at: string; revealable: boolean }
 export interface KeyQuotaLimit { id: string; window: 'day' | 'month' | 'total'; max_requests: number | null; max_tokens: number | null; max_cost: number | null; created_at: string }
@@ -43,10 +43,13 @@ export interface PricingTimeRule { id: string; model: string; name: string; star
 export interface PricingTimeRuleForm { id?: string; model: string; name: string; start_minute: number; end_minute: number; weekdays: string; input_per_million: number; cached_input_per_million: number; output_per_million: number; enabled?: boolean }
 export interface CatalogGroup { id: string; name: string; multiplier: number; public: boolean; display_name?: string | null }
 export interface CatalogModel { id: string; model: string; provider: string; provider_slug: string; input_per_million: number | null; cached_input_per_million: number | null; output_per_million: number | null; multiplier: number | null; groups: CatalogGroup[] }
+export interface ModelPerformanceGroup { group_id: string; group_name: string; requests: number; tps: number; avg_latency_ms: number; success_rate: number }
+export interface ModelPerformance { model: string; window_hours: number; groups: ModelPerformanceGroup[]; updated_at: string }
 export interface ModelProvider { id: string; name: string; slug: string; prefixes: string[]; priority: number }
 export interface UsageRecord { request_id: string; model: string; prompt_tokens: number; cached_prompt_tokens: number; completion_tokens: number; cost: string; status: string; created_at: string; client_ip: string; user_agent: string; error: string; key_name: string; subscription: boolean; duration_ms: number; group_name: string }
 
 export interface AccountUsageSummary { requests: number; tokens: number; cost: string }
+export interface DailyUsageRecord { day: string; prompt_tokens: number; completion_tokens: number }
 export interface ActivityLog { id: string; type: 'request' | 'login' | 'register' | 'logout' | 'topup' | 'operation'; action: string; user_id: string; user_name: string; model: string; group_id: string; group_name: string; status_code: number | null; duration_ms: number | null; prompt_tokens: number; completion_tokens: number; total_tokens: number; cost: number; details: Record<string, unknown>; created_at: string }
 export interface LedgerEntry { id: string; amount: string; balance_after: string; kind: string; request_id: string | null; note: string | null; created_at: string }
 export interface PaymentOrder { order_no: string; payment_type: string; amount: string; status: 'pending' | 'paid' | 'failed' | 'expired'; provider_trade_no?: string; paid_at: string | null; created_at: string }
@@ -136,6 +139,20 @@ export interface UsageStatBreakdown {
 
 export type BillingPeriod = 'hour' | 'day' | 'week' | 'month' | 'year'
 
+export type OveragePolicy = 'allow_wallet' | 'block'
+
+export interface SubscriptionPlanModelQuota {
+  model: string
+  max_requests_per_period: number | null
+  max_credit_per_period: number | null
+}
+
+export interface SubscriptionModelUsage {
+  model: string
+  requests: number
+  credit: number
+}
+
 export interface SubscriptionPlan {
   id: string
   name: string
@@ -148,7 +165,9 @@ export interface SubscriptionPlan {
   group_name: string
   model_whitelist: string[]
   max_requests_per_period: number | null
-  max_tokens_per_period: number | null
+  max_credit_per_period: number | null
+  overage_policy: OveragePolicy
+  model_quotas: SubscriptionPlanModelQuota[]
   sort_order: number
   enabled: boolean
   created_at: string
@@ -165,6 +184,10 @@ export interface PublicSubscriptionPlan {
   credit_amount: string
   group_name: string
   model_whitelist: string[]
+  max_requests_per_period: number | null
+  max_credit_per_period: number | null
+  overage_policy: OveragePolicy
+  model_quotas: SubscriptionPlanModelQuota[]
   sort_order: number
 }
 
@@ -187,7 +210,12 @@ export interface UserSubscription {
   group_name: string
   model_whitelist: string[]
   max_requests_per_period: number | null
-  max_tokens_per_period: number | null
+  max_credit_per_period: number | null
+  overage_policy: OveragePolicy
+  model_quotas: SubscriptionPlanModelQuota[]
+  usage_requests: number
+  usage_credit: number
+  model_usage: SubscriptionModelUsage[]
 }
 
 export interface SubscriptionOrder {
@@ -202,6 +230,19 @@ export interface SubscriptionOrder {
   status: 'pending' | 'paid' | 'failed' | 'expired'
   provider_trade_no?: string
   period_kind: 'new' | 'renewal'
+  paid_at: string | null
+  created_at: string
+}
+
+export interface OrderRecord {
+  order_no: string
+  order_type: 'payment' | 'subscription'
+  plan_name: string
+  payment_type: string
+  amount: string
+  status: 'pending' | 'paid' | 'failed' | 'expired'
+  provider_trade_no?: string
+  period_kind: string
   paid_at: string | null
   created_at: string
 }
@@ -410,8 +451,8 @@ export interface PaymentSettingsForm { enabled: boolean; base_url: string; merch
 export interface PaymentMethodForm { code: string; name: string; enabled: boolean }
 export interface PricingForm { model: string; input_per_million: number; cached_input_per_million: number; output_per_million: number; multiplier: number }
 export interface NewApiPricingForm { base_url: string; api_key: string; price_per_quota_unit: number }
-export interface SubscriptionPlanForm { name: string; description: string; price: string; currency: string; billing_period: string; credit_amount: string; group_id: string; model_whitelist: string[]; max_requests_per_period: number | null; max_tokens_per_period: number | null; sort_order: number; enabled: boolean }
-export interface UserUpdate { id?: number; name?: string; email?: string; role?: string; enabled?: boolean; password?: string; balance?: number | null; note?: string; permissions?: string[]; groups?: string[] }
+export interface SubscriptionPlanForm { name: string; description: string; price: string; currency: string; billing_period: string; credit_amount: string; group_id: string; model_whitelist: string[]; max_requests_per_period: number | null; max_credit_per_period: number | null; overage_policy: OveragePolicy; model_quotas: SubscriptionPlanModelQuota[]; sort_order: number; enabled: boolean }
+export interface UserUpdate { id?: number; name?: string; email?: string; role?: string; enabled?: boolean; password?: string; balance?: number | null; note?: string; permissions?: string[]; groups?: string[]; leaderboard_opt_in?: boolean; leaderboard_mask_name?: boolean; data_usage_enabled?: boolean }
 export interface MigrateForm { source_dsn: string; source_driver: string }
 export interface MigrateResult { message: string }
 /**
@@ -444,6 +485,7 @@ export const endpoints = {
   getAccount: () => get<Account>('/account/me'),
   getAccountKeys: () => get<{ data: ApiKey[] }>('/account/keys'),
   getAccountUsage: () => get<{ data: UsageRecord[] }>('/account/usage'),
+  getAccountUsageDaily: (days: number, offsetMinutes: number) => get<{ data: DailyUsageRecord[] }>(`/account/usage/daily?days=${days}&offset=${offsetMinutes}`),
   getAccountUsageSummary: () => get<AccountUsageSummary>('/account/usage/summary'),
   getAccountLedger: () => get<{ data: LedgerEntry[] }>('/account/ledger'),
   getAccountGroups: () => get<AccountGroups>('/account/groups'),
@@ -455,6 +497,7 @@ export const endpoints = {
   cancelAccountSubscription: (id: string) => send(`/account/subscriptions/${encodeURIComponent(id)}/cancel`, 'POST'),
   getAccountSubscriptionOrders: () => get<{ data: SubscriptionOrder[] }>('/account/subscription-orders'),
   getAccountSubscriptionOrder: (orderNo: string) => get<SubscriptionOrder>(`/account/subscription-orders/${encodeURIComponent(orderNo)}`),
+  getAccountOrders: () => get<{ data: OrderRecord[] }>('/account/orders'),
   getInvoiceSettings: () => get<InvoiceSettings>('/account/invoice/settings'),
   getInvoiceEligibleOrders: () => get<{ data: InvoiceEligibleOrder[] }>('/account/invoices/eligible-orders'),
   validateInvoiceOrders: (orderNos: string[], needPayTax: boolean, taxOrderNos: string[] = []) => post<InvoiceValidation>('/account/invoices/validate', { orderNos, needPayTax, ...(taxOrderNos.length ? { taxOrderNos } : {}) }),
@@ -478,6 +521,7 @@ export const endpoints = {
 
   getActivityLogs: (query = '') => get<{ data: ActivityLog[] }>(`/activity-logs${query}`),
   getModelCatalog: () => get<{ data: CatalogModel[]; groups: CatalogGroup[] }>('/model-catalog'),
+  getModelPerformance: (model: string) => get<ModelPerformance>(`/model-performance?model=${encodeURIComponent(model)}`),
   getPublicSubscriptionPlans: () => get<{ data: PublicSubscriptionPlan[] }>('/subscription-plans'),
 
   login: (body: LoginBody) => post<{ token: string }>('/auth/login', body),

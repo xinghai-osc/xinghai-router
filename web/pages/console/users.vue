@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Users } from 'lucide-vue-next'
 import { endpoints, type AdminUserSubscription, type Group, type SubscriptionPlan, type User, type UserUpdate } from '~/src/api'
-import { formatDateTime, formatMoney } from '~/src/format'
+import { formatDateTime, formatMoney, formatNumber } from '~/src/format'
 
 definePageMeta({ layout: 'console', middleware: 'console-auth' })
 
@@ -53,7 +53,7 @@ const search = ref('')
 watch(search, () => { page.value = 1; void users.refresh() })
 
 const groupOptions = computed(() => groups.data.value.data)
-const groupNames = computed(() => new Map(groupOptions.value.map(group => [group.id, group.name])))
+const groupNames = computed(() => new Map(groupOptions.value.map(group => [group.id, group.display_name || group.name])))
 
 const roleOptions = computed(() => [
   { value: 'user', label: t('admin.roleUser') },
@@ -79,6 +79,9 @@ const form = reactive({
   note: '',
   permissions: [] as string[],
   groups: [] as string[],
+  leaderboardOptIn: true,
+  leaderboardMaskName: false,
+  dataUsageEnabled: true,
 })
 
 function openManage(user: User) {
@@ -94,6 +97,9 @@ function openManage(user: User) {
   form.note = ''
   form.permissions = [...user.permissions]
   form.groups = [...user.groups]
+  form.leaderboardOptIn = user.leaderboard_opt_in
+  form.leaderboardMaskName = user.leaderboard_mask_name
+  form.dataUsageEnabled = user.data_usage_enabled
   dialogOpen.value = true
 }
 
@@ -118,6 +124,9 @@ function buildUpdate(): UserUpdate | null {
     enabled: form.enabled,
     permissions: form.permissions,
     groups: form.groups,
+    leaderboard_opt_in: form.leaderboardOptIn,
+    leaderboard_mask_name: form.leaderboardMaskName,
+    data_usage_enabled: form.dataUsageEnabled,
   }
   if (form.password) update.password = form.password
 
@@ -184,6 +193,26 @@ const subForm = reactive({ plan_id: '', start_at: '', end_at: '', auto_renew: fa
 const subFormError = ref('')
 
 const subPlanOptions = computed(() => subPlans.value.map(plan => ({ value: plan.id, label: plan.name })))
+
+function subQuotaLines(sub: AdminUserSubscription): string[] {
+  const lines: string[] = []
+  if (sub.max_requests_per_period !== null) {
+    lines.push(t('system.remainingRequests', { remaining: formatNumber(sub.remaining_requests), max: formatNumber(sub.max_requests_per_period) }))
+  }
+  if (sub.max_credit_per_period !== null) {
+    lines.push(t('system.remainingCredit', { remaining: formatMoney(sub.remaining_credit), max: formatMoney(sub.max_credit_per_period) }))
+  }
+  for (const quota of sub.model_usage) {
+    if (quota.max_requests_per_period !== null) {
+      lines.push(t('system.remainingModelRequests', { model: quota.model, remaining: formatNumber(quota.remaining_requests), max: formatNumber(quota.max_requests_per_period) }))
+    }
+    if (quota.max_credit_per_period !== null) {
+      lines.push(t('system.remainingModelCredit', { model: quota.model, remaining: formatMoney(quota.remaining_credit), max: formatMoney(quota.max_credit_per_period) }))
+    }
+  }
+  if (!lines.length) lines.push(t('system.unlimited'))
+  return lines
+}
 
 function toLocalInput(iso: string | null): string {
   if (!iso) return ''
@@ -407,6 +436,32 @@ async function deleteSubscription() {
 
         <UiCheckbox v-model="form.enabled">{{ t('admin.accountEnabled') }}</UiCheckbox>
 
+        <UiField :label="t('admin.preferences')">
+          <div class="space-y-3 rounded-control border border-line bg-sunken px-3 py-2.5">
+            <div class="flex items-start justify-between gap-4">
+              <div class="min-w-0">
+                <p class="text-sm text-ink">{{ t('console.dataUsageEnabled') }}</p>
+                <p class="text-[13px] text-muted">{{ t('console.dataUsageEnabledHint') }}</p>
+              </div>
+              <UiSwitch v-model="form.dataUsageEnabled" :label="t('console.dataUsageEnabled')" />
+            </div>
+            <div class="flex items-start justify-between gap-4">
+              <div class="min-w-0">
+                <p class="text-sm text-ink">{{ t('console.leaderboardOptIn') }}</p>
+                <p class="text-[13px] text-muted">{{ t('console.leaderboardOptInHint') }}</p>
+              </div>
+              <UiSwitch v-model="form.leaderboardOptIn" :label="t('console.leaderboardOptIn')" />
+            </div>
+            <div class="flex items-start justify-between gap-4">
+              <div class="min-w-0">
+                <p class="text-sm text-ink">{{ t('console.leaderboardMaskName') }}</p>
+                <p class="text-[13px] text-muted">{{ t('console.leaderboardMaskNameHint') }}</p>
+              </div>
+              <UiSwitch v-model="form.leaderboardMaskName" :disabled="!form.leaderboardOptIn" :label="t('console.leaderboardMaskName')" />
+            </div>
+          </div>
+        </UiField>
+
         <UiField :label="t('admin.permissions')">
           <div class="grid gap-x-4 gap-y-2 rounded-control border border-line bg-sunken px-3 py-2.5 sm:grid-cols-2">
             <UiCheckbox
@@ -487,6 +542,7 @@ async function deleteSubscription() {
           <thead>
             <tr>
               <th>{{ t('admin.plan') }}</th>
+              <th>{{ t('system.remainingQuota') }}</th>
               <th>{{ t('common.status') }}</th>
               <th class="num">{{ t('admin.periodStart') }}</th>
               <th class="num">{{ t('admin.periodEnd') }}</th>
@@ -497,6 +553,11 @@ async function deleteSubscription() {
           <tbody>
             <tr v-for="sub in subs" :key="sub.id">
               <td class="font-medium text-ink">{{ sub.plan_name }}</td>
+              <td>
+                <p v-for="line in subQuotaLines(sub)" :key="line" class="whitespace-nowrap text-[13px] text-muted">
+                  {{ line }}
+                </p>
+              </td>
               <td>
                 <UiBadge :tone="STATUS_TONES[sub.status]" dot>{{ t(STATUS_KEYS[sub.status]) }}</UiBadge>
               </td>

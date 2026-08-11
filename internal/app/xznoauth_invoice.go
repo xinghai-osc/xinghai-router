@@ -542,7 +542,7 @@ func (s *Service) accountInvoiceEligibleOrders(w http.ResponseWriter, r *http.Re
     join invoice_applications ia on ia.id=io.application_id
     where io.local_order_no=o.order_no and ia.status<>'canceled'
   )
-  order by o.paid_at desc`, account.userID, account.userID)
+  order by o.paid_at desc`, account.userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not load invoice orders")
 		return

@@ -90,7 +90,36 @@ func (s *Service) expireStalePendingOrders(ctx context.Context) {
 	} else {
 		lapsedN = tag.RowsAffected()
 	}
-	if payN > 0 || subOrderN > 0 || subN > 0 || lapsedN > 0 {
-		log.Printf("order cleanup: expired %d payment orders, %d subscription orders, cancelled %d pending subscriptions, marked %d lapsed actives older than %s", payN, subOrderN, subN, lapsedN, pendingOrderMaxAge)
+	// Revoke the plan group from users whose subscriptions to it no longer
+	// cover it, so an expired subscription does not keep granting group access.
+	// Only groups tied to a subscription plan are touched, and membership is
+	// kept while any active subscription still covers the group (e.g. another
+	// plan or a renewed subscription sharing the same group).
+	groupN := int64(0)
+	if tag, err := s.db.Exec(ctx, `delete from user_groups ug
+		where exists (
+			select 1
+			from subscription_plans p
+			join user_subscriptions us on us.plan_id=p.id
+			where p.group_id=ug.group_id and us.user_id=ug.user_id
+		)
+		  and not exists (
+			select 1
+			from subscription_plans p
+			join user_subscriptions us on us.plan_id=p.id
+			where p.group_id=ug.group_id and us.user_id=ug.user_id
+			  and us.status='active'
+			  and (us.current_period_end is null or us.current_period_end > now())
+		  )`); err != nil {
+		log.Printf("order cleanup: revoke lapsed subscription groups: %v", err)
+	} else {
+		groupN = tag.RowsAffected()
+	}
+	if payN > 0 || subOrderN > 0 || subN > 0 || lapsedN > 0 || groupN > 0 {
+		log.Printf("order cleanup: expired %d payment orders, %d subscription orders, cancelled %d pending subscriptions, marked %d lapsed actives older than %s, revoked %d subscription groups", payN, subOrderN, subN, lapsedN, pendingOrderMaxAge, groupN)
+		s.subscriptionCache.clear()
+		if groupN > 0 {
+			s.invalidateChannels()
+		}
 	}
 }

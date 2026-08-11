@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Plus, Sparkles } from 'lucide-vue-next'
 import { endpoints, type Group, type SubscriptionPlan, type SubscriptionPlanForm } from '~/src/api'
-import { formatNumber } from '~/src/format'
+import { formatMoney, formatNumber } from '~/src/format'
 
 definePageMeta({ layout: 'console', middleware: 'console-auth' })
 
@@ -101,6 +101,8 @@ async function confirmDelete() {
               <th class="num">{{ t('system.creditAmount') }}</th>
               <th>{{ t('system.planGroup') }}</th>
               <th class="num">{{ t('system.modelWhitelist') }}</th>
+              <th class="num">{{ t('system.quotaLimits') }}</th>
+              <th>{{ t('system.overagePolicy') }}</th>
               <th class="num">{{ t('system.sortOrder') }}</th>
               <th>{{ t('common.status') }}</th>
               <th>{{ t('common.actions') }}</th>
@@ -122,6 +124,27 @@ async function confirmDelete() {
                 {{ plan.model_whitelist.length
                   ? t('system.modelWhitelistCount', { count: formatNumber(plan.model_whitelist.length) })
                   : t('system.unlimited') }}
+              </td>
+              <td class="num">
+                <div class="text-[13px]">
+                  <p v-if="plan.max_requests_per_period !== null">
+                    {{ t('system.quotaRequests', { count: formatNumber(plan.max_requests_per_period) }) }}
+                  </p>
+                  <p v-if="plan.max_credit_per_period !== null">
+                    {{ t('system.quotaCredit', { amount: formatMoney(plan.max_credit_per_period) }) }}
+                  </p>
+                  <p v-if="plan.model_quotas.length" class="text-muted">
+                    {{ t('system.modelQuotaCount', { count: formatNumber(plan.model_quotas.length) }) }}
+                  </p>
+                  <p v-if="plan.max_requests_per_period === null && plan.max_credit_per_period === null && plan.model_quotas.length === 0" class="text-muted">
+                    {{ t('system.unlimited') }}
+                  </p>
+                </div>
+              </td>
+              <td>
+                <UiBadge :tone="plan.overage_policy === 'block' ? 'warn' : 'neutral'">
+                  {{ plan.overage_policy === 'block' ? t('system.overageBlock') : t('system.overageWallet') }}
+                </UiBadge>
               </td>
               <td class="num">{{ plan.sort_order }}</td>
               <td>

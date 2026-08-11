@@ -12,6 +12,7 @@ export default {
   ledger: '账单流水',
   subscriptions: '我的订阅',
   invoices: '发票管理',
+  orders: '我的订单',
   account: '账户设置',
 
   users: '用户',

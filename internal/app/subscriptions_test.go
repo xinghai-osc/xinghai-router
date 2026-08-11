@@ -142,6 +142,52 @@ func TestReadSubscriptionPlanInputUnlimitedCredit(t *testing.T) {
 	if plan.CreditAmount != "" {
 		t.Fatalf("credit amount = %q, want empty for unlimited", plan.CreditAmount)
 	}
+	if plan.OveragePolicy != "allow_wallet" {
+		t.Fatalf("overage policy = %q, want default allow_wallet", plan.OveragePolicy)
+	}
+}
+
+func TestReadSubscriptionPlanInputOveragePolicy(t *testing.T) {
+	body := `{"name":"Pro","price":"10.00","billing_period":"month","overage_policy":"block"}`
+	req := httptest.NewRequest(http.MethodPost, "/admin/subscription-plans", strings.NewReader(body))
+	plan, err := readSubscriptionPlanInput(req, &Service{}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.OveragePolicy != "block" {
+		t.Fatalf("overage policy = %q, want block", plan.OveragePolicy)
+	}
+	invalid := `{"name":"Pro","price":"10.00","billing_period":"month","overage_policy":"refund"}`
+	req = httptest.NewRequest(http.MethodPost, "/admin/subscription-plans", strings.NewReader(invalid))
+	if _, err := readSubscriptionPlanInput(req, &Service{}, ""); err == nil {
+		t.Fatal("expected rejection for invalid overage_policy")
+	}
+}
+
+func TestReadSubscriptionPlanInputModelQuotas(t *testing.T) {
+	body := `{"name":"Pro","price":"10.00","billing_period":"month","model_quotas":[{"model":"gpt-4o","max_requests_per_period":100,"max_credit_per_period":100000}]}`
+	req := httptest.NewRequest(http.MethodPost, "/admin/subscription-plans", strings.NewReader(body))
+	plan, err := readSubscriptionPlanInput(req, &Service{}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.ModelQuotas) != 1 {
+		t.Fatalf("model quotas = %+v, want 1 entry", plan.ModelQuotas)
+	}
+	if plan.ModelQuotas[0].Model != "gpt-4o" || plan.ModelQuotas[0].MaxRequestsPerRule == nil || *plan.ModelQuotas[0].MaxRequestsPerRule != 100 {
+		t.Fatalf("unexpected model quota: %+v", plan.ModelQuotas[0])
+	}
+	for _, body := range []string{
+		`{"name":"Pro","price":"10.00","billing_period":"month","model_quotas":[{"model":"","max_requests_per_period":100}]}`,
+		`{"name":"Pro","price":"10.00","billing_period":"month","model_quotas":[{"model":"gpt-4o","max_requests_per_period":100},{"model":"gpt-4o","max_requests_per_period":200}]}`,
+		`{"name":"Pro","price":"10.00","billing_period":"month","model_quotas":[{"model":"gpt-4o","max_requests_per_period":-1}]}`,
+		`{"name":"Pro","price":"10.00","billing_period":"month","model_quotas":[{"model":"gpt-4o"}]}`,
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/admin/subscription-plans", strings.NewReader(body))
+		if _, err := readSubscriptionPlanInput(req, &Service{}, ""); err == nil {
+			t.Fatalf("expected rejection for body %s", body)
+		}
+	}
 }
 
 func TestReadSubscriptionPlanInputMaxCredit(t *testing.T) {

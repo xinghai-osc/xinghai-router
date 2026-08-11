@@ -94,6 +94,26 @@ export function formatRatio(multiplier: number | string): string {
   return `x${formatted}`
 }
 
+/** Format a requests-per-second figure, trimming trailing zeros. */
+export function formatTPS(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return '0'
+  const formatted = value >= 1 ? value.toFixed(2) : value.toPrecision(2)
+  return String(Number.parseFloat(formatted))
+}
+
+/** Format an average latency in milliseconds, upgrading to seconds above 1s. */
+export function formatLatency(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return '—'
+  if (ms >= 1000) return `${(ms / 1000).toFixed(2)}s`
+  return `${Math.round(ms)}ms`
+}
+
+/** Format a success rate (0..1) as a percentage. */
+export function formatSuccessRate(rate: number): string {
+  if (!Number.isFinite(rate)) return '—'
+  return `${(rate * 100).toFixed(1)}%`
+}
+
 /** Deterministic accent colour for a vendor monogram. */
 export function vendorColor(name: string): { bg: string; fg: string } {
   let hash = 0

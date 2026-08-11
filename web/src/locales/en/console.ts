@@ -28,7 +28,6 @@ export default {
   quickTopUpHint: 'Pay online and keep calling once it clears',
   quickUsage: 'Review usage',
   quickUsageHint: 'Tokens and cost per request, by model',
-  usageWindowNote: 'Totals are based on the latest 100 usage records.',
 
   // ---- API keys ----
   keysDescription: 'Keys authenticate gateway calls. Keep them secret and out of your repository.',
@@ -183,6 +182,13 @@ export default {
   statusPaid: 'Paid',
   statusExpired: 'Expired',
 
+  // ---- Orders ----
+  ordersDescription: 'All historical orders, including top-ups and subscriptions.',
+  orderTypePayment: 'Top-up',
+  orderTypeSubscription: 'Subscription',
+  allOrdersEmptyTitle: 'No orders yet',
+  allOrdersEmptyBody: 'Orders appear here after your first top-up or subscription.',
+
   // ---- Subscriptions ----
   subscriptionsDescription: 'Subscription plans grant bundled credit and a dedicated group multiplier.',
   currentSubscriptions: 'Current subscriptions',
@@ -222,7 +228,14 @@ export default {
   planWhitelist: '{count} models included',
   planAllModels: 'All models included',
   planQuotaRequests: '{count} requests per period',
-  planQuotaTokens: '{count} tokens per period',
+  planQuotaCredit: '{amount} credit per period',
+  planModelQuota: 'Model {model} has its own quota',
+  planQuotaBlocked: 'Requests are rejected once the quota is used up',
+  periodQuota: 'Period quota',
+  quotaRequests: 'Requests',
+  quotaCredit: 'Credit',
+  quotaModelRequests: '{model} requests',
+  quotaModelCredit: '{model} credit',
   orderKind: 'Kind',
   orderKindNew: 'New',
   orderKindRenewal: 'Renewal',

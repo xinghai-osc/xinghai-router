@@ -82,8 +82,18 @@ function planBenefits(plan: PublicSubscriptionPlan): string[] {
   const list: string[] = []
   if (plan.credit_amount) {
     list.push(t('console.planCredit', { amount: Number(plan.credit_amount).toFixed(2) }))
-  } else {
+  } else if (plan.max_credit_per_period === null
+    && !(plan.model_quotas ?? []).some(quota => quota.max_credit_per_period !== null)) {
     list.push(t('console.planUnlimitedCredit'))
+  }
+  if (plan.max_requests_per_period !== null) {
+    list.push(t('console.planQuotaRequests', { count: formatNumber(plan.max_requests_per_period) }))
+  }
+  if (plan.max_credit_per_period !== null) {
+    list.push(t('console.planQuotaCredit', { amount: formatMoney(plan.max_credit_per_period) }))
+  }
+  for (const quota of plan.model_quotas ?? []) {
+    list.push(t('console.planModelQuota', { model: quota.model }))
   }
   if (plan.group_name) list.push(t('console.planGroup', { group: plan.group_name }))
   list.push(plan.model_whitelist.length
@@ -92,15 +102,61 @@ function planBenefits(plan: PublicSubscriptionPlan): string[] {
   return list
 }
 
-function subscriptionLimits(subscription: UserSubscription): string[] {
-  const list: string[] = []
+interface QuotaBar {
+  key: string
+  label: string
+  used: string
+  max: string
+  percent: number
+}
+
+function barPercent(used: number, max: number): number {
+  if (max <= 0) return 0
+  return Math.min(100, Math.max(0, Math.round((used / max) * 100)))
+}
+
+function quotaBars(subscription: UserSubscription): QuotaBar[] {
+  const bars: QuotaBar[] = []
   if (subscription.max_requests_per_period !== null) {
-    list.push(t('console.planQuotaRequests', { count: formatNumber(subscription.max_requests_per_period) }))
+    bars.push({
+      key: 'requests',
+      label: t('console.quotaRequests'),
+      used: formatNumber(subscription.usage_requests),
+      max: formatNumber(subscription.max_requests_per_period),
+      percent: barPercent(subscription.usage_requests, subscription.max_requests_per_period),
+    })
   }
-  if (subscription.max_tokens_per_period !== null) {
-    list.push(t('console.planQuotaTokens', { count: formatNumber(subscription.max_tokens_per_period) }))
+  if (subscription.max_credit_per_period !== null) {
+    bars.push({
+      key: 'credit',
+      label: t('console.quotaCredit'),
+      used: formatMoney(subscription.usage_credit),
+      max: formatMoney(subscription.max_credit_per_period),
+      percent: barPercent(subscription.usage_credit, subscription.max_credit_per_period),
+    })
   }
-  return list
+  for (const quota of subscription.model_quotas ?? []) {
+    const usage = subscription.model_usage.find(u => u.model === quota.model)
+    if (quota.max_requests_per_period !== null) {
+      bars.push({
+        key: `model-${quota.model}-requests`,
+        label: t('console.quotaModelRequests', { model: quota.model }),
+        used: formatNumber(usage?.requests ?? 0),
+        max: formatNumber(quota.max_requests_per_period),
+        percent: barPercent(usage?.requests ?? 0, quota.max_requests_per_period),
+      })
+    }
+    if (quota.max_credit_per_period !== null) {
+      bars.push({
+        key: `model-${quota.model}-credit`,
+        label: t('console.quotaModelCredit', { model: quota.model }),
+        used: formatMoney(usage?.credit ?? 0),
+        max: formatMoney(quota.max_credit_per_period),
+        percent: barPercent(usage?.credit ?? 0, quota.max_credit_per_period),
+      })
+    }
+  }
+  return bars
 }
 
 function openSubscribe(plan: PublicSubscriptionPlan) {
@@ -187,10 +243,36 @@ async function confirmCancel() {
                   <dt class="text-muted">{{ t('console.group') }}</dt>
                   <dd class="text-ink">{{ subscription.group_name }}</dd>
                 </div>
-                <div v-for="limit in subscriptionLimits(subscription)" :key="limit" class="text-muted">
-                  {{ limit }}
-                </div>
               </dl>
+
+              <div
+                v-if="quotaBars(subscription).length"
+                class="space-y-2 border-t border-line pt-3"
+              >
+                <p class="text-[13px] font-medium text-ink">{{ t('console.periodQuota') }}</p>
+                <div v-for="bar in quotaBars(subscription)" :key="bar.key" class="space-y-1">
+                  <div class="flex items-center justify-between gap-3 text-[13px]">
+                    <span class="min-w-0 truncate text-muted">{{ bar.label }}</span>
+                    <span class="numeric shrink-0 text-ink">{{ bar.used }} / {{ bar.max }}</span>
+                  </div>
+                  <div
+                    class="h-1.5 w-full overflow-hidden rounded-full bg-sunken"
+                    role="progressbar"
+                    :aria-label="bar.label"
+                    :aria-valuenow="bar.percent"
+                    aria-valuemin="0"
+                    aria-valuemax="100"
+                  >
+                    <div
+                      class="h-full rounded-full bg-clay transition-[width] duration-150 ease-out"
+                      :style="{ width: `${bar.percent}%` }"
+                    />
+                  </div>
+                </div>
+                <p v-if="subscription.overage_policy === 'block'" class="text-[13px] text-faint">
+                  {{ t('console.planQuotaBlocked') }}
+                </p>
+              </div>
 
               <UiButton
                 v-if="subscription.status === 'active' || subscription.status === 'pending'"

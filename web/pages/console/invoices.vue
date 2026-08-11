@@ -54,7 +54,7 @@ const buyerTypeOptions = computed(() => [
 ])
 
 const selectedCount = computed(() => selectedOrderNos.value.length)
-const allEligible = computed(() => orders.value.map(order => order.order_no))
+const allEligible = computed(() => orders.value.data.map(order => order.order_no))
 const canSubmit = computed(() => {
   if (!selectedOrderNos.value.length || !validation.value) return false
   if (needPayTax.value && !taxPaid.value) return false
@@ -248,7 +248,7 @@ async function syncStatuses() {
           <ConsoleUserDataState
             :pending="pending"
             :error="ordersError"
-            :empty="!orders.length"
+            :empty="!orders.data.length"
             :rows="5"
             :empty-icon="FileText"
             :empty-title="t('console.invoiceNoOrders')"
@@ -271,7 +271,7 @@ async function syncStatuses() {
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="order in orders" :key="order.order_no">
+                <tr v-for="order in orders.data" :key="order.order_no">
                   <td>
                     <UiCheckbox
                       :model-value="isSelected(order.order_no)"
@@ -402,7 +402,7 @@ async function syncStatuses() {
           <ConsoleUserDataState
             :pending="historyPending"
             :error="historyError"
-            :empty="!applications.length"
+            :empty="!applications.data.length"
             :rows="4"
             :empty-icon="FileText"
             :empty-title="t('console.invoiceHistoryEmptyTitle')"
@@ -420,7 +420,7 @@ async function syncStatuses() {
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="app in applications" :key="app.id">
+                <tr v-for="app in applications.data" :key="app.id">
                   <td><code class="font-mono text-[13px] text-muted">{{ app.application_id }}</code></td>
                   <td>{{ app.title }}</td>
                   <td class="num font-medium">{{ formatAmount(app.total_amount) }}</td>

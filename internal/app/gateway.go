@@ -313,8 +313,12 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 	subscriptionAccess := s.subscriptionCoversModel(ctx, key.userID, model)
 	ctx = context.WithValue(ctx, subscriptionCoveredKey{}, subscriptionAccess)
 	var reserved reservation
-	if subscriptionAccess {
+	if subscriptionAccess.Covered {
 		// Subscription-covered requests are never billed.
+	} else if subscriptionAccess.OveragePolicy == "block" {
+		s.logReject(ctx, model, 402, "subscription_quota_exceeded", started)
+		writeError(w, 402, "subscription_quota_exceeded", "subscription period quota exhausted")
+		return
 	} else {
 		var err error
 		reserved, err = s.reserveUsage(ctx, key, model, len(body), maxTokens, pricing, groupMultiplier)
@@ -566,8 +570,12 @@ tryChannels:
 			if streamErr == nil {
 				s.promptCache.store(model, normalizedPrompt(body), int64(st.prompt))
 			}
-			if !subscriptionAccess && (st.prompt > 0 || st.completion > 0) {
-				reserved = s.settleUsage(ctx, key, reserved, model, st.prompt, st.cached, st.completion, pricing, groupMultiplier)
+			if (st.prompt > 0 || st.completion > 0) {
+				if subscriptionAccess.Covered {
+					s.settleSubscriptionUsage(ctx, key, model, st.prompt, st.cached, st.completion, pricing, groupMultiplier)
+				} else {
+					reserved = s.settleUsage(ctx, key, reserved, model, st.prompt, st.cached, st.completion, pricing, groupMultiplier)
+				}
 			}
 			s.channelSucceeded(ctx, ch.id, ch.keyID)
 		}
@@ -614,7 +622,9 @@ tryChannels:
 	s.logRequest(ctx, key, ch.id, ch.keyID, model, resp.StatusCode, prompt, completion, total, time.Since(started), errorCode(resp.StatusCode), detail)
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		s.promptCache.store(model, normalizedPrompt(body), int64(prompt))
-		if !subscriptionAccess {
+		if subscriptionAccess.Covered {
+			s.settleSubscriptionUsage(ctx, key, model, prompt, cached, completion, pricing, groupMultiplier)
+		} else {
 			reserved = s.settleUsage(ctx, key, reserved, model, prompt, cached, completion, pricing, groupMultiplier)
 		}
 		s.channelSucceeded(ctx, ch.id, ch.keyID)
@@ -736,17 +746,7 @@ func (s *Service) settleUsage(ctx context.Context, key keyContext, held reservat
 	if held.amount == 0 && prompt == 0 && completion == 0 {
 		return held
 	}
-	// Apply time-based pricing, then tiered pricing for the actual token count.
-	input, cachedInput, output := pricing.resolvePricing(time.Now())
-	var cost float64
-	if len(pricing.tiers) > 0 {
-		cost = tieredUsageCost(prompt, cached, completion, pricing, input, cachedInput, output)
-		if groupMultiplier > 0 {
-			cost *= groupMultiplier
-		}
-	} else {
-		cost = usageCost(prompt, cached, completion, input, cachedInput, output, pricing.multiplier, groupMultiplier)
-	}
+	cost := computeUsageCost(prompt, cached, completion, pricing, groupMultiplier)
 	cost = clampCostToHold(cost, held.amount)
 	ledgerID, _ := randomID()
 	usageID, _ := randomID()
@@ -768,6 +768,52 @@ func (s *Service) settleUsage(ctx context.Context, key keyContext, held reservat
 		return held
 	}
 	return reservation{}
+}
+
+// computeUsageCost returns the cost of a request under the active pricing rule,
+// shared by the wallet settlement and the subscription-covered accounting path.
+func computeUsageCost(prompt, cached, completion int, pricing pricingRule, groupMultiplier float64) float64 {
+	// Apply time-based pricing, then tiered pricing for the actual token count.
+	input, cachedInput, output := pricing.resolvePricing(time.Now())
+	var cost float64
+	if len(pricing.tiers) > 0 {
+		cost = tieredUsageCost(prompt, cached, completion, pricing, input, cachedInput, output)
+		if groupMultiplier > 0 {
+			cost *= groupMultiplier
+		}
+	} else {
+		cost = usageCost(prompt, cached, completion, input, cachedInput, output, pricing.multiplier, groupMultiplier)
+	}
+	return cost
+}
+
+// settleSubscriptionUsage records the cost of a successful subscription-covered request
+// without touching the wallet. The usage_records row feeds the per-period credit quota in
+// subscriptionCoversModel, so a subscription's monthly credit cap counts what its requests
+// would have cost under normal pricing.
+func (s *Service) settleSubscriptionUsage(ctx context.Context, key keyContext, model string, prompt, cached, completion int, pricing pricingRule, groupMultiplier float64) {
+	if prompt == 0 && completion == 0 {
+		return
+	}
+	cost := computeUsageCost(prompt, cached, completion, pricing, groupMultiplier)
+	// The covering subscription is resolved during the coverage check; its
+	// per-period counters must be decremented once per settled request.
+	access, _ := ctx.Value(subscriptionCoveredKey{}).(subscriptionAccess)
+	usageID, _ := randomID()
+	settleCtx, cancel := detach(ctx, settlementTimeout)
+	defer cancel()
+	_, err := s.db.Exec(settleCtx, `insert into usage_records(id,request_id,user_id,api_key_id,model,prompt_tokens,cached_prompt_tokens,completion_tokens,cost)
+	values($1::uuid,$2::text,$3,$4::uuid,$5::text,$6::int,$7::int,$8::int,$9)
+	on conflict(request_id) do update set prompt_tokens=excluded.prompt_tokens,cached_prompt_tokens=excluded.cached_prompt_tokens,completion_tokens=excluded.completion_tokens,cost=excluded.cost`,
+		usageID, requestID(ctx), key.userID, key.keyID, model, prompt, cached, completion, cost)
+	if err != nil {
+		log.Printf("settleSubscriptionUsage failed: %v", err)
+	}
+	if access.SubscriptionID != "" {
+		if err := s.consumeSubscriptionQuota(settleCtx, access.SubscriptionID, model, cost); err != nil {
+			log.Printf("consumeSubscriptionQuota failed: %v", err)
+		}
+	}
 }
 
 func (s *Service) releaseReservation(ctx context.Context, key keyContext, held reservation) {
@@ -1303,10 +1349,10 @@ func (s *Service) logRequest(ctx context.Context, key keyContext, channelID int6
 	id, _ := randomID()
 	info := clientInfoFromContext(ctx)
 	detail = sanitizeErrorDetail(detail)
-	subscriptionCovered, _ := ctx.Value(subscriptionCoveredKey{}).(bool)
+	subscriptionAccess, _ := ctx.Value(subscriptionCoveredKey{}).(subscriptionAccess)
 	logCtx, cancel := detach(ctx, settlementTimeout)
 	defer cancel()
-	_, err := s.db.Exec(logCtx, `insert into request_logs(id,request_id,user_id,api_key_id,channel_id,channel_key_id,group_id,model,status_code,prompt_tokens,completion_tokens,total_tokens,duration_ms,error_code,client_ip,user_agent,error_detail,subscription_covered) values($1::uuid,$2::text,$3::bigint,$4::uuid,nullif($5,0),nullif($6,'')::uuid,nullif($7,'')::uuid,$8,$9::int,$10::int,$11::int,$12::int,$13::int,nullif($14,''),$15,$16,$17,$18)`, id, requestID(ctx), key.userID, key.keyID, channelID, channelKeyID, key.groupID, model, status, prompt, completion, total, d.Milliseconds(), errorCode, info.ip, info.userAgent, detail, subscriptionCovered)
+	_, err := s.db.Exec(logCtx, `insert into request_logs(id,request_id,user_id,api_key_id,channel_id,channel_key_id,group_id,model,status_code,prompt_tokens,completion_tokens,total_tokens,duration_ms,error_code,client_ip,user_agent,error_detail,subscription_covered) values($1::uuid,$2::text,$3::bigint,$4::uuid,nullif($5,0),nullif($6,'')::uuid,nullif($7,'')::uuid,$8,$9::int,$10::int,$11::int,$12::int,$13::int,nullif($14,''),$15,$16,$17,$18)`, id, requestID(ctx), key.userID, key.keyID, channelID, channelKeyID, key.groupID, model, status, prompt, completion, total, d.Milliseconds(), errorCode, info.ip, info.userAgent, detail, subscriptionAccess.Covered)
 	if err != nil {
 		log.Printf("logRequest failed: %v", err)
 	}

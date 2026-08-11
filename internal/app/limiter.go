@@ -17,6 +17,10 @@ const (
 	// an expensive multi-table aggregation on every direct hit. The 30s response
 	// cache absorbs repeats, so the limiter need only stop deliberate floods.
 	rankingsPerMinute = 60
+	// performancePerMinute bounds the unauthenticated /model-performance endpoint,
+	// which aggregates request_logs per group for a single model on every panel open.
+	// The short cache absorbs repeats from the same model.
+	performancePerMinute = 120
 )
 
 type rateLimiter interface {

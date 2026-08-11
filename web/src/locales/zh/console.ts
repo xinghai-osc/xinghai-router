@@ -28,7 +28,6 @@ export default {
   quickTopUpHint: '在线充值，到账后继续调用',
   quickUsage: '查看用量明细',
   quickUsageHint: '按模型查看每次请求的 Tokens 与费用',
-  usageWindowNote: '统计基于最近 100 条用量记录。',
 
   // ---- API 密钥 ----
   keysDescription: '密钥用于调用网关，请妥善保管，不要提交到代码仓库。',
@@ -183,6 +182,13 @@ export default {
   statusPaid: '已支付',
   statusExpired: '已过期',
 
+  // ---- 我的订单 ----
+  ordersDescription: '全部历史订单，包含充值订单与订阅订单。',
+  orderTypePayment: '充值',
+  orderTypeSubscription: '订阅',
+  allOrdersEmptyTitle: '还没有订单',
+  allOrdersEmptyBody: '完成一次充值或订阅后，订单会出现在这里。',
+
   // ---- 我的订阅 ----
   subscriptionsDescription: '订阅计划可获得赠送额度与专属分组倍率。',
   currentSubscriptions: '当前订阅',
@@ -222,7 +228,14 @@ export default {
   planWhitelist: '{count} 个可用模型',
   planAllModels: '全部模型可用',
   planQuotaRequests: '每周期 {count} 次请求',
-  planQuotaTokens: '每周期 {count} Tokens',
+  planQuotaCredit: '每周期 {amount} 额度',
+  planModelQuota: '模型 {model} 有独立额度',
+  planQuotaBlocked: '额度耗尽后拒绝请求',
+  periodQuota: '周期额度',
+  quotaRequests: '请求次数',
+  quotaCredit: '额度',
+  quotaModelRequests: '{model} 请求',
+  quotaModelCredit: '{model} 额度',
   orderKind: '类型',
   orderKindNew: '新购',
   orderKindRenewal: '续订',

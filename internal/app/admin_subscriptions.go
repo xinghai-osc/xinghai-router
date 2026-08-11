@@ -17,7 +17,7 @@ func (s *Service) adminUserSubscriptions(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusNotFound, "not_found", "user not found")
 		return
 	}
-	rows, err := s.db.Query(r.Context(), `select us.id::text,us.plan_id::text,p.name,us.status,to_char(us.current_period_start,'YYYY-MM-DD"T"HH24:MI:SS"Z"'),to_char(us.current_period_end,'YYYY-MM-DD"T"HH24:MI:SS"Z"'),us.auto_renew,to_char(us.cancelled_at,'YYYY-MM-DD"T"HH24:MI:SS"Z"'),to_char(us.created_at,'YYYY-MM-DD"T"HH24:MI:SS"Z"'),to_char(us.updated_at,'YYYY-MM-DD"T"HH24:MI:SS"Z"') from user_subscriptions us join subscription_plans p on p.id=us.plan_id where us.user_id=$1 order by us.created_at desc`, userID)
+	rows, err := s.db.Query(r.Context(), `select us.id::text,us.plan_id::text,p.name,us.status,to_char(us.current_period_start,'YYYY-MM-DD"T"HH24:MI:SS"Z"'),to_char(us.current_period_end,'YYYY-MM-DD"T"HH24:MI:SS"Z"'),us.auto_renew,to_char(us.cancelled_at,'YYYY-MM-DD"T"HH24:MI:SS"Z"'),to_char(us.created_at,'YYYY-MM-DD"T"HH24:MI:SS"Z"'),to_char(us.updated_at,'YYYY-MM-DD"T"HH24:MI:SS"Z"'),p.max_requests_per_period,us.remaining_requests,p.max_credit_per_period,us.remaining_credit from user_subscriptions us join subscription_plans p on p.id=us.plan_id where us.user_id=$1 order by us.created_at desc`, userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not load subscriptions")
 		return
@@ -28,15 +28,49 @@ func (s *Service) adminUserSubscriptions(w http.ResponseWriter, r *http.Request)
 		var id, planID, planName, status string
 		var start, end, cancelled, created, updated *string
 		var autoRenew bool
-		if err = rows.Scan(&id, &planID, &planName, &status, &start, &end, &autoRenew, &cancelled, &created, &updated); err != nil {
+		var maxReq, remainingReq *int64
+		var maxCredit, remainingCredit *float64
+		if err = rows.Scan(&id, &planID, &planName, &status, &start, &end, &autoRenew, &cancelled, &created, &updated, &maxReq, &remainingReq, &maxCredit, &remainingCredit); err != nil {
 			writeError(w, http.StatusInternalServerError, "internal_error", "could not load subscriptions")
 			return
 		}
-		data = append(data, map[string]any{"id": id, "plan_id": planID, "plan_name": planName, "status": status, "current_period_start": start, "current_period_end": end, "auto_renew": autoRenew, "cancelled_at": cancelled, "created_at": created, "updated_at": updated})
+		data = append(data, map[string]any{"id": id, "plan_id": planID, "plan_name": planName, "status": status, "current_period_start": start, "current_period_end": end, "auto_renew": autoRenew, "cancelled_at": cancelled, "created_at": created, "updated_at": updated, "max_requests_per_period": maxReq, "max_credit_per_period": maxCredit, "remaining_requests": remainingReq, "remaining_credit": remainingCredit, "model_usage": []map[string]any{}})
 	}
 	if err = rows.Err(); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not load subscriptions")
 		return
+	}
+	if len(data) > 0 {
+		subIDs := make([]string, len(data))
+		for i := range data {
+			subIDs[i] = data[i]["id"].(string)
+		}
+		usageRows, err := s.db.Query(r.Context(), `select uq.subscription_id::text,uq.model,q.max_requests_per_period,uq.remaining_requests,q.max_credit_per_period,uq.remaining_credit from user_subscription_model_usage uq join user_subscriptions us on us.id=uq.subscription_id join subscription_plan_model_quotas q on q.plan_id=us.plan_id and q.model=uq.model where uq.subscription_id = any($1) order by uq.model`, subIDs)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "could not load subscriptions")
+			return
+		}
+		defer usageRows.Close()
+		usageMap := map[string][]map[string]any{}
+		for usageRows.Next() {
+			var subID, model string
+			var maxReq, remainingReq *int64
+			var maxCredit, remainingCredit *float64
+			if err = usageRows.Scan(&subID, &model, &maxReq, &remainingReq, &maxCredit, &remainingCredit); err != nil {
+				writeError(w, http.StatusInternalServerError, "internal_error", "could not load subscriptions")
+				return
+			}
+			usageMap[subID] = append(usageMap[subID], map[string]any{"model": model, "max_requests_per_period": maxReq, "max_credit_per_period": maxCredit, "remaining_requests": remainingReq, "remaining_credit": remainingCredit})
+		}
+		if err = usageRows.Err(); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "could not load subscriptions")
+			return
+		}
+		for i := range data {
+			if usage, ok := usageMap[data[i]["id"].(string)]; ok {
+				data[i]["model_usage"] = usage
+			}
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": data})
 }
@@ -116,6 +150,10 @@ func (s *Service) adminCreateSubscription(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not create subscription")
 		return
 	}
+	if err = s.initSubscriptionCountersTx(r.Context(), tx, subID); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not initialise subscription quota")
+		return
+	}
 	if credit, ok := parseCreditAmount(creditStr); ok && credit > 0 {
 		if _, err = tx.Exec(r.Context(), `insert into user_wallets(user_id) values($1) on conflict do nothing`, userID); err != nil {
 			writeError(w, http.StatusInternalServerError, "internal_error", "could not credit wallet")
@@ -174,6 +212,7 @@ func (s *Service) adminUpdateSubscription(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not load subscription")
 		return
 	}
+	origStatus := status
 	if in.Status != nil {
 		switch *in.Status {
 		case "pending", "active", "expired", "cancelled":
@@ -215,7 +254,25 @@ func (s *Service) adminUpdateSubscription(w http.ResponseWriter, r *http.Request
 	if in.AutoRenew != nil {
 		autoRenew = *in.AutoRenew
 	}
-	if _, err = s.db.Exec(r.Context(), `update user_subscriptions set status=$1,current_period_start=$2,current_period_end=$3,auto_renew=$4,updated_at=now() where id=$5`, status, start, end, autoRenew, id); err != nil {
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not update subscription")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	if _, err = tx.Exec(r.Context(), `update user_subscriptions set status=$1,current_period_start=$2,current_period_end=$3,auto_renew=$4,updated_at=now() where id=$5`, status, start, end, autoRenew, id); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not update subscription")
+		return
+	}
+	if status == "active" && origStatus != "active" {
+		// Reactivating a subscription starts a fresh period, so refill its quota
+		// counters (a subscription manually activated from pending has none yet).
+		if err = s.initSubscriptionCountersTx(r.Context(), tx, id); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "could not reset subscription quota")
+			return
+		}
+	}
+	if err = tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not update subscription")
 		return
 	}

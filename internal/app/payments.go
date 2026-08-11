@@ -401,6 +401,8 @@ func (s *Service) epayNotify(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "fail", http.StatusInternalServerError)
 		return
 	}
+	s.subscriptionCache.clear()
+	s.invalidateChannels()
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte("success"))
 }

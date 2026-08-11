@@ -12,6 +12,7 @@ export default {
   ledger: 'Transactions',
   subscriptions: 'Subscriptions',
   invoices: 'Invoices',
+  orders: 'Orders',
   account: 'Settings',
 
   users: 'Users',
