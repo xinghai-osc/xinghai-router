@@ -288,7 +288,7 @@ func (s *Service) updateAccountProfile(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) accountKeys(w http.ResponseWriter, r *http.Request) {
 	account := accountFromContext(r)
-	rows, err := s.db.Query(r.Context(), `select k.id,k.name,k.key_prefix,k.expires_at,k.revoked_at,k.last_used_at,k.created_at,coalesce(k.group_id::text,''),coalesce(g.name,''),k.secret_encrypted<>'' from api_keys k left join groups g on g.id=k.group_id where k.user_id=$1 order by k.created_at desc`, account.userID)
+	rows, err := s.db.Query(r.Context(), `select k.id,k.name,k.key_prefix,k.expires_at,k.revoked_at,k.last_used_at,k.created_at,coalesce(k.group_id::text,''),coalesce(coalesce(g.display_name, g.name),''),k.secret_encrypted<>'' from api_keys k left join groups g on g.id=k.group_id where k.user_id=$1 order by k.created_at desc`, account.userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
 		return
@@ -483,7 +483,7 @@ func (s *Service) accountUsageSummary(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) accountUsage(w http.ResponseWriter, r *http.Request) {
 	account := accountFromContext(r)
-	rows, err := s.db.Query(r.Context(), `select rl.request_id,rl.model,coalesce(rl.prompt_tokens,0),coalesce(ur.cached_prompt_tokens,0),coalesce(rl.completion_tokens,0),coalesce(ur.cost,0),case when ur.status is not null then ur.status when rl.status_code>=400 or rl.error_code is not null then 'failed' else 'success' end,rl.created_at,rl.client_ip,rl.user_agent,case when rl.error_code is not null or rl.status_code>=400 then rl.error_detail else '' end,coalesce(ak.name,''),rl.subscription_covered,rl.duration_ms,coalesce(g.name,'') from request_logs rl left join usage_records ur on ur.request_id=rl.request_id left join api_keys ak on ak.id=rl.api_key_id left join groups g on g.id=rl.group_id where rl.user_id=$1 order by rl.created_at desc limit 100`, account.userID)
+	rows, err := s.db.Query(r.Context(), `select rl.request_id,rl.model,coalesce(rl.prompt_tokens,0),coalesce(ur.cached_prompt_tokens,0),coalesce(rl.completion_tokens,0),coalesce(ur.cost,0),case when ur.status is not null then ur.status when rl.status_code>=400 or rl.error_code is not null then 'failed' else 'success' end,rl.created_at,rl.client_ip,rl.user_agent,case when rl.error_code is not null or rl.status_code>=400 then rl.error_detail else '' end,coalesce(ak.name,''),rl.subscription_covered,rl.duration_ms,coalesce(coalesce(g.display_name, g.name),'') from request_logs rl left join usage_records ur on ur.request_id=rl.request_id left join api_keys ak on ak.id=rl.api_key_id left join groups g on g.id=rl.group_id where rl.user_id=$1 order by rl.created_at desc limit 100`, account.userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
 		return

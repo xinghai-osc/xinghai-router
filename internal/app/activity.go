@@ -36,7 +36,7 @@ func (s *Service) listActivityLogs(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.db.Query(r.Context(), `
 		select id,log_type,action,user_id,user_name,model,group_id,group_name,status_code,duration_ms,prompt_tokens,completion_tokens,total_tokens,cost,details,created_at
 		from (
-			select rl.request_id as id,'request'::text as log_type,'model.request'::text as action,rl.user_id::text as user_id,coalesce(u.name,'已删除用户') as user_name,rl.model,coalesce(rl.group_id::text,'') as group_id,coalesce(g.name,'') as group_name,rl.status_code,rl.duration_ms,coalesce(rl.prompt_tokens,0) as prompt_tokens,coalesce(rl.completion_tokens,0) as completion_tokens,coalesce(rl.total_tokens,0) as total_tokens,coalesce(ur.cost,0) as cost,jsonb_build_object('request_id',rl.request_id,'api_key_id',rl.api_key_id,'channel_id',rl.channel_id,'error_code',rl.error_code) as details,rl.created_at
+			select rl.request_id as id,'request'::text as log_type,'model.request'::text as action,rl.user_id::text as user_id,coalesce(u.name,'已删除用户') as user_name,rl.model,coalesce(rl.group_id::text,'') as group_id,coalesce(coalesce(g.display_name, g.name),'') as group_name,rl.status_code,rl.duration_ms,coalesce(rl.prompt_tokens,0) as prompt_tokens,coalesce(rl.completion_tokens,0) as completion_tokens,coalesce(rl.total_tokens,0) as total_tokens,coalesce(ur.cost,0) as cost,jsonb_build_object('request_id',rl.request_id,'api_key_id',rl.api_key_id,'channel_id',rl.channel_id,'error_code',rl.error_code) as details,rl.created_at
 			from request_logs rl
 			left join users u on u.id=rl.user_id
 			left join groups g on g.id=rl.group_id

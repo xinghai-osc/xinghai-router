@@ -24,7 +24,7 @@ function toggle(id: string, checked: boolean) {
       :model-value="model.includes(group.id)"
       @update:model-value="toggle(group.id, $event)"
     >
-      {{ group.name }}
+      {{ group.display_name || group.name }}
     </UiCheckbox>
   </div>
 </template>

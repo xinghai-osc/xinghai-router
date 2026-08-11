@@ -799,7 +799,7 @@ func (s *Service) listGroups(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "internal_error", "query failed")
 		return
 	}
-	rows, err := s.db.Query(r.Context(), `select id,name,multiplier,max_concurrency,"public",created_at from groups order by name limit $1 offset $2`, pageSize, offset)
+	rows, err := s.db.Query(r.Context(), `select id,name,display_name,description,multiplier,max_concurrency,"public",created_at from groups order by name limit $1 offset $2`, pageSize, offset)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
@@ -808,10 +808,11 @@ func (s *Service) listGroups(w http.ResponseWriter, r *http.Request) {
 	data := []map[string]any{}
 	for rows.Next() {
 		var id, name string
+		var displayName, description *string
 		var multiplier, maxConcurrency, created any
 		var public bool
-		if rows.Scan(&id, &name, &multiplier, &maxConcurrency, &public, &created) == nil {
-			data = append(data, map[string]any{"id": id, "name": name, "multiplier": multiplier, "max_concurrency": maxConcurrency, "public": public, "created_at": created})
+		if rows.Scan(&id, &name, &displayName, &description, &multiplier, &maxConcurrency, &public, &created) == nil {
+			data = append(data, map[string]any{"id": id, "name": name, "display_name": displayName, "description": description, "multiplier": multiplier, "max_concurrency": maxConcurrency, "public": public, "created_at": created})
 		}
 	}
 	writePaged(w, data, total, page, pageSize)
@@ -866,7 +867,7 @@ func (s *Service) accountGroups(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, err := s.db.Query(r.Context(), `
-		select g.id,g.name,g.multiplier,g."public",g.created_at from groups g
+		select g.id,g.name,g.display_name,g.description,g.multiplier,g."public",g.created_at from groups g
 		left join user_groups ug on ug.group_id=g.id and ug.user_id=$1
 		where g."public" or ug.user_id is not null
 		order by g.name`, account.userID)
@@ -879,10 +880,11 @@ func (s *Service) accountGroups(w http.ResponseWriter, r *http.Request) {
 	names := []string{}
 	for rows.Next() {
 		var id, name string
+		var displayName, description *string
 		var multiplier, created any
 		var public bool
-		if rows.Scan(&id, &name, &multiplier, &public, &created) == nil {
-			groups = append(groups, map[string]any{"id": id, "name": name, "multiplier": multiplier, "public": public, "created_at": created})
+		if rows.Scan(&id, &name, &displayName, &description, &multiplier, &public, &created) == nil {
+			groups = append(groups, map[string]any{"id": id, "name": name, "display_name": displayName, "description": description, "multiplier": multiplier, "public": public, "created_at": created})
 			names = append(names, name)
 		}
 	}
@@ -902,6 +904,8 @@ func (s *Service) myGroups(w http.ResponseWriter, r *http.Request) {
 func (s *Service) createGroup(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Name           string  `json:"name"`
+		DisplayName    string  `json:"display_name"`
+		Description    string  `json:"description"`
 		Multiplier     float64 `json:"multiplier"`
 		MaxConcurrency int     `json:"max_concurrency"`
 		Public         bool    `json:"public"`
@@ -915,6 +919,16 @@ func (s *Service) createGroup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_request", "name must be 1-100 characters")
 		return
 	}
+	displayName := strings.TrimSpace(in.DisplayName)
+	if !validGroupDisplayName(displayName) {
+		writeError(w, 400, "invalid_request", "display name must be 100 characters or fewer")
+		return
+	}
+	description := strings.TrimSpace(in.Description)
+	if !validGroupDescription(description) {
+		writeError(w, 400, "invalid_request", "description must be 500 characters or fewer")
+		return
+	}
 	if in.Multiplier == 0 {
 		in.Multiplier = 1
 	}
@@ -923,13 +937,13 @@ func (s *Service) createGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, _ := randomID()
-	_, err := s.db.Exec(r.Context(), `insert into groups(id,name,multiplier,max_concurrency,"public") values($1,$2,$3,$4,$5)`, id, name, in.Multiplier, in.MaxConcurrency, in.Public)
+	_, err := s.db.Exec(r.Context(), `insert into groups(id,name,display_name,description,multiplier,max_concurrency,"public") values($1,$2,nullif($3,''),nullif($4,''),$5,$6,$7)`, id, name, displayName, description, in.Multiplier, in.MaxConcurrency, in.Public)
 	if err != nil {
 		writeError(w, 409, "conflict", "group name already exists")
 		return
 	}
-	s.audit(r, "group.created", "group", id, map[string]any{"name": name, "multiplier": in.Multiplier, "max_concurrency": in.MaxConcurrency, "public": in.Public})
-	writeJSON(w, 201, map[string]any{"id": id, "name": name, "multiplier": in.Multiplier, "max_concurrency": in.MaxConcurrency, "public": in.Public})
+	s.audit(r, "group.created", "group", id, map[string]any{"name": name, "display_name": displayName, "description": description, "multiplier": in.Multiplier, "max_concurrency": in.MaxConcurrency, "public": in.Public})
+	writeJSON(w, 201, map[string]any{"id": id, "name": name, "display_name": nullStr(displayName), "description": nullStr(description), "multiplier": in.Multiplier, "max_concurrency": in.MaxConcurrency, "public": in.Public})
 }
 
 func (s *Service) importGroups(w http.ResponseWriter, r *http.Request) {
@@ -974,52 +988,100 @@ func (s *Service) updateGroup(w http.ResponseWriter, r *http.Request) {
 		Multiplier     float64 `json:"multiplier"`
 		MaxConcurrency int     `json:"max_concurrency"`
 		Public         bool    `json:"public"`
+		DisplayName    *string `json:"display_name"`
+		Description    *string `json:"description"`
 	}
 	if decode(r, &in) != nil || !validGroupMultiplier(in.Multiplier) {
 		writeError(w, 400, "invalid_request", "multiplier must be between 0 and 1000")
 		return
 	}
-	result, err := s.db.Exec(r.Context(), `update groups set multiplier=$1, max_concurrency=$2, "public"=$3 where id=$4`, in.Multiplier, in.MaxConcurrency, in.Public, r.PathValue("id"))
+	displayName := ptrString(in.DisplayName)
+	description := ptrString(in.Description)
+	if displayName != nil && !validGroupDisplayName(displayName.(string)) {
+		writeError(w, 400, "invalid_request", "display name must be 100 characters or fewer")
+		return
+	}
+	if description != nil && !validGroupDescription(description.(string)) {
+		writeError(w, 400, "invalid_request", "description must be 500 characters or fewer")
+		return
+	}
+	result, err := s.db.Exec(r.Context(), `update groups set multiplier=$1, max_concurrency=$2, "public"=$3, display_name=case when $4::text is null then display_name else nullif($4::text,'') end, description=case when $5::text is null then description else nullif($5::text,'') end where id=$6`, in.Multiplier, in.MaxConcurrency, in.Public, displayName, description, r.PathValue("id"))
 	if err != nil || result.RowsAffected() == 0 {
 		writeError(w, 404, "not_found", "group not found")
 		return
 	}
 	s.groupCache.invalidate(r.PathValue("id"))
 	s.groupConcurrencyCache.invalidate(r.PathValue("id"))
-	s.audit(r, "group.updated", "group", r.PathValue("id"), map[string]any{"multiplier": in.Multiplier, "max_concurrency": in.MaxConcurrency, "public": in.Public})
-	writeJSON(w, 200, map[string]any{"id": r.PathValue("id"), "multiplier": in.Multiplier, "max_concurrency": in.MaxConcurrency, "public": in.Public})
+	s.audit(r, "group.updated", "group", r.PathValue("id"), map[string]any{"multiplier": in.Multiplier, "max_concurrency": in.MaxConcurrency, "public": in.Public, "display_name": displayName, "description": description})
+	writeJSON(w, 200, map[string]any{"id": r.PathValue("id"), "multiplier": in.Multiplier, "max_concurrency": in.MaxConcurrency, "public": in.Public, "display_name": displayName, "description": description})
 }
 
 func (s *Service) batchUpdateGroups(w http.ResponseWriter, r *http.Request) {
-	var in struct {
-		IDs            []string `json:"ids"`
-		Multiplier     float64  `json:"multiplier"`
-		MaxConcurrency int      `json:"max_concurrency"`
-		Public         bool     `json:"public"`
+	type groupUpdate struct {
+		ID             string  `json:"id"`
+		Multiplier     float64 `json:"multiplier"`
+		MaxConcurrency int     `json:"max_concurrency"`
+		Public         bool    `json:"public"`
+		DisplayName    *string `json:"display_name"`
+		Description    *string `json:"description"`
 	}
-	if decode(r, &in) != nil || len(in.IDs) == 0 {
-		writeError(w, 400, "invalid_request", "ids, multiplier and public are required")
+	var in struct {
+		Groups []groupUpdate `json:"groups"`
+	}
+	if decode(r, &in) != nil || len(in.Groups) == 0 {
+		writeError(w, 400, "invalid_request", "a non-empty list of group updates is required")
 		return
 	}
-	if len(in.IDs) > 100 {
+	if len(in.Groups) > 100 {
 		writeError(w, 400, "invalid_request", "at most 100 groups at a time")
 		return
 	}
-	if !validGroupMultiplier(in.Multiplier) {
-		writeError(w, 400, "invalid_request", "multiplier must be between 0 and 1000")
-		return
+	for _, update := range in.Groups {
+		if strings.TrimSpace(update.ID) == "" {
+			writeError(w, 400, "invalid_request", "every group update requires an id")
+			return
+		}
+		if !validGroupMultiplier(update.Multiplier) {
+			writeError(w, 400, "invalid_request", "multiplier must be between 0 and 1000")
+			return
+		}
+		if update.MaxConcurrency < 0 {
+			writeError(w, 400, "invalid_request", "max_concurrency must be 0 or greater")
+			return
+		}
+		if ptrString(update.DisplayName) != nil && !validGroupDisplayName(ptrString(update.DisplayName).(string)) {
+			writeError(w, 400, "invalid_request", "display name must be 100 characters or fewer")
+			return
+		}
+		if ptrString(update.Description) != nil && !validGroupDescription(ptrString(update.Description).(string)) {
+			writeError(w, 400, "invalid_request", "description must be 500 characters or fewer")
+			return
+		}
 	}
-	result, err := s.db.Exec(r.Context(), `update groups set multiplier=$1, max_concurrency=$2, "public"=$3 where id = any($4)`, in.Multiplier, in.MaxConcurrency, in.Public, in.IDs)
+	tx, err := s.db.Begin(r.Context())
 	if err != nil {
 		writeError(w, 500, "internal_error", "could not update groups")
 		return
 	}
-	affected := result.RowsAffected()
-	for _, id := range in.IDs {
-		s.groupCache.invalidate(id)
-		s.groupConcurrencyCache.invalidate(id)
+	defer tx.Rollback(r.Context())
+	var affected int64
+	for _, update := range in.Groups {
+		result, err := tx.Exec(r.Context(), `update groups set multiplier=$1, max_concurrency=$2, "public"=$3, display_name=case when $4::text is null then display_name else nullif($4::text,'') end, description=case when $5::text is null then description else nullif($5::text,'') end where id=$6`, update.Multiplier, update.MaxConcurrency, update.Public, ptrString(update.DisplayName), ptrString(update.Description), update.ID)
+		if err != nil {
+			writeError(w, 500, "internal_error", "could not update groups")
+			return
+		}
+		affected += result.RowsAffected()
 	}
-	s.audit(r, "groups.batch_updated", "group", "batch", map[string]any{"count": affected, "multiplier": in.Multiplier, "max_concurrency": in.MaxConcurrency, "public": in.Public})
+	if err = tx.Commit(r.Context()); err != nil {
+		writeError(w, 500, "internal_error", "could not update groups")
+		return
+	}
+	for _, update := range in.Groups {
+		s.groupCache.invalidate(update.ID)
+		s.groupConcurrencyCache.invalidate(update.ID)
+	}
+	s.audit(r, "groups.batch_updated", "group", "batch", map[string]any{"count": affected})
 	writeJSON(w, 200, map[string]any{"affected": affected})
 }
 
@@ -1052,7 +1114,7 @@ func (s *Service) modelCatalog(w http.ResponseWriter, r *http.Request) {
 			where m.enabled and not m.hidden and c.enabled
 		), catalog as (
 			select distinct a.model, coalesce(g.id::text, '__public') as group_id,
-				coalesce(g.name, '公共') as group_name, coalesce(g.multiplier, 1) as group_multiplier,
+				coalesce(g.display_name, g.name, '公共') as group_name, coalesce(g.multiplier, 1) as group_multiplier,
 				coalesce(g."public", false) as group_public
 			from available a
 			left join channel_groups cg on cg.channel_id=a.channel_id
@@ -1326,6 +1388,28 @@ func sanitizeChannelModels(models []string) ([]string, bool) {
 
 func validGroupName(name string) bool {
 	return len(name) > 0 && len(name) <= 100
+}
+
+func validGroupDisplayName(name string) bool {
+	return len(name) <= 100
+}
+
+func validGroupDescription(description string) bool {
+	return len(description) <= 500
+}
+
+func nullStr(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
+func ptrString(p *string) any {
+	if p == nil {
+		return nil
+	}
+	return strings.TrimSpace(*p)
 }
 
 func validChannelName(name string) bool {

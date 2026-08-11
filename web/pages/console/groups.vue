@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Layers } from 'lucide-vue-next'
-import { endpoints, type Group } from '~/src/api'
+import { endpoints, type Group, type GroupUpdate } from '~/src/api'
 import { formatDateTime } from '~/src/format'
 
 definePageMeta({ layout: 'console', middleware: 'console-auth' })
@@ -46,22 +46,29 @@ function toggleAll() {
 const drafts = reactive<Record<string, string>>({})
 const concurrencyDrafts = reactive<Record<string, string>>({})
 const publicDrafts = reactive<Record<string, boolean>>({})
+const displayNameDrafts = reactive<Record<string, string>>({})
+const descriptionDrafts = reactive<Record<string, string>>({})
 
 watch(() => groups.data.value.data, (list) => {
   for (const group of list) {
     drafts[group.id] = String(group.multiplier)
     concurrencyDrafts[group.id] = group.max_concurrency ? String(group.max_concurrency) : ''
     publicDrafts[group.id] = group.public
+    displayNameDrafts[group.id] = group.display_name ?? ''
+    descriptionDrafts[group.id] = group.description ?? ''
   }
 }, { immediate: true })
 
 function isDirty(group: Group) {
-  const draft = drafts[group.id]
+  const multiplierChanged = drafts[group.id] !== undefined && drafts[group.id].trim() !== '' && Number(drafts[group.id]) !== group.multiplier
+  const concurrencyChanged = concurrencyDrafts[group.id] !== undefined && (concurrencyDraftValue(group) ?? 0) !== (group.max_concurrency ?? 0)
   const publicChanged = publicDrafts[group.id] !== group.public
-  const multiplierChanged = draft !== undefined && draft.trim() !== '' && Number(draft) !== group.multiplier
-  const concurrencyChanged = concurrencyDrafts[group.id] !== undefined && concurrencyDraftValue(group) !== group.max_concurrency
-  return multiplierChanged || publicChanged || concurrencyChanged
+  const displayChanged = (displayNameDrafts[group.id] ?? '').trim() !== (group.display_name ?? '')
+  const descriptionChanged = (descriptionDrafts[group.id] ?? '').trim() !== (group.description ?? '')
+  return multiplierChanged || concurrencyChanged || publicChanged || displayChanged || descriptionChanged
 }
+
+const dirtyCount = computed(() => groups.data.value.data.filter(group => isDirty(group)).length)
 
 function concurrencyDraftValue(group: Group) {
   const raw = (concurrencyDrafts[group.id] ?? '').trim()
@@ -76,29 +83,43 @@ function validConcurrency(value: number | null) {
   return value === null || (Number.isInteger(value) && value > 0 && value <= 10000)
 }
 
-const savingId = ref('')
-
-async function saveGroup(group: Group) {
-  const value = Number(drafts[group.id])
-  if (!validMultiplier(value)) { toast.error(t('admin.multiplierInvalid')); return }
-  const concurrency = concurrencyDraftValue(group)
-  if (!validConcurrency(concurrency)) { toast.error(t('admin.concurrencyInvalid')); return }
-  savingId.value = group.id
-  const publicValue = publicDrafts[group.id] ?? group.public
-  const ok = await run(() => endpoints.updateGroup(group.id, value, concurrency, publicValue))
-  savingId.value = ''
+async function saveAll() {
+  const updates: GroupUpdate[] = []
+  for (const group of groups.data.value.data) {
+    if (!isDirty(group)) continue
+    const multiplier = Number(drafts[group.id])
+    if (!validMultiplier(multiplier)) { toast.error(t('admin.multiplierInvalid')); return }
+    const concurrency = concurrencyDraftValue(group)
+    if (!validConcurrency(concurrency)) { toast.error(t('admin.concurrencyInvalid')); return }
+    const displayName = (displayNameDrafts[group.id] ?? '').trim()
+    if (displayName.length > 100) { toast.error(t('admin.displayNameTooLong')); return }
+    const description = (descriptionDrafts[group.id] ?? '').trim()
+    if (description.length > 500) { toast.error(t('admin.descriptionTooLong')); return }
+    updates.push({
+      id: group.id,
+      multiplier,
+      max_concurrency: concurrency,
+      public: publicDrafts[group.id] ?? group.public,
+      display_name: displayName,
+      description,
+    })
+  }
+  if (!updates.length) return
+  const ok = await run(() => endpoints.batchUpdateGroups(updates))
   if (!ok) { toast.error(t('common.actionFailed')); return }
-  toast.success(t('admin.groupUpdated'))
+  toast.success(t('admin.groupChangesSaved', { count: updates.length }))
   await groups.refresh()
 }
 
 const createOpen = ref(false)
 const createError = ref('')
-const createForm = reactive({ name: '', multiplier: '1', maxConcurrency: '', public: false })
+const createForm = reactive({ name: '', displayName: '', description: '', multiplier: '1', maxConcurrency: '', public: false })
 
 function openCreate() {
   createError.value = ''
   createForm.name = ''
+  createForm.displayName = ''
+  createForm.description = ''
   createForm.multiplier = '1'
   createForm.maxConcurrency = ''
   createForm.public = false
@@ -114,8 +135,12 @@ async function create() {
   const rawConcurrency = createForm.maxConcurrency.trim()
   const concurrency = rawConcurrency === '' ? null : Number(rawConcurrency)
   if (!validConcurrency(concurrency)) { createError.value = t('admin.concurrencyInvalid'); return }
+  const displayName = createForm.displayName.trim()
+  if (displayName.length > 100) { createError.value = t('admin.displayNameTooLong'); return }
+  const description = createForm.description.trim()
+  if (description.length > 500) { createError.value = t('admin.descriptionTooLong'); return }
 
-  const ok = await run(() => endpoints.createGroup(name, multiplier, concurrency, createForm.public))
+  const ok = await run(() => endpoints.createGroup(name, multiplier, concurrency, createForm.public, displayName, description))
   if (!ok) { toast.error(t('common.actionFailed')); return }
   toast.success(t('admin.groupCreated'))
   createOpen.value = false
@@ -195,7 +220,13 @@ async function runBatch() {
   const concurrency = rawConcurrency === '' ? null : Number(rawConcurrency)
   if (!validConcurrency(concurrency)) { batchError.value = t('admin.concurrencyInvalid'); return }
 
-  const ok = await run(() => endpoints.batchUpdateGroups(ids, multiplier, concurrency, batchForm.public))
+  const updates: GroupUpdate[] = ids.map(id => ({
+    id,
+    multiplier,
+    max_concurrency: concurrency,
+    public: batchForm.public,
+  }))
+  const ok = await run(() => endpoints.batchUpdateGroups(updates))
   if (!ok) { toast.error(t('common.actionFailed')); return }
   toast.success(t('admin.batchEditDone', { count: ids.length }))
   batchOpen.value = false
@@ -235,6 +266,9 @@ async function remove() {
             <UiBadge tone="outline" class="text-xs">{{ selected.size }}</UiBadge>
             <UiButton variant="secondary" size="sm" @click="openBatch">{{ t('admin.batchEdit') }}</UiButton>
           </template>
+          <UiButton v-if="dirtyCount > 0" :loading="busy" size="sm" @click="saveAll">
+            {{ t('admin.saveChanges', { count: dirtyCount }) }}
+          </UiButton>
           <UiButton variant="secondary" size="sm" @click="openImport">{{ t('admin.importGroups') }}</UiButton>
           <UiButton size="sm" @click="openCreate">{{ t('admin.createGroup') }}</UiButton>
         </template>
@@ -258,6 +292,8 @@ async function remove() {
               <UiCheckbox :model-value="allSelected" @update:model-value="toggleAll" />
             </th>
             <th>{{ t('admin.groupName') }}</th>
+            <th>{{ t('admin.groupDisplayName') }}</th>
+            <th>{{ t('admin.groupDescription') }}</th>
             <th class="num">{{ t('admin.multiplier') }}</th>
             <th class="num">{{ t('admin.maxConcurrency') }}</th>
             <th class="text-center">{{ t('admin.groupPublic') }}</th>
@@ -266,11 +302,31 @@ async function remove() {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="group in groups.data.value.data" :key="group.id">
+          <tr v-for="group in groups.data.value.data" :key="group.id" :class="{ 'bg-clay-soft/40': isDirty(group) }">
             <td v-if="canManage">
               <UiCheckbox :model-value="selected.has(group.id)" @update:model-value="toggleSelected(group.id)" />
             </td>
             <td class="font-medium text-ink">{{ group.name }}</td>
+            <td>
+              <UiInput
+                v-if="canManage"
+                v-model="displayNameDrafts[group.id]"
+                class="min-w-40"
+                :placeholder="t('admin.groupDisplayNamePlaceholder')"
+                :aria-label="t('admin.groupDisplayName')"
+              />
+              <span v-else>{{ group.display_name || '—' }}</span>
+            </td>
+            <td>
+              <UiInput
+                v-if="canManage"
+                v-model="descriptionDrafts[group.id]"
+                class="min-w-56"
+                :placeholder="t('admin.groupDescriptionPlaceholder')"
+                :aria-label="t('admin.groupDescription')"
+              />
+              <span v-else class="text-muted">{{ group.description || '—' }}</span>
+            </td>
             <td class="num">
               <div v-if="canManage" class="flex justify-end">
                 <UiInput
@@ -307,18 +363,7 @@ async function remove() {
             </td>
             <td class="text-muted whitespace-nowrap">{{ formatDateTime(group.created_at) }}</td>
             <td v-if="canManage">
-              <div class="flex items-center gap-1">
-                <UiButton
-                  variant="ghost"
-                  size="sm"
-                  :disabled="!isDirty(group)"
-                  :loading="savingId === group.id"
-                  @click="saveGroup(group)"
-                >
-                  {{ t('common.save') }}
-                </UiButton>
-                <UiButton variant="ghost" size="sm" @click="askRemove(group)">{{ t('common.delete') }}</UiButton>
-              </div>
+              <UiButton variant="ghost" size="sm" @click="askRemove(group)">{{ t('common.delete') }}</UiButton>
             </td>
           </tr>
         </tbody>
@@ -336,6 +381,12 @@ async function remove() {
         <UiAlert v-if="createError" tone="danger">{{ createError }}</UiAlert>
         <UiField :label="t('admin.groupName')" required>
           <UiInput v-model="createForm.name" :placeholder="t('admin.groupNamePlaceholder')" />
+        </UiField>
+        <UiField :label="t('admin.groupDisplayName')" :hint="t('admin.groupDisplayNameHint')">
+          <UiInput v-model="createForm.displayName" :placeholder="t('admin.groupDisplayNamePlaceholder')" />
+        </UiField>
+        <UiField :label="t('admin.groupDescription')" :hint="t('admin.groupDescriptionHint')">
+          <UiInput v-model="createForm.description" :placeholder="t('admin.groupDescriptionPlaceholder')" />
         </UiField>
         <UiField :label="t('admin.multiplier')" required>
           <UiInput v-model="createForm.multiplier" type="number" mono />

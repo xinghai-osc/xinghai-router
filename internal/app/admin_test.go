@@ -290,10 +290,14 @@ func TestCreateAndUpdateGroupRejectInvalidMultipliers(t *testing.T) {
 
 func TestBatchUpdateGroupsRejectsInvalidBeforeDatabaseAccess(t *testing.T) {
 	for _, body := range []string{
-		`{"ids":[]}`,
-		`{"ids":["g1"],"multiplier":-1}`,
-		`{"ids":["g1"],"multiplier":"nan"}`,
-		`{"ids":["g1"],"multiplier":1001}`,
+		`{"groups":[]}`,
+		`{"groups":[{"id":"g1","multiplier":-1}]}`,
+		`{"groups":[{"id":"g1","multiplier":"nan"}]}`,
+		`{"groups":[{"id":"g1","multiplier":1001}]}`,
+		`{"groups":[{"id":"","multiplier":1}]}`,
+		`{"groups":[{"id":"g1","multiplier":1,"max_concurrency":-1}]}`,
+		`{"groups":[{"id":"g1","multiplier":1,"display_name":"` + strings.Repeat("a", 101) + `"}]}`,
+		`{"groups":[{"id":"g1","multiplier":1,"description":"` + strings.Repeat("a", 501) + `"}]}`,
 	} {
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodPost, "/admin/groups/batch-update", strings.NewReader(body))
@@ -302,16 +306,16 @@ func TestBatchUpdateGroupsRejectsInvalidBeforeDatabaseAccess(t *testing.T) {
 			t.Fatalf("batchUpdateGroups body %s status = %d", body, recorder.Code)
 		}
 	}
-	var ids []string
+	var groups []map[string]any
 	for i := 0; i < 101; i++ {
-		ids = append(ids, "g")
+		groups = append(groups, map[string]any{"id": "g", "multiplier": 1})
 	}
-	body, _ := json.Marshal(map[string]any{"ids": ids, "multiplier": 1})
+	body, _ := json.Marshal(map[string]any{"groups": groups})
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/admin/groups/batch-update", strings.NewReader(string(body)))
 	(&Service{}).batchUpdateGroups(recorder, request)
 	if recorder.Code != http.StatusBadRequest {
-		t.Fatalf("batchUpdateGroups with 101 ids status = %d", recorder.Code)
+		t.Fatalf("batchUpdateGroups with 101 groups status = %d", recorder.Code)
 	}
 }
 

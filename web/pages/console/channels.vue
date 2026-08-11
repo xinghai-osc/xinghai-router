@@ -111,10 +111,10 @@ function toggleSelected(id: string) {
 }
 
 const groupOptions = computed(() => groups.data.value.data)
-const groupNames = computed(() => new Map(groupOptions.value.map(group => [group.id, group.name])))
+const groupNames = computed(() => new Map(groupOptions.value.map(group => [group.id, group.display_name || group.name])))
 const groupFilterOptions = computed(() => [
   { value: 'all', label: t('common.all') },
-  ...groupOptions.value.map(group => ({ value: group.id, label: group.name })),
+  ...groupOptions.value.map(group => ({ value: group.id, label: group.display_name || group.name })),
 ])
 const keyTypeOptions = computed(() => KEY_TYPES)
 

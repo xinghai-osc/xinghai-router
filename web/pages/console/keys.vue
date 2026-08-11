@@ -60,9 +60,11 @@ const groupOptions = computed(() => [
   { value: '', label: t('console.keyGroupDefault') },
   ...groups.value.groups.map(group => ({
     value: group.id,
-    label: group.public ? `${group.name} (${t('admin.groupPublic')})` : group.name,
+    label: group.public ? `${group.display_name || group.name} (${t('admin.groupPublic')})` : (group.display_name || group.name),
   })),
 ])
+
+const selectedGroup = computed(() => groups.value.groups.find(group => group.id === form.groupId))
 
 const STATES = {
   active: { tone: 'success', labelKey: 'console.keyStatusActive' },
@@ -429,6 +431,9 @@ onMounted(() => { if (route.query.create) openCreate() })
             :options="groupOptions"
             :placeholder="t('common.selectPlaceholder')"
           />
+          <p v-if="selectedGroup?.description" class="mt-1.5 text-xs leading-relaxed text-muted">
+            {{ selectedGroup.description }}
+          </p>
         </UiField>
       </form>
 

@@ -32,7 +32,8 @@ export interface ChannelUsageStats {
 
 export interface ModelRoute { id: string; public_model: string; upstream_model: string; channel_id?: string; priority: number; weight: number; enabled: boolean; hidden: boolean; created_at: string }
 export interface ModelRouteForm { public_model: string; upstream_model: string; priority?: number; weight?: number; hidden?: boolean }
-export interface Group { id: string; name: string; multiplier: number; max_concurrency: number | null; public: boolean; created_at: string }
+export interface Group { id: string; name: string; display_name: string | null; description: string | null; multiplier: number; max_concurrency: number | null; public: boolean; created_at: string }
+export interface GroupUpdate { id: string; multiplier: number; max_concurrency: number | null; public: boolean; display_name?: string; description?: string }
 export interface RequestLog { request_id: string; user_id: string | null; user_name: string; api_key_id: string | null; key_name: string; channel_id: string | null; channel_name: string; channel_key_id: string | null; channel_key_name: string; group_id: string | null; group_name: string; model: string; status_code: number; prompt_tokens: number | null; completion_tokens: number | null; total_tokens: number | null; duration_ms: number; error_code: string | null; error_detail: string; client_ip: string; user_agent: string; created_at: string }
 export interface Account { id: string; email: string; name: string; role: string; avatar_url: string; permissions: string[]; balance: number; reserved: number; leaderboard_opt_in: boolean; leaderboard_mask_name: boolean; data_usage_enabled: boolean; must_change_password?: boolean }
 export interface Pricing { id: string; model: string; input_per_million: number; cached_input_per_million: number; output_per_million: number; multiplier: number; enabled: boolean; updated_at: string }
@@ -40,7 +41,7 @@ export interface PricingTier { id: string; model: string; from_tokens: number; i
 export interface PricingTierForm { id?: string; model: string; from_tokens: number; input_per_million: number; cached_input_per_million: number; output_per_million: number }
 export interface PricingTimeRule { id: string; model: string; name: string; start_minute: number; end_minute: number; weekdays: string; input_per_million: number; cached_input_per_million: number; output_per_million: number; enabled: boolean; created_at: string }
 export interface PricingTimeRuleForm { id?: string; model: string; name: string; start_minute: number; end_minute: number; weekdays: string; input_per_million: number; cached_input_per_million: number; output_per_million: number; enabled?: boolean }
-export interface CatalogGroup { id: string; name: string; multiplier: number; public: boolean }
+export interface CatalogGroup { id: string; name: string; multiplier: number; public: boolean; display_name?: string | null }
 export interface CatalogModel { id: string; model: string; provider: string; provider_slug: string; input_per_million: number | null; cached_input_per_million: number | null; output_per_million: number | null; multiplier: number | null; groups: CatalogGroup[] }
 export interface ModelProvider { id: string; name: string; slug: string; prefixes: string[]; priority: number }
 export interface UsageRecord { request_id: string; model: string; prompt_tokens: number; cached_prompt_tokens: number; completion_tokens: number; cost: string; status: string; created_at: string; client_ip: string; user_agent: string; error: string; key_name: string; subscription: boolean; duration_ms: number; group_name: string }
@@ -487,11 +488,11 @@ export const endpoints = {
   getAdminUsers: (query = '') => get<Page<User>>(`/admin/users${query}`),
   updateUser: (id: string, update: UserUpdate) => send(`/admin/users/${encodeURIComponent(id)}`, 'PUT', update),
   getAdminGroups: (query = '') => get<Page<Group>>(`/admin/groups${query}`),
-  createGroup: (name: string, multiplier: number, maxConcurrency: number | null, publicGroup: boolean) => send('/admin/groups', 'POST', { name, multiplier, max_concurrency: maxConcurrency, public: publicGroup }),
-  updateGroup: (id: string, multiplier: number, maxConcurrency: number | null, publicGroup: boolean) => send(`/admin/groups/${encodeURIComponent(id)}`, 'PUT', { multiplier, max_concurrency: maxConcurrency, public: publicGroup }),
+  createGroup: (name: string, multiplier: number, maxConcurrency: number | null, publicGroup: boolean, displayName = '', description = '') => send('/admin/groups', 'POST', { name, multiplier, max_concurrency: maxConcurrency, public: publicGroup, display_name: displayName, description }),
+  updateGroup: (id: string, multiplier: number, maxConcurrency: number | null, publicGroup: boolean, displayName = '', description = '') => send(`/admin/groups/${encodeURIComponent(id)}`, 'PUT', { multiplier, max_concurrency: maxConcurrency, public: publicGroup, display_name: displayName, description }),
   deleteGroup: (id: string) => send(`/admin/groups/${encodeURIComponent(id)}`, 'DELETE'),
   importGroups: (entries: Record<string, number>) => send('/admin/groups/import', 'POST', entries),
-  batchUpdateGroups: (ids: string[], multiplier: number, maxConcurrency: number | null, publicGroup: boolean) => post<{ affected: number }>('/admin/groups/batch-update', { ids, multiplier, max_concurrency: maxConcurrency, public: publicGroup }),
+  batchUpdateGroups: (groups: GroupUpdate[]) => post<{ affected: number }>('/admin/groups/batch-update', { groups }),
   getAdminKeys: (query = '') => get<Page<ApiKey>>(`/admin/keys${query}`),
   createKey: (form: KeyForm) => post<{ key: string }>('/admin/keys', form),
   revokeKey: (id: string) => send(`/admin/keys/${encodeURIComponent(id)}/revoke`, 'POST'),
