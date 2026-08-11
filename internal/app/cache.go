@@ -15,10 +15,24 @@ const (
 	pricingCacheTTL     = 10 * time.Second
 	groupCacheTTL       = 30 * time.Second
 	reliabilityCacheTTL = 10 * time.Second
+	// channelCacheTTL bounds how long a per-(group,model) channel list and a
+	// channel's decrypted keys are reused before being re-read from the database.
+	// The gateway hot path would otherwise issue 1+N queries per proxied request.
+	// Writers that change channel configuration invalidate the cache eagerly, so
+	// the TTL is only a safety net for missed invalidation paths.
+	channelCacheTTL = 30 * time.Second
+	// subscriptionCacheTTL bounds how long a user's subscription coverage answer is
+	// reused. Coverage is derived from per-period usage aggregates that would cost a
+	// query per request otherwise. A short TTL means a subscription limit is
+	// enforced up to TTL seconds late, which is acceptable soft-quota behavior.
+	subscriptionCacheTTL = 10 * time.Second
 	// rankingsCacheTTL short-circuits repeated multi-table rankings aggregations.
 	// Leaders change slowly, so the drift from a 30s window is acceptable for a
 	// public page and it protects the database against request floods.
 	rankingsCacheTTL = 30 * time.Second
+	// performanceCacheTTL short-circuits the per-model request_logs aggregation
+	// behind /model-performance while a detail panel stays open.
+	performanceCacheTTL = 30 * time.Second
 	// keyTouchInterval is how often api_keys.last_used_at is refreshed for a busy key.
 	keyTouchInterval = time.Minute
 )

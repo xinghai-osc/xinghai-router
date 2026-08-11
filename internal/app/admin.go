@@ -789,6 +789,9 @@ func (s *Service) updateUser(w http.ResponseWriter, r *http.Request) {
 		s.audit(r, "wallet.adjusted", "user", userID, map[string]any{"amount": *in.Balance - oldBalance, "balance_after": *in.Balance, "note": note})
 	}
 	s.audit(r, "user.updated", "user", userID, changed)
+	if _, ok := changed["groups"]; ok {
+		s.invalidateChannels()
+	}
 	writeJSON(w, 200, map[string]any{"id": userID, "updated": changed})
 }
 
@@ -1882,6 +1885,7 @@ func (s *Service) createChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "channel.created", "channel", id, map[string]any{"name": in.Name, "models": in.Models, "provider": in.Provider, "key_type": in.KeyType, "key_count": len(keys)})
+	s.invalidateChannels()
 	writeJSON(w, 201, map[string]any{"id": id, "name": in.Name, "models": in.Models, "provider": in.Provider, "key_type": in.KeyType, "enabled": true})
 }
 func (s *Service) updateChannel(w http.ResponseWriter, r *http.Request) {
@@ -2049,6 +2053,7 @@ func (s *Service) updateChannel(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.audit(r, "channel.updated", "channel", channelID, map[string]any{"name": in.Name, "models": in.Models, "provider": in.Provider, "key_type": in.KeyType})
+	s.invalidateChannels()
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -2097,7 +2102,11 @@ func (s *Service) replaceChannelAPIKeys(ctx context.Context, channelID string, k
 			return err
 		}
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	s.invalidateChannels()
+	return nil
 }
 func (s *Service) listChannels(w http.ResponseWriter, r *http.Request) {
 	page, pageSize, offset := listPage(r)
@@ -2185,6 +2194,7 @@ func (s *Service) batchSetChannelStatus(w http.ResponseWriter, r *http.Request) 
 	}
 	affected := result.RowsAffected()
 	s.audit(r, "channels.batch_status_changed", "channel", "batch", map[string]any{"count": affected, "enabled": in.Enabled})
+	s.invalidateChannels()
 	writeJSON(w, 200, map[string]any{"affected": affected})
 }
 
@@ -2202,12 +2212,14 @@ func (s *Service) setChannelStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "channel.status_changed", "channel", r.PathValue("id"), map[string]any{"enabled": in.Enabled})
+	s.invalidateChannels()
 	writeJSON(w, 200, map[string]bool{"enabled": in.Enabled})
 }
 
 // syncChannelKeyType keeps channels.key_type consistent with the number of enabled keys.
 func (s *Service) syncChannelKeyType(ctx context.Context, channelID string) {
 	_, _ = s.db.Exec(ctx, `update channels set key_type=case when (select count(*) from channel_api_keys ak where ak.channel_id=channels.id and ak.enabled)>1 then 'multi' else 'single' end,updated_at=now() where id=$1`, channelID)
+	s.invalidateChannels()
 }
 
 func (s *Service) listChannelKeys(w http.ResponseWriter, r *http.Request) {
@@ -2336,6 +2348,7 @@ func (s *Service) updateChannelKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "channel_key.updated", "channel_api_key", r.PathValue("keyId"), map[string]any{"channel_id": r.PathValue("id"), "name": name, "priority": priority})
+	s.invalidateChannels()
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -2557,6 +2570,7 @@ func (s *Service) migrateChannelKeys(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "channel.keys_migrated", "channel", r.PathValue("id"), nil)
+	s.invalidateChannels()
 	writeJSON(w, 200, map[string]any{"migrated": true})
 }
 
@@ -2665,6 +2679,7 @@ func (s *Service) createModelRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "model_route.created", "model_route", id, map[string]any{"public_model": in.PublicModel, "channel_id": in.ChannelID, "hidden": in.Hidden})
+	s.invalidateChannels()
 	writeJSON(w, 201, map[string]any{"id": id})
 }
 
@@ -2739,6 +2754,7 @@ func (s *Service) updateModelRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "model_route.updated", "model_route", routeID, changed)
+	s.invalidateChannels()
 	writeJSON(w, 200, map[string]any{"id": routeID, "updated": changed})
 }
 
@@ -2800,6 +2816,7 @@ func (s *Service) createChannelRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "model_route.created", "model_route", routeID, map[string]any{"public_model": in.PublicModel, "channel_id": channelID, "hidden": in.Hidden})
+	s.invalidateChannels()
 	writeJSON(w, 201, map[string]any{"id": routeID})
 }
 
@@ -2870,6 +2887,7 @@ func (s *Service) updateChannelRoute(w http.ResponseWriter, r *http.Request) {
 		changed["hidden"] = *in.Hidden
 	}
 	s.audit(r, "model_route.updated", "model_route", routeID, changed)
+	s.invalidateChannels()
 	writeJSON(w, 200, map[string]any{"id": routeID, "updated": changed})
 }
 
@@ -2886,6 +2904,7 @@ func (s *Service) deleteChannelRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "model_route.deleted", "model_route", routeID, map[string]any{"channel_id": channelID})
+	s.invalidateChannels()
 	w.WriteHeader(http.StatusNoContent)
 }
 

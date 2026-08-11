@@ -31,6 +31,7 @@ type channel struct {
 	baseURL, apiKey, keyID, upstreamModel  string
 	provider, upstreamPath, upstreamFormat string
 	priority, weight                       int
+	inKeyGroup                             bool
 	overrides                              channelRequestOverrides
 	keys                                   []channelKeyCredential
 	keyIndex                               int
@@ -186,18 +187,17 @@ func resolveGatewayMaxTokens(maxTokens int) (int, bool) {
 
 func (s *Service) models(w http.ResponseWriter, r *http.Request) {
 	key := r.Context().Value(contextKey{}).(keyContext)
+	// Only models served by a channel in the caller's own group context are
+	// listed: the key's bound group when set, otherwise the groups the user
+	// belongs to. Public and ungrouped channels are not exposed to callers.
 	rows, err := s.db.Query(r.Context(), `select model from (
 		select jsonb_array_elements_text(c.models) as model from channels c where c.enabled and (
-			not exists(select 1 from channel_groups cg where cg.channel_id=c.id)
-			or exists(select 1 from channel_groups cg join groups g on g.id=cg.group_id where cg.channel_id=c.id and g."public")
-			or ($2<>'' and exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($2,'')::uuid))
+			($2<>'' and exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($2,'')::uuid))
 			or ($2='' and exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$1))
 		)
 		union
 		select m.public_model as model from model_routes m join channels c on c.id=m.channel_id where m.enabled and not m.hidden and c.enabled and (
-			not exists(select 1 from channel_groups cg where cg.channel_id=c.id)
-			or exists(select 1 from channel_groups cg join groups g on g.id=cg.group_id where cg.channel_id=c.id and g."public")
-			or ($2<>'' and exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($2,'')::uuid))
+			($2<>'' and exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($2,'')::uuid))
 			or ($2='' and exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$1))
 		)
 	) available order by model`, key.userID, key.groupID)
@@ -376,10 +376,25 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 	var ch channel
 	prefill := ""
 	failDetail := ""
+	// channelsForModel already returns only channels of the key's own group
+	// context, so every candidate is in-group and retries can never spill onto
+	// channels belonging to another group.
+	retryChannels := channels
+	if key.groupID != "" {
+		var inGroup []channel
+		for _, c := range channels {
+			if c.inKeyGroup {
+				inGroup = append(inGroup, c)
+			}
+		}
+		if len(inGroup) > 0 {
+			retryChannels = inGroup
+		}
+	}
 tryChannels:
 	for pass := 0; pass <= reliability.RetryCount; pass++ {
-		for i := range channels {
-			ch = channels[i]
+		for i := range retryChannels {
+			ch = retryChannels[i]
 			if s.checkChannelQuota(ctx, ch.id, model) != nil {
 				continue
 			}
@@ -473,7 +488,7 @@ tryChannels:
 			s.channelFailed(ctx, ch.id, ch.keyID, failureReason)
 			// Retries rotate to the next credential in priority order so a
 			// multi-key channel is not replayed with the same key.
-			channels[i].rotateKey()
+			retryChannels[i].rotateKey()
 		}
 	}
 	if resp == nil {
@@ -798,8 +813,27 @@ func (s *Service) checkQuota(ctx context.Context, key keyContext, model string) 
 	}
 	return rows.Err()
 }
+// channelsForModel returns the candidate channels for a model, memoised for a
+// few seconds per (group,model) or (user,model). Channel configuration changes
+// rarely; the cache removes the 1+N channel and key queries from every proxied
+// request. A fresh copy of the slice is returned so the retry loop's credential
+// rotation never mutates the shared cache entry.
 func (s *Service) channelsForModel(ctx context.Context, key keyContext, model string) ([]channel, error) {
-	rows, err := s.db.Query(ctx, `select c.id,c.base_url,c.api_key,coalesce(m.priority,c.priority),coalesce(m.weight,c.weight),coalesce(m.upstream_model,''),c.provider,c.upstream_path,c.upstream_format,c.request_overrides from channels c left join model_routes m on m.channel_id=c.id and m.public_model=$1 and m.enabled where (c.enabled or c.auto_disabled) and (c.models ? $1 or m.public_model is not null) and (not exists(select 1 from channel_groups cg where cg.channel_id=c.id) or exists(select 1 from channel_groups cg join groups g on g.id=cg.group_id where cg.channel_id=c.id and g."public") or ($3<>'' and exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($3,'')::uuid)) or ($3='' and exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$2))) order by (c.enabled and not c.auto_disabled) desc, coalesce(m.priority,c.priority) desc, c.priority desc, c.id`, model, key.userID, key.groupID)
+	ck := channelRouteKey{userID: key.userID, groupID: key.groupID, model: model}
+	if ck.groupID != "" {
+		ck.userID = ""
+	}
+	channels, err := s.channelCache.get(ctx, ck, func(ctx context.Context) ([]channel, error) {
+		return s.loadChannelsForModel(ctx, key, model)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return cloneChannels(channels), nil
+}
+
+func (s *Service) loadChannelsForModel(ctx context.Context, key keyContext, model string) ([]channel, error) {
+	rows, err := s.db.Query(ctx, `select c.id,c.base_url,c.api_key,coalesce(m.priority,c.priority),coalesce(m.weight,c.weight),coalesce(m.upstream_model,''),c.provider,c.upstream_path,c.upstream_format,c.request_overrides,case when $3='' then exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$2) else exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($3,'')::uuid) end as in_key_group from channels c left join model_routes m on m.channel_id=c.id and m.public_model=$1 and m.enabled where (c.enabled or c.auto_disabled) and (c.models ? $1 or m.public_model is not null) and (($3<>'' and exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($3,'')::uuid)) or ($3='' and exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$2))) order by (c.enabled and not c.auto_disabled) desc, coalesce(m.priority,c.priority) desc, c.priority desc, c.id`, model, key.userID, key.groupID)
 	if err != nil {
 		return nil, err
 	}
@@ -811,7 +845,7 @@ func (s *Service) channelsForModel(ctx context.Context, key keyContext, model st
 		var ch channel
 		var encrypted string
 		var overrides []byte
-		if err := rows.Scan(&ch.id, &ch.baseURL, &encrypted, &ch.priority, &ch.weight, &ch.upstreamModel, &ch.provider, &ch.upstreamPath, &ch.upstreamFormat, &overrides); err != nil {
+		if err := rows.Scan(&ch.id, &ch.baseURL, &encrypted, &ch.priority, &ch.weight, &ch.upstreamModel, &ch.provider, &ch.upstreamPath, &ch.upstreamFormat, &overrides, &ch.inKeyGroup); err != nil {
 			return nil, err
 		}
 		if len(overrides) > 0 {
@@ -873,8 +907,19 @@ func (s *Service) channelsForModel(ctx context.Context, key keyContext, model st
 }
 
 // channelKeys returns every enabled key of a channel in priority order
-// (descending priority, then creation time).
+// (descending priority, then creation time), memoised per channel for the same
+// window as the channel lists. Callers receive a fresh copy of the slice.
 func (s *Service) channelKeys(ctx context.Context, channelID int64) ([]channelKeyCredential, error) {
+	keys, err := s.channelKeyCache.get(ctx, channelID, func(ctx context.Context) ([]channelKeyCredential, error) {
+		return s.loadChannelKeys(ctx, channelID)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return cloneChannelKeys(keys), nil
+}
+
+func (s *Service) loadChannelKeys(ctx context.Context, channelID int64) ([]channelKeyCredential, error) {
 	krows, err := s.db.Query(ctx, `select id,key_encrypted,priority from channel_api_keys where channel_id=$1 and enabled order by priority desc,created_at`, channelID)
 	if err != nil {
 		return nil, err
@@ -942,10 +987,20 @@ func (s *Service) selectChannelKey(ctx context.Context, channelID int64, fallbac
 // keeps a shared channel row from becoming a write hotspot under concurrent traffic.
 func (s *Service) channelSucceeded(ctx context.Context, id int64, keyID string) {
 	s.background.submit(func(ctx context.Context) {
+		changed := false
 		if keyID != "" {
-			_, _ = s.db.Exec(ctx, `update channel_api_keys set failure_count=0,last_error=null,last_checked_at=now() where id=$1 and channel_id=$2 and (failure_count<>0 or last_error is not null or last_checked_at is null or last_checked_at < now()-interval '30 seconds')`, keyID, id)
+			tag, err := s.db.Exec(ctx, `update channel_api_keys set failure_count=0,last_error=null,last_checked_at=now() where id=$1 and channel_id=$2 and (failure_count<>0 or last_error is not null or last_checked_at is null or last_checked_at < now()-interval '30 seconds')`, keyID, id)
+			if err == nil && tag.RowsAffected() > 0 {
+				changed = true
+			}
 		}
-		_, _ = s.db.Exec(ctx, `update channels set failure_count=0,cooldown_until=null,last_error=null,last_checked_at=now(),updated_at=now(),enabled=case when auto_disabled then true else enabled end,auto_disabled=case when auto_disabled then false else auto_disabled end,disabled_reason=case when auto_disabled then '' else disabled_reason end where id=$1 and (failure_count<>0 or cooldown_until is not null or last_error is not null or last_checked_at is null or last_checked_at < now()-interval '30 seconds')`, id)
+		tag, err := s.db.Exec(ctx, `update channels set failure_count=0,cooldown_until=null,last_error=null,last_checked_at=now(),updated_at=now(),enabled=case when auto_disabled then true else enabled end,auto_disabled=case when auto_disabled then false else auto_disabled end,disabled_reason=case when auto_disabled then '' else disabled_reason end where id=$1 and (failure_count<>0 or cooldown_until is not null or last_error is not null or last_checked_at is null or last_checked_at < now()-interval '30 seconds')`, id)
+		if err == nil && tag.RowsAffected() > 0 {
+			changed = true
+		}
+		if changed {
+			s.invalidateChannels()
+		}
 	})
 }
 
@@ -1046,6 +1101,7 @@ func (s *Service) disableFailedChannel(ctx context.Context, channelID int64, key
 		if err != nil || result.RowsAffected() != 1 {
 			return
 		}
+		s.invalidateChannels()
 		s.syncChannelKeyType(ctx, strconv.FormatInt(channelID, 10))
 		details, _ := json.Marshal(map[string]string{"reason": reason})
 		auditID, _ := randomID()
@@ -1057,6 +1113,7 @@ func (s *Service) disableFailedChannel(ctx context.Context, channelID int64, key
 	if err != nil || result.RowsAffected() != 1 {
 		return
 	}
+	s.invalidateChannels()
 	details, _ := json.Marshal(map[string]string{"reason": reason})
 	auditID, _ := randomID()
 	_, _ = s.db.Exec(ctx, `insert into audit_logs(id,action,actor,entity_type,entity_id,details,request_method,request_path) values($1,'channel.auto_disabled','system','channel',$2,$3,'SYSTEM','/system/channel-test')`, auditID, channelID, details)

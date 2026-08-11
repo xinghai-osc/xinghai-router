@@ -344,6 +344,7 @@ func (s *Service) autoDisableChannel(ctx context.Context, channelID int64, keyID
 	if err != nil || result.RowsAffected() != 1 {
 		return
 	}
+	s.invalidateChannels()
 	details, _ := json.Marshal(map[string]string{"reason": reason})
 	auditID, _ := randomID()
 	_, _ = s.db.Exec(ctx, `insert into audit_logs(id,action,actor,entity_type,entity_id,details,request_method,request_path) values($1,'channel.auto_disabled','system','channel',$2,$3,'SYSTEM','/system/channel-test')`, auditID, channelID, details)
@@ -360,6 +361,7 @@ func (s *Service) disableChannelIfKeyless(ctx context.Context, channelID int64, 
 	if err != nil || result.RowsAffected() != 1 {
 		return
 	}
+	s.invalidateChannels()
 	details, _ := json.Marshal(map[string]string{"reason": reason})
 	auditID, _ := randomID()
 	_, _ = s.db.Exec(ctx, `insert into audit_logs(id,action,actor,entity_type,entity_id,details,request_method,request_path) values($1,'channel.auto_disabled','system','channel',$2,$3,'SYSTEM','/system/channel-test')`, auditID, channelID, details)
@@ -490,6 +492,7 @@ func (s *Service) runHealthChecks(ctx context.Context) {
 					_, _ = s.db.Exec(ctx, `update channel_api_keys set enabled=true,failure_count=0,last_error=null,last_checked_at=now() where id=$1 and channel_id=$2`, t.keyID, t.id)
 				}
 				_, _ = s.db.Exec(ctx, `update channels set enabled=true,auto_disabled=false,disabled_reason='',failure_count=0,cooldown_until=null,last_error=null,last_checked_at=now(),updated_at=now() where id=$1`, t.id)
+				s.invalidateChannels()
 			} else if t.hasKey {
 				_, _ = s.db.Exec(ctx, `update channel_api_keys set last_checked_at=now() where id=$1`, t.keyID)
 			} else {

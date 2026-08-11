@@ -36,6 +36,8 @@ type Service struct {
 	reliabilityData *ttlCache[struct{}, reliabilitySettings]
 	conversationCacheData *ttlCache[struct{}, conversationCacheSettings]
 	rankingsCache *ttlCache[string, rankingsPayload]
+	channelCache  *ttlCache[channelRouteKey, []channel]
+	channelKeyCache *ttlCache[int64, []channelKeyCredential]
 	promptCache    *promptPrefixCache
 	keyTouchCache   *ttlCache[string, struct{}]
 	scheduler       context.CancelFunc
@@ -118,6 +120,8 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 		reliabilityData: newTTLCache[struct{}, reliabilitySettings](reliabilityCacheTTL),
 		conversationCacheData: newTTLCache[struct{}, conversationCacheSettings](reliabilityCacheTTL),
 		rankingsCache: newTTLCache[string, rankingsPayload](rankingsCacheTTL),
+		channelCache:  newTTLCache[channelRouteKey, []channel](channelCacheTTL),
+		channelKeyCache: newTTLCache[int64, []channelKeyCredential](channelCacheTTL),
 		promptCache:    newPromptPrefixCache(cfg.LocalPromptCache, cfg.LocalPromptCacheSize),
 		keyTouchCache:   newTTLCache[string, struct{}](keyTouchInterval),
 		migration:       migrationStatus{mu: &sync.Mutex{}},
