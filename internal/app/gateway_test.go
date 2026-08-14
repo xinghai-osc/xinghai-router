@@ -328,6 +328,83 @@ func TestValidRequestOverrides(t *testing.T) {
 	}
 }
 
+func TestValidUAPool(t *testing.T) {
+	if err := validUAPool(nil); err != nil {
+		t.Fatalf("nil must be valid: %v", err)
+	}
+	if err := validUAPool([]string{}); err != nil {
+		t.Fatalf("empty must be valid: %v", err)
+	}
+	if err := validUAPool([]string{"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}); err != nil {
+		t.Fatalf("normal pool must be valid: %v", err)
+	}
+	for _, pool := range [][]string{
+		{""},
+		{"   "},
+		{strings.Repeat("a", maxUALength+1)},
+	} {
+		if err := validUAPool(pool); err == nil {
+			t.Fatalf("invalid pool must be rejected: %#v", pool)
+		}
+	}
+	tooMany := make([]string, maxUAPoolEntries+1)
+	for i := range tooMany {
+		tooMany[i] = "ua" + strconv.Itoa(i)
+	}
+	if err := validUAPool(tooMany); err == nil {
+		t.Fatal("oversize pool must be rejected")
+	}
+}
+
+func TestNormalizedUAPool(t *testing.T) {
+	pool := normalizedUAPool([]string{"  a  ", "", "b", "a", "b", "\tc\t"})
+	if len(pool) != 3 || pool[0] != "a" || pool[1] != "b" || pool[2] != "c" {
+		t.Fatalf("normalized pool = %#v", pool)
+	}
+	if out := normalizedUAPool(nil); len(out) != 0 {
+		t.Fatalf("nil normalization must yield empty slice: %#v", out)
+	}
+}
+
+func TestPickUA(t *testing.T) {
+	var ch channel
+	if got := ch.pickUA([]byte{0x01}); got != "" {
+		t.Fatalf("empty pool must yield empty UA, got %q", got)
+	}
+	ch.uaPool = []string{"only"}
+	if got := ch.pickUA([]byte{0x00}); got != "only" {
+		t.Fatalf("single-entry pool must always pick it, got %q", got)
+	}
+	ch.uaPool = []string{"a", "b", "c"}
+	first := ch.pickUA([]byte{0x00})
+	if first != "a" {
+		t.Fatalf("seed 0 must pick first entry, got %q", first)
+	}
+	if got := ch.pickUA([]byte{0x00}); got != first {
+		t.Fatalf("same seed must pick the same UA, got %q want %q", got, first)
+	}
+	picked := map[string]bool{}
+	for seed := 0; seed < 300; seed++ {
+		picked[ch.pickUA([]byte{byte(seed)})] = true
+	}
+	if len(picked) != 3 {
+		t.Fatalf("seeds must spread across the pool, picked %v", picked)
+	}
+}
+
+func TestParsedUAPool(t *testing.T) {
+	if got := parsedUAPool(nil); got != nil {
+		t.Fatalf("empty raw must yield nil, got %#v", got)
+	}
+	pool := parsedUAPool([]byte(`["a","b"]`))
+	if len(pool) != 2 || pool[0] != "a" || pool[1] != "b" {
+		t.Fatalf("parsed pool = %#v", pool)
+	}
+	if got := parsedUAPool([]byte(`not-json`)); got != nil {
+		t.Fatalf("invalid JSON must yield nil, got %#v", got)
+	}
+}
+
 func TestChatCompletionsRejectsOversizeMaxTokens(t *testing.T) {
 	rec := httptest.NewRecorder()
 	body := `{"model":"m","max_tokens":200001}`

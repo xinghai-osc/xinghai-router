@@ -29,7 +29,7 @@ watch(() => route.fullPath, () => { open.value = false })
 
 <template>
   <div class="sticky top-0 z-40">
-    <div v-if="settings.announcement" class="border-b border-line bg-clay-soft px-4 py-2 text-center text-[13px] text-clay-ink">
+    <div v-if="settings.announcement" class="border-b border-line bg-clay-soft px-4 py-2 text-center text-[13px] text-clay">
       {{ settings.announcement }}
     </div>
     <header

@@ -16,6 +16,9 @@ export default {
   captchaRequired: 'Please complete the captcha first',
   signInSuccess: 'Signed in',
   signUpSuccess: 'Account created',
+  invitationCode: 'Invitation code',
+  invitationCodeHint: 'Optional. Register with a valid code to receive a reward.',
+  invitationCodePlaceholder: 'Enter invitation code',
 
   emailPlaceholder: 'you@example.com',
   emailOrUsernamePlaceholder: 'you@example.com / username',

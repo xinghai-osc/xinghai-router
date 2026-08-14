@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -33,6 +34,7 @@ type channel struct {
 	priority, weight                       int
 	inKeyGroup                             bool
 	overrides                              channelRequestOverrides
+	uaPool                                 []string
 	keys                                   []channelKeyCredential
 	keyIndex                               int
 }
@@ -55,6 +57,8 @@ type channelRequestOverrides struct {
 const (
 	maxRequestOverrideFields = 50
 	maxRequestOverrideKeyLen = 100
+	maxUAPoolEntries         = 200
+	maxUALength              = 512
 )
 
 // validRequestOverrides checks field names and sizes so a misconfigured channel
@@ -101,6 +105,76 @@ func normalizedOverrides(ov *channelRequestOverrides) channelRequestOverrides {
 		}
 	}
 	return out
+}
+
+// validUAPool checks a channel's User-Agent pool so a misconfigured channel
+// cannot wedge the gateway hot path or smuggle oversized headers upstream.
+func validUAPool(pool []string) error {
+	if len(pool) > maxUAPoolEntries {
+		return fmt.Errorf("at most %d user agents are allowed", maxUAPoolEntries)
+	}
+	for _, ua := range pool {
+		if ua = strings.TrimSpace(ua); ua == "" || len(ua) > maxUALength {
+			return fmt.Errorf("each user agent must be 1-%d characters", maxUALength)
+		}
+	}
+	return nil
+}
+
+// normalizedUAPool trims whitespace and drops empty or duplicate entries so the
+// stored configuration matches exactly what the gateway applies.
+func normalizedUAPool(pool []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(pool))
+	for _, ua := range pool {
+		if ua = strings.TrimSpace(ua); ua == "" || seen[ua] {
+			continue
+		}
+		seen[ua] = true
+		out = append(out, ua)
+	}
+	return out
+}
+
+// pickUA returns one entry of the channel's UA pool for a request, chosen
+// deterministically from the request seed so retries of the same request keep a
+// single UA while distinct requests spread across the pool. An empty pool
+// yields an empty string and leaves the default client User-Agent untouched.
+func (ch *channel) pickUA(seed []byte) string {
+	if len(ch.uaPool) == 0 {
+		return ""
+	}
+	return ch.uaPool[int(seed[0])%len(ch.uaPool)]
+}
+
+// uaSeed derives the User-Agent pick seed for a channel from the request ID so
+// every attempt of one request uses the same UA while different requests pick
+// different entries of the pool.
+func uaSeed(ctx context.Context, channelID int64) []byte {
+	seed := sha256.Sum256([]byte(requestID(ctx) + "|ua|" + strconv.FormatInt(channelID, 10)))
+	return seed[:]
+}
+
+// randomUA returns a uniformly chosen entry of a UA pool, or "" when empty.
+// Used by out-of-request probes (health checks and channel tests) that have no
+// request ID to seed a deterministic pick.
+func randomUA(pool []string) string {
+	if len(pool) == 0 {
+		return ""
+	}
+	return pool[rand.Intn(len(pool))]
+}
+
+// parsedUAPool decodes a channel's stored ua_pool JSON into a string slice.
+func parsedUAPool(raw []byte) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	var pool []string
+	if json.Unmarshal(raw, &pool) != nil {
+		return nil
+	}
+	return pool
 }
 
 // applyRequestOverrides edits a request body according to the channel's
@@ -335,6 +409,18 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 		}
 	}
 	defer func() { s.releaseReservation(ctx, key, reserved) }()
+	maxUserConcurrency := s.userConcurrencyLimitFor(ctx, key.userID)
+	if maxUserConcurrency > 0 && !s.userLimiter.acquire(key.userID, maxUserConcurrency) {
+		s.releaseReservation(ctx, key, reserved)
+		reserved = reservation{}
+		writeError(w, 429, "user_concurrency_exceeded", "user concurrency limit exceeded")
+		return
+	}
+	defer func() {
+		if maxUserConcurrency > 0 {
+			s.userLimiter.release(key.userID)
+		}
+	}()
 	// Group concurrency limit: reject when the group's limit is reached,
 	// preventing a single group from saturating all its channels.
 	maxConcurrency := 0
@@ -342,7 +428,6 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 		maxConcurrency = s.groupConcurrencyLimitFor(ctx, key.groupID)
 	}
 	if maxConcurrency > 0 && !s.groupLimiter.acquire(key.groupID, maxConcurrency) {
-		s.logRequest(ctx, key, 0, "", model, 429, 0, 0, 0, time.Since(started), "group_concurrency_limit", "")
 		s.releaseReservation(ctx, key, reserved)
 		reserved = reservation{}
 		writeError(w, 429, "group_concurrency_exceeded", "group concurrency limit exceeded")
@@ -469,6 +554,9 @@ tryChannels:
 			}
 			upstreamReq.Header.Set("Content-Type", "application/json")
 			upstreamReq.Header.Set("Accept", accept)
+			if ua := ch.pickUA(uaSeed(r.Context(), ch.id)); ua != "" {
+				upstreamReq.Header.Set("User-Agent", ua)
+			}
 			resp, err = client.Do(upstreamReq)
 			if err != nil {
 				if code, detail, ok := classifyContextError(err); ok {
@@ -595,7 +683,7 @@ tryChannels:
 			if streamErr == nil {
 				s.promptCache.store(model, normalizedPrompt(body), int64(st.prompt))
 			}
-			if (st.prompt > 0 || st.completion > 0) {
+			if st.prompt > 0 || st.completion > 0 {
 				if subscriptionAccess.Covered {
 					s.settleSubscriptionUsage(ctx, key, model, st.prompt, st.cached, st.completion, pricing, groupMultiplier)
 				} else {
@@ -839,17 +927,32 @@ func (s *Service) settleSubscriptionUsage(ctx context.Context, key keyContext, m
 	usageID, _ := randomID()
 	settleCtx, cancel := detach(ctx, settlementTimeout)
 	defer cancel()
-	_, err := s.db.Exec(settleCtx, `insert into usage_records(id,request_id,user_id,api_key_id,model,prompt_tokens,cached_prompt_tokens,completion_tokens,cost)
-	values($1::uuid,$2::text,$3,$4::uuid,$5::text,$6::int,$7::int,$8::int,$9)
-	on conflict(request_id) do update set prompt_tokens=excluded.prompt_tokens,cached_prompt_tokens=excluded.cached_prompt_tokens,completion_tokens=excluded.completion_tokens,cost=excluded.cost`,
-		usageID, requestID(ctx), key.userID, key.keyID, model, prompt, cached, completion, cost)
+	_, err := s.db.Exec(settleCtx, `with inserted as (
+		insert into usage_records(id,request_id,user_id,api_key_id,model,prompt_tokens,cached_prompt_tokens,completion_tokens,cost)
+		values($1::uuid,$2::text,$3,$4::uuid,$5::text,$6::int,$7::int,$8::int,$9)
+		on conflict(request_id) do nothing
+		returning 1
+	), subscription as (
+		update user_subscriptions us set
+			remaining_requests = case when us.remaining_requests is null then null
+				when exists (select 1 from subscription_plan_model_quotas q where q.plan_id=us.plan_id and q.model=$5 and q.max_requests_per_period is not null)
+					then us.remaining_requests
+				else greatest(0, us.remaining_requests-1) end,
+			remaining_credit = case when us.remaining_credit is null then null
+				when exists (select 1 from subscription_plan_model_quotas q where q.plan_id=us.plan_id and q.model=$5 and q.max_credit_per_period is not null)
+					then us.remaining_credit
+				else greatest(0, us.remaining_credit-$9) end,
+			updated_at=now()
+		where us.id=$10 and exists (select 1 from inserted)
+		returning 1
+	)
+	update user_subscription_model_usage set
+		remaining_requests = case when remaining_requests is null then null else greatest(0, remaining_requests-1) end,
+		remaining_credit = case when remaining_credit is null then null else greatest(0, remaining_credit-$9) end
+	where subscription_id=$10 and model=$5 and exists (select 1 from inserted)`,
+		usageID, requestID(ctx), key.userID, key.keyID, model, prompt, cached, completion, cost, access.SubscriptionID)
 	if err != nil {
 		log.Printf("settleSubscriptionUsage failed: %v", err)
-	}
-	if access.SubscriptionID != "" {
-		if err := s.consumeSubscriptionQuota(settleCtx, access.SubscriptionID, model, cost); err != nil {
-			log.Printf("consumeSubscriptionQuota failed: %v", err)
-		}
 	}
 }
 
@@ -896,6 +999,7 @@ func (s *Service) checkQuota(ctx context.Context, key keyContext, model string) 
 	}
 	return rows.Err()
 }
+
 // channelsForModel returns the candidate channels for a model, memoised for a
 // few seconds per (user,group,model). Channel configuration changes rarely; the
 // cache removes the 1+N channel and key queries from every proxied request. A
@@ -913,7 +1017,7 @@ func (s *Service) channelsForModel(ctx context.Context, key keyContext, model st
 }
 
 func (s *Service) loadChannelsForModel(ctx context.Context, key keyContext, model string) ([]channel, error) {
-	rows, err := s.db.Query(ctx, `select c.id,c.base_url,c.api_key,coalesce(m.priority,c.priority),coalesce(m.weight,c.weight),coalesce(m.upstream_model,''),c.provider,c.upstream_path,c.upstream_format,c.request_overrides,case when $3='' then exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$2) or c.user_id=$2 else exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($3,'')::uuid) or c.user_id=$2 end as in_key_group from channels c left join model_routes m on m.channel_id=c.id and m.public_model=$1 and m.enabled where (c.enabled or c.auto_disabled) and (c.models ? $1 or m.public_model is not null) and (($3<>'' and (exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($3,'')::uuid) or c.user_id=$2)) or ($3='' and (exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$2) or c.user_id=$2))) order by (c.enabled and not c.auto_disabled) desc, coalesce(m.priority,c.priority) desc, c.priority desc, c.id`, model, key.userID, key.groupID)
+	rows, err := s.db.Query(ctx, `select c.id,c.base_url,c.api_key,coalesce(m.priority,c.priority),coalesce(m.weight,c.weight),coalesce(m.upstream_model,''),c.provider,c.upstream_path,c.upstream_format,c.request_overrides,c.ua_pool,case when $3='' then exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$2) or c.user_id=$2 else exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($3,'')::uuid) or c.user_id=$2 end as in_key_group from channels c left join model_routes m on m.channel_id=c.id and m.public_model=$1 and m.enabled where (c.enabled or c.auto_disabled) and (c.models ? $1 or m.public_model is not null) and (($3<>'' and (exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($3,'')::uuid) or c.user_id=$2)) or ($3='' and (exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$2) or c.user_id=$2))) order by (c.enabled and not c.auto_disabled) desc, coalesce(m.priority,c.priority) desc, c.priority desc, c.id`, model, key.userID, key.groupID)
 	if err != nil {
 		return nil, err
 	}
@@ -924,12 +1028,15 @@ func (s *Service) loadChannelsForModel(ctx context.Context, key keyContext, mode
 	for rows.Next() {
 		var ch channel
 		var encrypted string
-		var overrides []byte
-		if err := rows.Scan(&ch.id, &ch.baseURL, &encrypted, &ch.priority, &ch.weight, &ch.upstreamModel, &ch.provider, &ch.upstreamPath, &ch.upstreamFormat, &overrides, &ch.inKeyGroup); err != nil {
+		var overrides, uaPool []byte
+		if err := rows.Scan(&ch.id, &ch.baseURL, &encrypted, &ch.priority, &ch.weight, &ch.upstreamModel, &ch.provider, &ch.upstreamPath, &ch.upstreamFormat, &overrides, &uaPool, &ch.inKeyGroup); err != nil {
 			return nil, err
 		}
 		if len(overrides) > 0 {
 			_ = json.Unmarshal(overrides, &ch.overrides)
+		}
+		if len(uaPool) > 0 {
+			_ = json.Unmarshal(uaPool, &ch.uaPool)
 		}
 		keys, err := s.channelKeys(ctx, ch.id)
 		if err != nil {
@@ -1111,7 +1218,8 @@ func (s *Service) testFailedChannel(id int64) {
 	defer cancel()
 	var baseURL, encrypted, provider, upstreamFormat string
 	var enabled, autoDisable bool
-	if err := s.db.QueryRow(ctx, `select c.base_url,c.api_key,c.provider,c.upstream_format,c.enabled,ss.auto_disable_failed_channels from channels c cross join site_settings ss where c.id=$1 and ss.id=true`, id).Scan(&baseURL, &encrypted, &provider, &upstreamFormat, &enabled, &autoDisable); err != nil || !enabled || !autoDisable {
+	var uaPool []byte
+	if err := s.db.QueryRow(ctx, `select c.base_url,c.api_key,c.provider,c.upstream_format,c.enabled,c.ua_pool,ss.auto_disable_failed_channels from channels c cross join site_settings ss where c.id=$1 and ss.id=true`, id).Scan(&baseURL, &encrypted, &provider, &upstreamFormat, &enabled, &uaPool, &autoDisable); err != nil || !enabled || !autoDisable {
 		return
 	}
 	seed := sha256.Sum256([]byte(strconv.FormatInt(id, 10) + "test"))
@@ -1120,7 +1228,7 @@ func (s *Service) testFailedChannel(id int64) {
 		s.disableFailedChannel(ctx, id, "", "credential_decryption_failed")
 		return
 	}
-	s.testFailedCredential(ctx, id, "", baseURL, apiKey, provider, upstreamFormat)
+	s.testFailedCredential(ctx, id, "", baseURL, apiKey, provider, upstreamFormat, parsedUAPool(uaPool))
 }
 
 // testFailedChannelKey verifies a channel API key that failed repeatedly, so only
@@ -1130,7 +1238,8 @@ func (s *Service) testFailedChannelKey(channelID int64, keyID string) {
 	defer cancel()
 	var baseURL, encrypted, provider, upstreamFormat string
 	var enabled, autoDisable bool
-	if err := s.db.QueryRow(ctx, `select c.base_url,k.key_encrypted,c.provider,c.upstream_format,c.enabled,ss.auto_disable_failed_channels from channels c join channel_api_keys k on k.channel_id=c.id cross join site_settings ss where c.id=$1 and k.id=$2 and ss.id=true`, channelID, keyID).Scan(&baseURL, &encrypted, &provider, &upstreamFormat, &enabled, &autoDisable); err != nil || !enabled || !autoDisable {
+	var uaPool []byte
+	if err := s.db.QueryRow(ctx, `select c.base_url,k.key_encrypted,c.provider,c.upstream_format,c.enabled,c.ua_pool,ss.auto_disable_failed_channels from channels c join channel_api_keys k on k.channel_id=c.id cross join site_settings ss where c.id=$1 and k.id=$2 and ss.id=true`, channelID, keyID).Scan(&baseURL, &encrypted, &provider, &upstreamFormat, &enabled, &uaPool, &autoDisable); err != nil || !enabled || !autoDisable {
 		return
 	}
 	apiKey, err := channelKeyValue(s.cfg.EncryptionKey, encrypted)
@@ -1138,13 +1247,13 @@ func (s *Service) testFailedChannelKey(channelID int64, keyID string) {
 		s.disableFailedChannel(ctx, channelID, keyID, "credential_decryption_failed")
 		return
 	}
-	s.testFailedCredential(ctx, channelID, keyID, baseURL, apiKey, provider, upstreamFormat)
+	s.testFailedCredential(ctx, channelID, keyID, baseURL, apiKey, provider, upstreamFormat, parsedUAPool(uaPool))
 }
 
 // testFailedCredential probes a channel credential with GET /v1/models three
 // times. Success clears the failure bookkeeping for the channel or key; three
 // failed attempts auto-disable the credential.
-func (s *Service) testFailedCredential(ctx context.Context, channelID int64, keyID, baseURL, apiKey, provider, upstreamFormat string) {
+func (s *Service) testFailedCredential(ctx context.Context, channelID int64, keyID, baseURL, apiKey, provider, upstreamFormat string, uaPool []string) {
 	for attempt := 0; attempt < 3; attempt++ {
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/v1/models", nil)
 		if err != nil {
@@ -1156,6 +1265,9 @@ func (s *Service) testFailedCredential(ctx context.Context, channelID int64, key
 			request.Header.Set("Anthropic-Version", "2023-06-01")
 		} else {
 			request.Header.Set("Authorization", "Bearer "+apiKey)
+		}
+		if ua := randomUA(uaPool); ua != "" {
+			request.Header.Set("User-Agent", ua)
 		}
 		response, err := s.httpClient.Do(request)
 		if err == nil {

@@ -132,15 +132,15 @@ func (c *ttlCache[K, V]) clear() {
 
 // pricingTier is a single volume band in a tiered pricing rule.
 type pricingTier struct {
-	fromTokens                              int64
-	input, cachedInput, output              float64
+	fromTokens                 int64
+	input, cachedInput, output float64
 }
 
 // pricingTimeRule is a time-windowed price override.
 type pricingTimeRule struct {
-	startMinute, endMinute                  int
-	weekdays                                string
-	input, cachedInput, output              float64
+	startMinute, endMinute     int
+	weekdays                   string
+	input, cachedInput, output float64
 }
 
 // pricingRule is the cached form of a row in pricing_rules. found is false when no
@@ -149,10 +149,10 @@ type pricingTimeRule struct {
 // whose total token count falls in a tier band. timeRules, when non-empty, are
 // evaluated at request time; the last matching rule overrides the base prices.
 type pricingRule struct {
-	input, cachedInput, output, multiplier  float64
-	tiers                                   []pricingTier
-	timeRules                               []pricingTimeRule
-	found                                   bool
+	input, cachedInput, output, multiplier float64
+	tiers                                  []pricingTier
+	timeRules                              []pricingTimeRule
+	found                                  bool
 }
 
 func (s *Service) pricingFor(ctx context.Context, model string) pricingRule {
@@ -281,6 +281,29 @@ func (s *Service) groupConcurrencyLimitFor(ctx context.Context, groupID string) 
 			return 0, nil
 		}
 		return int(limit.Int64), nil
+	})
+	if err != nil {
+		return 0
+	}
+	return limit
+}
+
+func (s *Service) userConcurrencyLimitFor(ctx context.Context, userID string) int {
+	if userID == "" {
+		return 0
+	}
+	limit, err := s.userConcurrencyCache.get(ctx, userID, func(ctx context.Context) (int, error) {
+		var value sql.NullInt64
+		if err := s.db.QueryRow(ctx, `select max_concurrency from users where id=$1`, userID).Scan(&value); err != nil {
+			if isNoRows(err) {
+				return 0, nil
+			}
+			return 0, err
+		}
+		if !value.Valid || value.Int64 <= 0 {
+			return 0, nil
+		}
+		return int(value.Int64), nil
 	})
 	if err != nil {
 		return 0

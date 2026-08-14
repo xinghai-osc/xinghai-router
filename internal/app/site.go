@@ -116,8 +116,8 @@ func (s *Service) loadSystemConfig(ctx context.Context) systemConfig {
 
 func (s *Service) siteSettings(w http.ResponseWriter, r *http.Request) {
 	var name, iconURL, announcement string
-	var autoDisableFailedChannels bool
-	if err := s.db.QueryRow(r.Context(), `select name,icon_url,announcement,auto_disable_failed_channels from site_settings where id=true`).Scan(&name, &iconURL, &announcement, &autoDisableFailedChannels); err != nil {
+	var autoDisableFailedChannels, invitationsEnabled bool
+	if err := s.db.QueryRow(r.Context(), `select name,icon_url,announcement,auto_disable_failed_channels,invitations_enabled from site_settings where id=true`).Scan(&name, &iconURL, &announcement, &autoDisableFailedChannels, &invitationsEnabled); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not load site settings")
 		return
 	}
@@ -133,38 +133,42 @@ func (s *Service) siteSettings(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"name": name, "icon_url": iconURL, "announcement": announcement, "auto_disable_failed_channels": autoDisableFailedChannels, "captcha_provider": sys.captchaProvider(), "geetest_enabled": sys.geetestEnabled(), "geetest_captcha_id": sys.GeetestCaptchaID, "corptcha_site_id": sys.CorptchaSiteID, "email_verification_enabled": sys.emailVerificationEnabled(), "oauth_providers": oauthProviders})
+	writeJSON(w, http.StatusOK, map[string]any{"name": name, "icon_url": iconURL, "announcement": announcement, "auto_disable_failed_channels": autoDisableFailedChannels, "invitations_enabled": invitationsEnabled, "captcha_provider": sys.captchaProvider(), "geetest_enabled": sys.geetestEnabled(), "geetest_captcha_id": sys.GeetestCaptchaID, "corptcha_site_id": sys.CorptchaSiteID, "email_verification_enabled": sys.emailVerificationEnabled(), "oauth_providers": oauthProviders})
 }
 
 func (s *Service) adminSiteSettings(w http.ResponseWriter, r *http.Request) {
 	var name, iconURL, announcement string
-	var autoDisableFailedChannels bool
+	var autoDisableFailedChannels, invitationsEnabled bool
+	var inviterReward, inviteeReward string
 	var captchaProvider, geetestID, geetestKeyEnc, corptchaSiteID, corptchaSecretEnc, smtpHost, smtpPort, smtpUser, smtpPassEnc, smtpFrom, publicBaseURL string
-	err := s.db.QueryRow(r.Context(), `select name,icon_url,announcement,auto_disable_failed_channels,captcha_provider,geetest_captcha_id,geetest_captcha_key_encrypted,corptcha_site_id,corptcha_secret_encrypted,smtp_host,smtp_port,smtp_username,smtp_password_encrypted,smtp_from,public_base_url from site_settings where id=true`).Scan(&name, &iconURL, &announcement, &autoDisableFailedChannels, &captchaProvider, &geetestID, &geetestKeyEnc, &corptchaSiteID, &corptchaSecretEnc, &smtpHost, &smtpPort, &smtpUser, &smtpPassEnc, &smtpFrom, &publicBaseURL)
+	err := s.db.QueryRow(r.Context(), `select name,icon_url,announcement,auto_disable_failed_channels,captcha_provider,geetest_captcha_id,geetest_captcha_key_encrypted,corptcha_site_id,corptcha_secret_encrypted,smtp_host,smtp_port,smtp_username,smtp_password_encrypted,smtp_from,public_base_url,invitations_enabled,inviter_reward::text,invitee_reward::text from site_settings where id=true`).Scan(&name, &iconURL, &announcement, &autoDisableFailedChannels, &captchaProvider, &geetestID, &geetestKeyEnc, &corptchaSiteID, &corptchaSecretEnc, &smtpHost, &smtpPort, &smtpUser, &smtpPassEnc, &smtpFrom, &publicBaseURL, &invitationsEnabled, &inviterReward, &inviteeReward)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not load site settings")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"name": name, "icon_url": iconURL, "announcement": announcement, "auto_disable_failed_channels": autoDisableFailedChannels, "captcha_provider": captchaProvider, "geetest_captcha_id": geetestID, "has_geetest_captcha_key": strings.TrimSpace(geetestKeyEnc) != "", "corptcha_site_id": corptchaSiteID, "has_corptcha_secret": strings.TrimSpace(corptchaSecretEnc) != "", "smtp_host": smtpHost, "smtp_port": smtpPort, "smtp_username": smtpUser, "has_smtp_password": strings.TrimSpace(smtpPassEnc) != "", "smtp_from": smtpFrom, "public_base_url": publicBaseURL})
+	writeJSON(w, http.StatusOK, map[string]any{"name": name, "icon_url": iconURL, "announcement": announcement, "auto_disable_failed_channels": autoDisableFailedChannels, "captcha_provider": captchaProvider, "geetest_captcha_id": geetestID, "has_geetest_captcha_key": strings.TrimSpace(geetestKeyEnc) != "", "corptcha_site_id": corptchaSiteID, "has_corptcha_secret": strings.TrimSpace(corptchaSecretEnc) != "", "smtp_host": smtpHost, "smtp_port": smtpPort, "smtp_username": smtpUser, "has_smtp_password": strings.TrimSpace(smtpPassEnc) != "", "smtp_from": smtpFrom, "public_base_url": publicBaseURL, "invitations_enabled": invitationsEnabled, "inviter_reward": inviterReward, "invitee_reward": inviteeReward})
 }
 
 func (s *Service) updateSiteSettings(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Name                      string  `json:"name"`
-		IconURL                   string  `json:"icon_url"`
-		Announcement              string  `json:"announcement"`
-		AutoDisableFailedChannels *bool   `json:"auto_disable_failed_channels"`
-		CaptchaProvider           *string `json:"captcha_provider"`
-		GeetestCaptchaID          *string `json:"geetest_captcha_id"`
-		GeetestCaptchaKey         string  `json:"geetest_captcha_key"`
-		CorptchaSiteID            *string `json:"corptcha_site_id"`
-		CorptchaSecret            string  `json:"corptcha_secret"`
-		SMTPHost                  *string `json:"smtp_host"`
-		SMTPPort                  *string `json:"smtp_port"`
-		SMTPUsername              *string `json:"smtp_username"`
-		SMTPPassword              string  `json:"smtp_password"`
-		SMTPFrom                  *string `json:"smtp_from"`
-		PublicBaseURL             *string `json:"public_base_url"`
+		Name                      string   `json:"name"`
+		IconURL                   string   `json:"icon_url"`
+		Announcement              string   `json:"announcement"`
+		AutoDisableFailedChannels *bool    `json:"auto_disable_failed_channels"`
+		CaptchaProvider           *string  `json:"captcha_provider"`
+		GeetestCaptchaID          *string  `json:"geetest_captcha_id"`
+		GeetestCaptchaKey         string   `json:"geetest_captcha_key"`
+		CorptchaSiteID            *string  `json:"corptcha_site_id"`
+		CorptchaSecret            string   `json:"corptcha_secret"`
+		SMTPHost                  *string  `json:"smtp_host"`
+		SMTPPort                  *string  `json:"smtp_port"`
+		SMTPUsername              *string  `json:"smtp_username"`
+		SMTPPassword              string   `json:"smtp_password"`
+		SMTPFrom                  *string  `json:"smtp_from"`
+		PublicBaseURL             *string  `json:"public_base_url"`
+		InvitationsEnabled        *bool    `json:"invitations_enabled"`
+		InviterReward             *float64 `json:"inviter_reward"`
+		InviteeReward             *float64 `json:"invitee_reward"`
 	}
 	if decode(r, &in) != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", "invalid site settings")
@@ -253,6 +257,10 @@ func (s *Service) updateSiteSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		*in.PublicBaseURL = base
 	}
+	if (in.InviterReward != nil && (*in.InviterReward < 0 || *in.InviterReward > 1e9)) || (in.InviteeReward != nil && (*in.InviteeReward < 0 || *in.InviteeReward > 1e9)) {
+		writeError(w, http.StatusBadRequest, "invalid_request", "invitation rewards must be between 0 and 1e9")
+		return
+	}
 	geetestKeyEnc, smtpPassEnc := "", ""
 	if key := strings.TrimSpace(in.GeetestCaptchaKey); key != "" {
 		if len(key) > maxGeetestFieldLen {
@@ -304,11 +312,14 @@ func (s *Service) updateSiteSettings(w http.ResponseWriter, r *http.Request) {
 		smtp_password_encrypted=case when $13='' then smtp_password_encrypted else $13 end,
 		smtp_from=coalesce($14,smtp_from),
 		public_base_url=coalesce($15,public_base_url),
+		invitations_enabled=coalesce($16,invitations_enabled),
+		inviter_reward=coalesce($17,inviter_reward),
+		invitee_reward=coalesce($18,invitee_reward),
 		updated_at=now() where id=true`,
 		in.Name, in.IconURL, in.Announcement, in.AutoDisableFailedChannels,
 		trimmedPtr(in.CaptchaProvider), trimmedPtr(in.GeetestCaptchaID), geetestKeyEnc,
 		trimmedPtr(in.CorptchaSiteID), corptchaSecretEnc,
-		trimmedPtr(in.SMTPHost), trimmedPtr(in.SMTPPort), trimmedPtr(in.SMTPUsername), smtpPassEnc, trimmedPtr(in.SMTPFrom), trimmedPtr(in.PublicBaseURL)); err != nil {
+		trimmedPtr(in.SMTPHost), trimmedPtr(in.SMTPPort), trimmedPtr(in.SMTPUsername), smtpPassEnc, trimmedPtr(in.SMTPFrom), trimmedPtr(in.PublicBaseURL), in.InvitationsEnabled, in.InviterReward, in.InviteeReward); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not save site settings")
 		return
 	}

@@ -74,6 +74,7 @@ function remainingQuota(item: AdminSubscription): string[] {
 const extendPlanId = ref('all')
 const extendDays = ref('30')
 const extendStatus = ref<'active' | 'inactive' | 'all'>('active')
+const resetQuotasOpen = ref(false)
 
 const extendPlanOptions = computed(() => [
   { value: 'all', label: t('system.batchExtendAllPlans') },
@@ -107,6 +108,21 @@ async function runExtend() {
   }
   if (affected > 0) toast.success(t('system.extendDone', { count: affected }))
   else toast.info(t('system.extendNoop'))
+  await refresh()
+}
+
+async function resetQuotas() {
+  resetQuotasOpen.value = false
+  let affected = 0
+  const ok = await run(async () => {
+    const result = await endpoints.resetActiveSubscriptionQuotas()
+    affected = result.affected
+  })
+  if (!ok) {
+    toast.error(t('common.actionFailed'))
+    return
+  }
+  toast.success(t('system.resetQuotasDone', { count: affected }))
   await refresh()
 }
 </script>
@@ -144,6 +160,12 @@ async function runExtend() {
 
           <UiButton :loading="busy" @click="runExtend">{{ t('system.runExtend') }}</UiButton>
         </div>
+      </UiCard>
+
+      <UiCard v-if="canManage" :title="t('system.resetActiveQuotas')" :description="t('system.resetActiveQuotasLead')">
+        <UiButton variant="secondary" :loading="busy" @click="resetQuotasOpen = true">
+          {{ t('system.resetActiveQuotas') }}
+        </UiButton>
       </UiCard>
 
       <div class="flex flex-wrap items-center gap-3">
@@ -208,6 +230,14 @@ async function runExtend() {
           </tbody>
         </UiTable>
       </ConsoleSystemDataState>
+
+      <UiDialog v-model:open="resetQuotasOpen" size="sm" :title="t('system.resetActiveQuotas')">
+        <p class="text-sm text-muted">{{ t('system.confirmResetActiveQuotas') }}</p>
+        <template #footer>
+          <UiButton variant="secondary" @click="resetQuotasOpen = false">{{ t('common.cancel') }}</UiButton>
+          <UiButton :loading="busy" @click="resetQuotas">{{ t('common.confirm') }}</UiButton>
+        </template>
+      </UiDialog>
     </div>
   </ConsoleSystemGate>
 </template>

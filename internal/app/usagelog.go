@@ -42,7 +42,7 @@ func (s *Service) listUsageLogs(w http.ResponseWriter, r *http.Request) {
 
 	args := []any{}
 	argIdx := 1
-	where := []string{}
+	where := []string{"coalesce(rl.error_code,'') not in ('user_concurrency_limit','group_concurrency_limit')"}
 	if userID != "" {
 		where = append(where, "rl.user_id=$"+strconv.Itoa(argIdx))
 		args = append(args, userID)
@@ -185,7 +185,7 @@ func (s *Service) usageStats(w http.ResponseWriter, r *http.Request) {
 
 	args := []any{}
 	argIdx := 1
-	where := []string{}
+	where := []string{"coalesce(rl.error_code,'') not in ('user_concurrency_limit','group_concurrency_limit')"}
 	if userID != "" {
 		where = append(where, "rl.user_id=$"+strconv.Itoa(argIdx))
 		args = append(args, userID)

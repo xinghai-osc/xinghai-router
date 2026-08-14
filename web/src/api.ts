@@ -1,4 +1,4 @@
-export interface User { id: string; email: string; name: string; role: string; enabled: boolean; leaderboard_opt_in: boolean; leaderboard_mask_name: boolean; data_usage_enabled: boolean; balance: number; reserved: number; permissions: string[]; groups: string[]; created_at: string }
+export interface User { id: string; email: string; name: string; role: string; enabled: boolean; leaderboard_opt_in: boolean; leaderboard_mask_name: boolean; data_usage_enabled: boolean; max_concurrency: number | null; balance: number; reserved: number; permissions: string[]; groups: string[]; created_at: string }
 export interface Page<T> { data: T[]; total: number; page: number; page_size: number }
 export interface ApiKey { id: string; user_id: string; name: string; key_prefix: string; group_id: string; group_name: string; expires_at: string | null; revoked_at: string | null; last_used_at: string | null; created_at: string; revealable: boolean }
 export interface KeyQuotaLimit { id: string; window: 'day' | 'month' | 'total'; max_requests: number | null; max_tokens: number | null; max_cost: number | null; created_at: string }
@@ -7,7 +7,7 @@ export interface KeyQuota { limits: KeyQuotaLimit[]; usage: KeyQuotaUsage[] }
 export interface KeyQuotaForm { window: 'day' | 'month' | 'total'; max_requests?: number | null; max_tokens?: number | null; max_cost?: number | null }
 /** `groups` holds group ids, not names — resolve them through /admin/groups. */
 export interface RequestOverrides { delete: string[]; set: Record<string, unknown> }
-export interface Channel { id: string; name: string; base_url: string; provider: 'openai' | 'ollama' | 'kimi' | 'opencode_go' | 'anthropic' | 'deepseek' | 'custom'; models: string[]; test_model: string; enabled: boolean; auto_disabled: boolean; auto_disable: boolean; disabled_reason: string; priority: number; weight: number; last_test_time: string | null; last_error: string | null; response_time_ms: number; used_requests: number; used_tokens: number; groups: string[]; key_type: 'single' | 'multi'; key_count: number; upstream_path: string; upstream_format: string; request_overrides: RequestOverrides; created_at: string; updated_at: string; model_routes: ModelRoute[]; user_id: string | null; user_email: string; user_name: string }
+export interface Channel { id: string; name: string; base_url: string; provider: 'openai' | 'ollama' | 'kimi' | 'opencode_go' | 'anthropic' | 'deepseek' | 'custom'; models: string[]; test_model: string; enabled: boolean; auto_disabled: boolean; auto_disable: boolean; disabled_reason: string; priority: number; weight: number; last_test_time: string | null; last_error: string | null; response_time_ms: number; used_requests: number; used_tokens: number; groups: string[]; key_type: 'single' | 'multi'; key_count: number; upstream_path: string; upstream_format: string; request_overrides: RequestOverrides; ua_pool: string[]; created_at: string; updated_at: string; model_routes: ModelRoute[]; user_id: string | null; user_email: string; user_name: string }
 
 export interface ChannelKey { id: string; name: string; enabled: boolean; priority: number; last_checked_at: string | null; last_error: string | null; created_at: string }
 export interface ChannelKeyForm { name?: string; api_key: string; priority?: number }
@@ -60,8 +60,12 @@ export interface VendorRanking { rank: number; vendor: string; total_tokens: num
 export interface RankingMover { model_name: string; vendor: string; rank_delta: number; current_rank: number; growth_pct: number }
 export interface UserRanking { rank: number; name: string; total_tokens: number; total_cost: number; share: number; growth_pct: number; requests: number; top_model: string }
 export interface Rankings { period: string; models: ModelRanking[]; vendors: VendorRanking[]; top_movers: RankingMover[]; top_droppers: RankingMover[]; users: UserRanking[]; total_tokens: number; updated_at: string }
-export interface SiteSettings { name: string; icon_url: string; announcement: string; auto_disable_failed_channels: boolean; captcha_provider?: string; geetest_enabled?: boolean; geetest_captcha_id?: string; corptcha_site_id?: string; email_verification_enabled?: boolean; oauth_providers?: string[] }
-export interface AdminSiteSettings { name: string; icon_url: string; announcement: string; auto_disable_failed_channels: boolean; captcha_provider: string; geetest_captcha_id: string; has_geetest_captcha_key: boolean; corptcha_site_id: string; has_corptcha_secret: boolean; smtp_host: string; smtp_port: string; smtp_username: string; has_smtp_password: boolean; smtp_from: string; public_base_url: string }
+export interface SiteSettings { name: string; icon_url: string; announcement: string; auto_disable_failed_channels: boolean; invitations_enabled?: boolean; captcha_provider?: string; geetest_enabled?: boolean; geetest_captcha_id?: string; corptcha_site_id?: string; email_verification_enabled?: boolean; oauth_providers?: string[] }
+export interface AdminSiteSettings { name: string; icon_url: string; announcement: string; auto_disable_failed_channels: boolean; captcha_provider: string; geetest_captcha_id: string; has_geetest_captcha_key: boolean; corptcha_site_id: string; has_corptcha_secret: boolean; smtp_host: string; smtp_port: string; smtp_username: string; has_smtp_password: boolean; smtp_from: string; public_base_url: string; invitations_enabled: boolean; inviter_reward: string; invitee_reward: string }
+export interface Notification { id: string; title: string; content: string; enabled: boolean; sort_order: number; created_at: string; updated_at: string }
+export interface NotificationForm { title: string; content: string; enabled: boolean; sort_order: number }
+export interface Invitation { id: string; name: string; email: string; reward: string; created_at: string }
+export interface InvitationSummary { enabled: boolean; code: string; inviter_reward: string; invitee_reward: string; data: Invitation[] }
 export interface ReliabilitySettings { retry_count: number; retry_status_codes: string; health_check_mode: 'off' | 'scheduled_all' | 'passive_recovery'; health_check_interval_minutes: number; health_check_auto_recover: boolean; health_check_channel_ids: string; auto_disable_on_test_failure: boolean; auto_disable_slow_seconds: number; auto_disable_status_codes: string; auto_disable_keywords: string }
 
 export interface ConversationCacheSettings { conversation_cache_enabled: boolean }
@@ -400,6 +404,8 @@ export interface AdminUpdateSubscriptionForm {
   current_period_start?: string | null
   current_period_end?: string | null
   auto_renew?: boolean
+  remaining_requests?: number
+  remaining_credit?: number
 }
 
 export interface PublicActivityItem {
@@ -522,17 +528,17 @@ async function download(path: string): Promise<Blob> {
 }
 
 export interface LoginBody { email: string; password: string; code?: string; captcha_id?: string; lot_number?: string; captcha_output?: string; pass_token?: string; gen_time?: string; captcha_token?: string; captcha_purpose?: string }
-export interface RegisterBody { name: string; email: string; password: string; code?: string; captcha_id?: string; lot_number?: string; captcha_output?: string; pass_token?: string; gen_time?: string; captcha_token?: string; captcha_purpose?: string }
+export interface RegisterBody { name: string; email: string; password: string; code?: string; invitation_code?: string; captcha_id?: string; lot_number?: string; captcha_output?: string; pass_token?: string; gen_time?: string; captcha_token?: string; captcha_purpose?: string }
 export interface KeyForm { user_id?: string; name: string; expires_at: string; group_id: string }
 export interface AccountKeyForm { name: string; expires_at: string; group_id: string }
-export interface ChannelForm { name: string; provider: string; base_url: string; key_type: 'single' | 'multi'; api_keys: string; models: string[]; test_model?: string; priority: number; groups: string[]; upstream_path?: string; upstream_format?: string; model_routes?: ModelRouteForm[]; auto_disable: boolean; request_overrides?: RequestOverrides; user_email?: string }
+export interface ChannelForm { name: string; provider: string; base_url: string; key_type: 'single' | 'multi'; api_keys: string; models: string[]; test_model?: string; priority: number; groups: string[]; upstream_path?: string; upstream_format?: string; model_routes?: ModelRouteForm[]; auto_disable: boolean; request_overrides?: RequestOverrides; ua_pool?: string[]; user_email?: string }
 export interface ProviderForm { name: string; slug: string; prefixes: string[]; priority: number; id?: string }
 export interface PaymentSettingsForm { enabled: boolean; base_url: string; merchant_id: string; merchant_key: string; public_base_url: string }
 export interface PaymentMethodForm { code: string; name: string; enabled: boolean }
 export interface PricingForm { model: string; input_per_million: number; cached_input_per_million: number; output_per_million: number; multiplier: number }
 export interface NewApiPricingForm { base_url: string; api_key: string; price_per_quota_unit: number }
 export interface SubscriptionPlanForm { name: string; description: string; price: string; currency: string; billing_period: string; credit_amount: string; group_id: string; model_whitelist: string[]; max_requests_per_period: number | null; max_credit_per_period: number | null; overage_policy: OveragePolicy; model_quotas: SubscriptionPlanModelQuota[]; sort_order: number; enabled: boolean }
-export interface UserUpdate { id?: number; name?: string; email?: string; role?: string; enabled?: boolean; password?: string; balance?: number | null; note?: string; permissions?: string[]; groups?: string[]; leaderboard_opt_in?: boolean; leaderboard_mask_name?: boolean; data_usage_enabled?: boolean }
+export interface UserUpdate { id?: number; name?: string; email?: string; role?: string; enabled?: boolean; password?: string; balance?: number | null; note?: string; permissions?: string[]; groups?: string[]; leaderboard_opt_in?: boolean; leaderboard_mask_name?: boolean; data_usage_enabled?: boolean; max_concurrency?: number | null }
 export interface MigrateForm { source_dsn: string; source_driver: string }
 export interface MigrateResult { message: string }
 /**
@@ -580,6 +586,7 @@ export const endpoints = {
   getAccountOrders: () => get<{ data: OrderRecord[] }>('/account/orders'),
   redeemCode: (code: string) => post<RedemptionResult>('/account/redeem', { code }),
   getAccountRedemptions: () => get<{ data: RedemptionCodeRedemption[] }>('/account/redemptions'),
+  getAccountInvitations: () => get<InvitationSummary>('/account/invitations'),
   getInvoiceSettings: () => get<InvoiceSettings>('/account/invoice/settings'),
   getInvoiceEligibleOrders: () => get<{ data: InvoiceEligibleOrder[] }>('/account/invoices/eligible-orders'),
   validateInvoiceOrders: (orderNos: string[], needPayTax: boolean, taxOrderNos: string[] = []) => post<InvoiceValidation>('/account/invoices/validate', { orderNos, needPayTax, ...(taxOrderNos.length ? { taxOrderNos } : {}) }),
@@ -659,6 +666,11 @@ export const endpoints = {
   getConversationLogDetail: (id: string) => get<ConversationLogDetail>(`/admin/conversation-cache/${encodeURIComponent(id)}`),
   getAdminSiteSettings: () => get<AdminSiteSettings>('/admin/site-settings'),
   updateAdminSiteSettings: (form: SiteSettingsForm) => put<AdminSiteSettings>('/admin/site-settings', form),
+  getNotifications: () => get<{ data: Notification[] }>('/notifications'),
+  getAdminNotifications: () => get<{ data: Notification[] }>('/admin/notifications'),
+  createNotification: (form: NotificationForm) => post<Notification>('/admin/notifications', form),
+  updateNotification: (id: string, form: NotificationForm) => put<Notification>(`/admin/notifications/${encodeURIComponent(id)}`, form),
+  deleteNotification: (id: string) => send(`/admin/notifications/${encodeURIComponent(id)}`, 'DELETE'),
   getAdminPaymentSettings: () => get<PaymentSettings>('/admin/payment-settings'),
   updateAdminPaymentSettings: (form: PaymentSettingsForm) => put<PaymentSettings>('/admin/payment-settings', form),
   createPaymentMethod: (form: PaymentMethodForm) => send('/admin/payment-methods', 'POST', form),
@@ -670,6 +682,7 @@ export const endpoints = {
   deleteSubscriptionPlan: (id: string) => send(`/admin/subscription-plans/${encodeURIComponent(id)}`, 'DELETE'),
   getAdminSubscriptions: () => get<{ data: AdminSubscription[] }>('/admin/subscriptions'),
   batchExtendSubscriptions: (planId: string, days: number, status: 'active' | 'inactive' | 'all') => post<{ affected: number }>('/admin/subscriptions/extend', { plan_id: planId, days, status }),
+  resetActiveSubscriptionQuotas: () => post<{ affected: number }>('/admin/subscriptions/reset-quotas'),
   getAdminUserSubscriptions: (userId: string) => get<{ data: AdminUserSubscription[] }>(`/admin/users/${encodeURIComponent(userId)}/subscriptions`),
   createAdminUserSubscription: (userId: string, form: AdminCreateSubscriptionForm) => post<{ id: string }>(`/admin/users/${encodeURIComponent(userId)}/subscriptions`, form),
   updateAdminSubscription: (id: string, form: AdminUpdateSubscriptionForm) => send(`/admin/subscriptions/${encodeURIComponent(id)}`, 'PUT', form),

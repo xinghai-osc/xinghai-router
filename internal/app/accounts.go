@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -25,10 +26,11 @@ type accountContextKey struct{}
 
 func (s *Service) register(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Email    string `json:"email"`
-		Name     string `json:"name"`
-		Password string `json:"password"`
-		Code     string `json:"code"`
+		Email          string `json:"email"`
+		Name           string `json:"name"`
+		Password       string `json:"password"`
+		Code           string `json:"code"`
+		InvitationCode string `json:"invitation_code"`
 		geetestPayload
 		corptchaPayload
 	}
@@ -91,6 +93,43 @@ func (s *Service) register(w http.ResponseWriter, r *http.Request) {
 	if _, err = tx.Exec(r.Context(), `insert into user_wallets(user_id) values($1) on conflict do nothing`, id); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not create account")
 		return
+	}
+	invitationCode := strings.ToUpper(strings.TrimSpace(in.InvitationCode))
+	if invitationCode != "" {
+		var enabled bool
+		var inviterID, inviterReward, inviteeReward string
+		err = tx.QueryRow(r.Context(), `select s.invitations_enabled,c.user_id::text,s.inviter_reward::text,s.invitee_reward::text from site_settings s join invitation_codes c on c.code=$1 where s.id=true`, invitationCode).Scan(&enabled, &inviterID, &inviterReward, &inviteeReward)
+		if err == pgx.ErrNoRows || (err == nil && !enabled) {
+			writeError(w, http.StatusBadRequest, "invalid_invitation_code", "invalid invitation code")
+			return
+		}
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "could not apply invitation")
+			return
+		}
+		invitationID, idErr := randomID()
+		if idErr != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "could not apply invitation")
+			return
+		}
+		if _, err = tx.Exec(r.Context(), `insert into invitations(id,inviter_id,invitee_id,code,inviter_reward,invitee_reward) values($1,$2,$3,$4,$5,$6)`, invitationID, inviterID, id, invitationCode, inviterReward, inviteeReward); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "could not apply invitation")
+			return
+		}
+		inviterAmount, _ := strconv.ParseFloat(inviterReward, 64)
+		inviteeAmount, _ := strconv.ParseFloat(inviteeReward, 64)
+		if inviterAmount > 0 {
+			if err = s.creditWalletTx(r.Context(), tx, inviterID, inviterAmount, "invitation", invitationID, "Invitation reward"); err != nil {
+				writeError(w, http.StatusInternalServerError, "internal_error", "could not apply invitation reward")
+				return
+			}
+		}
+		if inviteeAmount > 0 {
+			if err = s.creditWalletTx(r.Context(), tx, id, inviteeAmount, "invitation", invitationID, "New user invitation reward"); err != nil {
+				writeError(w, http.StatusInternalServerError, "internal_error", "could not apply invitation reward")
+				return
+			}
+		}
 	}
 	if err = tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not create account")

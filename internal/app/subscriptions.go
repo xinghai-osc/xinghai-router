@@ -787,6 +787,47 @@ func (s *Service) batchExtendSubscriptions(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, map[string]any{"affected": affected})
 }
 
+func (s *Service) resetActiveSubscriptionQuotas(w http.ResponseWriter, r *http.Request) {
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not reset subscription quotas")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	rows, err := tx.Query(r.Context(), `select id::text from user_subscriptions where status='active'`)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not load active subscriptions")
+		return
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "could not load active subscriptions")
+			return
+		}
+		ids = append(ids, id)
+	}
+	if err = rows.Err(); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not load active subscriptions")
+		return
+	}
+	for _, id := range ids {
+		if err = s.initSubscriptionCountersTx(r.Context(), tx, id); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "could not reset subscription quotas")
+			return
+		}
+	}
+	if err = tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not reset subscription quotas")
+		return
+	}
+	s.audit(r, "subscription.active_quotas_reset", "user_subscription", "", map[string]any{"affected": len(ids)})
+	s.subscriptionCache.clear()
+	writeJSON(w, http.StatusOK, map[string]any{"affected": len(ids)})
+}
+
 func (s *Service) accountSubscriptionOrder(w http.ResponseWriter, r *http.Request) {
 	account := accountFromContext(r)
 	var order subscriptionOrder
@@ -923,8 +964,8 @@ type subscriptionAccess struct {
 // whitelists the requested model (empty whitelist = all models) and whose per-period
 // request/credit counters have not run out. Quota is tracked as remaining counters on
 // user_subscriptions / user_subscription_model_usage that are reset to the plan max on
-// every activation and decremented once per covered request at settlement time (see
-// consumeSubscriptionQuota), so this check is a plain counter read instead of an
+// every activation and decremented once per covered request at settlement time, so this
+// check is a plain counter read instead of an
 // on-the-fly aggregate over request_logs. When a per-model quota override exists for the
 // requested model, its counters take precedence over the plan-level counters: a null
 // override dimension inherits the plan-level counter for that model's requests. A null
@@ -995,31 +1036,4 @@ func (s *Service) loadSubscriptionCoversModel(ctx context.Context, userID, model
 		access.SubscriptionID = *subscriptionID
 	}
 	return access, nil
-}
-
-// consumeSubscriptionQuota decrements the remaining request/credit counters of
-// the subscription that covered a settled request. The counters mirror the pool
-// semantics of subscriptionCoversModel: a request drains the plan-level counter
-// for a dimension unless the model declares an explicit per-model override for
-// that dimension, in which case it drains the model's own counter instead. Null
-// counters (uncapped dimensions) stay null; counters are clamped at zero.
-func (s *Service) consumeSubscriptionQuota(ctx context.Context, subscriptionID, model string, cost float64) error {
-	if _, err := s.db.Exec(ctx, `update user_subscriptions us set
-		remaining_requests = case when us.remaining_requests is null then null
-			when exists (select 1 from subscription_plan_model_quotas q where q.plan_id=us.plan_id and q.model=$2 and q.max_requests_per_period is not null)
-				then us.remaining_requests
-			else greatest(0, us.remaining_requests-1) end,
-		remaining_credit = case when us.remaining_credit is null then null
-			when exists (select 1 from subscription_plan_model_quotas q where q.plan_id=us.plan_id and q.model=$2 and q.max_credit_per_period is not null)
-				then us.remaining_credit
-			else greatest(0, us.remaining_credit-$3) end,
-		updated_at=now()
-		where us.id=$1`, subscriptionID, model, cost); err != nil {
-		return err
-	}
-	_, err := s.db.Exec(ctx, `update user_subscription_model_usage set
-		remaining_requests = case when remaining_requests is null then null else greatest(0, remaining_requests-1) end,
-		remaining_credit = case when remaining_credit is null then null else greatest(0, remaining_credit-$3) end
-		where subscription_id=$1 and model=$2`, subscriptionID, model, cost)
-	return err
 }

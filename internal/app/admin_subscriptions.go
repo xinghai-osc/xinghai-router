@@ -191,10 +191,12 @@ func (s *Service) adminCreateSubscription(w http.ResponseWriter, r *http.Request
 func (s *Service) adminUpdateSubscription(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var in struct {
-		Status             *string `json:"status"`
-		CurrentPeriodStart *string `json:"current_period_start"`
-		CurrentPeriodEnd   *string `json:"current_period_end"`
-		AutoRenew          *bool   `json:"auto_renew"`
+		Status             *string  `json:"status"`
+		CurrentPeriodStart *string  `json:"current_period_start"`
+		CurrentPeriodEnd   *string  `json:"current_period_end"`
+		AutoRenew          *bool    `json:"auto_renew"`
+		RemainingRequests  *int64   `json:"remaining_requests"`
+		RemainingCredit    *float64 `json:"remaining_credit"`
 	}
 	if decode(r, &in) != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", "invalid payload")
@@ -203,7 +205,9 @@ func (s *Service) adminUpdateSubscription(w http.ResponseWriter, r *http.Request
 	var status string
 	var start, end any
 	var autoRenew bool
-	err := s.db.QueryRow(r.Context(), `select status,current_period_start,current_period_end,auto_renew from user_subscriptions where id=$1`, id).Scan(&status, &start, &end, &autoRenew)
+	var maxRequests, remainingRequests *int64
+	var maxCredit, remainingCredit *float64
+	err := s.db.QueryRow(r.Context(), `select us.status,us.current_period_start,us.current_period_end,us.auto_renew,p.max_requests_per_period,us.remaining_requests,p.max_credit_per_period,us.remaining_credit from user_subscriptions us join subscription_plans p on p.id=us.plan_id where us.id=$1`, id).Scan(&status, &start, &end, &autoRenew, &maxRequests, &remainingRequests, &maxCredit, &remainingCredit)
 	if err == pgx.ErrNoRows {
 		writeError(w, http.StatusNotFound, "not_found", "subscription not found")
 		return
@@ -254,13 +258,27 @@ func (s *Service) adminUpdateSubscription(w http.ResponseWriter, r *http.Request
 	if in.AutoRenew != nil {
 		autoRenew = *in.AutoRenew
 	}
+	if in.RemainingRequests != nil {
+		if maxRequests == nil || *in.RemainingRequests < 0 || *in.RemainingRequests > *maxRequests {
+			writeError(w, http.StatusBadRequest, "invalid_request", "remaining_requests must be between 0 and the plan limit")
+			return
+		}
+		remainingRequests = in.RemainingRequests
+	}
+	if in.RemainingCredit != nil {
+		if maxCredit == nil || *in.RemainingCredit < 0 || *in.RemainingCredit > *maxCredit {
+			writeError(w, http.StatusBadRequest, "invalid_request", "remaining_credit must be between 0 and the plan limit")
+			return
+		}
+		remainingCredit = in.RemainingCredit
+	}
 	tx, err := s.db.Begin(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not update subscription")
 		return
 	}
 	defer tx.Rollback(r.Context())
-	if _, err = tx.Exec(r.Context(), `update user_subscriptions set status=$1,current_period_start=$2,current_period_end=$3,auto_renew=$4,updated_at=now() where id=$5`, status, start, end, autoRenew, id); err != nil {
+	if _, err = tx.Exec(r.Context(), `update user_subscriptions set status=$1,current_period_start=$2,current_period_end=$3,auto_renew=$4,remaining_requests=$5,remaining_credit=$6,updated_at=now() where id=$7`, status, start, end, autoRenew, remainingRequests, remainingCredit, id); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not update subscription")
 		return
 	}
@@ -276,7 +294,8 @@ func (s *Service) adminUpdateSubscription(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not update subscription")
 		return
 	}
-	s.audit(r, "subscription.admin_updated", "user_subscription", id, map[string]any{"status": status, "current_period_start": start, "current_period_end": end})
+	s.audit(r, "subscription.admin_updated", "user_subscription", id, map[string]any{"status": status, "current_period_start": start, "current_period_end": end, "remaining_requests": remainingRequests, "remaining_credit": remainingCredit})
+	s.subscriptionCache.clear()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 

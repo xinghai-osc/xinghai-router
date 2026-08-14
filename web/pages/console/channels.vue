@@ -183,6 +183,7 @@ const form = reactive({
   upstream_format: '',
   delete_fields: '',
   set_fields: '',
+  ua_pool: '',
 })
 
 const keyDraft = ref('')
@@ -360,6 +361,7 @@ function openCreate() {
   form.upstream_format = ''
   form.delete_fields = ''
   form.set_fields = ''
+  form.ua_pool = ''
   dialogOpen.value = true
 }
 
@@ -383,6 +385,7 @@ function openEdit(channel: Channel) {
   form.delete_fields = (channel.request_overrides?.delete ?? []).join('\n')
   const setFields = channel.request_overrides?.set ?? {}
   form.set_fields = Object.keys(setFields).length ? JSON.stringify(setFields, null, 2) : ''
+  form.ua_pool = (channel.ua_pool ?? []).join('\n')
   dialogOpen.value = true
 }
 
@@ -409,6 +412,15 @@ function parseOverrideFields(value: string): string[] {
   for (const entry of value.split(/[\n,]/)) {
     const field = entry.trim()
     if (field) seen.add(field)
+  }
+  return [...seen]
+}
+
+function parseUAPool(value: string): string[] {
+  const seen = new Set<string>()
+  for (const entry of value.split('\n')) {
+    const ua = entry.trim()
+    if (ua) seen.add(ua)
   }
   return [...seen]
 }
@@ -508,6 +520,12 @@ async function save() {
     return
   }
 
+  const uaPool = parseUAPool(form.ua_pool)
+  if (uaPool.length > 200 || uaPool.some(ua => ua.length > 512)) {
+    formError.value = t('admin.uaPoolInvalid')
+    return
+  }
+
   const payload: ChannelForm = {
     name,
     provider: form.provider,
@@ -519,6 +537,7 @@ async function save() {
     groups: [...form.groups],
     auto_disable: form.auto_disable,
     request_overrides: { delete: overrideFields, set: overrideSet },
+    ua_pool: uaPool,
   }
   if (form.user_email.trim()) {
     payload.user_email = form.user_email.trim()
@@ -1100,6 +1119,10 @@ function quotaUsageForWindow(window: string) {
 
         <UiField :label="t('admin.requestOverrideSet')" :hint="t('admin.requestOverrideSetHint')">
           <UiTextarea v-model="form.set_fields" mono :rows="3" :placeholder="t('admin.requestOverrideSetPlaceholder')" />
+        </UiField>
+
+        <UiField :label="t('admin.uaPool')" :hint="t('admin.uaPoolHint')">
+          <UiTextarea v-model="form.ua_pool" mono :rows="3" :placeholder="t('admin.uaPoolPlaceholder')" />
         </UiField>
       </div>
 

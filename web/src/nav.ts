@@ -1,7 +1,7 @@
 import {
-  Activity, ArrowRightLeft, BadgeDollarSign, Blocks, CreditCard, Database, FileClock, FileText,
+  Activity, ArrowRightLeft, BadgeDollarSign, Bell, Blocks, CreditCard, Database, FileClock, FileText,
   KeyRound, LayoutDashboard, Layers, LogIn, MessageSquareText, Receipt, Repeat, ScrollText, Server,
-  Settings, ShieldCheck, ShoppingCart, Sparkles, Stamp, Ticket, UserCog, Users, Wallet,
+  Settings, ShieldCheck, ShoppingCart, Sparkles, Stamp, Ticket, UserCog, UserPlus, Users, Wallet,
 } from 'lucide-vue-next'
 import type { Component } from 'vue'
 
@@ -43,6 +43,7 @@ export const NAV_SECTIONS: NavSection[] = [
     titleKey: 'nav.sectionAccount',
     items: [
       { to: '/console/account', labelKey: 'nav.account', icon: UserCog },
+      { to: '/console/invitations', labelKey: 'nav.invitations', icon: UserPlus },
     ],
   },
   {
@@ -70,6 +71,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { to: '/console/payment-settings', labelKey: 'nav.paymentSettings', icon: CreditCard, permission: 'system.manage' },
       { to: '/console/invoice-settings', labelKey: 'nav.invoiceSettings', icon: Stamp, permission: 'system.manage' },
       { to: '/console/oauth-settings', labelKey: 'nav.oauthSettings', icon: LogIn, permission: 'system.manage' },
+      { to: '/console/notifications', labelKey: 'nav.notifications', icon: Bell, permission: 'system.manage' },
       { to: '/console/site-settings', labelKey: 'nav.siteSettings', icon: Settings, permission: 'system.manage' },
       { to: '/console/migrate', labelKey: 'nav.migrate', icon: Database, permission: 'system.manage' },
     ],

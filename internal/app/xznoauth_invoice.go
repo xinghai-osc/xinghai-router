@@ -35,12 +35,13 @@ const (
 // invoiceSettings is the server-side XZNoAuth developer-application configuration.
 // The Client Secret is encrypted at rest like the epay merchant key.
 type invoiceSettings struct {
-	Enabled         bool   `json:"enabled"`
-	BaseURL         string `json:"base_url"`
-	ClientID        string `json:"client_id"`
-	ClientSecret    string `json:"-"`
-	HasClientSecret bool   `json:"has_client_secret"`
-	NeedPayTax      bool   `json:"need_pay_tax"`
+	Enabled               bool   `json:"enabled"`
+	BaseURL               string `json:"base_url"`
+	ClientID              string `json:"client_id"`
+	ClientSecret          string `json:"-"`
+	HasClientSecret       bool   `json:"has_client_secret"`
+	NeedPayTax            bool   `json:"need_pay_tax"`
+	clientSecretEncrypted string
 }
 
 func (settings invoiceSettings) ready() bool {
@@ -51,13 +52,20 @@ func (s *Service) loadInvoiceSettings(ctx context.Context) (invoiceSettings, err
 	var settings invoiceSettings
 	var encrypted string
 	err := s.db.QueryRow(ctx, `select enabled,base_url,client_id,client_secret_encrypted,need_pay_tax from invoice_settings where id=1`).Scan(&settings.Enabled, &settings.BaseURL, &settings.ClientID, &encrypted, &settings.NeedPayTax)
+	if isNoRows(err) {
+		if _, insertErr := s.db.Exec(ctx, `insert into invoice_settings(id) values(1) on conflict do nothing`); insertErr != nil {
+			return settings, insertErr
+		}
+		err = s.db.QueryRow(ctx, `select enabled,base_url,client_id,client_secret_encrypted,need_pay_tax from invoice_settings where id=1`).Scan(&settings.Enabled, &settings.BaseURL, &settings.ClientID, &encrypted, &settings.NeedPayTax)
+	}
 	if err != nil {
 		return settings, err
 	}
 	settings.HasClientSecret = encrypted != ""
+	settings.clientSecretEncrypted = encrypted
 	if encrypted != "" {
-		if settings.ClientSecret, err = crypt(s.cfg.EncryptionKey, encrypted, true); err != nil {
-			return settings, err
+		if secret, decryptErr := crypt(s.cfg.EncryptionKey, encrypted, true); decryptErr == nil {
+			settings.ClientSecret = secret
 		}
 	}
 	return settings, nil
@@ -483,7 +491,7 @@ func (s *Service) adminUpdateInvoiceSettings(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusBadRequest, "invalid_request", "client_secret is required when invoice is enabled")
 		return
 	}
-	encrypted := ""
+	encrypted := current.clientSecretEncrypted
 	if secret != "" {
 		encrypted, err = crypt(s.cfg.EncryptionKey, secret, false)
 		if err != nil {

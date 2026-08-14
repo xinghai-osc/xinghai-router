@@ -21,7 +21,9 @@ onMounted(() => {
     <SiteFeatureGrid />
     <SiteModelWall :models="models" :loading="catalogLoading" />
 
-    <section class="shell py-20 md:py-24">
+    <section class="relative overflow-hidden py-20 md:py-24">
+      <div class="pointer-events-none absolute inset-y-0 right-0 w-1/2 opacity-50" style="background: radial-gradient(70% 60% at 100% 50%, var(--clay-soft), transparent 75%)" aria-hidden="true" />
+      <div class="shell relative">
       <div class="max-w-2xl space-y-3">
         <p class="text-2xs font-medium tracking-wide text-clay uppercase">{{ t('site.pricingEyebrow') }}</p>
         <h2 class="display text-4xl text-ink md:text-5xl">{{ t('site.pricingTitle') }}</h2>
@@ -30,6 +32,7 @@ onMounted(() => {
 
       <div class="mt-12">
         <SitePlanCards :plans="plans" :loading="plansLoading" />
+      </div>
       </div>
     </section>
 

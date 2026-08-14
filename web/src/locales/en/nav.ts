@@ -15,6 +15,7 @@ export default {
   invoices: 'Invoices',
   orders: 'Orders',
   account: 'Settings',
+  invitations: 'Invite friends',
 
   users: 'Users',
   groups: 'Groups',
@@ -34,6 +35,7 @@ export default {
   paymentSettings: 'Payments',
   invoiceSettings: 'Invoicing',
   oauthSettings: 'OAuth',
+  notifications: 'Notifications',
   siteSettings: 'Site',
   migrate: 'Migration',
 

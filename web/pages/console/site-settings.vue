@@ -27,6 +27,9 @@ const EMPTY: AdminSiteSettings = {
   has_smtp_password: false,
   smtp_from: '',
   public_base_url: '',
+  invitations_enabled: false,
+  inviter_reward: '0',
+  invitee_reward: '0',
 }
 
 const { data, pending, error, refresh } = useResource(
@@ -47,6 +50,9 @@ const form = reactive({
   smtp_username: '',
   smtp_from: '',
   public_base_url: '',
+  invitations_enabled: false,
+  inviter_reward: '0',
+  invitee_reward: '0',
 })
 
 /** Write-only: never seeded from the API, cleared again after every save. */
@@ -75,6 +81,9 @@ watch(data, (next) => {
   form.smtp_username = next.smtp_username
   form.smtp_from = next.smtp_from
   form.public_base_url = next.public_base_url
+  form.invitations_enabled = next.invitations_enabled
+  form.inviter_reward = next.inviter_reward
+  form.invitee_reward = next.invitee_reward
   geetestKey.value = ''
   corptchaSecret.value = ''
   smtpPassword.value = ''
@@ -84,7 +93,7 @@ watch(() => form.icon_url, () => { iconBroken.value = false })
 
 const iconPreviewUrl = computed(() => form.icon_url.trim())
 
-type SiteSettingsPayload = AdminSiteSettings & { geetest_captcha_key: string; corptcha_secret: string; smtp_password: string }
+type SiteSettingsPayload = Omit<AdminSiteSettings, 'inviter_reward' | 'invitee_reward'> & { inviter_reward: number; invitee_reward: number; geetest_captcha_key: string; corptcha_secret: string; smtp_password: string }
 
 async function save() {
   // The handler rejects unknown fields, so the read-only `has_*` flags that the
@@ -105,6 +114,9 @@ async function save() {
     smtp_password: smtpPassword.value,
     smtp_from: form.smtp_from.trim(),
     public_base_url: form.public_base_url.trim(),
+    invitations_enabled: form.invitations_enabled,
+    inviter_reward: Number(form.inviter_reward),
+    invitee_reward: Number(form.invitee_reward),
   } as SiteSettingsPayload
 
   const ok = await run(() => endpoints.updateAdminSiteSettings(payload))
@@ -251,6 +263,22 @@ async function save() {
             <UiField :label="t('system.smtpFrom')" :hint="t('system.smtpFromHint')" for="smtp-from">
               <UiInput id="smtp-from" v-model="form.smtp_from" type="email" />
             </UiField>
+          </div>
+        </UiCard>
+
+        <UiCard :title="t('system.invitations')">
+          <div class="space-y-4">
+            <UiField :label="t('system.invitationsEnabled')" :hint="t('system.invitationsEnabledHint')">
+              <UiSwitch v-model="form.invitations_enabled" :label="t('system.invitationsEnabled')" />
+            </UiField>
+            <div class="grid gap-4 sm:grid-cols-2">
+              <UiField :label="t('system.inviterReward')" :hint="t('system.inviterRewardHint')" for="inviter-reward">
+                <UiInput id="inviter-reward" v-model="form.inviter_reward" type="number" min="0" step="0.00000001" />
+              </UiField>
+              <UiField :label="t('system.inviteeReward')" :hint="t('system.inviteeRewardHint')" for="invitee-reward">
+                <UiInput id="invitee-reward" v-model="form.invitee_reward" type="number" min="0" step="0.00000001" />
+              </UiField>
+            </div>
           </div>
         </UiCard>
 

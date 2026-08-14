@@ -15,6 +15,7 @@ export default {
   invoices: '发票管理',
   orders: '我的订单',
   account: '账户设置',
+  invitations: '邀请好友',
 
   users: '用户',
   groups: '分组',
@@ -34,6 +35,7 @@ export default {
   paymentSettings: '支付设置',
   invoiceSettings: '发票设置',
   oauthSettings: '第三方登录',
+  notifications: '通知管理',
   siteSettings: '站点设置',
   migrate: '数据迁移',
 

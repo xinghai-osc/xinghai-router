@@ -21,17 +21,21 @@ const features = [
       <p class="text-muted">{{ t('site.featuresLead') }}</p>
     </div>
 
-    <div class="mt-12 grid gap-px overflow-hidden rounded-card border border-line bg-line sm:grid-cols-2 lg:grid-cols-3">
+    <div class="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
       <article
-        v-for="feature in features"
+        v-for="(feature, index) in features"
         :key="feature.key"
-        class="group space-y-3 bg-surface p-6 transition-colors duration-150 hover:bg-sunken"
+        :class="[
+          'group relative overflow-hidden rounded-card border border-line bg-surface p-6 transition-[border-color,transform,background-color] duration-150 ease-out hover:-translate-y-0.5 hover:border-line-strong hover:bg-sunken',
+          index === 0 || index === 5 ? 'sm:col-span-2 lg:col-span-1' : '',
+        ]"
       >
-        <div class="flex size-9 items-center justify-center rounded-[10px] bg-clay-soft text-clay transition-transform duration-150 ease-out group-hover:scale-110">
+        <span class="absolute top-4 right-5 font-mono text-2xs text-faint">0{{ index + 1 }}</span>
+        <div class="flex size-10 items-center justify-center rounded-[10px] bg-clay-soft text-clay transition-transform duration-150 ease-out group-hover:scale-110">
           <component :is="feature.icon" class="size-[18px]" />
         </div>
-        <h3 class="text-[15px] font-semibold text-ink">{{ t(`site.feature${feature.key}Title`) }}</h3>
-        <p class="text-[13px] leading-relaxed text-muted">{{ t(`site.feature${feature.key}Body`) }}</p>
+        <h3 class="mt-5 text-[15px] font-semibold text-ink">{{ t(`site.feature${feature.key}Title`) }}</h3>
+        <p class="mt-2 text-[13px] leading-relaxed text-muted">{{ t(`site.feature${feature.key}Body`) }}</p>
       </article>
     </div>
   </section>

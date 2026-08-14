@@ -15,7 +15,7 @@ const { challenge: geetestChallenge } = useGeetest()
 const { challenge: corptchaChallenge } = useCorptcha()
 
 const mode = ref(route.query.mode === 'register' ? 'register' : route.query.mode === 'reset' ? 'reset' : 'signin')
-const form = reactive({ name: '', email: '', password: '', code: '' })
+const form = reactive({ name: '', email: '', password: '', code: '', invitationCode: typeof route.query.invite === 'string' ? route.query.invite : '' })
 const formError = ref('')
 const busy = ref(false)
 const sending = ref(false)
@@ -176,7 +176,7 @@ async function submit() {
     }
     const email = form.email.trim()
     const { token } = isRegister.value
-      ? await endpoints.register({ name: form.name.trim(), email, password: form.password, code: form.code.trim(), ...captcha })
+      ? await endpoints.register({ name: form.name.trim(), email, password: form.password, code: form.code.trim(), invitation_code: form.invitationCode.trim(), ...captcha })
       : await endpoints.login({ email, password: form.password, ...captcha })
     await signIn(token)
     toast.success(isRegister.value ? t('auth.signUpSuccess') : t('auth.signInSuccess'))
@@ -209,6 +209,16 @@ async function submit() {
                 v-model="form.name"
                 autocomplete="nickname"
                 :placeholder="t('auth.displayNamePlaceholder')"
+              />
+            </UiField>
+
+            <UiField v-if="isRegister && settings.invitations_enabled" :label="t('auth.invitationCode')" for="auth-invitation" :hint="t('auth.invitationCodeHint')">
+              <UiInput
+                id="auth-invitation"
+                v-model="form.invitationCode"
+                autocomplete="off"
+                mono
+                :placeholder="t('auth.invitationCodePlaceholder')"
               />
             </UiField>
 

@@ -55,7 +55,7 @@ const { t } = useI18n()
 </script>
 
 <template>
-  <div class="overflow-hidden rounded-card border border-line bg-surface text-left shadow-pop">
+  <div class="overflow-hidden rounded-card border border-line-strong bg-surface text-left">
     <div class="grid grid-cols-[1fr_auto] items-center gap-2 border-b border-line bg-sunken px-3 pt-2 md:flex md:justify-between md:py-2">
       <div class="flex items-center gap-1.5">
         <span class="size-2.5 rounded-full bg-danger/70" aria-hidden="true" />

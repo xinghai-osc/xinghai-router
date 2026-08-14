@@ -146,6 +146,10 @@ func TestCreateChannelRejectsInvalidRequestBeforeDatabaseAccess(t *testing.T) {
 		`{"name":"channel","key_type":"single","api_keys":"sk","base_url":"https://api.example.com","models":["model"],"request_overrides":{"delete":["a","a"]}}`,
 		`{"name":"channel","key_type":"single","api_keys":"sk","base_url":"https://api.example.com","models":["model"],"request_overrides":{"set":{"":"x"}}}`,
 		`{"name":"channel","key_type":"single","api_keys":"sk","base_url":"https://api.example.com","models":["model"],"request_overrides":{"delete":["` + strings.Repeat("a", 101) + `"]}}`,
+		`{"name":"channel","key_type":"single","api_keys":"sk","base_url":"https://api.example.com","models":["model"],"ua_pool":[""]}`,
+		`{"name":"channel","key_type":"single","api_keys":"sk","base_url":"https://api.example.com","models":["model"],"ua_pool":["   "]}`,
+		`{"name":"channel","key_type":"single","api_keys":"sk","base_url":"https://api.example.com","models":["model"],"ua_pool":["` + strings.Repeat("a", 513) + `"]}`,
+		`{"name":"channel","key_type":"single","api_keys":"sk","base_url":"https://api.example.com","models":["model"],"ua_pool":` + tooManyUAPoolJSON() + `}`,
 	} {
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodPost, "/admin/channels", strings.NewReader(body))
@@ -154,6 +158,14 @@ func TestCreateChannelRejectsInvalidRequestBeforeDatabaseAccess(t *testing.T) {
 			t.Fatalf("body %s status = %d, want %d", body, recorder.Code, http.StatusBadRequest)
 		}
 	}
+}
+
+func tooManyUAPoolJSON() string {
+	entries := make([]string, maxUAPoolEntries+1)
+	for i := range entries {
+		entries[i] = `"ua` + strconv.Itoa(i) + `"`
+	}
+	return "[" + strings.Join(entries, ",") + "]"
 }
 
 func TestUpdateChannelRejectsInvalidPriorityBeforeDatabaseAccess(t *testing.T) {

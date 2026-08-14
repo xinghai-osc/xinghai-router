@@ -83,6 +83,7 @@ const form = reactive({
   leaderboardOptIn: true,
   leaderboardMaskName: false,
   dataUsageEnabled: true,
+  maxConcurrency: '',
 })
 
 function openManage(user: User) {
@@ -101,6 +102,7 @@ function openManage(user: User) {
   form.leaderboardOptIn = user.leaderboard_opt_in
   form.leaderboardMaskName = user.leaderboard_mask_name
   form.dataUsageEnabled = user.data_usage_enabled
+  form.maxConcurrency = user.max_concurrency === null ? '' : String(user.max_concurrency)
   dialogOpen.value = true
 }
 
@@ -118,6 +120,13 @@ function buildUpdate(): UserUpdate | null {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { formError.value = t('admin.emailRequired'); return null }
   if (form.password && form.password.length < 8) { formError.value = t('admin.passwordTooShort'); return null }
 
+  const rawConcurrency = form.maxConcurrency.trim()
+  const maxConcurrency = rawConcurrency === '' ? null : Number(rawConcurrency)
+  if (maxConcurrency !== null && (!Number.isInteger(maxConcurrency) || maxConcurrency < 1 || maxConcurrency > 10000)) {
+    formError.value = t('admin.userConcurrencyInvalid')
+    return null
+  }
+
   const update: UserUpdate = {
     name,
     email,
@@ -128,6 +137,7 @@ function buildUpdate(): UserUpdate | null {
     leaderboard_opt_in: form.leaderboardOptIn,
     leaderboard_mask_name: form.leaderboardMaskName,
     data_usage_enabled: form.dataUsageEnabled,
+    max_concurrency: maxConcurrency,
   }
   if (form.password) update.password = form.password
 
@@ -233,7 +243,7 @@ const subPlans = ref<SubscriptionPlan[]>([])
 const editingSub = ref<AdminUserSubscription | null>(null)
 const voidTarget = ref<AdminUserSubscription | null>(null)
 const deleteTarget = ref<AdminUserSubscription | null>(null)
-const subForm = reactive({ plan_id: '', start_at: '', end_at: '', auto_renew: false })
+const subForm = reactive({ plan_id: '', start_at: '', end_at: '', auto_renew: false, remaining_requests: '', remaining_credit: '' })
 const subFormError = ref('')
 
 const subPlanOptions = computed(() => subPlans.value.map(plan => ({ value: plan.id, label: plan.name })))
@@ -271,6 +281,8 @@ function resetSubForm() {
   subForm.start_at = ''
   subForm.end_at = ''
   subForm.auto_renew = false
+  subForm.remaining_requests = ''
+  subForm.remaining_credit = ''
   subFormError.value = ''
 }
 
@@ -309,6 +321,8 @@ function startEditSubscription(sub: AdminUserSubscription) {
   subForm.start_at = toLocalInput(sub.current_period_start)
   subForm.end_at = toLocalInput(sub.current_period_end)
   subForm.auto_renew = sub.auto_renew
+  subForm.remaining_requests = sub.remaining_requests === null ? '' : String(sub.remaining_requests)
+  subForm.remaining_credit = sub.remaining_credit === null ? '' : String(sub.remaining_credit)
 }
 
 async function saveSubscription() {
@@ -330,10 +344,19 @@ async function saveSubscription() {
   const target = subsUser.value
   if (!target) return
   if (editingSub.value) {
+    const remainingRequests = subForm.remaining_requests.trim()
+    const remainingCredit = subForm.remaining_credit.trim()
+    if ((remainingRequests && (!Number.isInteger(Number(remainingRequests)) || Number(remainingRequests) < 0))
+      || (remainingCredit && (!Number.isFinite(Number(remainingCredit)) || Number(remainingCredit) < 0))) {
+      subFormError.value = t('admin.invalidRemainingQuota')
+      return
+    }
     const ok = await run(() => endpoints.updateAdminSubscription(editingSub.value!.id, {
       current_period_start: startIso,
       current_period_end: endIso,
       auto_renew: subForm.auto_renew,
+      ...(remainingRequests ? { remaining_requests: Number(remainingRequests) } : {}),
+      ...(remainingCredit ? { remaining_credit: Number(remainingCredit) } : {}),
     }))
     if (!ok) { toast.error(t('common.actionFailed')); return }
     toast.success(t('admin.subscriptionUpdated'))
@@ -408,6 +431,7 @@ async function deleteSubscription() {
             <th>{{ t('admin.role') }}</th>
             <th>{{ t('common.status') }}</th>
             <th class="num">{{ t('admin.balance') }}</th>
+            <th class="num">{{ t('admin.maxConcurrency') }}</th>
             <th>{{ t('admin.groups') }}</th>
             <th>{{ t('common.createdAt') }}</th>
             <th v-if="canManage || canAdjustWallet">{{ t('common.actions') }}</th>
@@ -425,6 +449,7 @@ async function deleteSubscription() {
               </UiBadge>
             </td>
             <td class="num">{{ formatMoney(user.balance) }}</td>
+            <td class="num">{{ user.max_concurrency ?? t('admin.concurrencyPlaceholder') }}</td>
             <td>
               <div v-if="user.groups.length" class="flex flex-wrap gap-1">
                 <UiBadge v-for="id in user.groups" :key="id" tone="outline">{{ groupNames.get(id) ?? id }}</UiBadge>
@@ -473,6 +498,9 @@ async function deleteSubscription() {
           </UiField>
           <UiField :label="t('admin.balance')" :hint="t('admin.balanceHint')">
             <UiInput v-model="form.balance" type="number" mono />
+          </UiField>
+          <UiField :label="t('admin.userConcurrency')" :hint="t('admin.userConcurrencyHint')">
+            <UiInput v-model="form.maxConcurrency" type="number" min="1" max="10000" step="1" mono :placeholder="t('admin.concurrencyPlaceholder')" />
           </UiField>
           <UiField :label="t('admin.note')" :hint="t('admin.noteHint')">
             <UiInput v-model="form.note" />
@@ -562,6 +590,14 @@ async function deleteSubscription() {
               </UiField>
             </div>
             <UiCheckbox v-model="subForm.auto_renew">{{ t('admin.autoRenew') }}</UiCheckbox>
+            <div v-if="editingSub" class="grid gap-4 sm:grid-cols-2">
+              <UiField v-if="editingSub.max_requests_per_period !== null" :label="t('admin.remainingRequests')" :hint="t('admin.remainingRequestsHint', { max: formatNumber(editingSub.max_requests_per_period) })">
+                <UiInput v-model="subForm.remaining_requests" type="number" min="0" :max="editingSub.max_requests_per_period" mono />
+              </UiField>
+              <UiField v-if="editingSub.max_credit_per_period !== null" :label="t('admin.remainingCredit')" :hint="t('admin.remainingCreditHint', { max: formatMoney(editingSub.max_credit_per_period) })">
+                <UiInput v-model="subForm.remaining_credit" type="number" min="0" :max="editingSub.max_credit_per_period" step="any" mono />
+              </UiField>
+            </div>
             <div class="flex justify-end gap-2">
               <UiButton v-if="editingSub" variant="secondary" @click="editingSub = null; resetSubForm()">
                 {{ t('common.cancel') }}

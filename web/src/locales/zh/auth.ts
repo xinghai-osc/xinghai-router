@@ -16,6 +16,9 @@ export default {
   captchaRequired: '请先完成人机验证',
   signInSuccess: '登录成功',
   signUpSuccess: '注册成功',
+  invitationCode: '邀请码',
+  invitationCodeHint: '选填，使用有效邀请码注册可获得奖励。',
+  invitationCodePlaceholder: '请输入邀请码',
 
   emailPlaceholder: 'you@example.com',
   emailOrUsernamePlaceholder: 'you@example.com / 用户名',

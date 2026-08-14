@@ -13,6 +13,7 @@ export default {
   subscriptions: '我的訂閱',
   orders: '我的訂單',
   account: '賬戶設定',
+  invitations: '邀請好友',
 
   users: '用戶',
   groups: '分組',
@@ -28,6 +29,7 @@ export default {
   reliability: '可靠性',
   paymentSettings: '支付設定',
   oauthSettings: '第三方登入',
+  notifications: '通知管理',
   siteSettings: '站點設定',
   migrate: '數據遷移',
 

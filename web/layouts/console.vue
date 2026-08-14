@@ -1,13 +1,16 @@
 <script setup lang="ts">
 const { settings, loadSiteSettings } = useSiteSettings()
 const { account, loading, error, can, loadAccount } = useAccount()
+const { loadNotifications } = useNotifications()
 const { t } = useI18n()
 const route = useRoute()
 const navOpen = ref(false)
 
-onMounted(() => {
+onMounted(async () => {
   loadSiteSettings()
-  loadAccount()
+  await loadAccount()
+  // Show the notification popup on every fresh login (per page load).
+  if (account.value) loadNotifications()
 })
 
 watch(() => route.fullPath, () => { navOpen.value = false })
@@ -69,5 +72,6 @@ watchEffect(() => {
     </div>
 
     <UiToaster />
+    <ConsoleNotificationsDialog />
   </div>
 </template>

@@ -16,6 +16,9 @@ export default {
   captchaRequired: '請先完成人机驗證',
   signInSuccess: '登錄成功',
   signUpSuccess: '註購成功',
+  invitationCode: '邀請碼',
+  invitationCodeHint: '選填，使用有效邀請碼註冊可獲得獎勵。',
+  invitationCodePlaceholder: '請輸入邀請碼',
 
   emailPlaceholder: 'you@example.com',
   emailOrUsernamePlaceholder: 'you@example.com / 用戶名',

@@ -32,13 +32,14 @@ type paymentOrder struct {
 }
 
 type epaySettings struct {
-	Enabled        bool            `json:"enabled"`
-	BaseURL        string          `json:"base_url"`
-	MerchantID     string          `json:"merchant_id"`
-	MerchantKey    string          `json:"-"`
-	HasMerchantKey bool            `json:"has_merchant_key"`
-	PublicBaseURL  string          `json:"public_base_url"`
-	Methods        []paymentMethod `json:"methods"`
+	Enabled              bool            `json:"enabled"`
+	BaseURL              string          `json:"base_url"`
+	MerchantID           string          `json:"merchant_id"`
+	MerchantKey          string          `json:"-"`
+	HasMerchantKey       bool            `json:"has_merchant_key"`
+	PublicBaseURL        string          `json:"public_base_url"`
+	Methods              []paymentMethod `json:"methods"`
+	merchantKeyEncrypted string
 }
 
 type paymentMethod struct {
@@ -57,11 +58,9 @@ func (s *Service) loadEpaySettings(r *http.Request) (epaySettings, error) {
 		return settings, err
 	}
 	settings.HasMerchantKey = encryptedKey != ""
+	settings.merchantKeyEncrypted = encryptedKey
 	if encryptedKey != "" {
-		settings.MerchantKey, err = crypt(s.cfg.EncryptionKey, encryptedKey, true)
-		if err != nil {
-			return settings, err
-		}
+		settings.MerchantKey, _ = crypt(s.cfg.EncryptionKey, encryptedKey, true)
 	}
 	rows, err := s.db.Query(r.Context(), `select id,code,name,enabled,created_at from payment_methods where provider='epay' order by created_at,id`)
 	if err != nil {
@@ -143,7 +142,7 @@ func (s *Service) updatePaymentSettings(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "invalid_request", "merchant_key is required when payment is enabled")
 		return
 	}
-	encryptedKey := ""
+	encryptedKey := current.merchantKeyEncrypted
 	if merchantKey != "" {
 		encryptedKey, err = crypt(s.cfg.EncryptionKey, merchantKey, false)
 		if err != nil {
