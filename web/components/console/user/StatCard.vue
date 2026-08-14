@@ -11,10 +11,12 @@ defineProps<{
 </script>
 
 <template>
-  <div class="rounded-card border border-line bg-surface px-5 py-4">
+  <div class="rounded-card border border-line bg-surface px-5 py-4 transition-[border-color] duration-150 hover:border-line-strong">
     <div class="flex items-start justify-between gap-2">
       <p class="text-[13px] text-muted">{{ label }}</p>
-      <component :is="icon" v-if="icon" class="size-4 shrink-0 text-faint" />
+      <div v-if="icon" class="flex size-7 items-center justify-center rounded-[8px] bg-sunken text-faint">
+        <component :is="icon" class="size-4 shrink-0" />
+      </div>
     </div>
 
     <UiSkeleton v-if="loading" class="mt-2.5 h-7 w-24" />

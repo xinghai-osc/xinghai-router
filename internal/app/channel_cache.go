@@ -1,9 +1,9 @@
 package app
 
-// channelRouteKey identifies the channel list a gateway request needs. When a
-// key is bound to a group (groupID != "") the query result no longer depends on
-// the user, so the key is normalized to (groupID, model) and every user in the
-// group shares one cache entry. Ungrouped keys are keyed per (userID, model).
+// channelRouteKey identifies the channel list a gateway request needs. A channel
+// may be restricted to a single user (channels.user_id), so the candidate list
+// depends on the caller's identity even when the key is bound to a group; the
+// user part of the key is therefore never normalized away.
 type channelRouteKey struct {
 	userID  string
 	groupID string

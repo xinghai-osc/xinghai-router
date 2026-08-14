@@ -59,6 +59,7 @@ func TestUpdateSiteSettingsRejectsInvalidBeforeDatabase(t *testing.T) {
 		`{"name":"` + strings.Repeat("n", 101) + `"}`,
 		`{"name":"Site","icon_url":"http://evil.example.com/x"}`,
 		`{"name":"Site","icon_url":"https://cdn.example.com/` + strings.Repeat("a", 2040) + `"}`,
+		`{"name":"Site","announcement":"` + strings.Repeat("a", 2001) + `"}`,
 		`{"name":"Site","smtp_port":"0"}`,
 		`{"name":"Site","smtp_from":"not-an-email"}`,
 		`{"name":"Site","smtp_host":"` + strings.Repeat("h", 256) + `"}`,

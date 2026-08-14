@@ -187,18 +187,19 @@ func resolveGatewayMaxTokens(maxTokens int) (int, bool) {
 
 func (s *Service) models(w http.ResponseWriter, r *http.Request) {
 	key := r.Context().Value(contextKey{}).(keyContext)
-	// Only models served by a channel in the caller's own group context are
-	// listed: the key's bound group when set, otherwise the groups the user
-	// belongs to. Public and ungrouped channels are not exposed to callers.
+	// Only models served by a channel the caller may use are listed: the key's
+	// bound group when set, otherwise the groups the user belongs to, plus any
+	// channel restricted to the caller alone. Public and ungrouped channels are
+	// not exposed to callers.
 	rows, err := s.db.Query(r.Context(), `select model from (
 		select jsonb_array_elements_text(c.models) as model from channels c where c.enabled and (
-			($2<>'' and exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($2,'')::uuid))
-			or ($2='' and exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$1))
+			($2<>'' and (exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($2,'')::uuid) or c.user_id=$1))
+			or ($2='' and (exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$1) or c.user_id=$1))
 		)
 		union
 		select m.public_model as model from model_routes m join channels c on c.id=m.channel_id where m.enabled and not m.hidden and c.enabled and (
-			($2<>'' and exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($2,'')::uuid))
-			or ($2='' and exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$1))
+			($2<>'' and (exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($2,'')::uuid) or c.user_id=$1))
+			or ($2='' and (exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$1) or c.user_id=$1))
 		)
 	) available order by model`, key.userID, key.groupID)
 	if err != nil {
@@ -379,7 +380,8 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 	var resp *http.Response
 	var ch channel
 	prefill := ""
-	failDetail := ""
+	failCode := "upstream_unreachable"
+	failDetail := failCode
 	// channelsForModel already returns only channels of the key's own group
 	// context, so every candidate is in-group and retries can never spill onto
 	// channels belonging to another group.
@@ -468,6 +470,15 @@ tryChannels:
 			upstreamReq.Header.Set("Content-Type", "application/json")
 			upstreamReq.Header.Set("Accept", accept)
 			resp, err = client.Do(upstreamReq)
+			if err != nil {
+				if code, detail, ok := classifyContextError(err); ok {
+					// The client hung up or the request timeout elapsed: retrying
+					// other channels cannot help, and a healthy channel must not be
+					// counted as failed for a problem that is not its fault.
+					failCode, failDetail = code, detail
+					break tryChannels
+				}
+			}
 			if err == nil && !reliability.retryable(resp.StatusCode) {
 				break tryChannels
 			}
@@ -496,8 +507,13 @@ tryChannels:
 		}
 	}
 	if resp == nil {
-		s.logRequest(ctx, key, ch.id, ch.keyID, model, 502, 0, 0, 0, time.Since(started), "upstream_unreachable", failDetail)
-		writeError(w, 502, "upstream_error", "all upstream channels failed")
+		prompt := len(body) / 3
+		s.logRequest(ctx, key, ch.id, ch.keyID, model, 502, prompt, 0, prompt, time.Since(started), failCode, failDetail)
+		clientDetail := "all upstream channels failed"
+		if failCode == "request_timeout" || failCode == "client_canceled" {
+			clientDetail = failDetail
+		}
+		writeError(w, 502, "upstream_error", clientDetail)
 		return
 	}
 	defer resp.Body.Close()
@@ -543,28 +559,37 @@ tryChannels:
 		}
 		total := st.prompt + st.completion
 		code, detail := "", ""
-		switch {
-		case streamErr != nil && !capture.wrote && !capture.headerSent:
-			// The stream failed before emitting anything: hand the client a clean error.
-			code, detail = "upstream_stream_error", streamErr.Error()
-		case !capture.wrote && !capture.headerSent:
-			// The upstream accepted a 2xx streaming request but never sent a single byte.
-			// Relaying that as an empty 200 confuses clients, so convert it into a 502.
-			code, detail = "empty_upstream_response", "upstream returned an empty streaming response"
-		case streamErr != nil:
-			// Headers were already sent; the client saw a partial stream. Record the
-			// failure but keep the original status because it is already dispatching.
-			code, detail = "upstream_stream_error", streamErr.Error()
+		contextError := false
+		if code, detail, contextError = classifyContextError(streamErr); !contextError {
+			switch {
+			case streamErr != nil && !capture.wrote && !capture.headerSent:
+				// The stream failed before emitting anything: hand the client a clean error.
+				code, detail = "upstream_stream_error", streamErr.Error()
+			case !capture.wrote && !capture.headerSent:
+				// The upstream accepted a 2xx streaming request but never sent a single byte.
+				// Relaying that as an empty 200 confuses clients, so convert it into a 502.
+				code, detail = "empty_upstream_response", "upstream returned an empty streaming response"
+			case streamErr != nil:
+				// Headers were already sent; the client saw a partial stream. Record the
+				// failure but keep the original status because it is already dispatching.
+				code, detail = "upstream_stream_error", streamErr.Error()
+			}
 		}
 		if code != "" {
 			if !capture.wrote && !capture.headerSent {
 				status = 502
 			}
+			if st.prompt == 0 {
+				st.prompt = len(body) / 3
+				total = st.prompt + st.completion
+			}
 			s.logRequest(ctx, key, ch.id, ch.keyID, model, status, st.prompt, st.completion, total, time.Since(started), code, detail)
 			if !capture.wrote && !capture.headerSent {
 				writeError(w, status, "upstream_error", s.clientUpstreamError(ctx, detail, reliability))
 			}
-			s.channelFailed(ctx, ch.id, ch.keyID, code)
+			if !contextError {
+				s.channelFailed(ctx, ch.id, ch.keyID, code)
+			}
 		} else {
 			s.logRequest(ctx, key, ch.id, ch.keyID, model, status, st.prompt, st.completion, total, time.Since(started), "", "")
 			if streamErr == nil {
@@ -589,13 +614,21 @@ tryChannels:
 	}
 	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, maxUpstreamResponseBody))
 	if err != nil {
-		s.logRequest(ctx, key, ch.id, ch.keyID, model, 502, 0, 0, 0, time.Since(started), "upstream_read_error", err.Error())
+		prompt := len(body) / 3
+		code, detail, contextError := classifyContextError(err)
+		if !contextError {
+			code, detail = "upstream_read_error", err.Error()
+		}
+		s.logRequest(ctx, key, ch.id, ch.keyID, model, 502, prompt, 0, prompt, time.Since(started), code, detail)
 		writeError(w, 502, "upstream_error", "could not read upstream response")
-		s.channelFailed(ctx, ch.id, ch.keyID, "upstream_read_error")
+		if !contextError {
+			s.channelFailed(ctx, ch.id, ch.keyID, "upstream_read_error")
+		}
 		return
 	}
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 && resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusNotModified && len(responseBody) == 0 {
-		s.logRequest(ctx, key, ch.id, ch.keyID, model, 502, 0, 0, 0, time.Since(started), "empty_upstream_response", "upstream returned an empty response")
+		prompt := len(body) / 3
+		s.logRequest(ctx, key, ch.id, ch.keyID, model, 502, prompt, 0, prompt, time.Since(started), "empty_upstream_response", "upstream returned an empty response")
 		writeError(w, 502, "upstream_error", "upstream returned an empty response")
 		s.channelFailed(ctx, ch.id, ch.keyID, "empty_upstream_response")
 		return
@@ -618,6 +651,10 @@ tryChannels:
 	detail := ""
 	if resp.StatusCode >= 400 {
 		detail = string(responseBody)
+		if prompt == 0 && completion == 0 {
+			prompt = len(body) / 3
+			total = prompt
+		}
 	}
 	s.logRequest(ctx, key, ch.id, ch.keyID, model, resp.StatusCode, prompt, completion, total, time.Since(started), errorCode(resp.StatusCode), detail)
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
@@ -860,15 +897,12 @@ func (s *Service) checkQuota(ctx context.Context, key keyContext, model string) 
 	return rows.Err()
 }
 // channelsForModel returns the candidate channels for a model, memoised for a
-// few seconds per (group,model) or (user,model). Channel configuration changes
-// rarely; the cache removes the 1+N channel and key queries from every proxied
-// request. A fresh copy of the slice is returned so the retry loop's credential
-// rotation never mutates the shared cache entry.
+// few seconds per (user,group,model). Channel configuration changes rarely; the
+// cache removes the 1+N channel and key queries from every proxied request. A
+// fresh copy of the slice is returned so the retry loop's credential rotation
+// never mutates the shared cache entry.
 func (s *Service) channelsForModel(ctx context.Context, key keyContext, model string) ([]channel, error) {
 	ck := channelRouteKey{userID: key.userID, groupID: key.groupID, model: model}
-	if ck.groupID != "" {
-		ck.userID = ""
-	}
 	channels, err := s.channelCache.get(ctx, ck, func(ctx context.Context) ([]channel, error) {
 		return s.loadChannelsForModel(ctx, key, model)
 	})
@@ -879,7 +913,7 @@ func (s *Service) channelsForModel(ctx context.Context, key keyContext, model st
 }
 
 func (s *Service) loadChannelsForModel(ctx context.Context, key keyContext, model string) ([]channel, error) {
-	rows, err := s.db.Query(ctx, `select c.id,c.base_url,c.api_key,coalesce(m.priority,c.priority),coalesce(m.weight,c.weight),coalesce(m.upstream_model,''),c.provider,c.upstream_path,c.upstream_format,c.request_overrides,case when $3='' then exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$2) else exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($3,'')::uuid) end as in_key_group from channels c left join model_routes m on m.channel_id=c.id and m.public_model=$1 and m.enabled where (c.enabled or c.auto_disabled) and (c.models ? $1 or m.public_model is not null) and (($3<>'' and exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($3,'')::uuid)) or ($3='' and exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$2))) order by (c.enabled and not c.auto_disabled) desc, coalesce(m.priority,c.priority) desc, c.priority desc, c.id`, model, key.userID, key.groupID)
+	rows, err := s.db.Query(ctx, `select c.id,c.base_url,c.api_key,coalesce(m.priority,c.priority),coalesce(m.weight,c.weight),coalesce(m.upstream_model,''),c.provider,c.upstream_path,c.upstream_format,c.request_overrides,case when $3='' then exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$2) or c.user_id=$2 else exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($3,'')::uuid) or c.user_id=$2 end as in_key_group from channels c left join model_routes m on m.channel_id=c.id and m.public_model=$1 and m.enabled where (c.enabled or c.auto_disabled) and (c.models ? $1 or m.public_model is not null) and (($3<>'' and (exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($3,'')::uuid) or c.user_id=$2)) or ($3='' and (exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$2) or c.user_id=$2))) order by (c.enabled and not c.auto_disabled) desc, coalesce(m.priority,c.priority) desc, c.priority desc, c.id`, model, key.userID, key.groupID)
 	if err != nil {
 		return nil, err
 	}
@@ -1359,6 +1393,21 @@ func (s *Service) logRequest(ctx context.Context, key keyContext, channelID int6
 }
 
 var upstreamURLPattern = regexp.MustCompile(`https?://[^\s"'\])\}]+`)
+
+// classifyContextError maps a context-cancellation or deadline-exceeded error
+// (client hangup, RequestTimeout elapsed) to a stable error code and a clean,
+// channel-agnostic message. The boolean reports whether err is such an error.
+// These errors must not count against channel health: the channel itself is
+// fine, only the request was cut short.
+func classifyContextError(err error) (string, string, bool) {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "request_timeout", "upstream request timed out", true
+	}
+	if errors.Is(err, context.Canceled) {
+		return "client_canceled", "request canceled by client", true
+	}
+	return "", "", false
+}
 
 // noChannelAvailableDetail is the generic message relayed to clients when an
 // upstream error matches an auto-disable keyword, so the upstream's specific

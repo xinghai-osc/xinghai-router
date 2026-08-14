@@ -55,16 +55,23 @@ const { t } = useI18n()
 </script>
 
 <template>
-  <div class="overflow-hidden rounded-card border border-line bg-surface text-left">
-    <div class="flex items-center justify-between gap-2 border-b border-line bg-sunken px-2 py-1.5">
-      <div class="flex items-center gap-1">
+  <div class="overflow-hidden rounded-card border border-line bg-surface text-left shadow-pop">
+    <div class="grid grid-cols-[1fr_auto] items-center gap-2 border-b border-line bg-sunken px-3 pt-2 md:flex md:justify-between md:py-2">
+      <div class="flex items-center gap-1.5">
+        <span class="size-2.5 rounded-full bg-danger/70" aria-hidden="true" />
+        <span class="size-2.5 rounded-full bg-warn/70" aria-hidden="true" />
+        <span class="size-2.5 rounded-full bg-success/70" aria-hidden="true" />
+        <span class="ml-2 text-2xs font-medium text-faint">terminal</span>
+      </div>
+
+      <div class="order-3 col-span-2 -mx-1 flex items-center gap-0.5 overflow-x-auto border-t border-line px-1 pt-1.5 pb-2 md:order-none md:col-auto md:mx-0 md:border-0 md:p-0">
         <button
           v-for="sample in samples"
           :key="sample.value"
           type="button"
           :class="[
             'rounded-[7px] px-2.5 py-1 text-[13px] transition-colors duration-150',
-            active === sample.value ? 'bg-surface font-medium text-ink' : 'text-muted hover:text-ink',
+            active === sample.value ? 'bg-surface font-medium text-ink shadow-sm' : 'text-muted hover:text-ink',
           ]"
           @click="active = sample.value"
         >{{ sample.label }}</button>
@@ -72,7 +79,7 @@ const { t } = useI18n()
 
       <button
         type="button"
-        class="inline-flex items-center gap-1.5 rounded-[7px] px-2 py-1 text-2xs text-muted transition-colors hover:text-ink"
+        class="inline-flex items-center gap-1.5 rounded-[7px] px-2 py-1 text-2xs text-muted transition-colors hover:bg-surface hover:text-ink"
         :aria-label="copied ? t('common.copied') : t('site.codeCopy')"
         @click="copy(current.code)"
       >
@@ -82,6 +89,6 @@ const { t } = useI18n()
       </button>
     </div>
 
-    <pre class="overflow-x-auto px-4 py-4 font-mono text-[12.5px] leading-relaxed text-ink"><code>{{ current.code }}</code></pre>
+    <pre class="overflow-x-auto px-4 py-4 font-mono text-xs leading-relaxed text-ink sm:text-[12.5px]"><code>{{ current.code }}</code></pre>
   </div>
 </template>

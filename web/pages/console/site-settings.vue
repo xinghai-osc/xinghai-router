@@ -14,6 +14,7 @@ useHead({ title: () => `${t('system.siteSettingsTitle')} · ${site.value.name}` 
 const EMPTY: AdminSiteSettings = {
   name: '',
   icon_url: '',
+  announcement: '',
   auto_disable_failed_channels: false,
   captcha_provider: '',
   geetest_captcha_id: '',
@@ -36,6 +37,7 @@ const { data, pending, error, refresh } = useResource(
 const form = reactive({
   name: '',
   icon_url: '',
+  announcement: '',
   auto_disable_failed_channels: false,
   captcha_provider: '',
   geetest_captcha_id: '',
@@ -63,6 +65,7 @@ const captchaProviderOptions = [
 watch(data, (next) => {
   form.name = next.name
   form.icon_url = next.icon_url
+  form.announcement = next.announcement
   form.auto_disable_failed_channels = next.auto_disable_failed_channels
   form.captcha_provider = next.captcha_provider
   form.geetest_captcha_id = next.geetest_captcha_id
@@ -89,6 +92,7 @@ async function save() {
   const payload = {
     name: form.name.trim(),
     icon_url: form.icon_url.trim(),
+    announcement: form.announcement.trim(),
     auto_disable_failed_channels: form.auto_disable_failed_channels,
     captcha_provider: form.captcha_provider,
     geetest_captcha_id: form.geetest_captcha_id.trim(),
@@ -145,6 +149,10 @@ async function save() {
 
               <UiField :label="t('system.siteIcon')" :hint="t('system.siteIconHint')" for="site-icon">
                 <UiInput id="site-icon" v-model="form.icon_url" type="url" />
+              </UiField>
+
+              <UiField :label="t('system.announcement')" :hint="t('system.announcementHint')" for="site-announcement" class="sm:col-span-2">
+                <UiTextarea id="site-announcement" v-model="form.announcement" :maxlength="2000" :rows="3" />
               </UiField>
             </div>
 

@@ -26,6 +26,7 @@
   --shadow-pop: 0 1px 2px rgb(11 13 23 / 0.06), 0 16px 40px -10px rgb(91 91 245 / 0.25);
   --shadow-glow: 0 0 0 1px rgb(91 91 245 / 0.2), 0 8px 28px -6px rgb(91 91 245 / 0.35);
   --page-glow: none;
+  --shimmer-highlight: rgb(255 255 255 / 0.5);
 
   --radius-control-token: 8px;
   --radius-card-token: 12px;
@@ -59,4 +60,5 @@
   --page-glow:
     radial-gradient(50% 40% at 15% 0%, rgb(124 124 255 / 0.14), transparent 70%),
     radial-gradient(45% 35% at 88% 8%, rgb(47 211 165 / 0.1), transparent 70%);
+  --shimmer-highlight: rgb(255 255 255 / 0.06);
 }

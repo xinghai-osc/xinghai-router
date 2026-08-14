@@ -11,7 +11,7 @@ defineProps<{
 
 <template>
   <div class="flex flex-col items-center justify-center gap-3 px-6 py-14 text-center">
-    <div class="flex size-11 items-center justify-center rounded-full bg-sunken text-faint">
+    <div class="flex size-12 items-center justify-center rounded-full bg-clay-soft text-clay">
       <component :is="icon ?? Inbox" class="size-5" />
     </div>
     <div class="space-y-1">

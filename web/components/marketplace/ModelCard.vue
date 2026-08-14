@@ -19,12 +19,14 @@ const rows = computed(() => [
 <template>
   <button
     type="button"
-    class="flex flex-col gap-4 rounded-card border border-line bg-surface p-5 text-left transition-colors duration-150 hover:border-line-strong focus-visible:border-clay focus-visible:outline-none"
+    class="group flex flex-col gap-4 rounded-card border border-line bg-surface p-5 text-left transition-[border-color,transform,background-color] duration-150 ease-out hover:-translate-y-0.5 hover:border-line-strong hover:bg-surface focus-visible:border-clay focus-visible:outline-none"
     :aria-label="t('site.sqOpenDetail', { model: model.model })"
     @click="emit('select', model)"
   >
     <header class="flex items-start gap-3">
-      <SiteVendorMark :name="model.vendor_name" />
+      <span class="transition-transform duration-150 ease-out group-hover:scale-105">
+        <SiteVendorMark :name="model.vendor_name" />
+      </span>
       <div class="min-w-0 flex-1">
         <p class="truncate font-mono text-[13px] font-medium text-ink">{{ model.model }}</p>
         <p class="mt-0.5 truncate text-2xs text-faint">{{ model.vendor_name }}</p>

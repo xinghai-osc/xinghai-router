@@ -53,10 +53,12 @@ const vendors = computed(() => {
         <article
           v-for="vendor in vendors"
           :key="vendor.name"
-          class="space-y-4 rounded-card border border-line bg-surface p-5 transition-colors duration-150 hover:border-line-strong"
+          class="group space-y-4 rounded-card border border-line bg-surface p-5 transition-[border-color,transform,background-color] duration-150 ease-out hover:-translate-y-0.5 hover:border-line-strong hover:bg-surface"
         >
           <header class="flex items-center gap-3">
-            <SiteVendorMark :name="vendor.name" :slug="vendor.slug" />
+            <span class="transition-transform duration-150 ease-out group-hover:scale-105">
+              <SiteVendorMark :name="vendor.name" :slug="vendor.slug" />
+            </span>
             <div class="min-w-0">
               <p class="truncate text-sm font-semibold text-ink">{{ vendor.name }}</p>
               <p class="numeric text-2xs text-faint">{{ t('site.wallModelCount', { count: vendor.count }) }}</p>
@@ -67,7 +69,7 @@ const vendors = computed(() => {
             <li
               v-for="model in vendor.models"
               :key="model.id"
-              class="truncate font-mono text-[12.5px] text-muted"
+              class="truncate font-mono text-[12.5px] text-muted transition-colors duration-150 group-hover:text-ink"
             >{{ model.model }}</li>
           </ul>
         </article>

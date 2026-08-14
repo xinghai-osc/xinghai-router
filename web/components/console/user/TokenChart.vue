@@ -46,6 +46,7 @@ const bars = computed(() => props.points.map((point, index) => {
   const x = index * slot.value + (slot.value - barWidth.value) / 2
   return {
     ...point,
+    index,
     x,
     center: x + barWidth.value / 2,
     height,
@@ -53,6 +54,9 @@ const bars = computed(() => props.points.map((point, index) => {
     hover: t('console.chartBarLabel', { date: point.label, tokens: formatNumber(point.value) }),
   }
 }))
+
+const grown = ref(false)
+onMounted(() => { requestAnimationFrame(() => { grown.value = true }) })
 
 const peakBar = computed(() => bars.value.reduce<(typeof bars.value)[number] | null>(
   (best, bar) => (bar.value > 0 && (!best || bar.value > best.value) ? bar : best),
@@ -83,12 +87,23 @@ const peakLabelX = computed(() => {
       />
 
       <g v-for="bar in bars" :key="bar.key" class="group">
-        <path
-          v-if="bar.path"
-          :d="bar.path"
-          fill="var(--clay)"
-          class="transition-opacity duration-150 ease-out group-hover:opacity-70"
-        />
+        <g
+          class="transition-[transform,opacity] duration-500 ease-out"
+          :style="{
+            transformBox: 'fill-box',
+            transformOrigin: 'bottom',
+            transform: grown ? 'scaleY(1)' : 'scaleY(0)',
+            opacity: grown ? 1 : 0,
+            transitionDelay: `${bar.index * 40}ms`,
+          }"
+        >
+          <path
+            v-if="bar.path"
+            :d="bar.path"
+            fill="var(--clay)"
+            class="transition-opacity duration-150 ease-out group-hover:opacity-70"
+          />
+        </g>
         <rect
           :x="bar.x - 2"
           :y="PAD_TOP"
@@ -108,6 +123,8 @@ const peakLabelX = computed(() => {
         fill="var(--muted)"
         font-family="var(--font-mono)"
         font-size="11"
+        class="transition-opacity duration-300 ease-out"
+        :style="{ opacity: grown ? 1 : 0, transitionDelay: `${bars.length * 40 + 120}ms` }"
       >{{ formatCompact(peakBar.value) }}</text>
 
       <text

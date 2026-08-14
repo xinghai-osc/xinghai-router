@@ -45,7 +45,11 @@ function startOfToday(): Date {
   return start
 }
 
-const range = reactive<{ start: Date | null; end: Date | null }>({ start: startOfToday(), end: new Date() })
+function defaultEnd(): Date {
+  return new Date(Date.now() + 3600 * 1000)
+}
+
+const range = reactive<{ start: Date | null; end: Date | null }>({ start: startOfToday(), end: defaultEnd() })
 const rangeDraft = reactive({ start: '', end: '' })
 const rangeOpen = ref(false)
 
@@ -81,8 +85,9 @@ function applyRangeDraft() {
 }
 
 function applyRangePreset(preset: (typeof DATE_PRESETS)[number]) {
-  const end = new Date()
-  const start = preset.start(end)
+  const now = new Date()
+  const end = defaultEnd()
+  const start = preset.start(now)
   range.start = start
   range.end = end
   rangeDraft.start = toInputValue(start)
@@ -189,7 +194,7 @@ async function resetFilters() {
   filters.status = ''
   filters.request_id = ''
   range.start = startOfToday()
-  range.end = new Date()
+  range.end = defaultEnd()
   await applyFilters()
 }
 
@@ -368,7 +373,12 @@ const detailTarget = ref<UsageLog | RequestLog | null>(null)
                 <td class="num">{{ formatNumber(log.cached_prompt_tokens) }}</td>
                 <td class="num">{{ formatNumber(log.completion_tokens) }}</td>
                 <td class="num">{{ t('admin.durationMs', { value: log.duration_ms }) }}</td>
-                <td class="num">{{ formatMoney(log.cost, 4) }}</td>
+                <td class="num">
+                  <span class="inline-flex items-center justify-end gap-1.5">
+                    {{ formatMoney(log.cost, 4) }}
+                    <UiBadge v-if="log.subscription" tone="success" dot>{{ t('admin.subscriptionCovered') }}</UiBadge>
+                  </span>
+                </td>
                 <td>
                   <UiButton variant="ghost" size="sm" @click="detailTarget = log">{{ t('common.detail') }}</UiButton>
                 </td>
@@ -491,6 +501,13 @@ const detailTarget = ref<UsageLog | RequestLog | null>(null)
               <div class="text-2xs text-faint">{{ t('admin.statCompletionTokens') }}</div>
               <div class="numeric text-[13px] text-ink">{{ detailTarget ? formatNumber(detailTarget.completion_tokens ?? 0) : '—' }}</div>
             </div>
+          </div>
+        </div>
+        <div v-if="detailTarget && 'subscription' in detailTarget">
+          <div class="mb-1 text-xs text-muted">{{ t('admin.cost') }}</div>
+          <div class="text-[13px] text-ink">
+            <UiBadge v-if="detailTarget.subscription" tone="success" dot>{{ t('admin.subscriptionCovered') }}</UiBadge>
+            <template v-else>{{ formatMoney(Number(detailTarget.cost ?? 0), 4) }}</template>
           </div>
         </div>
         <div>

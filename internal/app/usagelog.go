@@ -97,7 +97,7 @@ func (s *Service) listUsageLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	query := `select rl.request_id,coalesce(rl.user_id::text,''),coalesce(u.name,'') as user_name,coalesce(rl.api_key_id::text,''),coalesce(ak.name,'') as key_name,coalesce(rl.channel_id::text,''),coalesce(c.name,'') as channel_name,coalesce(rl.channel_key_id::text,''),coalesce(ck.name,'') as channel_key_name,coalesce(rl.group_id::text,'') as group_id,coalesce(coalesce(g.display_name, g.name),'') as group_name,rl.model,rl.status_code,coalesce(rl.prompt_tokens,0),coalesce(rl.completion_tokens,0),coalesce(rl.total_tokens,0),coalesce(ur.cached_prompt_tokens,0),rl.duration_ms,coalesce(rl.error_code,''),case when rl.error_code is not null or rl.status_code>=400 then rl.error_detail else '' end,rl.client_ip,rl.user_agent,coalesce(ur.cost,0) as cost,rl.created_at from request_logs rl left join users u on u.id=rl.user_id left join api_keys ak on ak.id=rl.api_key_id left join channels c on c.id=rl.channel_id left join channel_api_keys ck on ck.id=rl.channel_key_id left join groups g on g.id=rl.group_id left join usage_records ur on ur.request_id=rl.request_id` + whereClause + ` order by rl.created_at desc limit $` + strconv.Itoa(argIdx) + ` offset $` + strconv.Itoa(argIdx+1)
+	query := `select rl.request_id,coalesce(rl.user_id::text,''),coalesce(u.name,'') as user_name,coalesce(rl.api_key_id::text,''),coalesce(ak.name,'') as key_name,coalesce(rl.channel_id::text,''),coalesce(c.name,'') as channel_name,coalesce(rl.channel_key_id::text,''),coalesce(ck.name,'') as channel_key_name,coalesce(rl.group_id::text,'') as group_id,coalesce(coalesce(g.display_name, g.name),'') as group_name,rl.model,rl.status_code,coalesce(rl.prompt_tokens,0),coalesce(rl.completion_tokens,0),coalesce(rl.total_tokens,0),coalesce(ur.cached_prompt_tokens,0),rl.duration_ms,coalesce(rl.error_code,''),case when rl.error_code is not null or rl.status_code>=400 then rl.error_detail else '' end,rl.client_ip,rl.user_agent,coalesce(ur.cost,0) as cost,rl.subscription_covered,rl.created_at from request_logs rl left join users u on u.id=rl.user_id left join api_keys ak on ak.id=rl.api_key_id left join channels c on c.id=rl.channel_id left join channel_api_keys ck on ck.id=rl.channel_key_id left join groups g on g.id=rl.group_id left join usage_records ur on ur.request_id=rl.request_id` + whereClause + ` order by rl.created_at desc limit $` + strconv.Itoa(argIdx) + ` offset $` + strconv.Itoa(argIdx+1)
 	args = append(args, pageSize, offset)
 
 	rows, err := s.db.Query(r.Context(), query, args...)
@@ -116,8 +116,9 @@ func (s *Service) listUsageLogs(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var requestID, userID, userName, apiKeyID, keyName, channelID, channelName, channelKeyID, channelKeyName, groupID, groupName, model, errorCode, errorDetail, clientIP, userAgent string
 		var statusCode, duration, prompt, completion, totalTokens, cached int
+		var subscriptionCovered bool
 		var cost, created any
-		if err := rows.Scan(&requestID, &userID, &userName, &apiKeyID, &keyName, &channelID, &channelName, &channelKeyID, &channelKeyName, &groupID, &groupName, &model, &statusCode, &prompt, &completion, &totalTokens, &cached, &duration, &errorCode, &errorDetail, &clientIP, &userAgent, &cost, &created); err != nil {
+		if err := rows.Scan(&requestID, &userID, &userName, &apiKeyID, &keyName, &channelID, &channelName, &channelKeyID, &channelKeyName, &groupID, &groupName, &model, &statusCode, &prompt, &completion, &totalTokens, &cached, &duration, &errorCode, &errorDetail, &clientIP, &userAgent, &cost, &subscriptionCovered, &created); err != nil {
 			log.Printf("scan usage log row: %v", err)
 			continue
 		}
@@ -146,6 +147,7 @@ func (s *Service) listUsageLogs(w http.ResponseWriter, r *http.Request) {
 			"client_ip":            clientIP,
 			"user_agent":           userAgent,
 			"cost":                 cost,
+			"subscription":         subscriptionCovered,
 			"created_at":           created,
 		})
 	}

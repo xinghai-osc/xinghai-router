@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Repeat } from 'lucide-vue-next'
 import { endpoints, type AdminSubscription, type SubscriptionPlan } from '~/src/api'
-import { formatDateTime } from '~/src/format'
+import { formatDateTime, formatMoney, formatNumber } from '~/src/format'
 
 definePageMeta({ layout: 'console', middleware: 'console-auth' })
 
@@ -55,6 +55,21 @@ const subscriptions = computed(() => {
 })
 
 const canManage = computed(() => can('system.manage'))
+
+function remainingQuota(item: AdminSubscription): string[] {
+  const lines: string[] = []
+  if (item.max_requests_per_period !== null) {
+    lines.push(t('system.remainingRequests', { remaining: formatNumber(item.remaining_requests), max: formatNumber(item.max_requests_per_period) }))
+  }
+  if (item.max_credit_per_period !== null) {
+    lines.push(t('system.remainingCredit', { remaining: formatMoney(item.remaining_credit), max: formatMoney(item.max_credit_per_period) }))
+  }
+  if (!lines.length && item.model_quota_count > 0) {
+    lines.push(t('system.modelQuotaCount', { count: formatNumber(item.model_quota_count) }))
+  }
+  if (!lines.length) lines.push(t('system.unlimited'))
+  return lines
+}
 
 const extendPlanId = ref('all')
 const extendDays = ref('30')
@@ -160,6 +175,7 @@ async function runExtend() {
             <tr>
               <th>{{ t('system.subscriber') }}</th>
               <th>{{ t('system.plan') }}</th>
+              <th>{{ t('system.remainingQuota') }}</th>
               <th>{{ t('common.status') }}</th>
               <th class="num">{{ t('system.periodStart') }}</th>
               <th class="num">{{ t('system.periodEnd') }}</th>
@@ -175,6 +191,11 @@ async function runExtend() {
                 <p v-if="item.user_name" class="mt-0.5 text-[13px] text-muted">{{ item.user_name }}</p>
               </td>
               <td>{{ item.plan_name }}</td>
+              <td>
+                <p v-for="line in remainingQuota(item)" :key="line" class="whitespace-nowrap text-[13px] text-muted">
+                  {{ line }}
+                </p>
+              </td>
               <td>
                 <UiBadge :tone="STATUS_TONES[item.status]" dot>{{ t(STATUS_KEYS[item.status]) }}</UiBadge>
               </td>

@@ -27,6 +27,7 @@
   --shadow-pop: 0 1px 2px rgb(26 21 51 / 0.06), 0 14px 36px -10px rgb(124 58 237 / 0.22);
   --shadow-glow: 0 0 0 1px rgb(124 58 237 / 0.18), 0 8px 28px -6px rgb(124 58 237 / 0.3);
   --page-glow: none;
+  --shimmer-highlight: rgb(255 255 255 / 0.4);
 
   --radius-card-token: 18px;
   --surface-blur: 14px;
@@ -59,6 +60,7 @@
   --shadow-glow: 0 0 0 1px rgb(167 139 250 / 0.28), 0 8px 32px -6px rgb(167 139 250 / 0.45);
   --page-glow: none;
   --surface-blur: 16px;
+  --shimmer-highlight: rgb(255 255 255 / 0.06);
 }
 
 /* 银河背景层：多层星云径向渐变 + 星点，缓慢漂移与呼吸。

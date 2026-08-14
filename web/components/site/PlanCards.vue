@@ -71,8 +71,8 @@ function benefits(plan: PublicSubscriptionPlan): string[] {
       v-for="(plan, index) in sorted"
       :key="plan.id"
       :class="[
-        'relative flex flex-col gap-5 rounded-card border bg-surface p-6 transition-[border-color,transform,background-color] duration-150 ease-out hover:-translate-y-px hover:bg-surface',
-        index === featured ? 'border-clay' : 'border-line hover:border-line-strong',
+        'relative flex flex-col gap-5 rounded-card border bg-surface p-6 transition-[border-color,transform,background-color] duration-150 ease-out hover:-translate-y-0.5 hover:bg-surface',
+        index === featured ? 'border-clay shadow-pop' : 'border-line hover:border-line-strong',
       ]"
     >
       <UiBadge v-if="index === featured" tone="clay" class="absolute -top-2.5 left-6">

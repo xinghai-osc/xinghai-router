@@ -66,7 +66,11 @@ function startOfToday(): Date {
   return start
 }
 
-const range = reactive<{ start: Date | null; end: Date | null }>({ start: startOfToday(), end: new Date() })
+function defaultEnd(): Date {
+  return new Date(Date.now() + 3600 * 1000)
+}
+
+const range = reactive<{ start: Date | null; end: Date | null }>({ start: startOfToday(), end: defaultEnd() })
 const rangeDraft = reactive({ start: '', end: '' })
 const rangeOpen = ref(false)
 
@@ -102,8 +106,9 @@ function applyRangeDraft() {
 }
 
 function applyRangePreset(preset: (typeof DATE_PRESETS)[number]) {
-  const end = new Date()
-  const start = preset.start(end)
+  const now = new Date()
+  const end = defaultEnd()
+  const start = preset.start(now)
   range.start = start
   range.end = end
   rangeDraft.start = toInputValue(start)
@@ -267,7 +272,7 @@ async function resetFilters() {
   status.value = ''
   userId.value = ''
   range.start = startOfToday()
-  range.end = new Date()
+  range.end = defaultEnd()
   applied.model = ''
   applied.group = ''
   applied.key = ''

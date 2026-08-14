@@ -2660,6 +2660,10 @@ func (s *Service) adjustBalance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(r.Context())
+	if _, err = tx.Exec(r.Context(), `insert into user_wallets(user_id) values($1) on conflict(user_id) do nothing`, in.UserID); err != nil {
+		writeError(w, 500, "internal_error", "could not load wallet")
+		return
+	}
 	var balance float64
 	if err = tx.QueryRow(r.Context(), `select balance from user_wallets where user_id=$1 for update`, in.UserID).Scan(&balance); err != nil || balance+in.Amount < 0 {
 		writeError(w, 400, "invalid_request", "unknown user or insufficient balance")

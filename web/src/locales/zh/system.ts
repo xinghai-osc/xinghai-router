@@ -1,6 +1,8 @@
 export default {
   siteName: '站点名称',
   siteIcon: '站点图标',
+  announcement: '公告',
+  announcementHint: '显示在公开页面顶部；留空则不显示。最多 2000 个字符。',
   smtp: '邮件服务',
   captcha: '人机验证',
   payments: '支付',

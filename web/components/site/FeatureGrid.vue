@@ -25,9 +25,9 @@ const features = [
       <article
         v-for="feature in features"
         :key="feature.key"
-        class="space-y-3 bg-surface p-6 transition-colors duration-150 hover:bg-sunken"
+        class="group space-y-3 bg-surface p-6 transition-colors duration-150 hover:bg-sunken"
       >
-        <div class="flex size-9 items-center justify-center rounded-[10px] bg-clay-soft text-clay">
+        <div class="flex size-9 items-center justify-center rounded-[10px] bg-clay-soft text-clay transition-transform duration-150 ease-out group-hover:scale-110">
           <component :is="feature.icon" class="size-[18px]" />
         </div>
         <h3 class="text-[15px] font-semibold text-ink">{{ t(`site.feature${feature.key}Title`) }}</h3>

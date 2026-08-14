@@ -13,7 +13,7 @@ withDefaults(defineProps<{
   <section
     :class="cn(
       'rounded-card border border-line bg-surface',
-      interactive && 'transition-colors duration-150 hover:border-line-strong',
+      interactive && 'transition-[border-color,transform,background-color] duration-150 ease-out hover:-translate-y-px hover:border-line-strong hover:bg-surface',
     )"
   >
     <header

@@ -1,6 +1,8 @@
 export default {
   siteName: 'Site name',
   siteIcon: 'Site icon',
+  announcement: 'Announcement',
+  announcementHint: 'Shown at the top of public pages. Leave blank to hide it. Up to 2,000 characters.',
   smtp: 'Email delivery',
   captcha: 'Captcha',
   payments: 'Payments',

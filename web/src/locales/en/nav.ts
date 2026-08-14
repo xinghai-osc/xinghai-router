@@ -9,6 +9,7 @@ export default {
   keys: 'API keys',
   usage: 'Usage',
   wallet: 'Top up',
+  redeem: 'Redeem',
   ledger: 'Transactions',
   subscriptions: 'Subscriptions',
   invoices: 'Invoices',
@@ -26,6 +27,7 @@ export default {
   conversationCache: 'Conversations',
 
   subscriptionPlans: 'Plans',
+  redemptionCodes: 'Redemption codes',
   adminSubscriptions: 'Subscriptions',
   reliability: 'Reliability',
   conversationCacheSettings: 'Conversation cache',

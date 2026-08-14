@@ -26,7 +26,8 @@
   --overlay: rgb(20 20 19 / 0.32);
   --shadow-pop: 0 1px 2px rgb(20 20 19 / 0.04), 0 12px 32px -8px rgb(20 20 19 / 0.14);
   --shadow-glow: none;
-  --page-glow: none;
+  --page-glow: radial-gradient(48% 42% at 50% 0%, rgb(201 100 66 / 0.05), transparent 72%);
+  --shimmer-highlight: rgb(255 255 255 / 0.5);
 }
 
 :root[data-preset='default'][data-theme='dark'] {
@@ -53,4 +54,6 @@
 
   --overlay: rgb(0 0 0 / 0.55);
   --shadow-pop: 0 1px 2px rgb(0 0 0 / 0.3), 0 12px 32px -8px rgb(0 0 0 / 0.5);
+  --page-glow: radial-gradient(48% 42% at 50% 0%, rgb(217 119 87 / 0.07), transparent 72%);
+  --shimmer-highlight: rgb(255 255 255 / 0.06);
 }

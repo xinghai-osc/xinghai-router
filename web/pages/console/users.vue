@@ -12,6 +12,7 @@ const { busy, run } = useAction()
 
 const allowed = computed(() => can('users.read'))
 const canManage = computed(() => can('system.manage'))
+const canAdjustWallet = computed(() => can('wallets.manage'))
 
 // Must stay in sync with availablePermissions in internal/app/admin.go —
 // a permission missing here would be stripped from the user on save.
@@ -163,6 +164,49 @@ async function save() {
   if (!ok) { toast.error(t('common.actionFailed')); return }
   toast.success(t('admin.userSaved'))
   dialogOpen.value = false
+  await users.refresh()
+}
+
+const balanceOpen = ref(false)
+const balanceUser = ref<User | null>(null)
+const balanceForm = reactive({ amount: '', note: '' })
+const balanceError = ref('')
+
+function openAdjustBalance(user: User) {
+  balanceUser.value = user
+  balanceForm.amount = ''
+  balanceForm.note = ''
+  balanceError.value = ''
+  balanceOpen.value = true
+}
+
+const parsedAmount = computed(() => {
+  const raw = balanceForm.amount.trim()
+  if (!raw) return null
+  const value = Number(raw)
+  if (!Number.isFinite(value) || value === 0 || Math.abs(value) > 1_000_000_000) return null
+  return value
+})
+
+const projectedBalance = computed(() => {
+  const user = balanceUser.value
+  if (!user || parsedAmount.value === null) return null
+  const next = Number(user.balance) + parsedAmount.value
+  return Number.isFinite(next) ? next : null
+})
+
+async function submitAdjustBalance() {
+  const target = balanceUser.value
+  if (!target) return
+  balanceError.value = ''
+  const amount = parsedAmount.value
+  if (amount === null) { balanceError.value = t('admin.adjustAmountInvalid'); return }
+  const note = balanceForm.note.trim()
+  if (!note || note.length > 500) { balanceError.value = t('admin.adjustNoteRequired'); return }
+  const ok = await run(() => endpoints.adjustBalance(target.id, amount, note))
+  if (!ok) { toast.error(t('common.actionFailed')); return }
+  toast.success(t('admin.balanceAdjusted'))
+  balanceOpen.value = false
   await users.refresh()
 }
 
@@ -366,7 +410,7 @@ async function deleteSubscription() {
             <th class="num">{{ t('admin.balance') }}</th>
             <th>{{ t('admin.groups') }}</th>
             <th>{{ t('common.createdAt') }}</th>
-            <th v-if="canManage">{{ t('common.actions') }}</th>
+            <th v-if="canManage || canAdjustWallet">{{ t('common.actions') }}</th>
           </tr>
         </thead>
         <tbody>
@@ -388,10 +432,11 @@ async function deleteSubscription() {
               <span v-else class="text-faint">{{ t('common.none') }}</span>
             </td>
             <td class="text-muted whitespace-nowrap">{{ formatDateTime(user.created_at) }}</td>
-            <td v-if="canManage">
+            <td v-if="canManage || canAdjustWallet">
               <div class="flex gap-1">
-                <UiButton variant="ghost" size="sm" @click="openManage(user)">{{ t('admin.manage') }}</UiButton>
-                <UiButton variant="ghost" size="sm" @click="openSubscriptions(user)">{{ t('admin.subscriptions') }}</UiButton>
+                <UiButton v-if="canManage" variant="ghost" size="sm" @click="openManage(user)">{{ t('admin.manage') }}</UiButton>
+                <UiButton v-if="canAdjustWallet" variant="ghost" size="sm" @click="openAdjustBalance(user)">{{ t('admin.adjustBalance') }}</UiButton>
+                <UiButton v-if="canManage" variant="ghost" size="sm" @click="openSubscriptions(user)">{{ t('admin.subscriptions') }}</UiButton>
               </div>
             </td>
           </tr>
@@ -578,6 +623,36 @@ async function deleteSubscription() {
         </UiTable>
       </div>
     </UiSlidePanel>
+
+    <UiDialog v-model:open="balanceOpen" size="sm" :title="t('admin.adjustBalance')" :description="t('admin.adjustBalanceLead')">
+      <div class="space-y-4">
+        <UiAlert v-if="balanceError" tone="danger">{{ balanceError }}</UiAlert>
+        <div v-if="balanceUser" class="rounded-control border border-line bg-sunken px-3 py-2.5 text-sm">
+          <div class="flex items-center justify-between gap-4">
+            <span class="text-muted">{{ t('admin.email') }}</span>
+            <span class="font-medium text-ink">{{ balanceUser.email }}</span>
+          </div>
+          <div class="mt-1.5 flex items-center justify-between gap-4">
+            <span class="text-muted">{{ t('admin.currentBalance') }}</span>
+            <span class="font-medium text-ink">{{ formatMoney(balanceUser.balance) }}</span>
+          </div>
+          <div v-if="projectedBalance !== null" class="mt-1.5 flex items-center justify-between gap-4 border-t border-line pt-1.5">
+            <span class="text-muted">{{ t('admin.newBalance') }}</span>
+            <span class="font-medium text-ink">{{ formatMoney(projectedBalance) }}</span>
+          </div>
+        </div>
+        <UiField :label="t('admin.adjustAmount')" :hint="t('admin.adjustAmountHint')" required>
+          <UiInput v-model="balanceForm.amount" type="number" mono />
+        </UiField>
+        <UiField :label="t('admin.note')" required>
+          <UiInput v-model="balanceForm.note" />
+        </UiField>
+      </div>
+      <template #footer>
+        <UiButton variant="secondary" @click="balanceOpen = false">{{ t('common.cancel') }}</UiButton>
+        <UiButton :loading="busy" @click="submitAdjustBalance">{{ t('common.confirm') }}</UiButton>
+      </template>
+    </UiDialog>
 
     <UiDialog :open="voidTarget !== null" size="sm" :title="t('admin.void')">
       <p class="text-sm text-muted">{{ t('admin.confirmVoidSubscription') }}</p>

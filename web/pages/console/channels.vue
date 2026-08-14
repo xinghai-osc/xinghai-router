@@ -177,6 +177,7 @@ const form = reactive({
   test_model: '',
   priority: '0',
   groups: [] as string[],
+  user_email: '',
   auto_disable: true,
   upstream_path: '',
   upstream_format: '',
@@ -353,6 +354,7 @@ function openCreate() {
   form.test_model = ''
   form.priority = '0'
   form.groups = []
+  form.user_email = ''
   form.auto_disable = true
   form.upstream_path = ''
   form.upstream_format = ''
@@ -374,6 +376,7 @@ function openEdit(channel: Channel) {
   form.models = channel.models.join('\n')
   form.priority = String(channel.priority)
   form.groups = [...channel.groups]
+  form.user_email = channel.user_email ?? ''
   form.auto_disable = channel.auto_disable
   form.upstream_path = channel.upstream_path ?? ''
   form.upstream_format = channel.upstream_format ?? ''
@@ -516,6 +519,11 @@ async function save() {
     groups: [...form.groups],
     auto_disable: form.auto_disable,
     request_overrides: { delete: overrideFields, set: overrideSet },
+  }
+  if (form.user_email.trim()) {
+    payload.user_email = form.user_email.trim()
+  } else {
+    payload.user_email = ''
   }
   if (form.provider === 'custom') {
     payload.upstream_path = form.upstream_path.trim()
@@ -896,6 +904,7 @@ function quotaUsageForWindow(window: string) {
               <th>{{ t('admin.provider') }}</th>
               <th>{{ t('common.status') }}</th>
               <th>{{ t('admin.groups') }}</th>
+              <th>{{ t('admin.restrictUser') }}</th>
               <th class="num">{{ t('admin.priority') }}</th>
               <th class="num">{{ t('admin.weight') }}</th>
               <th>{{ t('admin.usedTokens') }}</th>
@@ -937,6 +946,10 @@ function quotaUsageForWindow(window: string) {
                   <UiBadge v-for="id in channel.groups" :key="id" tone="outline">{{ sensitiveVisible ? (groupNames.get(id) ?? id) : '••••' }}</UiBadge>
                 </div>
                 <span v-else class="text-faint">{{ t('common.all') }}</span>
+              </td>
+              <td>
+                <UiBadge v-if="channel.user_id" tone="clay">{{ sensitiveVisible ? (channel.user_email || channel.user_name || channel.user_id) : '••••' }}</UiBadge>
+                <span v-else class="text-faint">{{ t('common.none') }}</span>
               </td>
               <td class="num">{{ channel.priority }}</td>
               <td class="num">{{ channel.weight }}</td>
@@ -1067,6 +1080,14 @@ function quotaUsageForWindow(window: string) {
 
         <UiField :label="t('admin.groups')" :hint="t('admin.groupsHint')">
           <ConsoleOpsGroupPicker v-model="form.groups" :options="groupOptions" />
+        </UiField>
+
+        <UiField :label="t('admin.restrictUser')" :hint="t('admin.restrictUserHint')">
+          <UiInput
+            v-model="form.user_email"
+            type="email"
+            :placeholder="t('admin.restrictUserPlaceholder')"
+          />
         </UiField>
 
         <UiField :label="t('admin.autoDisable')" :hint="t('admin.autoDisableHint')">

@@ -7,7 +7,7 @@ export interface KeyQuota { limits: KeyQuotaLimit[]; usage: KeyQuotaUsage[] }
 export interface KeyQuotaForm { window: 'day' | 'month' | 'total'; max_requests?: number | null; max_tokens?: number | null; max_cost?: number | null }
 /** `groups` holds group ids, not names — resolve them through /admin/groups. */
 export interface RequestOverrides { delete: string[]; set: Record<string, unknown> }
-export interface Channel { id: string; name: string; base_url: string; provider: 'openai' | 'ollama' | 'kimi' | 'opencode_go' | 'anthropic' | 'deepseek' | 'custom'; models: string[]; test_model: string; enabled: boolean; auto_disabled: boolean; auto_disable: boolean; disabled_reason: string; priority: number; weight: number; last_test_time: string | null; last_error: string | null; response_time_ms: number; used_requests: number; used_tokens: number; groups: string[]; key_type: 'single' | 'multi'; key_count: number; upstream_path: string; upstream_format: string; request_overrides: RequestOverrides; created_at: string; updated_at: string; model_routes: ModelRoute[] }
+export interface Channel { id: string; name: string; base_url: string; provider: 'openai' | 'ollama' | 'kimi' | 'opencode_go' | 'anthropic' | 'deepseek' | 'custom'; models: string[]; test_model: string; enabled: boolean; auto_disabled: boolean; auto_disable: boolean; disabled_reason: string; priority: number; weight: number; last_test_time: string | null; last_error: string | null; response_time_ms: number; used_requests: number; used_tokens: number; groups: string[]; key_type: 'single' | 'multi'; key_count: number; upstream_path: string; upstream_format: string; request_overrides: RequestOverrides; created_at: string; updated_at: string; model_routes: ModelRoute[]; user_id: string | null; user_email: string; user_name: string }
 
 export interface ChannelKey { id: string; name: string; enabled: boolean; priority: number; last_checked_at: string | null; last_error: string | null; created_at: string }
 export interface ChannelKeyForm { name?: string; api_key: string; priority?: number }
@@ -60,8 +60,8 @@ export interface VendorRanking { rank: number; vendor: string; total_tokens: num
 export interface RankingMover { model_name: string; vendor: string; rank_delta: number; current_rank: number; growth_pct: number }
 export interface UserRanking { rank: number; name: string; total_tokens: number; total_cost: number; share: number; growth_pct: number; requests: number; top_model: string }
 export interface Rankings { period: string; models: ModelRanking[]; vendors: VendorRanking[]; top_movers: RankingMover[]; top_droppers: RankingMover[]; users: UserRanking[]; total_tokens: number; updated_at: string }
-export interface SiteSettings { name: string; icon_url: string; auto_disable_failed_channels: boolean; captcha_provider?: string; geetest_enabled?: boolean; geetest_captcha_id?: string; corptcha_site_id?: string; email_verification_enabled?: boolean; oauth_providers?: string[] }
-export interface AdminSiteSettings { name: string; icon_url: string; auto_disable_failed_channels: boolean; captcha_provider: string; geetest_captcha_id: string; has_geetest_captcha_key: boolean; corptcha_site_id: string; has_corptcha_secret: boolean; smtp_host: string; smtp_port: string; smtp_username: string; has_smtp_password: boolean; smtp_from: string; public_base_url: string }
+export interface SiteSettings { name: string; icon_url: string; announcement: string; auto_disable_failed_channels: boolean; captcha_provider?: string; geetest_enabled?: boolean; geetest_captcha_id?: string; corptcha_site_id?: string; email_verification_enabled?: boolean; oauth_providers?: string[] }
+export interface AdminSiteSettings { name: string; icon_url: string; announcement: string; auto_disable_failed_channels: boolean; captcha_provider: string; geetest_captcha_id: string; has_geetest_captcha_key: boolean; corptcha_site_id: string; has_corptcha_secret: boolean; smtp_host: string; smtp_port: string; smtp_username: string; has_smtp_password: boolean; smtp_from: string; public_base_url: string }
 export interface ReliabilitySettings { retry_count: number; retry_status_codes: string; health_check_mode: 'off' | 'scheduled_all' | 'passive_recovery'; health_check_interval_minutes: number; health_check_auto_recover: boolean; health_check_channel_ids: string; auto_disable_on_test_failure: boolean; auto_disable_slow_seconds: number; auto_disable_status_codes: string; auto_disable_keywords: string }
 
 export interface ConversationCacheSettings { conversation_cache_enabled: boolean }
@@ -111,6 +111,7 @@ export interface UsageLog {
   client_ip: string
   user_agent: string
   cost: string
+  subscription: boolean
   created_at: string
 }
 
@@ -248,6 +249,67 @@ export interface OrderRecord {
 }
 
 export interface InvoiceSettings { enabled: boolean; need_pay_tax: boolean }
+
+export type RedemptionRewardType = 'balance' | 'subscription'
+
+export interface RedemptionCode {
+  id: string
+  batch_id: string
+  code: string
+  reward_type: RedemptionRewardType
+  amount: string
+  plan_id: string
+  plan_name: string
+  period_days: number | null
+  max_uses: number
+  used_count: number
+  expires_at: string | null
+  enabled: boolean
+  note: string
+  redeemed_by: string | null
+  redeemed_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface RedemptionCodeRedemption {
+  id: string
+  code_id: string
+  code: string
+  user_id: string
+  user_email: string
+  user_name: string
+  amount: string
+  plan_id: string
+  plan_name: string
+  subscription_id: string
+  created_at: string
+}
+
+export interface RedemptionCodeForm {
+  reward_type: RedemptionRewardType
+  amount: string
+  plan_id: string
+  period_days: number | null
+  max_uses: number
+  quantity: number
+  expires_at: string
+  note: string
+}
+
+export interface RedemptionResult {
+  reward_type: RedemptionRewardType
+  amount?: string
+  subscription_id?: string
+  plan_id?: string
+}
+
+export interface RedemptionCodeUpdate {
+  enabled?: boolean
+  expires_at?: string | null
+  note?: string
+  max_uses?: number
+}
 export interface AdminInvoiceSettings { enabled: boolean; base_url: string; client_id: string; has_client_secret: boolean; need_pay_tax: boolean }
 export interface AdminInvoiceSettingsForm { enabled: boolean; base_url: string; client_id: string; client_secret: string; need_pay_tax: boolean }
 export interface InvoiceEligibleOrder { order_no: string; invoice_no: string; order_type: 'payment' | 'subscription'; plan_name: string; amount: string; paid_at: string | null }
@@ -293,6 +355,19 @@ export interface AdminSubscription {
   cancelled_at: string | null
   created_at: string
   updated_at: string
+  max_requests_per_period: number | null
+  max_credit_per_period: number | null
+  remaining_requests: number | null
+  remaining_credit: number | null
+  model_quota_count: number
+}
+
+export interface AdminUserSubscriptionModelUsage {
+  model: string
+  max_requests_per_period: number | null
+  max_credit_per_period: number | null
+  remaining_requests: number | null
+  remaining_credit: number | null
 }
 
 export interface AdminUserSubscription {
@@ -306,6 +381,11 @@ export interface AdminUserSubscription {
   cancelled_at: string | null
   created_at: string
   updated_at: string
+  max_requests_per_period: number | null
+  max_credit_per_period: number | null
+  remaining_requests: number | null
+  remaining_credit: number | null
+  model_usage: AdminUserSubscriptionModelUsage[]
 }
 
 export interface AdminCreateSubscriptionForm {
@@ -445,7 +525,7 @@ export interface LoginBody { email: string; password: string; code?: string; cap
 export interface RegisterBody { name: string; email: string; password: string; code?: string; captcha_id?: string; lot_number?: string; captcha_output?: string; pass_token?: string; gen_time?: string; captcha_token?: string; captcha_purpose?: string }
 export interface KeyForm { user_id?: string; name: string; expires_at: string; group_id: string }
 export interface AccountKeyForm { name: string; expires_at: string; group_id: string }
-export interface ChannelForm { name: string; provider: string; base_url: string; key_type: 'single' | 'multi'; api_keys: string; models: string[]; test_model?: string; priority: number; groups: string[]; upstream_path?: string; upstream_format?: string; model_routes?: ModelRouteForm[]; auto_disable: boolean; request_overrides?: RequestOverrides }
+export interface ChannelForm { name: string; provider: string; base_url: string; key_type: 'single' | 'multi'; api_keys: string; models: string[]; test_model?: string; priority: number; groups: string[]; upstream_path?: string; upstream_format?: string; model_routes?: ModelRouteForm[]; auto_disable: boolean; request_overrides?: RequestOverrides; user_email?: string }
 export interface ProviderForm { name: string; slug: string; prefixes: string[]; priority: number; id?: string }
 export interface PaymentSettingsForm { enabled: boolean; base_url: string; merchant_id: string; merchant_key: string; public_base_url: string }
 export interface PaymentMethodForm { code: string; name: string; enabled: boolean }
@@ -498,6 +578,8 @@ export const endpoints = {
   getAccountSubscriptionOrders: () => get<{ data: SubscriptionOrder[] }>('/account/subscription-orders'),
   getAccountSubscriptionOrder: (orderNo: string) => get<SubscriptionOrder>(`/account/subscription-orders/${encodeURIComponent(orderNo)}`),
   getAccountOrders: () => get<{ data: OrderRecord[] }>('/account/orders'),
+  redeemCode: (code: string) => post<RedemptionResult>('/account/redeem', { code }),
+  getAccountRedemptions: () => get<{ data: RedemptionCodeRedemption[] }>('/account/redemptions'),
   getInvoiceSettings: () => get<InvoiceSettings>('/account/invoice/settings'),
   getInvoiceEligibleOrders: () => get<{ data: InvoiceEligibleOrder[] }>('/account/invoices/eligible-orders'),
   validateInvoiceOrders: (orderNos: string[], needPayTax: boolean, taxOrderNos: string[] = []) => post<InvoiceValidation>('/account/invoices/validate', { orderNos, needPayTax, ...(taxOrderNos.length ? { taxOrderNos } : {}) }),
@@ -619,6 +701,11 @@ export const endpoints = {
   setUserPermissions: (id: string, permissions: string[]) => send(`/admin/users/${encodeURIComponent(id)}/permissions`, 'PUT', { permissions }),
   setUserGroups: (id: string, groups: string[]) => send(`/admin/users/${encodeURIComponent(id)}/groups`, 'PUT', { groups }),
   adjustBalance: (userId: string, amount: number, note: string) => send('/admin/wallets/adjustments', 'POST', { user_id: userId, amount, note }),
+  getRedemptionCodes: (query = '') => get<Page<RedemptionCode>>(`/admin/redemption-codes${query}`),
+  createRedemptionCodes: (form: RedemptionCodeForm) => post<{ batch_id: string; codes: string[] }>('/admin/redemption-codes', form),
+  updateRedemptionCode: (id: string, form: RedemptionCodeUpdate) => send(`/admin/redemption-codes/${encodeURIComponent(id)}`, 'PUT', form),
+  deleteRedemptionCode: (id: string) => send(`/admin/redemption-codes/${encodeURIComponent(id)}`, 'DELETE'),
+  getRedemptionCodeRedemptions: (id: string) => get<Page<RedemptionCodeRedemption>>(`/admin/redemption-codes/${encodeURIComponent(id)}/redemptions`),
   getMigrationRequests: () => get<{ data: MigrationRequest[] }>('/admin/migrate/requests'),
 
   getOAuthProviders: () => get<{ data: OAuthProvider[] }>('/admin/oauth/providers'),

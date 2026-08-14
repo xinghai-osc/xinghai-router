@@ -9,6 +9,7 @@ export default {
   keys: 'API 密钥',
   usage: '用量',
   wallet: '钱包充值',
+  redeem: '兑换码',
   ledger: '账单流水',
   subscriptions: '我的订阅',
   invoices: '发票管理',
@@ -26,6 +27,7 @@ export default {
   conversationCache: '对话缓存',
 
   subscriptionPlans: '订阅计划',
+  redemptionCodes: '兑换码',
   adminSubscriptions: '订阅管理',
   reliability: '可靠性',
   conversationCacheSettings: '对话缓存设置',
