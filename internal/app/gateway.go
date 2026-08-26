@@ -325,7 +325,7 @@ func (s *Service) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_request", "max_tokens must be at most 200000")
 		return
 	}
-	s.proxyChatCompletions(w, r, body, request.Model, request.Stream, request.MaxTokens, nil, nil, nil, nil, nil)
+	s.proxyChatCompletions(w, r, body, request.Model, request.Stream, request.MaxTokens, nil, nil, nil, nil, nil, nil)
 }
 
 type responseTransform func([]byte) ([]byte, error)
@@ -367,7 +367,7 @@ func (s *Service) logReject(ctx context.Context, model string, status int, code 
 	s.logRequest(ctx, key, 0, "", model, status, 0, 0, 0, time.Since(started), code, "")
 }
 
-func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, body []byte, model string, stream bool, maxTokens int, transform responseTransform, streamFn streamTransform, requestFn requestTransform, providerTransform providerResponseTransform, providerStreamFn providerStreamTransform) {
+func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, body []byte, model string, stream bool, maxTokens int, transform responseTransform, streamFn streamTransform, requestFn requestTransform, providerTransform providerResponseTransform, providerStreamFn providerStreamTransform, responsesBody []byte) {
 	started := time.Now()
 	ctx := r.Context()
 	key := ctx.Value(contextKey{}).(keyContext)
@@ -385,7 +385,7 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 	// settlement, which previously repeated the same two lookups.
 	pricing := s.pricingFor(ctx, model)
 	groupMultiplier := s.groupMultiplierFor(ctx, key.groupID)
-	subscriptionAccess := s.subscriptionCoversModel(ctx, key.userID, model)
+	subscriptionAccess := s.subscriptionCoversModel(ctx, key, model)
 	ctx = context.WithValue(ctx, subscriptionCoveredKey{}, subscriptionAccess)
 	var reserved reservation
 	if subscriptionAccess.Covered {
@@ -463,7 +463,11 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 		accept = "text/event-stream"
 	}
 	var resp *http.Response
+	var lastUpstreamStatus int
+	var lastUpstreamBody []byte
+	var lastUpstreamContentType string
 	var ch channel
+	var selectedDirectResponses bool
 	prefill := ""
 	failCode := "upstream_unreachable"
 	failDetail := failCode
@@ -497,8 +501,12 @@ tryChannels:
 					upstreamFormat = "openai"
 				}
 			}
+			directResponses := responsesBody != nil && upstreamFormat == "openai"
+			selectedDirectResponses = directResponses
 			upstreamPath := ch.upstreamPath
-			if upstreamPath == "" {
+			if directResponses {
+				upstreamPath = "/v1/responses"
+			} else if upstreamPath == "" {
 				if upstreamFormat == "anthropic" {
 					upstreamPath = "/v1/messages"
 				} else {
@@ -507,7 +515,10 @@ tryChannels:
 			}
 			upstreamURL := ch.baseURL + upstreamPath
 			upstreamBody := stripGatewayExtensions(body)
-			if stream && upstreamFormat != "anthropic" {
+			if directResponses {
+				upstreamBody = responsesBody
+			}
+			if stream && upstreamFormat != "anthropic" && !directResponses {
 				var payload map[string]any
 				if json.Unmarshal(upstreamBody, &payload) == nil {
 					so, _ := payload["stream_options"].(map[string]any)
@@ -521,27 +532,29 @@ tryChannels:
 					}
 				}
 			}
-			if ch.upstreamModel != "" && ch.upstreamModel != model {
-				var payload map[string]any
-				if json.Unmarshal(upstreamBody, &payload) == nil {
-					payload["model"] = ch.upstreamModel
-					upstreamBody, _ = json.Marshal(payload)
+			if !directResponses {
+				if ch.upstreamModel != "" && ch.upstreamModel != model {
+					var payload map[string]any
+					if json.Unmarshal(upstreamBody, &payload) == nil {
+						payload["model"] = ch.upstreamModel
+						upstreamBody, _ = json.Marshal(payload)
+					}
 				}
-			}
-			if upstreamFormat == "anthropic" {
-				var prefillText string
-				upstreamBody, prefillText, err = openAIRequestToAnthropic(upstreamBody)
-				if err != nil {
-					continue
+				if upstreamFormat == "anthropic" {
+					var prefillText string
+					upstreamBody, prefillText, err = openAIRequestToAnthropic(upstreamBody)
+					if err != nil {
+						continue
+					}
+					prefill = prefillText
 				}
-				prefill = prefillText
+				if requestFn != nil {
+					upstreamBody = requestFn(upstreamBody, ch.provider)
+				}
+				// Channel-configured deletes/overrides apply last, after every built-in
+				// rewrite, so the admin's configuration is authoritative.
+				upstreamBody = applyRequestOverrides(upstreamBody, ch.overrides)
 			}
-			if requestFn != nil {
-				upstreamBody = requestFn(upstreamBody, ch.provider)
-			}
-			// Channel-configured deletes/overrides apply last, after every built-in
-			// rewrite, so the admin's configuration is authoritative.
-			upstreamBody = applyRequestOverrides(upstreamBody, ch.overrides)
 			upstreamReq, requestErr := http.NewRequestWithContext(r.Context(), http.MethodPost, upstreamURL, bytes.NewReader(upstreamBody))
 			if requestErr != nil {
 				continue
@@ -577,9 +590,14 @@ tryChannels:
 			}
 			if err == nil {
 				failureReason = "upstream_status_" + strconv.Itoa(resp.StatusCode)
-				// Apply auto-disable rules to the upstream error body before retrying.
-				bodyPeek, readErr := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+				// Retain the latest upstream response so a retry exhaustion can relay it
+				// directly instead of replacing it with a generic gateway error.
+				bodyPeek, readErr := io.ReadAll(io.LimitReader(resp.Body, maxUpstreamResponseBody))
+				contentType := resp.Header.Get("Content-Type")
 				resp.Body.Close()
+				lastUpstreamStatus = resp.StatusCode
+				lastUpstreamBody = bodyPeek
+				lastUpstreamContentType = contentType
 				if readErr == nil {
 					failDetail = failureReason + ": " + string(bodyPeek)
 					if reliability.autoDisableStatus(resp.StatusCode) || reliability.autoDisableKeyword(string(bodyPeek)) {
@@ -596,6 +614,19 @@ tryChannels:
 	}
 	if resp == nil {
 		prompt := len(body) / 3
+		if lastUpstreamStatus != 0 {
+			status := lastUpstreamStatus
+			detail := string(lastUpstreamBody)
+			s.logRequest(ctx, key, ch.id, ch.keyID, model, status, prompt, 0, prompt, time.Since(started), errorCode(status), detail)
+			clientBody := lastUpstreamBody
+			if !selectedDirectResponses {
+				clientBody = []byte(s.clientUpstreamError(ctx, detail, reliability))
+			}
+			w.Header().Set("Content-Type", contentType(lastUpstreamContentType))
+			w.WriteHeader(status)
+			_, _ = w.Write(clientBody)
+			return
+		}
 		s.logRequest(ctx, key, ch.id, ch.keyID, model, 502, prompt, 0, prompt, time.Since(started), failCode, failDetail)
 		clientDetail := "all upstream channels failed"
 		if failCode == "request_timeout" || failCode == "client_canceled" {
@@ -614,12 +645,17 @@ tryChannels:
 		}
 	}
 	if stream && resp.StatusCode >= 200 && resp.StatusCode < 300 && strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
+		if selectedDirectResponses {
+			copyResponseHeaders(w.Header(), resp.Header)
+		}
 		var st streamStats
 		cacheEnabled := s.conversationCacheSettings(ctx).Enabled
 		capture := newStreamCaptureWriter(w, cacheEnabled)
 		w = capture
 		var streamErr error
-		if providerStreamFn != nil {
+		if selectedDirectResponses {
+			st, streamErr = streamResponseDirect(w, resp)
+		} else if providerStreamFn != nil {
 			st, streamErr = providerStreamFn(w, resp, ch.provider)
 		} else if streamFn != nil {
 			// streamFn is format-aware: it converts whatever the upstream actually
@@ -753,7 +789,9 @@ tryChannels:
 			reserved = s.settleUsage(ctx, key, reserved, model, prompt, cached, completion, pricing, groupMultiplier)
 		}
 		s.channelSucceeded(ctx, ch.id, ch.keyID)
-		if providerTransform != nil {
+		if selectedDirectResponses {
+			// OpenAI Responses responses are already in the client-facing format.
+		} else if providerTransform != nil {
 			responseBody, err = providerTransform(responseBody, ch.provider)
 			if err != nil {
 				s.logRequest(ctx, key, ch.id, ch.keyID, model, 502, 0, 0, 0, time.Since(started), "upstream_convert_error", err.Error())
@@ -778,9 +816,15 @@ tryChannels:
 			s.autoDisableChannel(ctx, ch.id, ch.keyID, failureReason)
 		}
 		s.channelFailed(ctx, ch.id, ch.keyID, failureReason)
-		responseBody = []byte(s.clientUpstreamError(ctx, detail, reliability))
+		if !selectedDirectResponses {
+			responseBody = []byte(s.clientUpstreamError(ctx, detail, reliability))
+		}
 	}
-	w.Header().Set("Content-Type", contentType(resp.Header.Get("Content-Type")))
+	if selectedDirectResponses {
+		copyResponseHeaders(w.Header(), resp.Header)
+	} else {
+		w.Header().Set("Content-Type", contentType(resp.Header.Get("Content-Type")))
+	}
 	w.WriteHeader(resp.StatusCode)
 	w.Write(responseBody)
 	s.storeConversationCache(ctx, key, model, false, body, responseBody, resp.StatusCode, time.Since(started).Milliseconds())
@@ -813,8 +857,8 @@ func (s *Service) reserveUsage(ctx context.Context, key keyContext, model string
 		where user_id=$2 and balance-reserved >= $1
 		returning balance
 	)
-	insert into wallet_ledger(id,user_id,amount,balance_after,kind,request_id,note)
-	select $3::uuid,$2,-$1,balance,'reservation',$4::text,$5::text from held`, amount, key.userID, id, requestID(ctx), model)
+	insert into wallet_ledger(id,user_id,amount,balance_after,kind,request_id,note,settlement_status)
+	select $3::uuid,$2,-$1,balance,'reservation',$4::text,$5::text,'not_applicable' from held`, amount, key.userID, id, requestID(ctx), model)
 	if err != nil {
 		return reservation{}, err
 	}
@@ -864,31 +908,40 @@ func clampCostToHold(cost, held float64) float64 {
 	return cost
 }
 
-// settleUsage charges the actual cost and releases the hold. Balance update, ledger
-// entry and usage record are one statement so they commit or fail together, without the
-// five extra round trips an explicit transaction needed.
+// settleUsage records the actual call cost as pending. The estimated hold is replaced
+// by the actual cost so concurrent requests remain protected until the daily debit runs.
 func (s *Service) settleUsage(ctx context.Context, key keyContext, held reservation, model string, prompt, cached, completion int, pricing pricingRule, groupMultiplier float64) reservation {
 	if held.amount == 0 && prompt == 0 && completion == 0 {
 		return held
 	}
 	cost := computeUsageCost(prompt, cached, completion, pricing, groupMultiplier)
 	cost = clampCostToHold(cost, held.amount)
+	if cost == 0 {
+		return held
+	}
 	ledgerID, _ := randomID()
+	settlementID, _ := randomID()
 	usageID, _ := randomID()
 	settleCtx, cancel := detach(ctx, settlementTimeout)
 	defer cancel()
+	createdAt := time.Now().UTC()
+	businessDate := walletBusinessDate(createdAt)
 	tag, err := s.db.Exec(settleCtx, `with settled as (
-		update user_wallets set balance=balance-$1, reserved=greatest(0,reserved-$2), updated_at=now()
-		where user_id=$3
+		update user_wallets set reserved=greatest(0,reserved-$2)+$1,updated_at=now()
+		where user_id=$3 and reserved >= $2 and balance-reserved+$2 >= $1
 		returning balance
 	), ledger as (
-		insert into wallet_ledger(id,user_id,amount,balance_after,kind,request_id,note)
-		select $4::uuid,$3,-$1,balance,'charge',$5::text,$6::text from settled
+		insert into wallet_ledger(id,user_id,amount,balance_after,kind,request_id,note,settlement_status,settlement_date)
+		select $4::uuid,$3,-$1,balance,'charge',$5::text,$6::text,'pending',$7::date from settled
+	), settlement as (
+		insert into wallet_settlements(id,ledger_id,user_id,request_id,business_date,amount)
+		select $8::uuid,$4::uuid,$3,$5::text,$7::date,$1 from settled
+		on conflict(request_id) do nothing
 	)
 	insert into usage_records(id,request_id,user_id,api_key_id,model,prompt_tokens,cached_prompt_tokens,completion_tokens,cost)
-	select $7::uuid,$5::text,$3,$8::uuid,$6::text,$9::int,$10::int,$11::int,$1 from settled
+	select $9::uuid,$5::text,$3,$10::uuid,$6::text,$11::int,$12::int,$13::int,$1 from settled
 	on conflict(request_id) do update set prompt_tokens=excluded.prompt_tokens,cached_prompt_tokens=excluded.cached_prompt_tokens,completion_tokens=excluded.completion_tokens,cost=excluded.cost`,
-		cost, held.amount, key.userID, ledgerID, requestID(ctx), model, usageID, key.keyID, prompt, cached, completion)
+		cost, held.amount, key.userID, ledgerID, requestID(ctx), model, businessDate, settlementID, usageID, key.keyID, prompt, cached, completion)
 	if err != nil || tag.RowsAffected() == 0 {
 		return held
 	}
@@ -963,7 +1016,14 @@ func (s *Service) releaseReservation(ctx context.Context, key keyContext, held r
 	// The client may already have hung up; the hold must be released regardless.
 	releaseCtx, cancel := detach(ctx, settlementTimeout)
 	defer cancel()
-	_, _ = s.db.Exec(releaseCtx, `update user_wallets set reserved=greatest(0,reserved-$1),updated_at=now() where user_id=$2`, held.amount, key.userID)
+	ledgerID, _ := randomID()
+	_, _ = s.db.Exec(releaseCtx, `with released as (
+		update user_wallets set reserved=greatest(0,reserved-$1),updated_at=now()
+		where user_id=$2
+		returning balance
+	)
+	insert into wallet_ledger(id,user_id,amount,balance_after,kind,request_id,note,settlement_status)
+	select $3::uuid,$2,$1,balance,'release',$4::text,'Reservation released','not_applicable' from released`, held.amount, key.userID, ledgerID, requestID(ctx))
 }
 
 // checkQuota evaluates every matching quota row in one query. Each row's usage
@@ -1391,6 +1451,9 @@ func parseSSEUsage(data []byte, st *streamStats) {
 		Message struct {
 			Usage json.RawMessage `json:"usage"`
 		} `json:"message"`
+		Response struct {
+			Usage json.RawMessage `json:"usage"`
+		} `json:"response"`
 	}
 	if json.Unmarshal(data, &chunk) != nil {
 		return
@@ -1399,6 +1462,8 @@ func parseSSEUsage(data []byte, st *streamStats) {
 	isMessageStart := chunk.Type == "message_start"
 	if isMessageStart {
 		rawUsage = chunk.Message.Usage
+	} else if len(chunk.Response.Usage) > 0 {
+		rawUsage = chunk.Response.Usage
 	}
 	if len(rawUsage) == 0 || string(rawUsage) == "null" {
 		return
@@ -1451,6 +1516,37 @@ func estimatedStreamUsage(body []byte, maxTokens int) (prompt, completion int) {
 	completion, _ = resolveGatewayMaxTokens(maxTokens)
 	prompt = len(body) / 3
 	return prompt, completion
+}
+
+func streamResponseDirect(w http.ResponseWriter, resp *http.Response) (streamStats, error) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		return streamStats{}, fmt.Errorf("streaming unsupported")
+	}
+	var st streamStats
+	reader := bufio.NewReader(resp.Body)
+	for {
+		line, err := reader.ReadBytes('\n')
+		if len(line) > 0 {
+			if _, writeErr := w.Write(line); writeErr != nil {
+				return st, writeErr
+			}
+			flusher.Flush()
+			trimmed := strings.TrimSpace(string(line))
+			if strings.HasPrefix(trimmed, "data:") {
+				data := strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
+				if data != "" && data != "[DONE]" {
+					parseSSEUsage([]byte(data), &st)
+				}
+			}
+		}
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return st, nil
+			}
+			return st, err
+		}
+	}
 }
 
 func (s *Service) streamResponse(w http.ResponseWriter, resp *http.Response) (streamStats, error) {
@@ -1544,14 +1640,20 @@ func (s *Service) clientUpstreamError(ctx context.Context, detail string, reliab
 	return detail
 }
 
-// rewriteErrorMessage replaces the "message" field of an OpenAI-style JSON error
-// body; non-JSON bodies are replaced wholesale with the message itself.
+// rewriteErrorMessage returns a generic OpenAI-style error body when possible;
+// no other upstream fields are retained because the matched keyword may appear
+// anywhere in the response. Non-JSON bodies are replaced wholesale.
 func rewriteErrorMessage(body, message string) string {
 	var payload map[string]any
 	if json.Unmarshal([]byte(body), &payload) == nil {
 		if errObj, ok := payload["error"].(map[string]any); ok {
-			errObj["message"] = message
-			if out, err := json.Marshal(payload); err == nil {
+			generic := map[string]any{"message": message}
+			for _, field := range []string{"type", "code", "param"} {
+				if value, exists := errObj[field]; exists {
+					generic[field] = value
+				}
+			}
+			if out, err := json.Marshal(map[string]any{"error": generic}); err == nil {
 				return string(out)
 			}
 		}
@@ -1626,4 +1728,16 @@ func contentType(value string) string {
 		return "text/event-stream"
 	}
 	return "application/json"
+}
+
+func copyResponseHeaders(dst, src http.Header) {
+	for name, values := range src {
+		switch http.CanonicalHeaderKey(name) {
+		case "Connection", "Keep-Alive", "Proxy-Authenticate", "Proxy-Authorization", "Te", "Trailer", "Transfer-Encoding", "Upgrade", "Content-Length":
+			continue
+		}
+		for _, value := range values {
+			dst.Add(name, value)
+		}
+	}
 }

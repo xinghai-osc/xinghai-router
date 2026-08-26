@@ -251,7 +251,9 @@ curl -N http://localhost:8080/v1/messages \
   -d '{"model":"kimi-k2.6","max_tokens":1024,"messages":[{"role":"user","content":"Hello"}],"stream":true}'
 ```
 
-OpenAI Responses 客户端可调用 `/v1/responses`。`instructions`、字符串或数组形式的 `input`（含 `message`、`function_call`、`function_call_output` 条目）、`tools`、`tool_choice`、`max_output_tokens` 和 `text.format` 会转换为上游 Chat Completions 请求；非流式响应和 SSE 事件（`response.created`、`response.output_text.delta`、`response.function_call_arguments.delta`、`response.completed` 等）会转换回 Responses 格式：
+OpenAI Responses 客户端可调用 `/v1/responses`。`instructions`、字符串或数组形式的 `input`（含 `message`、`function_call`、`function_call_output` 条目）、`tools`、`tool_choice`、`max_output_tokens` 和 `text.format` 会转换为上游 Chat Completions 请求；非流式响应和 SSE 事件（`response.created`、`response.output_text.delta`、`response.function_call_arguments.delta`、`response.completed` 等）会转换回 Responses 格式。Response Lite 使用同一路径并携带 `X-OpenAI-Internal-Codex-Responses-Lite: true`；其请求会自动补齐 `reasoning.context=all_turns` 和 `parallel_tool_calls=false`，不支持的 hosted tool 类型会被拒绝。
+
+Responses 客户端也可以通过 `GET /v1/responses`（或 `/responses`、`/backend-api/codex/responses`）建立 WebSocket。首条消息使用 `{"type":"response.create","model":"MODEL","input":"Hello"}`；后续消息可以省略 `model` 并使用 `previous_response_id`。本系统接收客户端 WebSocket 后通过现有 HTTP/SSE 上游桥接，并直接发送 JSON Responses 事件；`response.append` 不支持。
 
 ```sh
 curl -N http://localhost:8080/v1/responses \

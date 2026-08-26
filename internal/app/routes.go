@@ -9,7 +9,10 @@ import (
 	"time"
 )
 
-type keyContext struct{ userID, keyID, groupID string; dataUsageEnabled bool }
+type keyContext struct {
+	userID, keyID, groupID string
+	dataUsageEnabled       bool
+}
 type contextKey struct{}
 
 func (s *Service) routes() http.Handler {
@@ -47,6 +50,8 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("GET /account/usage/daily", s.account(s.accountUsageDaily))
 	mux.Handle("GET /account/usage/summary", s.account(s.accountUsageSummary))
 	mux.Handle("GET /account/ledger", s.account(s.accountLedger))
+	mux.Handle("GET /account/checkin", s.account(s.accountCheckinStatus))
+	mux.Handle("POST /account/checkin", s.account(s.accountCheckin))
 	mux.Handle("GET /account/payments", s.account(s.listAccountPayments))
 	mux.Handle("POST /account/payments", s.account(s.createAccountPayment))
 	mux.Handle("GET /account/payments/{order_no}", s.account(s.getAccountPayment))
@@ -63,6 +68,7 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("GET /subscription-plans", s.optionalAccount(s.publicSubscriptionPlans))
 	mux.Handle("GET /account/subscriptions", s.account(s.accountSubscriptions))
 	mux.Handle("POST /account/subscriptions", s.account(s.createSubscription))
+	mux.Handle("POST /account/subscriptions/balance", s.account(s.createBalanceSubscription))
 	mux.Handle("POST /account/subscriptions/{id}/cancel", s.account(s.cancelSubscription))
 	mux.Handle("GET /account/subscription-orders", s.account(s.accountSubscriptionOrders))
 	mux.Handle("GET /account/subscription-orders/{order_no}", s.account(s.accountSubscriptionOrder))
@@ -84,12 +90,16 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("GET /admin/users/{id}/subscriptions", s.permission("users.read", s.adminUserSubscriptions))
 	mux.Handle("POST /admin/users/{id}/subscriptions", s.permission("system.manage", s.adminCreateSubscription))
 	mux.Handle("PUT /admin/subscriptions/{id}", s.permission("system.manage", s.adminUpdateSubscription))
+	mux.Handle("POST /admin/subscriptions/{id}/reset-quotas", s.permission("system.manage", s.adminResetSubscriptionQuota))
 	mux.Handle("POST /admin/subscriptions/{id}/void", s.permission("system.manage", s.adminVoidSubscription))
 	mux.Handle("DELETE /admin/subscriptions/{id}", s.permission("system.manage", s.adminDeleteSubscription))
 	mux.Handle("GET /admin/users", s.permission("users.read", s.listUsers))
-	mux.Handle("PUT /admin/users/{id}", s.permission("system.manage", s.updateUser))
-	mux.Handle("POST /admin/users/{id}/role", s.permission("system.manage", s.setUserRole))
-	mux.Handle("PUT /admin/users/{id}/permissions", s.permission("system.manage", s.setUserPermissions))
+	mux.Handle("GET /admin/checkins", s.permission("users.read", s.listAdminCheckins))
+	mux.Handle("POST /admin/users/{user_id}/checkins/{date}/withdraw", s.permission("wallets.manage", s.withdrawAdminCheckin))
+	mux.Handle("POST /admin/users", s.permission("users.manage", s.createUser))
+	mux.Handle("PUT /admin/users/{id}", s.permission("users.manage", s.updateUser))
+	mux.Handle("POST /admin/users/{id}/role", s.permission("users.manage", s.setUserRole))
+	mux.Handle("PUT /admin/users/{id}/permissions", s.permission("users.manage", s.setUserPermissions))
 	mux.Handle("GET /admin/groups", s.permission("users.read", s.listGroups))
 	mux.Handle("GET /group", s.permission("users.read", s.listGroupNames))
 	mux.Handle("POST /admin/groups", s.permission("system.manage", s.createGroup))
@@ -104,6 +114,7 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("PUT /admin/keys/{id}/group", s.permission("keys.manage", s.setKeyGroup))
 	mux.Handle("GET /admin/keys/{id}/secret", s.permission("keys.manage", s.revealKey))
 	mux.Handle("POST /admin/channels", s.permission("channels.manage", s.createChannel))
+	mux.Handle("POST /admin/channels/{id}/copy", s.permission("channels.manage", s.copyChannel))
 	mux.Handle("PUT /admin/channels/{id}", s.permission("channels.manage", s.updateChannel))
 	mux.Handle("POST /admin/channels/models", s.permission("channels.manage", s.fetchChannelModels))
 	mux.Handle("GET /admin/channels", s.permission("channels.read", s.listChannels))
@@ -137,6 +148,8 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("PUT /admin/conversation-cache/settings", s.permission("system.manage", s.updateConversationCacheSettings))
 	mux.Handle("GET /admin/conversation-cache", s.permission("logs.read", s.listConversationCache))
 	mux.Handle("GET /admin/conversation-cache/{id}", s.permission("logs.read", s.getConversationCacheDetail))
+	mux.Handle("GET /admin/orders", s.permission("users.read", s.listAdminOrders))
+	mux.Handle("GET /admin/wallet-ledger", s.permission("users.read", s.listAdminWalletLedger))
 	mux.Handle("GET /admin/payment-settings", s.permission("system.manage", s.getPaymentSettings))
 	mux.Handle("PUT /admin/payment-settings", s.permission("system.manage", s.updatePaymentSettings))
 	mux.Handle("GET /admin/invoice-settings", s.permission("system.manage", s.adminGetInvoiceSettings))
@@ -171,6 +184,7 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("POST /admin/channels/{id}/quota", s.permission("channels.manage", s.upsertChannelQuotaHandler))
 	mux.Handle("DELETE /admin/channels/{id}/quota", s.permission("channels.manage", s.deleteChannelQuotaHandler))
 	mux.Handle("GET /admin/channels/{id}/usage-stats", s.permission("channels.read", s.channelUsageStatsHandler))
+	mux.Handle("POST /admin/channels/{id}/balance", s.permission("channels.read", s.channelBalanceHandler))
 	mux.Handle("POST /admin/quota-limits", s.permission("quotas.manage", s.upsertQuota))
 	mux.Handle("GET /admin/quota-limits", s.permission("quotas.manage", s.listQuotaLimits))
 	mux.Handle("DELETE /admin/quota-limits/{id}", s.permission("quotas.manage", s.deleteQuotaLimit))
@@ -188,6 +202,9 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("GET /v1/models", s.api(s.models))
 	mux.Handle("POST /v1/chat/completions", s.api(s.chatCompletions))
 	mux.Handle("POST /v1/responses", s.api(s.responsesCompletions))
+	mux.Handle("GET /v1/responses", s.api(s.responsesWebSocket))
+	mux.Handle("GET /responses", s.api(s.responsesWebSocket))
+	mux.Handle("GET /backend-api/codex/responses", s.api(s.responsesWebSocket))
 	mux.Handle("POST /v1/messages", s.api(s.anthropicMessages))
 	return recoverPanic(securityHeaders(s.requestID(mux)))
 }
@@ -310,7 +327,7 @@ func (s *Service) myUsage(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Service) myLedger(w http.ResponseWriter, r *http.Request) {
 	key := r.Context().Value(contextKey{}).(keyContext)
-	rows, err := s.db.Query(r.Context(), `select id,amount,balance_after,kind,request_id,note,created_at from wallet_ledger where user_id=$1 order by created_at desc limit 100`, key.userID)
+	rows, err := s.db.Query(r.Context(), `select wl.id,wl.amount,wl.balance_after,wl.kind,wl.request_id,wl.note,wl.created_at,wl.settlement_status,wl.settlement_date,wl.settled_at,coalesce(ws.error,'') from wallet_ledger wl left join wallet_settlements ws on ws.ledger_id=wl.id where wl.user_id=$1 order by wl.created_at desc limit 100`, key.userID)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
@@ -318,10 +335,12 @@ func (s *Service) myLedger(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	data := []map[string]any{}
 	for rows.Next() {
-		var id, kind, requestID, note string
-		var amount, after, created any
-		if rows.Scan(&id, &amount, &after, &kind, &requestID, &note, &created) == nil {
-			data = append(data, map[string]any{"id": id, "amount": amount, "balance_after": after, "kind": kind, "request_id": requestID, "note": note, "created_at": created})
+		var id, kind string
+		var requestID, note any
+		var amount, after, created, settlementDate, settledAt, settlementError any
+		var settlementStatus string
+		if rows.Scan(&id, &amount, &after, &kind, &requestID, &note, &created, &settlementStatus, &settlementDate, &settledAt, &settlementError) == nil {
+			data = append(data, map[string]any{"id": id, "amount": amount, "balance_after": after, "kind": kind, "request_id": requestID, "note": note, "created_at": created, "settlement_status": settlementStatus, "settlement_date": settlementDate, "settled_at": settledAt, "settlement_error": settlementError})
 		}
 	}
 	writeJSON(w, 200, map[string]any{"data": data})

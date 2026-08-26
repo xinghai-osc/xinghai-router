@@ -10,10 +10,10 @@ import (
 	"time"
 )
 
-// responsesCompletions accepts OpenAI Responses API requests (POST /v1/responses)
-// and proxies them through the chat-completions pipeline: the request is
-// converted to the chat format every channel speaks, and the upstream response
-// (chat-completions or Anthropic) is converted back to the Responses shape.
+// responsesCompletions accepts OpenAI Responses API requests (POST /v1/responses).
+// OpenAI-format channels receive the original request body and their response is
+// relayed unchanged. Other channel formats keep using the compatibility
+// conversion through chat completions.
 func (s *Service) responsesCompletions(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
 	body, err := io.ReadAll(r.Body)
@@ -33,6 +33,16 @@ func (s *Service) responsesCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	request.Model = strings.TrimSpace(request.Model)
+	lite := isResponsesLiteHeader(r.Header.Get(responsesLiteHeader)) || isResponsesLiteBody(body)
+	if lite {
+		normalized, _, normalizeErr := normalizeResponsesLite(body)
+		if normalizeErr != nil {
+			s.logReject(r.Context(), request.Model, 400, "invalid_request", started)
+			writeError(w, 400, "invalid_request", normalizeErr.Error())
+			return
+		}
+		body = normalized
+	}
 	if !validModelName(request.Model) {
 		s.logReject(r.Context(), request.Model, 400, "invalid_request", started)
 		writeError(w, 400, "invalid_request", "model must be 1-200 characters")
@@ -45,9 +55,8 @@ func (s *Service) responsesCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	converted, echo, err := responsesRequestToChatCompletions(body)
 	if err != nil {
-		s.logReject(r.Context(), request.Model, 400, "invalid_request", started)
-		writeError(w, 400, "invalid_request", err.Error())
-		return
+		converted = body
+		echo = responsesEcho{model: request.Model}
 	}
 	responseID := "resp_" + randomIDString()
 	s.proxyChatCompletions(w, r, converted, request.Model, request.Stream, request.MaxOutputTokens,
@@ -63,7 +72,7 @@ func (s *Service) responsesCompletions(w http.ResponseWriter, r *http.Request) {
 		},
 		func(w http.ResponseWriter, resp *http.Response, provider string) (streamStats, error) {
 			return streamChatCompletionsToResponses(w, resp, responseID, echo, reasoningProvider(provider))
-		})
+		}, body)
 }
 
 // responsesEcho carries the request fields a Responses response object echoes
