@@ -1,0 +1,20 @@
+{
+  "name": "xinghai-router-llm-adapter",
+  "version": "0.2.3",
+  "publishConfig": { "access": "public" },
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
+  "scripts": { "build": "tsc -p tsconfig.json", "typecheck": "tsc -p tsconfig.json --noEmit" },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-llm": "^0.1.0-rc.6"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-llm": "^0.1.0-rc.6",
+    "typescript": "^5.7.3"
+  }
+}

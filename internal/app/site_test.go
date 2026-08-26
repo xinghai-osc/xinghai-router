@@ -39,6 +39,25 @@ func TestSystemConfigCaptchaProvider(t *testing.T) {
 	}
 }
 
+func TestRegistrationEmailWhitelistMatchesSuffix(t *testing.T) {
+	whitelist := []string{"alice@example.com", "@allowed.example.com"}
+	cases := []struct {
+		email string
+		want  bool
+	}{
+		{"alice@example.com", true},
+		{"not-alice@example.com", true},
+		{"user@allowed.example.com", true},
+		{"user@sub.allowed.example.com", false},
+		{"user@other.example.com", false},
+	}
+	for _, tc := range cases {
+		if got := emailWhitelistAllowed(whitelist, tc.email); got != tc.want {
+			t.Fatalf("emailWhitelistAllowed(%q) = %v, want %v", tc.email, got, tc.want)
+		}
+	}
+}
+
 func TestValidIconURL(t *testing.T) {
 	for _, value := range []string{"https://cdn.example.com/icon.png", "http://127.0.0.1:3000/i.png", "http://localhost/icon.png"} {
 		if !validIconURL(value) {

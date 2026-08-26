@@ -8,6 +8,7 @@ export default {
   overview: '總覽',
   keys: 'API 密鑰',
   usage: '用量',
+  checkin: '每日簽到',
   wallet: '錢包充值',
   ledger: '帳單流水',
   subscriptions: '我的訂閱',
@@ -16,6 +17,8 @@ export default {
   invitations: '邀請好友',
 
   users: '用戶',
+  adminOrders: '全站訂單',
+  walletLedger: '餘額變動',
   groups: '分組',
   channels: '渠道',
   providers: '供應商',
@@ -23,6 +26,8 @@ export default {
   pricing: '模型定價',
   logs: '請求日誌',
   audit: '審計日誌',
+  requestAudits: '請求內容審計',
+  contentPolicy: '禁用詞策略',
 
   subscriptionPlans: '訂閱計劃',
   adminSubscriptions: '訂閱管理',

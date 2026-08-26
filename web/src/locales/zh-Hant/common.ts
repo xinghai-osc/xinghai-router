@@ -60,6 +60,7 @@ export default {
   signUp: '註冊',
   getStarted: '開始使用',
   console: '控制台',
+  openConsole: '進入控制台',
   home: '返回首頁',
   menu: '菜單',
   openNav: '打開導航',

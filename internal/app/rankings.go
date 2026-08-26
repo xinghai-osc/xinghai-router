@@ -255,12 +255,12 @@ func (s *Service) userLeaderboard(r *http.Request, start, previousStart, now tim
 	}
 	defer rows.Close()
 	type userTotals struct {
-		name                   string
-		mask                   bool
-		current, previous      int64
-		cost                   float64
-		requests               int64
-		modelTokens            map[string]int64
+		name              string
+		mask              bool
+		current, previous int64
+		cost              float64
+		requests          int64
+		modelTokens       map[string]int64
 	}
 	byUser := map[string]*userTotals{}
 	for rows.Next() {

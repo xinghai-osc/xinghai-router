@@ -60,6 +60,7 @@ export default {
   signUp: 'Sign up',
   getStarted: 'Get started',
   console: 'Console',
+  openConsole: 'Open console',
   home: 'Back to home',
   menu: 'Menu',
   openNav: 'Open navigation',

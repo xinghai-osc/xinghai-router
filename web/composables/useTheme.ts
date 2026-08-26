@@ -1,5 +1,5 @@
 export type ThemeMode = 'light' | 'dark'
-export type ThemePreset = 'default' | 'cool' | 'galaxy'
+export type ThemePreset = 'default' | 'cool' | 'galaxy' | 'deepseek'
 
 export const MODE_STORAGE_KEY = 'xinghai.theme'
 export const PRESET_STORAGE_KEY = 'xinghai.preset'
@@ -15,12 +15,13 @@ export const THEME_PRESETS: { value: ThemePreset; swatch: string[] }[] = [
   { value: 'default', swatch: ['#faf9f5', '#c96442', '#141413'] },
   { value: 'cool', swatch: ['#08090f', '#7c7cff', '#2fd3a5'] },
   { value: 'galaxy', swatch: ['#0a0a18', '#a78bfa', '#4f82f6'] },
+  { value: 'deepseek', swatch: ['#0a0a0a', '#6799fe', '#f9f8f8'] },
 ]
 
 const PRESET_VALUES = THEME_PRESETS.map(preset => preset.value)
 
 const mode = ref<ThemeMode>('light')
-const preset = ref<ThemePreset>('default')
+const preset = ref<ThemePreset>('deepseek')
 
 function apply() {
   if (!import.meta.client) return
@@ -50,10 +51,10 @@ export function useTheme() {
     const storedMode = localStorage.getItem(MODE_STORAGE_KEY)
     mode.value = storedMode === 'light' || storedMode === 'dark'
       ? storedMode
-      : window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+      : 'dark'
 
     const storedPreset = localStorage.getItem(PRESET_STORAGE_KEY) as ThemePreset | null
-    preset.value = storedPreset && PRESET_VALUES.includes(storedPreset) ? storedPreset : 'default'
+    preset.value = storedPreset && PRESET_VALUES.includes(storedPreset) ? storedPreset : 'deepseek'
 
     apply()
   }

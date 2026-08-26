@@ -67,6 +67,7 @@ var dummyPasswordHash = func() string {
 	}
 	return string(hash)
 }()
+
 // channelKeyValue resolves a stored channel API key to its usable form. Channel
 // keys are stored plaintext; rows written before that change hold ciphertext and
 // are decrypted transparently when ENCRYPTION_KEY still matches.

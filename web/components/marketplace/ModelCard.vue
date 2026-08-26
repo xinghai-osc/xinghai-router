@@ -25,7 +25,7 @@ const rows = computed(() => [
   >
     <header class="flex items-start gap-3">
       <span class="transition-transform duration-150 ease-out group-hover:scale-105">
-        <SiteVendorMark :name="model.vendor_name" />
+        <SiteVendorMark :name="model.vendor_name" :slug="model.vendor_slug" />
       </span>
       <div class="min-w-0 flex-1">
         <p class="truncate font-mono text-[13px] font-medium text-ink">{{ model.model }}</p>

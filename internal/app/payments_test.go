@@ -70,7 +70,7 @@ func TestPaymentAmountInBounds(t *testing.T) {
 	if !paymentAmountInBounds(minPaymentCents) || !paymentAmountInBounds(maxPaymentCents) {
 		t.Fatal("min and max cents must be allowed")
 	}
-	if paymentAmountInBounds(minPaymentCents - 1) || paymentAmountInBounds(maxPaymentCents+1) || paymentAmountInBounds(0) {
+	if paymentAmountInBounds(minPaymentCents-1) || paymentAmountInBounds(maxPaymentCents+1) || paymentAmountInBounds(0) {
 		t.Fatal("out-of-range amounts must be rejected")
 	}
 }

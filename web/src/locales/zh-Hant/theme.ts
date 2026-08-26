@@ -5,4 +5,6 @@ export default {
   coolHint: '高對比 · 電紫發光',
   galaxyLabel: '銀河',
   galaxyHint: '深空靛藍 · 星雲紫',
+  deepseekLabel: '深藍',
+  deepseekHint: 'DeepSeek 風 · 冷白與品牌藍',
 }

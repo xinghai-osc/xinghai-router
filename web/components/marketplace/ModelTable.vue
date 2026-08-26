@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { effectivePrice, formatRatio, formatSquarePrice, getDisplayGroup, type SquareModel, type TokenUnit } from '~/src/marketplace'
+import { effectivePrice, formatRatio, formatSquarePrice, getDisplayGroup, squareModelKey, type SquareModel, type TokenUnit } from '~/src/marketplace'
 
 const props = defineProps<{ models: SquareModel[]; group: string; unit: TokenUnit }>()
 
@@ -33,7 +33,7 @@ const rows = computed(() => props.models.map((model) => {
       </tr>
     </thead>
     <tbody>
-      <tr v-for="row in rows" :key="row.model.id">
+      <tr v-for="row in rows" :key="squareModelKey(row.model)">
         <td>
           <button
             type="button"

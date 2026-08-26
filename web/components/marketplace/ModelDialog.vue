@@ -47,8 +47,11 @@ async function loadPerformance() {
   }
 }
 
-watch(open, (next) => {
-  if (next) loadPerformance()
+watch([open, () => props.model?.model], ([nextOpen]) => {
+  if (nextOpen) {
+    performance.value = null
+    loadPerformance()
+  }
 })
 </script>
 
@@ -60,7 +63,7 @@ watch(open, (next) => {
 
     <div v-if="model" class="space-y-5">
       <div class="flex flex-wrap items-center gap-3">
-        <SiteVendorMark :name="model.vendor_name" size="lg" />
+        <SiteVendorMark :name="model.vendor_name" :slug="model.vendor_slug" size="lg" />
         <div class="min-w-0">
           <p class="truncate text-sm font-medium text-ink">{{ model.vendor_name }}</p>
           <p class="numeric text-2xs text-faint">

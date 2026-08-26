@@ -15,20 +15,19 @@ const { t } = useI18n()
 </script>
 
 <template>
-  <UiSkeleton v-if="pending" :rows="rows" />
+  <div v-if="pending" class="rounded-card border border-line bg-surface/45 px-5 py-5"><UiSkeleton :rows="rows" /></div>
 
   <UiAlert v-else-if="error" tone="danger" :title="t('common.loadFailed')">
     {{ error }}
   </UiAlert>
 
-  <UiEmptyState
-    v-else-if="empty"
+  <div v-else-if="empty" class="rounded-card border border-line bg-surface/45"><UiEmptyState
     :icon="emptyIcon"
     :title="emptyTitle"
     :description="emptyDescription"
   >
     <slot name="empty-action" />
-  </UiEmptyState>
+  </UiEmptyState></div>
 
   <slot v-else />
 </template>

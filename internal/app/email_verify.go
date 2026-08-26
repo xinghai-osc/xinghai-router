@@ -117,6 +117,15 @@ func (s *Service) sendEmailCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	email := strings.ToLower(strings.TrimSpace(in.Email))
+	allowed, err := s.registrationEmailAllowed(r.Context(), email)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not check registration email")
+		return
+	}
+	if !allowed {
+		writeError(w, http.StatusForbidden, "email_not_allowed", "this email is not allowed to register")
+		return
+	}
 	clientIP := requestMetadata(r).clientIP
 	if s.limiter != nil {
 		if !s.limiter.allowN("auth:email-code:ip:"+clientIP, authEmailCodePerMinute) || !s.limiter.allowN("auth:email-code:email:"+email, authEmailCodePerMinute) {

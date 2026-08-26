@@ -32,13 +32,13 @@ watchEffect(() => {
 
 <template>
   <div class="min-h-dvh bg-paper lg:grid lg:grid-cols-[15rem_1fr]">
-    <aside class="sticky top-0 hidden h-dvh border-r border-line lg:block">
+    <aside class="sticky top-0 hidden h-dvh border-r border-line bg-surface/35 lg:block">
       <ConsoleSidebar :can="can" :site-name="settings.name" :icon-url="settings.icon_url" />
     </aside>
 
     <div v-if="navOpen" class="fixed inset-0 z-50 lg:hidden">
       <div class="animate-fade absolute inset-0 bg-[var(--overlay)]" @click="navOpen = false" />
-      <aside class="animate-fade absolute inset-y-0 left-0 w-64 border-r border-line bg-paper">
+      <aside class="animate-fade absolute inset-y-0 left-0 w-64 border-r border-line bg-surface shadow-pop">
         <ConsoleSidebar :can="can" :site-name="settings.name" :icon-url="settings.icon_url" />
       </aside>
     </div>
@@ -51,7 +51,7 @@ watchEffect(() => {
         </template>
       </ConsoleHeader>
 
-      <main class="flex-1 space-y-4 px-4 py-6 md:px-8 md:py-8">
+      <main class="flex-1 space-y-5 px-4 py-6 md:px-8 md:py-8 xl:px-10">
         <UiAlert v-if="mustChangePassword" tone="warn" :title="t('console.mustChangePasswordTitle')">
           {{ t('console.mustChangePasswordBody') }}
         </UiAlert>

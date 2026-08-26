@@ -10,6 +10,23 @@ import (
 	"testing"
 )
 
+func TestDecodeUpstreamUsageWindowsAlwaysReturnsAnArray(t *testing.T) {
+	for _, raw := range [][]byte{nil, []byte("null"), []byte("not-json")} {
+		got, err := json.Marshal(decodeUpstreamUsageWindows(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != "[]" {
+			t.Fatalf("raw %q encoded as %s, want []", raw, got)
+		}
+	}
+
+	got := decodeUpstreamUsageWindows([]byte(`[{"window":"weekly","percent":32}]`))
+	if len(got) != 1 || got[0].Window != "weekly" || got[0].Percent == nil || *got[0].Percent != 32 {
+		t.Fatalf("valid usage windows were not preserved: %#v", got)
+	}
+}
+
 func TestSyncNewAPIPricingRejectsInvalidSourceBeforeNetworkOrDatabaseAccess(t *testing.T) {
 	for _, body := range []string{
 		`{}`,
@@ -208,6 +225,16 @@ func TestValidChannelProviderAndPriority(t *testing.T) {
 	if len(keys) != 2 || keys[0] != "sk1" || keys[1] != "sk2" {
 		t.Fatalf("parseChannelAPIKeys = %#v", keys)
 	}
+	var manyKeyInput strings.Builder
+	for i := 0; i < 101; i++ {
+		manyKeyInput.WriteString("sk-")
+		manyKeyInput.WriteString(strconv.Itoa(i))
+		manyKeyInput.WriteByte('\n')
+	}
+	manyKeys := parseChannelAPIKeys(manyKeyInput.String())
+	if len(manyKeys) != 101 {
+		t.Fatalf("parseChannelAPIKeys should support more than 100 keys, got %d", len(manyKeys))
+	}
 }
 
 func TestSanitizeChannelModels(t *testing.T) {
@@ -223,6 +250,37 @@ func TestSanitizeChannelModels(t *testing.T) {
 	}
 	if _, ok := sanitizeChannelModels([]string{strings.Repeat("m", 201)}); ok {
 		t.Fatal("overlong model name must fail")
+	}
+}
+
+func TestChannelCopyName(t *testing.T) {
+	taken := map[string]bool{}
+	next := func(name string) string {
+		return channelCopyName(name, func(candidate string) bool { return taken[candidate] })
+	}
+
+	first := next("gpt-channel")
+	if first != "gpt-channel (copy)" {
+		t.Fatalf("first copy name = %q", first)
+	}
+	taken[first] = true
+	if got := next("gpt-channel"); got != "gpt-channel (copy 2)" {
+		t.Fatalf("second copy name = %q", got)
+	}
+
+	long := strings.Repeat("长", 100)
+	copied := next(long)
+	if len([]rune(copied)) > 100 || copied != strings.Repeat("长", 93)+" (copy)" {
+		t.Fatalf("overlong source name = %q (runes %d)", copied, len([]rune(copied)))
+	}
+	if got := truncateRunes("abcdef", 3); got != "abc" {
+		t.Fatalf("truncateRunes = %q", got)
+	}
+	if got := truncateRunes("abc", 5); got != "abc" {
+		t.Fatalf("truncateRunes short = %q", got)
+	}
+	if got := truncateRunes("abc", -1); got != "" {
+		t.Fatalf("truncateRunes negative = %q", got)
 	}
 }
 
@@ -645,7 +703,6 @@ func TestCreateGroupRejectsInvalidNameBeforeDatabase(t *testing.T) {
 	}
 }
 
-
 func TestSaveProviderRejectsInvalidBeforeDatabase(t *testing.T) {
 	for _, body := range []string{
 		`{}`,
@@ -717,7 +774,6 @@ func TestCreateKeyRejectsInvalidNameBeforeDatabase(t *testing.T) {
 		}
 	}
 }
-
 
 func TestValidChannelAPIKeyAndBaseURL(t *testing.T) {
 	if !validChannelAPIKey("sk") || !validChannelAPIKey(strings.Repeat("k", maxChannelAPIKeyLen)) {

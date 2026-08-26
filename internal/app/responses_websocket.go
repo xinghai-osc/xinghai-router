@@ -55,6 +55,10 @@ func (s *Service) responsesWebSocket(w http.ResponseWriter, r *http.Request) {
 			_ = conn.Close(websocket.StatusPolicyViolation, "only text or binary JSON messages are supported")
 			return
 		}
+		if len(payload) > maxGatewayRequestBody {
+			_ = conn.Close(websocket.StatusMessageTooBig, "request body is too large")
+			return
+		}
 		normalized, requestModel, err := normalizeResponsesWSRequest(payload, model, first)
 		if err != nil {
 			_ = conn.Close(websocket.StatusPolicyViolation, err.Error())
@@ -67,10 +71,22 @@ func (s *Service) responsesWebSocket(w http.ResponseWriter, r *http.Request) {
 			_ = conn.Close(websocket.StatusPolicyViolation, err.Error())
 			return
 		}
+		key, ok := ctx.Value(contextKey{}).(keyContext)
+		if !ok {
+			_ = conn.Close(websocket.StatusPolicyViolation, "API key required")
+			return
+		}
+		frameRequestID := randomIDString()
+		frameCtx := context.WithValue(ctx, requestIDKey{}, frameRequestID)
+		allowed, policyCtx := s.enforceContentPolicy(frameCtx, key, model, "/v1/responses", normalized)
+		if !allowed {
+			_ = conn.Close(websocket.StatusPolicyViolation, "request content violates the content policy")
+			return
+		}
 		// The WS bridge always consumes an upstream stream and emits Responses
 		// event JSON frames, matching Sub2Api's HTTP-bridge behavior.
-		adapter := &wsResponsesAdapter{conn: conn, ctx: ctx, model: model}
-		request := r.Clone(ctx)
+		adapter := &wsResponsesAdapter{conn: conn, ctx: policyCtx, model: model}
+		request := r.Clone(policyCtx)
 		request.Body = io.NopCloser(bytes.NewReader(converted))
 		s.proxyChatCompletions(adapter, request, converted, model, true, 0, nil, adapter.stream, nil, nil, nil, nil)
 	}

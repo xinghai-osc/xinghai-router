@@ -25,6 +25,7 @@ export default {
   displayNamePlaceholder: 'What should we call you',
   emailCodePlaceholder: '6-digit code',
   emailInvalid: 'Enter a valid email address',
+  emailNotAllowed: 'This email is not on the registration allowlist',
   nameRequired: 'Enter a display name',
   passwordTooShort: 'Password must be at least 8 characters',
   passwordTooLong: 'Password must be at most 72 characters',

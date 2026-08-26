@@ -15,7 +15,7 @@ const { t } = useI18n()
 </script>
 
 <template>
-  <div v-if="pending" class="rounded-card border border-line bg-surface px-5 py-6">
+  <div v-if="pending" class="rounded-card border border-line bg-surface/75 px-5 py-6 shadow-[0_1px_0_rgb(255_255_255/0.03)]">
     <UiSkeleton :rows="rows" />
   </div>
 
@@ -23,7 +23,7 @@ const { t } = useI18n()
     {{ error }}
   </UiAlert>
 
-  <div v-else-if="empty" class="rounded-card border border-line bg-surface">
+  <div v-else-if="empty" class="rounded-card border border-line bg-surface/75 shadow-[0_1px_0_rgb(255_255_255/0.03)]">
     <UiEmptyState :icon="emptyIcon" :title="emptyTitle" :description="emptyDescription" />
   </div>
 

@@ -12,8 +12,8 @@ withDefaults(defineProps<{
 <template>
   <section
     :class="cn(
-      'rounded-card border border-line bg-surface',
-      interactive && 'transition-[border-color,transform,background-color] duration-150 ease-out hover:-translate-y-px hover:border-line-strong hover:bg-surface',
+      'rounded-card border border-line bg-surface/90 shadow-[0_1px_0_rgb(255_255_255/0.03)]',
+      interactive && 'transition-[border-color,transform,background-color,box-shadow] duration-150 ease-out hover:-translate-y-px hover:border-line-strong hover:bg-surface hover:shadow-pop',
     )"
   >
     <header

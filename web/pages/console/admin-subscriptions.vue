@@ -75,6 +75,8 @@ const extendPlanId = ref('all')
 const extendDays = ref('30')
 const extendStatus = ref<'active' | 'inactive' | 'all'>('active')
 const resetQuotasOpen = ref(false)
+const resetQuotaStatus = ref<'active' | 'inactive' | 'all'>('active')
+const resetQuotaTarget = ref<AdminSubscription | null>(null)
 
 const extendPlanOptions = computed(() => [
   { value: 'all', label: t('system.batchExtendAllPlans') },
@@ -85,6 +87,12 @@ const extendStatusOptions = computed(() => [
   { value: 'active', label: t('system.batchExtendStatusActive') },
   { value: 'inactive', label: t('system.batchExtendStatusInactive') },
   { value: 'all', label: t('system.batchExtendStatusAll') },
+])
+
+const resetQuotaStatusOptions = computed(() => [
+  { value: 'active', label: t('system.resetQuotaStatusActive') },
+  { value: 'inactive', label: t('system.resetQuotaStatusInactive') },
+  { value: 'all', label: t('system.resetQuotaStatusAll') },
 ])
 
 async function runExtend() {
@@ -115,7 +123,7 @@ async function resetQuotas() {
   resetQuotasOpen.value = false
   let affected = 0
   const ok = await run(async () => {
-    const result = await endpoints.resetActiveSubscriptionQuotas()
+    const result = await endpoints.resetActiveSubscriptionQuotas(resetQuotaStatus.value)
     affected = result.affected
   })
   if (!ok) {
@@ -123,6 +131,19 @@ async function resetQuotas() {
     return
   }
   toast.success(t('system.resetQuotasDone', { count: affected }))
+  await refresh()
+}
+
+async function resetSubscriptionQuota() {
+  const target = resetQuotaTarget.value
+  if (!target) return
+  resetQuotaTarget.value = null
+  const ok = await run(() => endpoints.resetAdminSubscriptionQuota(target.id))
+  if (!ok) {
+    toast.error(t('common.actionFailed'))
+    return
+  }
+  toast.success(t('system.resetSubscriptionQuotaDone', { plan: target.plan_name }))
   await refresh()
 }
 </script>
@@ -163,9 +184,14 @@ async function resetQuotas() {
       </UiCard>
 
       <UiCard v-if="canManage" :title="t('system.resetActiveQuotas')" :description="t('system.resetActiveQuotasLead')">
-        <UiButton variant="secondary" :loading="busy" @click="resetQuotasOpen = true">
-          {{ t('system.resetActiveQuotas') }}
-        </UiButton>
+        <div class="flex flex-wrap items-end gap-3">
+          <UiField :label="t('system.resetQuotaStatus')" for="reset-quota-status">
+            <UiSelect id="reset-quota-status" v-model="resetQuotaStatus" :options="resetQuotaStatusOptions" />
+          </UiField>
+          <UiButton variant="secondary" :loading="busy" @click="resetQuotasOpen = true">
+            {{ t('system.resetActiveQuotas') }}
+          </UiButton>
+        </div>
       </UiCard>
 
       <div class="flex flex-wrap items-center gap-3">
@@ -204,6 +230,7 @@ async function resetQuotas() {
               <th>{{ t('system.autoRenew') }}</th>
               <th class="num">{{ t('system.cancelledAt') }}</th>
               <th class="num">{{ t('common.createdAt') }}</th>
+              <th v-if="canManage">{{ t('common.actions') }}</th>
             </tr>
           </thead>
           <tbody>
@@ -226,16 +253,31 @@ async function resetQuotas() {
               <td>{{ item.auto_renew ? t('system.yes') : t('system.no') }}</td>
               <td class="num">{{ formatDateTime(item.cancelled_at) }}</td>
               <td class="num">{{ formatDateTime(item.created_at) }}</td>
+              <td v-if="canManage">
+                <UiButton variant="ghost" size="sm" @click="resetQuotaTarget = item">
+                  {{ t('system.resetSubscriptionQuota') }}
+                </UiButton>
+              </td>
             </tr>
           </tbody>
         </UiTable>
       </ConsoleSystemDataState>
 
       <UiDialog v-model:open="resetQuotasOpen" size="sm" :title="t('system.resetActiveQuotas')">
-        <p class="text-sm text-muted">{{ t('system.confirmResetActiveQuotas') }}</p>
+        <p class="text-sm text-muted">{{ t('system.confirmResetQuotaByStatus', { status: t(`system.resetQuotaStatus${resetQuotaStatus.charAt(0).toUpperCase() + resetQuotaStatus.slice(1)}`) }) }}</p>
         <template #footer>
           <UiButton variant="secondary" @click="resetQuotasOpen = false">{{ t('common.cancel') }}</UiButton>
           <UiButton :loading="busy" @click="resetQuotas">{{ t('common.confirm') }}</UiButton>
+        </template>
+      </UiDialog>
+
+      <UiDialog :open="resetQuotaTarget !== null" size="sm" :title="t('system.resetSubscriptionQuota')">
+        <p class="text-sm text-muted">
+          {{ t('system.confirmResetSubscriptionQuota', { plan: resetQuotaTarget?.plan_name ?? '' }) }}
+        </p>
+        <template #footer>
+          <UiButton variant="secondary" @click="resetQuotaTarget = null">{{ t('common.cancel') }}</UiButton>
+          <UiButton :loading="busy" @click="resetSubscriptionQuota">{{ t('common.confirm') }}</UiButton>
         </template>
       </UiDialog>
     </div>

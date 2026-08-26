@@ -70,7 +70,7 @@ const { t } = useI18n()
           :key="sample.value"
           type="button"
           :class="[
-            'rounded-[7px] px-2.5 py-1 text-[13px] transition-colors duration-150',
+            'rounded-full px-2.5 py-1 text-[13px] transition-colors duration-150',
             active === sample.value ? 'bg-surface font-medium text-ink shadow-sm' : 'text-muted hover:text-ink',
           ]"
           @click="active = sample.value"
@@ -79,7 +79,7 @@ const { t } = useI18n()
 
       <button
         type="button"
-        class="inline-flex items-center gap-1.5 rounded-[7px] px-2 py-1 text-2xs text-muted transition-colors hover:bg-surface hover:text-ink"
+        class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-2xs text-muted transition-colors hover:bg-surface hover:text-ink"
         :aria-label="copied ? t('common.copied') : t('site.codeCopy')"
         @click="copy(current.code)"
       >

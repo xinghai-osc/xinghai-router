@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 )
@@ -65,6 +66,35 @@ func (c systemConfig) emailVerificationEnabled() bool {
 	return c.SMTPHost != "" && c.SMTPFrom != ""
 }
 
+func (s *Service) registrationEmailAllowed(ctx context.Context, email string) (bool, error) {
+	if s.db == nil {
+		return true, nil
+	}
+	email = strings.ToLower(strings.TrimSpace(email))
+	var whitelistEnabled, aliasBlocked bool
+	var whitelist []string
+	if err := s.db.QueryRow(ctx, `select registration_email_whitelist_enabled,registration_email_whitelist,registration_email_alias_blocked from site_settings where id=true`).Scan(&whitelistEnabled, &whitelist, &aliasBlocked); err != nil {
+		return false, err
+	}
+	if aliasBlocked && isEmailAlias(email) {
+		return false, nil
+	}
+	if !whitelistEnabled {
+		return true, nil
+	}
+	return emailWhitelistAllowed(whitelist, email), nil
+}
+
+func emailWhitelistAllowed(whitelist []string, email string) bool {
+	email = strings.ToLower(strings.TrimSpace(email))
+	for _, allowed := range whitelist {
+		if strings.HasSuffix(email, strings.ToLower(strings.TrimSpace(allowed))) {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Service) loadSystemConfig(ctx context.Context) systemConfig {
 	cfg := systemConfig{CaptchaProvider: s.cfg.CaptchaProvider, GeetestCaptchaID: s.cfg.GeetestCaptchaID, GeetestCaptchaKey: s.cfg.GeetestCaptchaKey, CorptchaSiteID: s.cfg.CorptchaSiteID, CorptchaSecret: s.cfg.CorptchaSecret, SMTPHost: s.cfg.SMTPHost, SMTPPort: s.cfg.SMTPPort, SMTPUsername: s.cfg.SMTPUsername, SMTPPassword: s.cfg.SMTPPassword, SMTPFrom: s.cfg.SMTPFrom}
 	if s.db == nil {
@@ -116,8 +146,8 @@ func (s *Service) loadSystemConfig(ctx context.Context) systemConfig {
 
 func (s *Service) siteSettings(w http.ResponseWriter, r *http.Request) {
 	var name, iconURL, announcement string
-	var autoDisableFailedChannels, invitationsEnabled bool
-	if err := s.db.QueryRow(r.Context(), `select name,icon_url,announcement,auto_disable_failed_channels,invitations_enabled from site_settings where id=true`).Scan(&name, &iconURL, &announcement, &autoDisableFailedChannels, &invitationsEnabled); err != nil {
+	var autoDisableFailedChannels, invitationsEnabled, whitelistEnabled, aliasBlocked bool
+	if err := s.db.QueryRow(r.Context(), `select name,icon_url,announcement,auto_disable_failed_channels,invitations_enabled,registration_email_whitelist_enabled,registration_email_alias_blocked from site_settings where id=true`).Scan(&name, &iconURL, &announcement, &autoDisableFailedChannels, &invitationsEnabled, &whitelistEnabled, &aliasBlocked); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not load site settings")
 		return
 	}
@@ -133,20 +163,22 @@ func (s *Service) siteSettings(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"name": name, "icon_url": iconURL, "announcement": announcement, "auto_disable_failed_channels": autoDisableFailedChannels, "invitations_enabled": invitationsEnabled, "captcha_provider": sys.captchaProvider(), "geetest_enabled": sys.geetestEnabled(), "geetest_captcha_id": sys.GeetestCaptchaID, "corptcha_site_id": sys.CorptchaSiteID, "email_verification_enabled": sys.emailVerificationEnabled(), "oauth_providers": oauthProviders})
+	writeJSON(w, http.StatusOK, map[string]any{"name": name, "icon_url": iconURL, "announcement": announcement, "auto_disable_failed_channels": autoDisableFailedChannels, "invitations_enabled": invitationsEnabled, "registration_email_whitelist_enabled": whitelistEnabled, "registration_email_alias_blocked": aliasBlocked, "captcha_provider": sys.captchaProvider(), "geetest_enabled": sys.geetestEnabled(), "geetest_captcha_id": sys.GeetestCaptchaID, "corptcha_site_id": sys.CorptchaSiteID, "email_verification_enabled": sys.emailVerificationEnabled(), "oauth_providers": oauthProviders})
 }
 
 func (s *Service) adminSiteSettings(w http.ResponseWriter, r *http.Request) {
 	var name, iconURL, announcement string
-	var autoDisableFailedChannels, invitationsEnabled bool
-	var inviterReward, inviteeReward string
+	var autoDisableFailedChannels, invitationsEnabled, whitelistEnabled, aliasBlocked bool
+	var whitelist []string
+	var inviterReward, inviteeReward, checkinBaseReward, checkinStreakBonus string
+	var checkinMaxBonusDays int
 	var captchaProvider, geetestID, geetestKeyEnc, corptchaSiteID, corptchaSecretEnc, smtpHost, smtpPort, smtpUser, smtpPassEnc, smtpFrom, publicBaseURL string
-	err := s.db.QueryRow(r.Context(), `select name,icon_url,announcement,auto_disable_failed_channels,captcha_provider,geetest_captcha_id,geetest_captcha_key_encrypted,corptcha_site_id,corptcha_secret_encrypted,smtp_host,smtp_port,smtp_username,smtp_password_encrypted,smtp_from,public_base_url,invitations_enabled,inviter_reward::text,invitee_reward::text from site_settings where id=true`).Scan(&name, &iconURL, &announcement, &autoDisableFailedChannels, &captchaProvider, &geetestID, &geetestKeyEnc, &corptchaSiteID, &corptchaSecretEnc, &smtpHost, &smtpPort, &smtpUser, &smtpPassEnc, &smtpFrom, &publicBaseURL, &invitationsEnabled, &inviterReward, &inviteeReward)
+	err := s.db.QueryRow(r.Context(), `select name,icon_url,announcement,auto_disable_failed_channels,registration_email_whitelist_enabled,registration_email_whitelist,registration_email_alias_blocked,captcha_provider,geetest_captcha_id,geetest_captcha_key_encrypted,corptcha_site_id,corptcha_secret_encrypted,smtp_host,smtp_port,smtp_username,smtp_password_encrypted,smtp_from,public_base_url,invitations_enabled,inviter_reward::text,invitee_reward::text,checkin_base_reward::text,checkin_streak_bonus::text,checkin_max_bonus_days from site_settings where id=true`).Scan(&name, &iconURL, &announcement, &autoDisableFailedChannels, &whitelistEnabled, &whitelist, &aliasBlocked, &captchaProvider, &geetestID, &geetestKeyEnc, &corptchaSiteID, &corptchaSecretEnc, &smtpHost, &smtpPort, &smtpUser, &smtpPassEnc, &smtpFrom, &publicBaseURL, &invitationsEnabled, &inviterReward, &inviteeReward, &checkinBaseReward, &checkinStreakBonus, &checkinMaxBonusDays)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not load site settings")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"name": name, "icon_url": iconURL, "announcement": announcement, "auto_disable_failed_channels": autoDisableFailedChannels, "captcha_provider": captchaProvider, "geetest_captcha_id": geetestID, "has_geetest_captcha_key": strings.TrimSpace(geetestKeyEnc) != "", "corptcha_site_id": corptchaSiteID, "has_corptcha_secret": strings.TrimSpace(corptchaSecretEnc) != "", "smtp_host": smtpHost, "smtp_port": smtpPort, "smtp_username": smtpUser, "has_smtp_password": strings.TrimSpace(smtpPassEnc) != "", "smtp_from": smtpFrom, "public_base_url": publicBaseURL, "invitations_enabled": invitationsEnabled, "inviter_reward": inviterReward, "invitee_reward": inviteeReward})
+	writeJSON(w, http.StatusOK, map[string]any{"name": name, "icon_url": iconURL, "announcement": announcement, "auto_disable_failed_channels": autoDisableFailedChannels, "captcha_provider": captchaProvider, "geetest_captcha_id": geetestID, "has_geetest_captcha_key": strings.TrimSpace(geetestKeyEnc) != "", "corptcha_site_id": corptchaSiteID, "has_corptcha_secret": strings.TrimSpace(corptchaSecretEnc) != "", "smtp_host": smtpHost, "smtp_port": smtpPort, "smtp_username": smtpUser, "has_smtp_password": strings.TrimSpace(smtpPassEnc) != "", "smtp_from": smtpFrom, "public_base_url": publicBaseURL, "invitations_enabled": invitationsEnabled, "inviter_reward": inviterReward, "invitee_reward": inviteeReward, "registration_email_whitelist_enabled": whitelistEnabled, "registration_email_whitelist": whitelist, "registration_email_alias_blocked": aliasBlocked, "checkin_base_reward": checkinBaseReward, "checkin_streak_bonus": checkinStreakBonus, "checkin_max_bonus_days": checkinMaxBonusDays})
 }
 
 func (s *Service) updateSiteSettings(w http.ResponseWriter, r *http.Request) {
@@ -169,6 +201,12 @@ func (s *Service) updateSiteSettings(w http.ResponseWriter, r *http.Request) {
 		InvitationsEnabled        *bool    `json:"invitations_enabled"`
 		InviterReward             *float64 `json:"inviter_reward"`
 		InviteeReward             *float64 `json:"invitee_reward"`
+		CheckinBaseReward         *float64 `json:"checkin_base_reward"`
+		CheckinStreakBonus        *float64 `json:"checkin_streak_bonus"`
+		CheckinMaxBonusDays       *int     `json:"checkin_max_bonus_days"`
+		WhitelistEnabled          *bool    `json:"registration_email_whitelist_enabled"`
+		Whitelist                 []string `json:"registration_email_whitelist"`
+		AliasBlocked              *bool    `json:"registration_email_alias_blocked"`
 	}
 	if decode(r, &in) != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", "invalid site settings")
@@ -177,6 +215,11 @@ func (s *Service) updateSiteSettings(w http.ResponseWriter, r *http.Request) {
 	in.Name = strings.TrimSpace(in.Name)
 	in.IconURL = strings.TrimSpace(in.IconURL)
 	in.Announcement = strings.TrimSpace(in.Announcement)
+	whitelist, err := normalizeEmailWhitelist(in.Whitelist)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
 	if in.Name == "" || len([]rune(in.Name)) > 100 {
 		writeError(w, http.StatusBadRequest, "invalid_request", "site name must contain 1 to 100 characters")
 		return
@@ -261,6 +304,10 @@ func (s *Service) updateSiteSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "invitation rewards must be between 0 and 1e9")
 		return
 	}
+	if (in.CheckinBaseReward != nil && (*in.CheckinBaseReward < 0 || *in.CheckinBaseReward > 1e9)) || (in.CheckinStreakBonus != nil && (*in.CheckinStreakBonus < 0 || *in.CheckinStreakBonus > 1e9)) || (in.CheckinMaxBonusDays != nil && (*in.CheckinMaxBonusDays < 1 || *in.CheckinMaxBonusDays > 365)) {
+		writeError(w, http.StatusBadRequest, "invalid_request", "check-in rewards must be non-negative and bonus days must be between 1 and 365")
+		return
+	}
 	geetestKeyEnc, smtpPassEnc := "", ""
 	if key := strings.TrimSpace(in.GeetestCaptchaKey); key != "" {
 		if len(key) > maxGeetestFieldLen {
@@ -315,16 +362,53 @@ func (s *Service) updateSiteSettings(w http.ResponseWriter, r *http.Request) {
 		invitations_enabled=coalesce($16,invitations_enabled),
 		inviter_reward=coalesce($17,inviter_reward),
 		invitee_reward=coalesce($18,invitee_reward),
+		checkin_base_reward=coalesce($19,checkin_base_reward),
+		checkin_streak_bonus=coalesce($20,checkin_streak_bonus),
+		checkin_max_bonus_days=coalesce($21,checkin_max_bonus_days),
+		registration_email_whitelist_enabled=coalesce($22,registration_email_whitelist_enabled),
+		registration_email_whitelist=$23,
+		registration_email_alias_blocked=coalesce($24,registration_email_alias_blocked),
 		updated_at=now() where id=true`,
 		in.Name, in.IconURL, in.Announcement, in.AutoDisableFailedChannels,
 		trimmedPtr(in.CaptchaProvider), trimmedPtr(in.GeetestCaptchaID), geetestKeyEnc,
 		trimmedPtr(in.CorptchaSiteID), corptchaSecretEnc,
-		trimmedPtr(in.SMTPHost), trimmedPtr(in.SMTPPort), trimmedPtr(in.SMTPUsername), smtpPassEnc, trimmedPtr(in.SMTPFrom), trimmedPtr(in.PublicBaseURL), in.InvitationsEnabled, in.InviterReward, in.InviteeReward); err != nil {
+		trimmedPtr(in.SMTPHost), trimmedPtr(in.SMTPPort), trimmedPtr(in.SMTPUsername), smtpPassEnc, trimmedPtr(in.SMTPFrom), trimmedPtr(in.PublicBaseURL), in.InvitationsEnabled, in.InviterReward, in.InviteeReward, in.CheckinBaseReward, in.CheckinStreakBonus, in.CheckinMaxBonusDays, in.WhitelistEnabled, whitelist, in.AliasBlocked); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not save site settings")
 		return
 	}
 	s.audit(r, "settings.updated", "site_settings", "site", map[string]any{"name": in.Name})
 	s.adminSiteSettings(w, r)
+}
+
+func isEmailAlias(email string) bool {
+	local, _, ok := strings.Cut(email, "@")
+	return ok && strings.Contains(local, "+")
+}
+
+func normalizeEmailWhitelist(values []string) ([]string, error) {
+	seen := make(map[string]bool, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		email := strings.ToLower(strings.TrimSpace(value))
+		if email == "" {
+			continue
+		}
+		if !strings.Contains(email, "@") {
+			email = "@" + strings.TrimPrefix(email, ".")
+		}
+		if strings.HasPrefix(email, "@") {
+			if len(email) < 4 || strings.ContainsAny(email[1:], " @\t\r\n") || !strings.Contains(email[1:], ".") {
+				return nil, errors.New("registration email whitelist contains an invalid email or domain suffix")
+			}
+		} else if !validEmail(email) {
+			return nil, errors.New("registration email whitelist contains an invalid email or domain suffix")
+		}
+		if !seen[email] {
+			seen[email] = true
+			out = append(out, email)
+		}
+	}
+	return out, nil
 }
 
 func trimmedPtr(value *string) *string {

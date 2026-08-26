@@ -29,13 +29,13 @@
   --color-danger: var(--danger);
   --color-danger-soft: var(--danger-soft);
 
-  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB',
-    'Noto Sans SC', 'Microsoft YaHei', sans-serif;
-  --font-serif: 'Instrument Serif', 'Iowan Old Style', Georgia, serif;
+  --font-sans: var(--app-font-sans);
+  --font-serif: var(--app-font-display);
   --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 
   --radius-control: var(--radius-control-token);
   --radius-card: var(--radius-card-token);
+  --radius-button: var(--radius-button-token);
 
   --shadow-pop: var(--shadow-pop);
   --shadow-glow: var(--shadow-glow);
@@ -44,7 +44,14 @@
 }
 
 :root {
+  --app-font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB',
+    'Noto Sans SC', 'Microsoft YaHei', sans-serif;
+  --app-font-display: 'Instrument Serif', 'Iowan Old Style', Georgia, serif;
+  --app-display-weight: 400;
+  --app-display-tracking: -0.015em;
+  --app-display-leading: 1.08;
   --radius-control-token: 10px;
   --radius-card-token: 16px;
+  --radius-button-token: 10px;
   --shadow-glow: none;
 }

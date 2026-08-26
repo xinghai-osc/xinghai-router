@@ -9,16 +9,21 @@ export function useResource<T>(loader: () => Promise<T>, initial: T) {
   const data = ref<T>(initial) as Ref<T>
   const pending = ref(false)
   const error = ref('')
+  let requestId = 0
 
   async function refresh() {
+    const currentRequestId = ++requestId
     pending.value = true
     error.value = ''
     try {
-      data.value = await loader()
+      const next = await loader()
+      if (currentRequestId === requestId) data.value = next
     } catch (cause) {
-      error.value = cause instanceof Error ? cause.message : t('common.loadFailed')
+      if (currentRequestId === requestId) {
+        error.value = cause instanceof Error ? cause.message : t('common.loadFailed')
+      }
     } finally {
-      pending.value = false
+      if (currentRequestId === requestId) pending.value = false
     }
   }
 

@@ -10,12 +10,12 @@ defineProps<{ items: TabItem[] }>()
 
 <template>
   <TabsRoot v-model="model">
-    <TabsList class="relative flex items-center gap-1 border-b border-line">
+    <TabsList class="relative flex items-center gap-1 rounded-control border border-line bg-sunken/45 p-1">
       <TabsTrigger
         v-for="item in items"
         :key="item.value"
         :value="item.value"
-        class="relative -mb-px flex items-center gap-1.5 border-b-2 border-transparent px-3 py-2 text-sm text-muted transition-colors duration-150 hover:text-ink focus-visible:outline-none data-[state=active]:border-clay data-[state=active]:text-ink"
+        class="relative flex items-center gap-1.5 rounded-control border border-transparent px-3 py-1.5 text-sm text-muted transition-colors duration-150 hover:text-ink focus-visible:outline-none data-[state=active]:border-line-strong data-[state=active]:bg-surface data-[state=active]:text-ink data-[state=active]:shadow-sm"
       >
         {{ item.label }}
         <span

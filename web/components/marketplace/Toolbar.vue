@@ -16,6 +16,13 @@ const props = defineProps<{
 }>()
 
 const { t } = useI18n()
+const searchShell = ref<HTMLElement | null>(null)
+
+function focusSearch() {
+  searchShell.value?.querySelector<HTMLInputElement>('input')?.focus()
+}
+
+defineExpose({ focusSearch })
 
 const vendorOptions = computed(() => [
   { value: FILTER_ALL, label: t('site.sqAllVendors') },
@@ -55,30 +62,33 @@ const SEGMENT_ITEM = 'rounded-[7px] transition-colors duration-150'
 
 <template>
   <div class="flex flex-col gap-3 lg:flex-row lg:items-center">
-    <div class="lg:max-w-xs lg:flex-1">
+    <div ref="searchShell" class="lg:max-w-xs lg:flex-1">
       <label for="sq-search" class="sr-only">{{ t('site.sqSearchPlaceholder') }}</label>
       <UiInput id="sq-search" v-model="search" :placeholder="t('site.sqSearchPlaceholder')">
         <template #leading>
           <Search class="size-4" />
         </template>
+        <template #trailing>
+          <kbd class="rounded border border-line px-1.5 py-0.5 font-mono text-[10px] text-faint" :title="t('site.sqSearchShortcutHint')">/</kbd>
+        </template>
       </UiInput>
     </div>
 
-    <div class="flex flex-wrap items-center gap-2 lg:ml-auto">
-      <div class="w-40">
+    <div class="flex min-w-0 flex-wrap items-center gap-2 lg:ml-auto">
+      <div class="min-w-0 flex-1 basis-36 lg:w-40 lg:flex-none">
         <label for="sq-vendor" class="sr-only">{{ t('site.sqVendorLabel') }}</label>
         <UiSelect id="sq-vendor" v-model="vendor" :options="vendorOptions" />
       </div>
-      <div class="w-36">
+      <div class="min-w-0 flex-1 basis-32 lg:w-36 lg:flex-none">
         <label for="sq-group" class="sr-only">{{ t('site.sqGroupLabel') }}</label>
         <UiSelect id="sq-group" v-model="group" :options="groupOptions" />
       </div>
-      <div class="w-40">
+      <div class="min-w-0 flex-1 basis-36 lg:w-40 lg:flex-none">
         <label for="sq-sort" class="sr-only">{{ t('site.sqSortLabel') }}</label>
         <UiSelect id="sq-sort" v-model="sortProxy" :options="sortOptions" />
       </div>
 
-      <div :class="SEGMENT" role="group" :aria-label="t('site.sqUnitLabel')">
+      <div :class="[SEGMENT, 'shrink-0']" role="group" :aria-label="t('site.sqUnitLabel')">
         <button
           v-for="item in units"
           :key="item.value"
@@ -89,7 +99,7 @@ const SEGMENT_ITEM = 'rounded-[7px] transition-colors duration-150'
         >{{ t(item.labelKey) }}</button>
       </div>
 
-      <div :class="SEGMENT" role="group" :aria-label="t('site.sqViewLabel')">
+      <div :class="[SEGMENT, 'shrink-0']" role="group" :aria-label="t('site.sqViewLabel')">
         <button
           v-for="item in views"
           :key="item.value"

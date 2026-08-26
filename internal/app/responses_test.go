@@ -8,14 +8,11 @@ import (
 	"testing"
 )
 
-func TestResponsesCompletionsRejectsInvalidBodyBeforeUpstream(t *testing.T) {
+func TestResponsesCompletionsRejectsInvalidRoutingFieldsBeforeUpstream(t *testing.T) {
 	for _, body := range []string{
 		`{}`,
 		`{"model":""}`,
 		`not-json`,
-		`{"model":"m"}`,
-		`{"model":"m","input":[]}`,
-		`{"model":"m","input":""}`,
 		`{"model":"m","input":"hi","max_output_tokens":200001}`,
 	} {
 		rec := httptest.NewRecorder()
@@ -123,6 +120,20 @@ func TestResponsesRequestToChatCompletions(t *testing.T) {
 	}
 	if len(echo.tools) != 2 || echo.tools[0].(map[string]any)["type"] != "function" {
 		t.Fatalf("echo tools not captured: %+v", echo.tools)
+	}
+}
+
+func TestResponsesReasoningEffortIsForwarded(t *testing.T) {
+	out, _, err := responsesRequestToChatCompletions([]byte(`{"model":"m","input":"hi","reasoning":{"effort":"high"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(out, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["reasoning_effort"] != "high" {
+		t.Fatalf("reasoning_effort = %#v, want high", payload["reasoning_effort"])
 	}
 }
 

@@ -532,7 +532,7 @@ const clientTarget = ref<UsageRow | null>(null)
 
         <ConsoleOpsPagination
           v-if="adminView"
-          :page="adminUsage.data.value.page"
+          :page="page"
           :page-size="pageSize"
           :total="adminUsage.data.value.total"
           :page-size-options="pageSizeOptions"

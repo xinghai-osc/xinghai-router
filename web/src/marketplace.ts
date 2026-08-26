@@ -19,8 +19,38 @@ export interface SquareModel extends CatalogModel {
   vendor_slug: string
 }
 
+export function normalizeCatalogValue(value: string): string {
+  return value.normalize('NFKC').trim().toLowerCase()
+}
+
+export function squareModelKey(model: Pick<SquareModel, 'model' | 'vendor_slug'>): string {
+  return `${normalizeCatalogValue(model.model)}\u0000${normalizeCatalogValue(model.vendor_slug)}`
+}
+
 export function toSquareModel(item: CatalogModel): SquareModel {
-  return { ...item, vendor_name: item.provider, vendor_slug: item.provider_slug }
+  const model = { ...item, vendor_name: item.provider, vendor_slug: item.provider_slug }
+  return { ...model, id: model.id || squareModelKey(model) }
+}
+
+export function dedupeSquareModels(models: SquareModel[]): SquareModel[] {
+  const unique = new Map<string, SquareModel>()
+  for (const model of models) {
+    const key = squareModelKey(model)
+    const existing = unique.get(key)
+    if (!existing) {
+      unique.set(key, { ...model, groups: [...model.groups] })
+      continue
+    }
+
+    const groups = new Map(existing.groups.map(group => [group.id, group]))
+    for (const group of model.groups) groups.set(group.id, group)
+    existing.groups = [...groups.values()]
+    existing.input_per_million ??= model.input_per_million
+    existing.cached_input_per_million ??= model.cached_input_per_million
+    existing.output_per_million ??= model.output_per_million
+    existing.multiplier ??= model.multiplier
+  }
+  return [...unique.values()]
 }
 
 /** Unique vendors across the catalog, with model counts, preserving order. */
@@ -114,14 +144,6 @@ export function formatSuccessRate(rate: number): string {
   return `${(rate * 100).toFixed(1)}%`
 }
 
-/** Deterministic accent colour for a vendor monogram. */
-export function vendorColor(name: string): { bg: string; fg: string } {
-  let hash = 0
-  for (let index = 0; index < name.length; index += 1) hash = (hash * 31 + name.charCodeAt(index)) >>> 0
-  const hue = hash % 360
-  return { bg: `hsl(${hue} 60% 45% / 0.12)`, fg: `hsl(${hue} 45% 42%)` }
-}
-
 /** First meaningful character of a vendor name, used as its monogram. */
 export function vendorInitial(name: string): string {
   return (name.trim()[0] ?? '?').toUpperCase()
@@ -134,28 +156,73 @@ export interface SquareFilters {
   sortBy: SortOption
 }
 
+function searchText(value: string): string {
+  return normalizeCatalogValue(value).replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
+}
+
+function searchScore(model: SquareModel, query: string): number | null {
+  const modelText = searchText(model.model)
+  const vendorText = searchText(model.vendor_name)
+  const queryText = searchText(query)
+  if (!queryText) return 0
+
+  const tokens = queryText.split(' ').filter(Boolean)
+  const modelTokens = modelText.split(' ').filter(Boolean)
+  const vendorTokens = vendorText.split(' ').filter(Boolean)
+  const matchesToken = (token: string) =>
+    [...modelTokens, ...vendorTokens].some(candidate => candidate === token || candidate.startsWith(token))
+  if (!tokens.every(matchesToken)) return null
+
+  let score = 0
+  if (modelText === queryText) score += 1000
+  else if (vendorText === queryText) score += 900
+  else if (modelText.startsWith(queryText)) score += 700
+  else if (vendorText.startsWith(queryText)) score += 650
+
+  for (const token of tokens) {
+    if (modelTokens.some(candidate => candidate === token)) score += 30
+    else if (vendorTokens.some(candidate => candidate === token)) score += 20
+    else if (modelTokens.some(candidate => candidate.startsWith(token))) score += 10
+    else score += 5
+  }
+  return score
+}
+
 export function filterAndSort(models: SquareModel[], filters: SquareFilters): SquareModel[] {
-  const query = filters.search.trim().toLowerCase()
-  let result = models
+  const query = filters.search.trim()
+  let result = dedupeSquareModels(models)
+  const scores = new Map<string, number>()
 
   if (query) {
-    result = result.filter(model =>
-      model.model.toLowerCase().includes(query) || model.vendor_name.toLowerCase().includes(query),
-    )
+    result = result.filter((model) => {
+      const score = searchScore(model, query)
+      if (score == null) return false
+      scores.set(squareModelKey(model), score)
+      return true
+    })
   }
   if (filters.vendor !== FILTER_ALL) result = result.filter(model => model.vendor_name === filters.vendor)
   if (filters.group !== FILTER_ALL) result = result.filter(model => model.groups.some(group => group.id === filters.group))
 
   const sorted = [...result]
-  if (filters.sortBy === 'name') {
-    sorted.sort((a, b) => a.model.localeCompare(b.model))
-  } else if (filters.sortBy === 'price-low') {
-    sorted.sort((a, b) =>
-      (effectivePrice(a, 'input', filters.group) ?? Number.POSITIVE_INFINITY)
-      - (effectivePrice(b, 'input', filters.group) ?? Number.POSITIVE_INFINITY))
-  } else if (filters.sortBy === 'price-high') {
-    sorted.sort((a, b) =>
-      (effectivePrice(b, 'input', filters.group) ?? -1) - (effectivePrice(a, 'input', filters.group) ?? -1))
-  }
+  const byName = (a: SquareModel, b: SquareModel) =>
+    a.model.localeCompare(b.model) || squareModelKey(a).localeCompare(squareModelKey(b))
+  const byPriceLow = (a: SquareModel, b: SquareModel) =>
+    (effectivePrice(a, 'input', filters.group) ?? Number.POSITIVE_INFINITY)
+    - (effectivePrice(b, 'input', filters.group) ?? Number.POSITIVE_INFINITY) || byName(a, b)
+  const byPriceHigh = (a: SquareModel, b: SquareModel) =>
+    (effectivePrice(b, 'input', filters.group) ?? -1)
+    - (effectivePrice(a, 'input', filters.group) ?? -1) || byName(a, b)
+  const sortResult = filters.sortBy === 'price-low'
+    ? byPriceLow
+    : filters.sortBy === 'price-high' ? byPriceHigh : byName
+
+  sorted.sort((a, b) => {
+    if (query) {
+      const relevance = (scores.get(squareModelKey(b)) ?? 0) - (scores.get(squareModelKey(a)) ?? 0)
+      if (relevance) return relevance
+    }
+    return sortResult(a, b)
+  })
   return sorted
 }

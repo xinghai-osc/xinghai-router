@@ -23,8 +23,8 @@
   }
 
   ::selection {
-    background-color: var(--clay-soft);
-    color: var(--clay);
+    background-color: var(--clay);
+    color: var(--clay-ink);
   }
 
   :focus-visible {

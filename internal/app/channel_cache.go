@@ -11,10 +11,12 @@ type channelRouteKey struct {
 }
 
 // subscriptionRouteKey identifies a user's subscription coverage answer for one
-// model. Coverage depends only on the user and the requested model.
+// model. Coverage is scoped to the key's group: only subscriptions whose plan is
+// bound to that group (or to no group for an ungrouped key) may be consumed.
 type subscriptionRouteKey struct {
-	userID string
-	model  string
+	userID  string
+	groupID string
+	model   string
 }
 
 // invalidateChannels drops the cached channel lists and keys. It is called after

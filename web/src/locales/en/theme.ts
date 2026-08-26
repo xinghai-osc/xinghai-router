@@ -5,4 +5,6 @@ export default {
   coolHint: 'High contrast · electric violet',
   galaxyLabel: 'Galaxy',
   galaxyHint: 'Deep space · nebula purple',
+  deepseekLabel: 'DeepSeek',
+  deepseekHint: 'Cool white · brand blue & glass',
 }

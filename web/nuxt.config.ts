@@ -1,13 +1,13 @@
 import tailwindcss from '@tailwindcss/vite'
 
-const publicRoutes = ['/', '/models', '/rankings', '/pricing', '/terms', '/privacy']
+const publicRoutes = ['/', '/auth', '/auth/reset', '/models', '/rankings', '/pricing', '/terms', '/privacy']
 
 export default defineNuxtConfig({
   modules: ['@nuxt/eslint'],
   css: ['~/assets/css/main.css'],
   components: [{ path: '~/components', pathPrefix: true }],
   app: {
-    pageTransition: { name: 'page', mode: 'out-in' },
+    pageTransition: { name: 'page' },
     head: {
       htmlAttrs: { lang: 'zh-CN' },
       link: [
@@ -15,7 +15,7 @@ export default defineNuxtConfig({
         { rel: 'preconnect', href: 'https://fonts.gstatic.com', crossorigin: '' },
         {
           rel: 'stylesheet',
-          href: 'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500&display=swap',
+          href: 'https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Montserrat:wght@400;500;600&display=swap',
         },
       ],
     },

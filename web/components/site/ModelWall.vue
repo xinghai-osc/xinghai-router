@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ArrowRight } from 'lucide-vue-next'
 import type { SquareModel } from '~/src/marketplace'
-import { extractVendors } from '~/src/marketplace'
+import { extractVendors, squareModelKey } from '~/src/marketplace'
 
 const props = withDefaults(defineProps<{
   models: SquareModel[]
@@ -68,7 +68,7 @@ const vendors = computed(() => {
           <ul class="space-y-1.5">
             <li
               v-for="model in vendor.models"
-              :key="model.id"
+              :key="squareModelKey(model)"
               class="truncate font-mono text-[12.5px] text-muted transition-colors duration-150 group-hover:text-ink"
             >{{ model.model }}</li>
           </ul>

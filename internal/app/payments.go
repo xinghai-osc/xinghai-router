@@ -382,6 +382,7 @@ func (s *Service) epayNotify(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "fail", http.StatusInternalServerError)
 			return
 		}
+		s.notifyAdminsOfPurchase(r.Context(), "topup", r.Form.Get("out_trade_no"), userID, amount, "")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("success"))
 		return
@@ -400,6 +401,7 @@ func (s *Service) epayNotify(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "fail", http.StatusInternalServerError)
 		return
 	}
+	s.notifyAdminsOfPurchase(r.Context(), "subscription", r.Form.Get("out_trade_no"), "", notifiedAmount, "")
 	s.subscriptionCache.clear()
 	s.invalidateChannels()
 	w.WriteHeader(http.StatusOK)

@@ -8,8 +8,10 @@ definePageMeta({ layout: 'console', middleware: 'console-auth' })
 interface TokenPoint { key: string; label: string; value: number }
 
 const CHART_DAYS = 14
+const HEATMAP_WEEKS = 53
+const HEATMAP_DAYS = HEATMAP_WEEKS * 7
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const { account } = useAccount()
 const { settings } = useSiteSettings()
 
@@ -17,6 +19,11 @@ useHead({ title: () => `${t('nav.overview')} · ${settings.value.name}` })
 
 const { data: dailyUsage, pending, error } = useResource(
   () => endpoints.getAccountUsageDaily(CHART_DAYS, -new Date().getTimezoneOffset()),
+  { data: [] as DailyUsageRecord[] },
+)
+
+const { data: heatmapUsage, pending: heatmapPending, error: heatmapError } = useResource(
+  () => endpoints.getAccountUsageDaily(400, -new Date().getTimezoneOffset()),
   { data: [] as DailyUsageRecord[] },
 )
 
@@ -57,6 +64,42 @@ const daily = computed<TokenPoint[]>(() => {
 
 const hasUsage = computed(() => daily.value.some(point => point.value > 0))
 
+function heatmapDayKey(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+const heatmap = computed(() => {
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const end = new Date(today)
+  end.setDate(end.getDate() + (6 - end.getDay()))
+  const start = new Date(end)
+  start.setDate(start.getDate() - (HEATMAP_DAYS - 1))
+
+  const buckets = new Map<string, number>()
+  const points: { key: string; date: string; label: string; requests: number }[] = []
+  for (let offset = 0; offset < HEATMAP_DAYS; offset += 1) {
+    const date = new Date(start)
+    date.setDate(start.getDate() + offset)
+    const key = heatmapDayKey(date)
+    buckets.set(key, 0)
+    points.push({
+      key,
+      date: key,
+      label: new Intl.DateTimeFormat(locale.value === 'en' ? 'en-US' : locale.value === 'zh-Hant' ? 'zh-TW' : 'zh-CN', { year: 'numeric', month: 'short', day: 'numeric' }).format(date),
+      requests: 0,
+    })
+  }
+
+  for (const record of heatmapUsage.value.data) {
+    if (buckets.has(record.day)) buckets.set(record.day, record.requests)
+  }
+  return points.map(point => ({ ...point, requests: buckets.get(point.key) ?? 0 }))
+})
+
+const heatmapTotal = computed(() => heatmap.value.reduce((sum, point) => sum + point.requests, 0))
+const heatmapActiveDays = computed(() => heatmap.value.filter(point => point.requests > 0).length)
+
 const quickLinks = computed(() => [
   { to: '/console/keys?create=1', icon: KeyRound, title: t('console.quickCreateKey'), hint: t('console.quickCreateKeyHint') },
   { to: '/console/wallet', icon: Wallet, title: t('console.quickTopUp'), hint: t('console.quickTopUpHint') },
@@ -79,6 +122,13 @@ const quickLinks = computed(() => [
         :value="formatMoney(account?.reserved ?? 0)"
         :hint="t('console.reservedHint')"
         :icon="Lock"
+        :loading="!account"
+      />
+      <ConsoleUserStatCard
+        :label="t('console.pendingSettlement')"
+        :value="formatMoney(account?.pending_settlement ?? 0)"
+        :hint="t('console.pendingSettlementHint')"
+        :icon="Coins"
         :loading="!account"
       />
       <ConsoleUserStatCard
@@ -113,6 +163,26 @@ const quickLinks = computed(() => [
       >
         <ConsoleUserTokenChart :points="daily" />
       </ConsoleUserDataState>
+    </UiCard>
+
+    <UiCard :title="t('console.callHeatmap')" :description="t('console.callHeatmapHint')">
+      <template #actions>
+        <div class="flex items-center gap-2 text-xs text-muted">
+          <span class="numeric font-semibold text-ink">{{ formatNumber(heatmapTotal) }}</span>
+          <span>{{ t('console.heatmapRequestsUnit') }}</span>
+        </div>
+      </template>
+      <div v-if="heatmapPending" class="space-y-2">
+        <UiSkeleton :rows="5" />
+      </div>
+      <UiAlert v-else-if="heatmapError" tone="danger" :title="t('console.heatmapError')" />
+      <div v-else class="space-y-3">
+        <ConsoleUserCallHeatmap :points="heatmap" />
+        <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted">
+          <span>{{ t('console.heatmapActiveDays', { count: heatmapActiveDays }) }}</span>
+          <span>{{ t('console.heatmapTotal', { count: formatNumber(heatmapTotal) }) }}</span>
+        </div>
+      </div>
     </UiCard>
 
     <div class="grid gap-4 lg:grid-cols-2">

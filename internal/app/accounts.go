@@ -39,6 +39,15 @@ func (s *Service) register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	email := strings.ToLower(strings.TrimSpace(in.Email))
+	allowed, err := s.registrationEmailAllowed(r.Context(), email)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not check registration email")
+		return
+	}
+	if !allowed {
+		writeError(w, http.StatusForbidden, "email_not_allowed", "this email is not allowed to register")
+		return
+	}
 	clientIP := requestMetadata(r).clientIP
 	if s.limiter != nil {
 		if !s.limiter.allowN("auth:register:ip:"+clientIP, authRegisterPerMinute) || !s.limiter.allowN("auth:register:email:"+email, authRegisterPerMinute) {
@@ -206,8 +215,8 @@ func (s *Service) accountMe(w http.ResponseWriter, r *http.Request) {
 	account := r.Context().Value(accountContextKey{}).(accountContext)
 	var email, name, role, avatarURL string
 	var leaderboardOptIn, leaderboardMaskName, mustChangePassword, dataUsageEnabled bool
-	var balance, reserved any
-	err := s.db.QueryRow(r.Context(), `select u.email,u.name,u.role,u.avatar_url,u.leaderboard_opt_in,u.leaderboard_mask_name,u.must_change_password,u.data_usage_enabled,coalesce(w.balance,0),coalesce(w.reserved,0) from users u left join user_wallets w on w.user_id=u.id where u.id=$1`, account.userID).Scan(&email, &name, &role, &avatarURL, &leaderboardOptIn, &leaderboardMaskName, &mustChangePassword, &dataUsageEnabled, &balance, &reserved)
+	var balance, reserved, pendingSettlement any
+	err := s.db.QueryRow(r.Context(), `select u.email,u.name,u.role,u.avatar_url,u.leaderboard_opt_in,u.leaderboard_mask_name,u.must_change_password,u.data_usage_enabled,coalesce(w.balance,0),coalesce(w.reserved,0),coalesce((select sum(ws.amount) from wallet_settlements ws where ws.user_id=u.id and ws.status in ('pending','processing')),0) from users u left join user_wallets w on w.user_id=u.id where u.id=$1`, account.userID).Scan(&email, &name, &role, &avatarURL, &leaderboardOptIn, &leaderboardMaskName, &mustChangePassword, &dataUsageEnabled, &balance, &reserved, &pendingSettlement)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not load account")
 		return
@@ -217,7 +226,7 @@ func (s *Service) accountMe(w http.ResponseWriter, r *http.Request) {
 		permissions = append(permissions, permission)
 	}
 	sort.Strings(permissions)
-	writeJSON(w, http.StatusOK, map[string]any{"id": account.userID, "email": email, "name": name, "role": role, "avatar_url": avatarURL, "permissions": permissions, "balance": balance, "reserved": reserved, "leaderboard_opt_in": leaderboardOptIn, "leaderboard_mask_name": leaderboardMaskName, "data_usage_enabled": dataUsageEnabled, "must_change_password": mustChangePassword})
+	writeJSON(w, http.StatusOK, map[string]any{"id": account.userID, "email": email, "name": name, "role": role, "avatar_url": avatarURL, "permissions": permissions, "balance": balance, "reserved": reserved, "pending_settlement": pendingSettlement, "leaderboard_opt_in": leaderboardOptIn, "leaderboard_mask_name": leaderboardMaskName, "data_usage_enabled": dataUsageEnabled, "must_change_password": mustChangePassword})
 }
 
 func (s *Service) updateAccountPreferences(w http.ResponseWriter, r *http.Request) {
@@ -530,7 +539,7 @@ func (s *Service) accountUsageDaily(w http.ResponseWriter, r *http.Request) {
 	account := accountFromContext(r)
 	days := 14
 	if v := strings.TrimSpace(r.URL.Query().Get("days")); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 1 && n <= 90 {
+		if n, err := strconv.Atoi(v); err == nil && n >= 1 && n <= 400 {
 			days = n
 		}
 	}
@@ -543,7 +552,7 @@ func (s *Service) accountUsageDaily(w http.ResponseWriter, r *http.Request) {
 	// Shifting by the client offset and reading the result as UTC wall-clock
 	// yields the local day, independent of the session timezone. The window has
 	// one day of slack so clients ahead of UTC still see a full window.
-	rows, err := s.db.Query(r.Context(), `select (date_trunc('day', (rl.created_at + make_interval(mins => $2)) at time zone 'UTC'))::date as day,coalesce(sum(rl.prompt_tokens),0),coalesce(sum(rl.completion_tokens),0) from request_logs rl where rl.user_id=$1 and rl.created_at>=now()-make_interval(days => $3) group by day order by day`, account.userID, offset, days+1)
+	rows, err := s.db.Query(r.Context(), `select (date_trunc('day', (rl.created_at + make_interval(mins => $2)) at time zone 'UTC'))::date as day,count(*),coalesce(sum(rl.prompt_tokens),0),coalesce(sum(rl.completion_tokens),0) from request_logs rl where rl.user_id=$1 and rl.created_at>=now()-make_interval(days => $3) group by day order by day`, account.userID, offset, days+1)
 	if err != nil {
 		log.Printf("account usage daily: %v", err)
 		writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
@@ -553,9 +562,9 @@ func (s *Service) accountUsageDaily(w http.ResponseWriter, r *http.Request) {
 	data := []map[string]any{}
 	for rows.Next() {
 		var day time.Time
-		var prompt, completion int64
-		if rows.Scan(&day, &prompt, &completion) == nil {
-			data = append(data, map[string]any{"day": day.Format("2006-01-02"), "prompt_tokens": prompt, "completion_tokens": completion})
+		var requests, prompt, completion int64
+		if rows.Scan(&day, &requests, &prompt, &completion) == nil {
+			data = append(data, map[string]any{"day": day.Format("2006-01-02"), "requests": requests, "prompt_tokens": prompt, "completion_tokens": completion})
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": data})
@@ -584,7 +593,7 @@ func (s *Service) accountUsage(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) accountLedger(w http.ResponseWriter, r *http.Request) {
 	account := accountFromContext(r)
-	rows, err := s.db.Query(r.Context(), `select id,amount,balance_after,kind,request_id,note,created_at from wallet_ledger where user_id=$1 order by created_at desc limit 100`, account.userID)
+	rows, err := s.db.Query(r.Context(), `select wl.id,wl.amount,wl.balance_after,wl.kind,wl.request_id,wl.note,wl.created_at,wl.settlement_status,wl.settlement_date,wl.settled_at,coalesce(ws.error,'') from wallet_ledger wl left join wallet_settlements ws on ws.ledger_id=wl.id where wl.user_id=$1 order by wl.created_at desc limit 100`, account.userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
 		return
@@ -594,9 +603,10 @@ func (s *Service) accountLedger(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var id, kind string
 		var requestID, note any
-		var amount, after, created any
-		if rows.Scan(&id, &amount, &after, &kind, &requestID, &note, &created) == nil {
-			data = append(data, map[string]any{"id": id, "amount": amount, "balance_after": after, "kind": kind, "request_id": requestID, "note": note, "created_at": created})
+		var amount, after, created, settlementDate, settledAt, settlementError any
+		var settlementStatus string
+		if rows.Scan(&id, &amount, &after, &kind, &requestID, &note, &created, &settlementStatus, &settlementDate, &settledAt, &settlementError) == nil {
+			data = append(data, map[string]any{"id": id, "amount": amount, "balance_after": after, "kind": kind, "request_id": requestID, "note": note, "created_at": created, "settlement_status": settlementStatus, "settlement_date": settlementDate, "settled_at": settledAt, "settlement_error": settlementError})
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": data})

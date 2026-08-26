@@ -17,6 +17,7 @@ const (
 	captchaPurposeRegister  = "register"
 	captchaPurposeEmailCode = "email_code"
 	captchaPurposeReset     = "reset"
+	captchaPurposeCheckin   = "checkin"
 
 	corptchaAPIBaseURL = "https://cpt-api.25y.cn"
 	corptchaVerifyPath = "/v1/verify"

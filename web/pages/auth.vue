@@ -111,6 +111,7 @@ async function runCaptcha(purpose: string): Promise<Record<string, string> | nul
 }
 
 function describe(cause: unknown): string {
+  if (cause instanceof Error && cause.message.includes('email_not_allowed')) return t('auth.emailNotAllowed')
   return cause instanceof Error && cause.message ? cause.message : t('common.requestFailed')
 }
 

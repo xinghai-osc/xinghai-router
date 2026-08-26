@@ -1,5 +1,5 @@
 import { endpoints, type CatalogGroup } from '~/src/api'
-import { toSquareModel, type SquareModel } from '~/src/marketplace'
+import { dedupeSquareModels, toSquareModel, type SquareModel } from '~/src/marketplace'
 
 /**
  * Public model catalog. Fetched on the client because the public pages are
@@ -19,7 +19,7 @@ export function useCatalog() {
     error.value = ''
     try {
       const response = await endpoints.getModelCatalog()
-      models.value = (response.data ?? []).map(toSquareModel)
+      models.value = dedupeSquareModels((response.data ?? []).map(toSquareModel))
       groups.value = response.groups ?? []
       loaded.value = true
     } catch (cause) {

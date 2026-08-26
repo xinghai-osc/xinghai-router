@@ -84,13 +84,7 @@ func (s reliabilitySettings) autoDisableStatus(status int) bool {
 }
 
 func (s reliabilitySettings) autoDisableKeyword(body string) bool {
-	lower := strings.ToLower(body)
-	for _, keyword := range s.parsedKeywords {
-		if strings.Contains(lower, keyword) {
-			return true
-		}
-	}
-	return false
+	return s.matchedKeyword(body) != ""
 }
 
 // matchedKeyword returns the first configured keyword present in the response
@@ -101,6 +95,9 @@ func (s reliabilitySettings) matchedKeyword(body string) string {
 		if strings.Contains(lower, keyword) {
 			return keyword
 		}
+	}
+	if strings.Contains(lower, "credit balance is too low") {
+		return "your credit balance is too low"
 	}
 	return ""
 }

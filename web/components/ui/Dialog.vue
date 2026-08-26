@@ -22,12 +22,12 @@ const { t } = useI18n()
 <template>
   <DialogRoot v-model:open="open">
     <DialogPortal>
-      <DialogOverlay class="animate-fade fixed inset-0 z-50 bg-[var(--overlay)] backdrop-blur-[2px]" />
+      <DialogOverlay class="animate-fade fixed inset-0 z-50 bg-[var(--overlay)] backdrop-blur-md" />
 
       <DialogContent
         :class="cn(
           'animate-pop fixed top-1/2 left-1/2 z-50 flex max-h-[88vh] w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2 flex-col',
-          'rounded-card border border-line bg-surface shadow-pop focus:outline-none',
+          'rounded-card border border-line bg-surface/95 shadow-pop backdrop-blur-xl focus:outline-none',
           WIDTHS[size],
         )"
       >

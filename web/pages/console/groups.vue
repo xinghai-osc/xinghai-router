@@ -23,9 +23,13 @@ function pageQuery(): string {
   return `?${params.toString()}`
 }
 
-watch(pageSize, async () => { page.value = 1; await groups.refresh() })
-
 const groups = useResource(() => endpoints.getAdminGroups(pageQuery()), { data: [] as Group[], total: 0, page: 1, page_size: 50 })
+
+watch(page, () => { void groups.refresh() })
+watch(pageSize, async () => {
+  if (page.value !== 1) page.value = 1
+  else await groups.refresh()
+})
 
 const selected = ref<Set<string>>(new Set())
 
@@ -60,7 +64,7 @@ watch(() => groups.data.value.data, (list) => {
 }, { immediate: true })
 
 function isDirty(group: Group) {
-  const multiplierChanged = drafts[group.id] !== undefined && drafts[group.id].trim() !== '' && Number(drafts[group.id]) !== group.multiplier
+  const multiplierChanged = drafts[group.id] !== undefined && String(drafts[group.id] ?? '').trim() !== '' && Number(drafts[group.id]) !== group.multiplier
   const concurrencyChanged = concurrencyDrafts[group.id] !== undefined && (concurrencyDraftValue(group) ?? 0) !== (group.max_concurrency ?? 0)
   const publicChanged = publicDrafts[group.id] !== group.public
   const displayChanged = (displayNameDrafts[group.id] ?? '').trim() !== (group.display_name ?? '')
@@ -71,7 +75,7 @@ function isDirty(group: Group) {
 const dirtyCount = computed(() => groups.data.value.data.filter(group => isDirty(group)).length)
 
 function concurrencyDraftValue(group: Group) {
-  const raw = (concurrencyDrafts[group.id] ?? '').trim()
+  const raw = String(concurrencyDrafts[group.id] ?? '').trim()
   return raw === '' ? null : Number(raw)
 }
 
@@ -132,7 +136,7 @@ async function create() {
   if (!name) { createError.value = t('admin.groupNameRequired'); return }
   const multiplier = Number(createForm.multiplier)
   if (!validMultiplier(multiplier)) { createError.value = t('admin.multiplierInvalid'); return }
-  const rawConcurrency = createForm.maxConcurrency.trim()
+  const rawConcurrency = String(createForm.maxConcurrency ?? '').trim()
   const concurrency = rawConcurrency === '' ? null : Number(rawConcurrency)
   if (!validConcurrency(concurrency)) { createError.value = t('admin.concurrencyInvalid'); return }
   const displayName = createForm.displayName.trim()
@@ -216,7 +220,7 @@ async function runBatch() {
   if (!ids.length) { batchOpen.value = false; return }
   const multiplier = Number(batchForm.multiplier)
   if (!validMultiplier(multiplier)) { batchError.value = t('admin.multiplierInvalid'); return }
-  const rawConcurrency = batchForm.maxConcurrency.trim()
+  const rawConcurrency = String(batchForm.maxConcurrency ?? '').trim()
   const concurrency = rawConcurrency === '' ? null : Number(rawConcurrency)
   if (!validConcurrency(concurrency)) { batchError.value = t('admin.concurrencyInvalid'); return }
 

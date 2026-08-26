@@ -7,9 +7,9 @@ import (
 )
 
 const (
-	authCleanupInterval   = time.Hour
-	pendingOrderMaxAge    = 24 * time.Hour
-	pendingOrderAgeSQL    = "24 hours"
+	authCleanupInterval = time.Hour
+	pendingOrderMaxAge  = 24 * time.Hour
+	pendingOrderAgeSQL  = "24 hours"
 )
 
 func (s *Service) startAuthCleanupScheduler(ctx context.Context) {
@@ -24,6 +24,7 @@ func (s *Service) startAuthCleanupScheduler(ctx context.Context) {
 			case <-timer.C:
 				s.cleanupExpiredAuthState(ctx)
 				s.expireStalePendingOrders(ctx)
+				s.cleanupContentAudits(ctx)
 				timer.Reset(authCleanupInterval)
 			}
 		}

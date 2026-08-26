@@ -59,7 +59,7 @@ func (s *Service) listKeyQuotaLimits(ctx context.Context, keyID string) ([]map[s
 		return nil, err
 	}
 	defer rows.Close()
-	var result []map[string]any
+	result := make([]map[string]any, 0)
 	for rows.Next() {
 		var id, window string
 		var maxRequests, maxTokens *int64
@@ -84,22 +84,21 @@ func (s *Service) listKeyQuotaLimits(ctx context.Context, keyID string) ([]map[s
 // that has a limit row, using the same aggregation logic as checkQuota so the
 // UI shows the same numbers the gateway enforces.
 func (s *Service) keyQuotaUsage(ctx context.Context, keyID string) ([]map[string]any, error) {
-	rows, err := s.db.Query(ctx, `select q."window",
-		count(rl.*) as requests, coalesce(sum(rl.total_tokens),0) as tokens, coalesce(sum(ur.cost),0) as cost
+	rows, err := s.db.Query(ctx, `select q."window",agg.requests,agg.tokens,agg.cost
 	from quota_limits q
-	cross join lateral (
-		select * from request_logs rl
+	left join lateral (
+		select count(rl.*) as requests, coalesce(sum(rl.total_tokens),0) as tokens, coalesce(sum(ur.cost),0) as cost
+		from request_logs rl
 		left join usage_records ur on ur.request_id=rl.request_id
 		where rl.api_key_id=$1 and (q."window"='total' or rl.created_at >= now() - ('1 '||q."window")::interval)
-	) rl
+	) agg on true
 	where q.api_key_id=$1 and q.model is null
-	group by q."window"
 	order by q."window"`, keyID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var result []map[string]any
+	result := make([]map[string]any, 0)
 	for rows.Next() {
 		var window string
 		var requests, tokens int64

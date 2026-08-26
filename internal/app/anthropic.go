@@ -41,11 +41,27 @@ func (s *Service) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "anthropic-version header is required")
 		return
 	}
+	rawBody, err := readGatewayBody(r)
+	if err != nil {
+		s.logReject(r.Context(), "", http.StatusBadRequest, "invalid_request", started)
+		writeError(w, http.StatusBadRequest, "invalid_request", "request body is too large or could not be read")
+		return
+	}
 	var in anthropicRequest
-	if decode(r, &in) != nil {
+	if json.Unmarshal(rawBody, &in) != nil {
 		s.logReject(r.Context(), "", http.StatusBadRequest, "invalid_request", started)
 		writeError(w, http.StatusBadRequest, "invalid_request", "model, messages, and max_tokens are required")
 		return
+	}
+	var rawPayload map[string]any
+	if json.Unmarshal(rawBody, &rawPayload) != nil {
+		rawPayload = nil
+	}
+	for key := range rawPayload {
+		switch key {
+		case "model", "system", "messages", "max_tokens", "stream", "temperature", "top_p", "stop_sequences", "tools", "tool_choice":
+			delete(rawPayload, key)
+		}
 	}
 	in.Model = strings.TrimSpace(in.Model)
 	if !validModelName(in.Model) || !validGatewayMaxTokens(in.MaxTokens) || len(in.Messages) == 0 {
@@ -53,17 +69,38 @@ func (s *Service) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "model must be 1-200 characters; messages and max_tokens (1-200000) are required")
 		return
 	}
-	body, err := anthropicToOpenAI(in)
+	body, err := anthropicToOpenAIWithExtras(in, rawPayload)
 	if err != nil {
 		s.logReject(r.Context(), in.Model, http.StatusBadRequest, "invalid_request", started)
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	s.proxyChatCompletions(w, r, body, in.Model, in.Stream, in.MaxTokens, openAIToAnthropic, streamOpenAIToAnthropic, nil, nil, nil)
+	key := r.Context().Value(contextKey{}).(keyContext)
+	allowed, policyCtx := s.enforceContentPolicy(r.Context(), key, in.Model, "/v1/messages", rawBody)
+	if !allowed {
+		s.logReject(policyCtx, in.Model, http.StatusBadRequest, "content_policy_violation", started)
+		writeError(w, http.StatusBadRequest, "content_policy_violation", "request content violates the content policy")
+		return
+	}
+	r = r.WithContext(policyCtx)
+	s.proxyChatCompletions(w, r, body, in.Model, in.Stream, in.MaxTokens, openAIToAnthropic, streamOpenAIToAnthropic, nil, nil, nil, nil)
 }
 
 func anthropicToOpenAI(in anthropicRequest) ([]byte, error) {
-	payload := map[string]any{"model": in.Model, "max_tokens": in.MaxTokens, "stream": in.Stream}
+	return anthropicToOpenAIWithExtras(in, nil)
+}
+
+// anthropicToOpenAIWithExtras keeps fields that are not part of the gateway's
+// typed Anthropic surface. They may be provider-specific parameters and must
+// not disappear while translating the request to OpenAI shape.
+func anthropicToOpenAIWithExtras(in anthropicRequest, extras map[string]any) ([]byte, error) {
+	payload := make(map[string]any, len(extras)+8)
+	for key, value := range extras {
+		payload[key] = value
+	}
+	payload["model"] = in.Model
+	payload["max_tokens"] = in.MaxTokens
+	payload["stream"] = in.Stream
 	messages := make([]any, 0, len(in.Messages)+1)
 	if len(in.System) > 0 && string(in.System) != "null" {
 		content, err := anthropicContentToOpenAI(in.System)
@@ -395,8 +432,21 @@ func openAIRequestToAnthropic(body []byte) ([]byte, string, error) {
 	if json.Unmarshal(body, &in) != nil {
 		return nil, "", fmt.Errorf("invalid OpenAI request")
 	}
-	out := map[string]any{"model": in["model"], "max_tokens": 4096}
-	for _, key := range []string{"max_tokens", "stream", "temperature", "top_p"} {
+	out := map[string]any{}
+	// Preserve provider-specific request parameters across the format bridge.
+	// Known fields are rewritten below so their target representation remains
+	// authoritative; all other top-level fields must survive unchanged.
+	for key, value := range in {
+		switch key {
+		case "model", "messages", "max_tokens", "stream", "temperature", "top_p", "reasoning_effort", "stop", "tools", "tool_choice", "response_format":
+			continue
+		default:
+			out[key] = value
+		}
+	}
+	out["model"] = in["model"]
+	out["max_tokens"] = 4096
+	for _, key := range []string{"max_tokens", "stream", "temperature", "top_p", "reasoning_effort"} {
 		if value, ok := in[key]; ok {
 			out[key] = value
 		}

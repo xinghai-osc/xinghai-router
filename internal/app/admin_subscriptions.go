@@ -299,6 +299,36 @@ func (s *Service) adminUpdateSubscription(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+func (s *Service) adminResetSubscriptionQuota(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not reset subscription quota")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	var exists bool
+	if err = tx.QueryRow(r.Context(), `select exists(select 1 from user_subscriptions where id=$1)`, id).Scan(&exists); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not load subscription")
+		return
+	}
+	if !exists {
+		writeError(w, http.StatusNotFound, "not_found", "subscription not found")
+		return
+	}
+	if err = s.initSubscriptionCountersTx(r.Context(), tx, id); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not reset subscription quota")
+		return
+	}
+	if err = tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not reset subscription quota")
+		return
+	}
+	s.audit(r, "subscription.admin_quota_reset", "user_subscription", id, nil)
+	s.subscriptionCache.clear()
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
 func (s *Service) adminVoidSubscription(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	result, err := s.db.Exec(r.Context(), `update user_subscriptions set status='cancelled',auto_renew=false,cancelled_at=coalesce(cancelled_at,now()),updated_at=now() where id=$1`, id)

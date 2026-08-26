@@ -1,0 +1,67 @@
+/* DeepSeek Harness-inspired: near-black surfaces, brand blue and glass controls. */
+
+:root[data-preset='deepseek'] {
+  --paper: #f9f8f8;
+  --surface: #ffffff;
+  --sunken: #f3f2f2;
+  --ink: #1e232c;
+  --muted: rgb(30 35 44 / 0.72);
+  --faint: #8691a1;
+  --line: rgb(30 35 44 / 0.08);
+  --line-strong: rgb(30 35 44 / 0.18);
+
+  --clay: #4d6bfe;
+  --clay-hover: #3a5ce8;
+  --clay-soft: #eef1fe;
+  --clay-ink: #ffffff;
+
+  --success: #1f8a5d;
+  --success-soft: #e8f4ee;
+  --warn: #b0821f;
+  --warn-soft: #f8f1de;
+  --danger: #d03c3c;
+  --danger-soft: #fbeceb;
+
+  --overlay: rgb(10 10 10 / 0.32);
+  --shadow-pop: 0 2px 4px rgb(0 0 0 / 0.04), 0 12px 28px -8px rgb(0 0 0 / 0.1);
+  --shadow-glow: none;
+  --page-glow: none;
+  --shimmer-highlight: rgb(255 255 255 / 0.5);
+
+  --radius-card-token: 20px;
+  --radius-button-token: 999px;
+  --app-font-sans: 'DM Sans', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB',
+    'Noto Sans SC', 'Microsoft YaHei', sans-serif;
+  --app-font-display: 'Montserrat', 'DM Sans', -apple-system, BlinkMacSystemFont, 'PingFang SC',
+    'Noto Sans SC', 'Microsoft YaHei', sans-serif;
+  --app-display-weight: 500;
+  --app-display-tracking: -0.02em;
+  --app-display-leading: 1.2;
+}
+
+:root[data-preset='deepseek'][data-theme='dark'] {
+  --paper: #0a0a0a;
+  --surface: #17181a;
+  --sunken: #121316;
+  --ink: #ffffff;
+  --muted: rgb(255 255 255 / 0.72);
+  --faint: rgb(255 255 255 / 0.45);
+  --line: rgb(255 255 255 / 0.09);
+  --line-strong: rgb(255 255 255 / 0.2);
+
+  --clay: #6799fe;
+  --clay-hover: #8ab0ff;
+  --clay-soft: rgb(103 153 254 / 0.14);
+  --clay-ink: #0a0a0a;
+
+  --success: #3fbf8f;
+  --success-soft: rgb(63 191 143 / 0.14);
+  --warn: #e0b04c;
+  --warn-soft: rgb(224 176 76 / 0.14);
+  --danger: #f26d6d;
+  --danger-soft: rgb(242 109 109 / 0.14);
+
+  --overlay: rgb(0 0 0 / 0.6);
+  --shadow-pop: 0 2px 4px rgb(0 0 0 / 0.4), 0 16px 32px -8px rgb(0 0 0 / 0.6);
+  --shimmer-highlight: rgb(255 255 255 / 0.08);
+}

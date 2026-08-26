@@ -25,6 +25,7 @@ export default {
   displayNamePlaceholder: '如何称呼你',
   emailCodePlaceholder: '6 位数字验证码',
   emailInvalid: '请输入有效的邮箱地址',
+  emailNotAllowed: '该邮箱不在注册白名单内',
   nameRequired: '请填写昵称',
   passwordTooShort: '密码至少需要 8 个字符',
   passwordTooLong: '密码最多 72 个字符',

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { Component } from 'vue'
-import { Server, KeyRound, Play, ArrowRightLeft, BarChart3, X, ListChecks, SortAsc, Eye, EyeOff, Sparkles, Cpu, Moon, SquareTerminal, Hexagon, Brain, Plug } from 'lucide-vue-next'
-import { endpoints, type Channel, type ChannelForm, type ChannelKey, type ChannelKeyTestResult, type ChannelQuota, type ChannelQuotaForm, type ChannelTestResult, type ChannelUsageStats, type Group, type ModelRoute, type ModelRouteForm } from '~/src/api'
+import { Server, KeyRound, Play, ArrowRightLeft, BarChart3, X, ListChecks, SortAsc, Eye, EyeOff, Sparkles, Cpu, Moon, SquareTerminal, Hexagon, Brain, Plug, WalletCards, Copy } from 'lucide-vue-next'
+import { endpoints, type Channel, type ChannelForm, type ChannelKey, type ChannelKeyTestResult, type ChannelQuota, type ChannelQuotaForm, type ChannelTestResult, type ChannelUsageStats, type ChannelUsageWindow, type Group, type ModelRoute, type ModelRouteForm } from '~/src/api'
 import { formatCompact, formatNumber, formatMoney, formatDateTime } from '~/src/format'
 
 definePageMeta({ layout: 'console', middleware: 'console-auth' })
@@ -40,9 +40,13 @@ function pageQuery(): string {
   return `?${params.toString()}`
 }
 
-watch(pageSize, async () => { page.value = 1; await channels.refresh() })
-
 const channels = useResource(() => endpoints.getAdminChannels(pageQuery()), { data: [] as Channel[], total: 0, page: 1, page_size: 50 })
+
+watch(page, () => { void channels.refresh() })
+watch(pageSize, async () => {
+  if (page.value !== 1) page.value = 1
+  else await channels.refresh()
+})
 const groups = useResource(
   () => (can('users.read') ? endpoints.getAdminGroups('?page_size=100') : Promise.resolve({ data: [] as Group[], total: 0, page: 1, page_size: 100 })),
   { data: [] as Group[], total: 0, page: 1, page_size: 100 },
@@ -94,6 +98,23 @@ function formatDuration(ms: number): string {
   if (!ms) return '—'
   if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`
   return `${Math.round(ms)}ms`
+}
+
+function usageWindowLabel(window: ChannelUsageWindow): string {
+  if (window.window === 'rolling') return t('admin.opencodeUsageRolling')
+  if (window.window === 'weekly') return t('admin.opencodeUsageWeekly')
+  if (window.window === 'monthly') return t('admin.opencodeUsageMonthly')
+  return window.window
+}
+
+function usageWindowText(window: ChannelUsageWindow): string {
+  const percent = typeof window.percent === 'number' ? `${window.percent.toFixed(window.percent % 1 ? 1 : 0)}%` : '-'
+  if (!window.reset_at) return `${usageWindowLabel(window)} ${percent}`
+  return `${usageWindowLabel(window)} ${percent} · ${formatDateTime(window.reset_at)}`
+}
+
+function usageWindows(value: ChannelUsageWindow[] | null | undefined): ChannelUsageWindow[] {
+  return value ?? []
 }
 
 function responseTone(ms: number): 'success' | 'warn' | 'danger' | 'neutral' {
@@ -163,6 +184,28 @@ async function confirmBatchToggle() {
   await channels.refresh()
 }
 
+const copyConfirmOpen = ref(false)
+const copyTarget = ref<Channel | null>(null)
+const copyName = ref('')
+
+function openCopy(channel: Channel) {
+  copyTarget.value = channel
+  copyName.value = `${channel.name} (copy)`.slice(0, 100)
+  copyConfirmOpen.value = true
+}
+
+async function confirmCopy() {
+  const target = copyTarget.value
+  if (!target) return
+  const name = copyName.value.trim()
+  const ok = await run(() => endpoints.copyChannel(target.id, name ? { name } : undefined))
+  if (!ok) { toast.error(t('common.actionFailed')); return }
+  toast.success(t('admin.channelCopied'))
+  copyConfirmOpen.value = false
+  copyTarget.value = null
+  await channels.refresh()
+}
+
 const dialogOpen = ref(false)
 const editingId = ref('')
 const formError = ref('')
@@ -192,22 +235,22 @@ const keyChips = computed(() => parseApiKeys(form.api_keys))
 
 function addKey() {
   keyInputError.value = ''
-  const key = keyDraft.value.trim()
-  if (!key) return
-  if (key.length > 4096) {
+  const incoming = parseApiKeys(keyDraft.value)
+  if (!incoming.length) return
+  const keys = keyChips.value
+  if (incoming.some(key => key.length > 4096)) {
     keyInputError.value = t('admin.apiKeyInvalid')
     return
   }
-  const keys = keyChips.value
-  if (keys.includes(key)) {
+  if (incoming.some(key => keys.includes(key))) {
     keyInputError.value = t('admin.duplicateApiKey')
     return
   }
-  if (form.key_type === 'single' && keys.length > 0) {
+  if (form.key_type === 'single' && keys.length + incoming.length > 1) {
     keyInputError.value = t('admin.singleKeyOnlyOne')
     return
   }
-  form.api_keys = [...keys, key].join('\n')
+  form.api_keys = [...keys, ...incoming].join('\n')
   keyDraft.value = ''
 }
 
@@ -297,7 +340,12 @@ async function saveKey() {
       keyFormError.value = t('admin.nameRequired')
       return
     }
-    const ok = await run(() => endpoints.updateChannelKey(keysChannelId.value, editingKeyId.value, { name, priority }))
+    const apiKey = keyForm.api_key.trim()
+    if (apiKey && apiKey.length > 4096) {
+      keyFormError.value = t('admin.apiKeyInvalid')
+      return
+    }
+    const ok = await run(() => endpoints.updateChannelKey(keysChannelId.value, editingKeyId.value, { name, priority, ...(apiKey ? { api_key: apiKey } : {}) }))
     if (!ok) { toast.error(t('common.actionFailed')); return }
     toast.success(t('admin.keySaved'))
   }
@@ -376,6 +424,7 @@ function openEdit(channel: Channel) {
   keyDraft.value = ''
   keyInputError.value = ''
   form.models = channel.models.join('\n')
+  form.test_model = channel.test_model ?? ''
   form.priority = String(channel.priority)
   form.groups = [...channel.groups]
   form.user_email = channel.user_email ?? ''
@@ -491,13 +540,14 @@ async function save() {
   const models = parseModels(form.models)
   if (!models.length) { formError.value = t('admin.modelsRequired'); return }
 
+  const testModel = form.test_model.trim()
+  if (testModel && testModel.length > 200) { formError.value = t('admin.testModelInvalid'); return }
+
   const apiKeys = parseApiKeys(form.api_keys)
   if (!editingId.value && !apiKeys.length) { formError.value = t('admin.apiKeyRequired'); return }
-  if (apiKeys.length) {
-    if (form.key_type === 'single' && apiKeys.length > 1) {
-      formError.value = t('admin.singleKeyOnlyOne')
-      return
-    }
+  if (apiKeys.length && form.key_type === 'single' && apiKeys.length > 1) {
+    formError.value = t('admin.singleKeyOnlyOne')
+    return
   }
 
   const priority = Number(form.priority)
@@ -533,6 +583,7 @@ async function save() {
     key_type: form.key_type,
     api_keys: apiKeys.join('\n'),
     models,
+    test_model: testModel,
     priority,
     groups: [...form.groups],
     auto_disable: form.auto_disable,
@@ -603,6 +654,40 @@ async function testKey(key: ChannelKey) {
   }
   const refreshed = await endpoints.getChannelKeys(keysChannelId.value)
   channelKeys.data.value.data = refreshed.data
+  await channels.refresh()
+}
+
+const balanceChannelId = ref<string | null>(null)
+async function refreshBalance(channel: Channel) {
+  balanceChannelId.value = channel.id
+  const ok = await run(async () => {
+    await endpoints.refreshChannelBalance(channel.id)
+  })
+  balanceChannelId.value = null
+  if (!ok) { toast.error(t('admin.channelBalanceUnavailable')); return }
+  toast.success(t('admin.channelBalanceUpdated'))
+  await channels.refresh()
+}
+
+const balanceKeyId = ref<string | null>(null)
+async function queryKeyBalance(key: ChannelKey) {
+  balanceKeyId.value = key.id
+  const ok = await run(async () => {
+    const result = await endpoints.refreshChannelBalance(keysChannelId.value, key.id)
+    if (result) {
+      key.upstream_balance = result.balance
+      key.upstream_used = result.used
+      key.upstream_total = result.total
+      key.upstream_currency = result.currency
+      key.upstream_usage_windows = result.usage_windows
+      key.upstream_balance_supported = result.supported
+      key.upstream_balance_error = ''
+      key.upstream_balance_fetched_at = result.fetched_at
+    }
+  })
+  balanceKeyId.value = null
+  if (!ok) { toast.error(t('admin.keyBalanceUnavailable')); return }
+  toast.success(t('admin.keyBalanceUpdated'))
   await channels.refresh()
 }
 
@@ -806,8 +891,8 @@ function openEditQuota(limit: { window: string; max_requests: number | null; max
 
 async function saveQuota() {
   quotaFormError.value = ''
-  const maxRequests = quotaForm.max_requests.trim()
-  const maxTokens = quotaForm.max_tokens.trim()
+  const maxRequests = String(quotaForm.max_requests ?? '').trim()
+  const maxTokens = String(quotaForm.max_tokens ?? '').trim()
   if (!maxRequests && !maxTokens) {
     quotaFormError.value = t('admin.quotaLimitInvalid')
     return
@@ -927,6 +1012,7 @@ function quotaUsageForWindow(window: string) {
               <th class="num">{{ t('admin.priority') }}</th>
               <th class="num">{{ t('admin.weight') }}</th>
               <th>{{ t('admin.usedTokens') }}</th>
+              <th>{{ t('admin.channelBalance') }}</th>
               <th>{{ t('admin.responseTime') }}</th>
               <th>{{ t('admin.lastTested') }}</th>
               <th v-if="canManage">{{ t('common.actions') }}</th>
@@ -977,6 +1063,15 @@ function quotaUsageForWindow(window: string) {
                   <span class="text-sm text-ink">{{ sensitiveVisible ? formatCompact(channel.used_tokens) : '••••' }}</span>
                 </UiTooltip>
               </td>
+              <td class="num text-sm">
+                <div v-if="usageWindows(channel.upstream_usage_windows).length" class="space-y-0.5 text-left">
+                  <UiTooltip v-for="window in usageWindows(channel.upstream_usage_windows)" :key="window.window" :content="usageWindowText(window)">
+                    <span class="block text-[12px] text-muted">{{ usageWindowText(window) }}</span>
+                  </UiTooltip>
+                </div>
+                <span v-else-if="channel.upstream_balance_supported && channel.upstream_balance !== null">{{ channel.upstream_currency }} {{ formatNumber(channel.upstream_balance) }}</span>
+                <span v-else class="text-faint">-</span>
+              </td>
               <td>
                 <UiBadge :tone="responseTone(channel.response_time_ms)">
                   {{ formatDuration(channel.response_time_ms) }}
@@ -990,6 +1085,11 @@ function quotaUsageForWindow(window: string) {
               <td v-if="canManage">
                 <div class="flex items-center gap-1">
                   <UiButton variant="ghost" size="sm" @click="openEdit(channel)">{{ t('common.edit') }}</UiButton>
+                  <UiTooltip :content="t('admin.copyChannel')">
+                    <UiButton variant="ghost" size="sm" :disabled="busy" @click="openCopy(channel)">
+                      <Copy class="h-4 w-4" />
+                    </UiButton>
+                  </UiTooltip>
                   <UiButton variant="ghost" size="sm" :loading="testingChannelId === channel.id" :disabled="busy" @click="testChannelRow(channel)">
                     <Play class="h-4 w-4" />
                   </UiButton>
@@ -998,6 +1098,9 @@ function quotaUsageForWindow(window: string) {
                   </UiButton>
                   <UiButton variant="ghost" size="sm" @click="openRoutes(channel)">
                     <ArrowRightLeft class="h-4 w-4" />
+                  </UiButton>
+                  <UiButton variant="ghost" size="sm" :loading="balanceChannelId === channel.id" @click="refreshBalance(channel)">
+                    {{ t('admin.refreshChannelBalance') }}
                   </UiButton>
                   <UiButton variant="ghost" size="sm" @click="openUsage(channel)">
                     <BarChart3 class="h-4 w-4" />
@@ -1078,11 +1181,13 @@ function quotaUsageForWindow(window: string) {
               </span>
             </div>
             <p v-else class="px-1 pb-1 text-2xs text-faint">{{ t('admin.keyListEmpty') }}</p>
-            <UiInput
+            <UiTextarea
               v-model="keyDraft"
               mono
-              :placeholder="t('admin.apiKeyInputPlaceholder')"
-              @keydown.enter.prevent="addKey"
+              :rows="3"
+              :placeholder="t('admin.apiKeysPlaceholder')"
+              @keydown.ctrl.enter.prevent="addKey"
+              @keydown.meta.enter.prevent="addKey"
             />
           </div>
           <p v-if="keyInputError" class="mt-1 text-xs text-danger">{{ keyInputError }}</p>
@@ -1095,6 +1200,10 @@ function quotaUsageForWindow(window: string) {
               {{ t('admin.fetchModels') }}
             </UiButton>
           </div>
+        </UiField>
+
+        <UiField :label="t('admin.testModel')" :hint="t('admin.testModelHint')">
+          <UiInput v-model="form.test_model" mono :placeholder="t('admin.testModelPlaceholder')" />
         </UiField>
 
         <UiField :label="t('admin.groups')" :hint="t('admin.groupsHint')">
@@ -1147,18 +1256,33 @@ function quotaUsageForWindow(window: string) {
       <div v-else class="space-y-2">
         <div
           v-for="key in channelKeys.data.value.data" :key="key.id"
-          class="flex items-center justify-between rounded-control border border-line px-3 py-2"
+          class="flex flex-col gap-3 rounded-control border border-line px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
         >
-          <div class="flex items-center gap-2 min-w-0">
-            <KeyRound class="h-4 w-4 text-faint shrink-0" />
-            <span class="text-sm font-medium text-ink truncate">{{ key.name }}</span>
+          <div class="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+            <KeyRound class="h-4 w-4 shrink-0 text-faint" />
+            <span class="min-w-0 max-w-full truncate text-sm font-medium text-ink sm:max-w-[12rem]">{{ key.name }}</span>
             <UiBadge tone="outline" class="shrink-0">{{ t('admin.keyPriorityShort', { value: key.priority }) }}</UiBadge>
             <UiBadge v-if="!key.enabled" tone="danger" class="shrink-0">{{ t('common.disabled') }}</UiBadge>
             <UiTooltip v-else-if="key.last_error" :content="key.last_error">
               <UiBadge tone="warn" class="shrink-0">{{ t('admin.lastTestFailed') }}</UiBadge>
             </UiTooltip>
+            <span v-if="usageWindows(key.upstream_usage_windows).length" class="flex flex-wrap gap-1 text-[12px] text-muted shrink-0">
+              <UiTooltip v-for="window in usageWindows(key.upstream_usage_windows)" :key="window.window" :content="usageWindowText(window)">
+                <span>{{ usageWindowText(window) }}</span>
+              </UiTooltip>
+            </span>
+            <span v-else-if="key.upstream_balance_supported && key.upstream_balance !== null" class="numeric text-[13px] text-muted shrink-0">
+              {{ key.upstream_currency }} {{ formatNumber(key.upstream_balance) }}
+            </span>
+            <UiTooltip v-else-if="key.upstream_balance_error" :content="key.upstream_balance_error">
+              <span class="text-[13px] text-warn shrink-0">-</span>
+            </UiTooltip>
+            <span v-else class="text-[13px] text-faint shrink-0">-</span>
           </div>
-          <div class="flex items-center gap-1 shrink-0">
+          <div class="flex w-full flex-wrap items-center justify-end gap-1 sm:w-auto sm:shrink-0">
+            <UiButton variant="ghost" size="sm" :loading="balanceKeyId === key.id" :disabled="busy" :title="t('admin.queryKeyBalance')" @click="queryKeyBalance(key)">
+              <WalletCards class="h-4 w-4" />
+            </UiButton>
             <UiSwitch
               :model-value="key.enabled"
               size="sm"
@@ -1199,7 +1323,7 @@ function quotaUsageForWindow(window: string) {
       <div class="space-y-4">
         <UiAlert v-if="keyFormError" tone="danger">{{ keyFormError }}</UiAlert>
 
-        <UiField v-if="!editingKeyId" :label="t('admin.apiKey')" required>
+        <UiField :label="t('admin.apiKey')" :required="!editingKeyId" :hint="editingKeyId ? t('admin.apiKeyEditHint') : undefined">
           <UiInput v-model="keyForm.api_key" mono :placeholder="t('admin.apiKeysPlaceholder')" />
         </UiField>
 
@@ -1456,6 +1580,19 @@ function quotaUsageForWindow(window: string) {
       <template #footer>
         <UiButton variant="secondary" @click="batchConfirmOpen = false">{{ t('common.cancel') }}</UiButton>
         <UiButton :loading="busy" @click="confirmBatchToggle">{{ t('common.confirm') }}</UiButton>
+      </template>
+    </UiDialog>
+
+    <UiDialog v-model:open="copyConfirmOpen" size="sm" :title="t('admin.copyChannelTitle')">
+      <p class="text-sm text-muted">
+        {{ t('admin.copyChannelConfirm', { name: copyTarget?.name ?? '' }) }}
+      </p>
+      <UiField :label="t('admin.channelName')" :hint="t('admin.copyChannelNameHint')" class="mt-4">
+        <UiInput v-model="copyName" />
+      </UiField>
+      <template #footer>
+        <UiButton variant="secondary" @click="copyConfirmOpen = false">{{ t('common.cancel') }}</UiButton>
+        <UiButton :loading="busy" @click="confirmCopy">{{ t('common.confirm') }}</UiButton>
       </template>
     </UiDialog>
   </div>

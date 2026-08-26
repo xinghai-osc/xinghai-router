@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Bell } from 'lucide-vue-next'
 
-const { notifications, open } = useNotifications()
+const { notifications, open, dismissNotifications } = useNotifications()
 const { t } = useI18n()
 </script>
 
@@ -20,7 +20,10 @@ const { t } = useI18n()
     </div>
 
     <template #footer>
-      <UiButton variant="secondary" @click="open = false">{{ t('common.close') }}</UiButton>
+      <div class="flex w-full flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <UiButton variant="ghost" @click="dismissNotifications">{{ t('system.notificationsDismissUntilNew') }}</UiButton>
+        <UiButton variant="secondary" @click="open = false">{{ t('common.close') }}</UiButton>
+      </div>
     </template>
   </UiDialog>
 </template>

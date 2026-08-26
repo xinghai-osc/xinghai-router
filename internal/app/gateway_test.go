@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -20,6 +21,7 @@ func TestClientUpstreamErrorHidesKeywordErrors(t *testing.T) {
 		`{"error":{"message":"Your credit balance is too low, please recharge at https://auth.openai.com"}}`,
 		`Your credit balance is too low, please recharge`,
 		`error: 订阅额度不足或未配置订阅`,
+		`{"error":{"message":"upstream request failed","detail":"credit balance is too low"}}`,
 	} {
 		out := s.clientUpstreamError(ctx, body, reliability)
 		if strings.Contains(out, "credit balance") || strings.Contains(out, "auth.openai.com") || strings.Contains(out, "订阅") {
@@ -91,6 +93,40 @@ func TestContentType(t *testing.T) {
 		if got := contentType(tt.in); got != tt.want {
 			t.Fatalf("contentType(%q) = %q, want %q", tt.in, got, tt.want)
 		}
+	}
+}
+
+func TestCopyResponseHeadersPreservesEndToEndHeaders(t *testing.T) {
+	src := http.Header{
+		"Content-Type":      {"application/json; charset=utf-8"},
+		"Openai-Request-Id": {"req_upstream"},
+		"X-Upstream":        {"kept"},
+		"Connection":        {"keep-alive"},
+		"Content-Length":    {"123"},
+	}
+	dst := http.Header{}
+	copyResponseHeaders(dst, src)
+	if dst.Get("Content-Type") != "application/json; charset=utf-8" || dst.Get("Openai-Request-Id") != "req_upstream" || dst.Get("X-Upstream") != "kept" {
+		t.Fatalf("headers not preserved: %#v", dst)
+	}
+	if dst.Get("Connection") != "" || dst.Get("Content-Length") != "" {
+		t.Fatalf("hop-by-hop headers leaked: %#v", dst)
+	}
+}
+
+func TestStreamResponseDirectPreservesBytes(t *testing.T) {
+	body := "event: response.output_text.delta\r\ndata: {\"delta\":\"hi\",\"usage\":{\"input_tokens\":2,\"output_tokens\":1}}\r\n\r\n"
+	resp := &http.Response{Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{"Content-Type": {"text/event-stream"}}}
+	rec := httptest.NewRecorder()
+	stats, err := streamResponseDirect(rec, resp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Body.String() != body {
+		t.Fatalf("stream changed:\n got %q\nwant %q", rec.Body.String(), body)
+	}
+	if stats.prompt != 2 || stats.completion != 1 {
+		t.Fatalf("usage = %+v", stats)
 	}
 }
 

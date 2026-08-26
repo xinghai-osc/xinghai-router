@@ -238,6 +238,15 @@ func TestBatchExtendSubscriptionsRejectsInvalidDaysBeforeDatabase(t *testing.T) 
 	}
 }
 
+func TestAdminResetSubscriptionQuotaRouteRequiresAuth(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/admin/subscriptions/sub-1/reset-quotas", nil)
+	(&Service{}).routes().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusUnauthorized)
+	}
+}
+
 func TestProviderForModel(t *testing.T) {
 	providers := []modelProvider{
 		{Name: "OpenAI", Slug: "openai", Prefixes: []string{"gpt-", "o1"}, Priority: 10},

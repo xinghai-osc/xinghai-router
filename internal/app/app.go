@@ -37,6 +37,7 @@ type Service struct {
 	groupLimiter          *GroupLimiter
 	userLimiter           *GroupLimiter
 	reliabilityData       *ttlCache[struct{}, reliabilitySettings]
+	contentPolicyData     *ttlCache[struct{}, contentPolicySnapshot]
 	conversationCacheData *ttlCache[struct{}, conversationCacheSettings]
 	rankingsCache         *ttlCache[string, rankingsPayload]
 	performanceCache      *ttlCache[string, modelPerformancePayload]
@@ -127,6 +128,7 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 		groupLimiter:          NewGroupLimiter(),
 		userLimiter:           NewGroupLimiter(),
 		reliabilityData:       newTTLCache[struct{}, reliabilitySettings](reliabilityCacheTTL),
+		contentPolicyData:     newTTLCache[struct{}, contentPolicySnapshot](reliabilityCacheTTL),
 		conversationCacheData: newTTLCache[struct{}, conversationCacheSettings](reliabilityCacheTTL),
 		rankingsCache:         newTTLCache[string, rankingsPayload](rankingsCacheTTL),
 		performanceCache:      newTTLCache[string, modelPerformancePayload](performanceCacheTTL),
@@ -144,6 +146,8 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 	schedulerCtx, cancel := context.WithCancel(context.Background())
 	s.scheduler = cancel
 	s.startHealthCheckScheduler(schedulerCtx)
+	s.startChannelBalanceScheduler(schedulerCtx)
+	s.startWalletSettlementScheduler(schedulerCtx)
 	s.startAuthCleanupScheduler(schedulerCtx)
 	if err := os.MkdirAll(s.cfg.ConversationCacheDir, 0o755); err != nil {
 		log.Printf("conversation cache dir: %v", err)

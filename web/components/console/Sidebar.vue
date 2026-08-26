@@ -23,8 +23,8 @@ function isActive(to: string) {
 </script>
 
 <template>
-  <div class="flex h-full flex-col gap-6 overflow-y-auto px-3 py-5">
-    <div class="px-2">
+  <div class="flex h-full flex-col gap-7 overflow-y-auto px-3 py-6">
+    <div class="rounded-2xl border border-line bg-surface/60 px-3 py-3 shadow-sm">
       <SiteLogo :name="siteName" :icon-url="iconUrl" />
     </div>
 
@@ -36,9 +36,9 @@ function isActive(to: string) {
           :key="item.to"
           :to="item.to"
           :class="[
-            'flex items-center gap-2.5 rounded-control px-2 py-2 text-[13px] transition-colors duration-150',
+            'group relative flex items-center gap-2.5 rounded-control px-2.5 py-2 text-[13px] transition-colors duration-150',
             isActive(item.to)
-              ? 'bg-clay-soft font-medium text-clay'
+              ? 'bg-clay-soft font-medium text-clay before:absolute before:inset-y-2 before:left-0 before:w-0.5 before:rounded-full before:bg-clay'
               : 'text-muted hover:bg-sunken hover:text-ink',
           ]"
           :aria-current="isActive(item.to) ? 'page' : undefined"

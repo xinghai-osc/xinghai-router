@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Users } from 'lucide-vue-next'
-import { endpoints, type AdminUserSubscription, type Group, type SubscriptionPlan, type User, type UserUpdate } from '~/src/api'
+import { endpoints, type AdminUserSubscription, type Group, type SubscriptionPlan, type User, type UserCreate, type UserUpdate } from '~/src/api'
 import { formatDateTime, formatMoney, formatNumber } from '~/src/format'
 
 definePageMeta({ layout: 'console', middleware: 'console-auth' })
@@ -11,7 +11,7 @@ const { toast } = useToast()
 const { busy, run } = useAction()
 
 const allowed = computed(() => can('users.read'))
-const canManage = computed(() => can('system.manage'))
+const canManage = computed(() => can('users.manage'))
 const canAdjustWallet = computed(() => can('wallets.manage'))
 
 // Must stay in sync with availablePermissions in internal/app/admin.go —
@@ -44,9 +44,13 @@ function pageQuery(): string {
   return `?${params.toString()}`
 }
 
-watch(pageSize, async () => { page.value = 1; await users.refresh() })
-
 const users = useResource(() => endpoints.getAdminUsers(pageQuery()), { data: [] as User[], total: 0, page: 1, page_size: 50 })
+
+watch(page, () => { void users.refresh() })
+watch(pageSize, async () => {
+  if (page.value !== 1) page.value = 1
+  else await users.refresh()
+})
 const groups = useResource(() => endpoints.getAdminGroups('?page_size=100'), { data: [] as Group[], total: 0, page: 1, page_size: 100 })
 
 const search = ref('')
@@ -68,6 +72,7 @@ const roleLabel = (role: string) => roleOptions.value.find(option => option.valu
 
 const dialogOpen = ref(false)
 const editing = ref<User | null>(null)
+const creating = ref(false)
 const formError = ref('')
 const form = reactive({
   id: '',
@@ -84,9 +89,33 @@ const form = reactive({
   leaderboardMaskName: false,
   dataUsageEnabled: true,
   maxConcurrency: '',
+  inviterId: '',
 })
 
+function openCreate() {
+  creating.value = true
+  editing.value = null
+  formError.value = ''
+  form.id = ''
+  form.name = ''
+  form.email = ''
+  form.role = 'user'
+  form.enabled = true
+  form.password = ''
+  form.balance = ''
+  form.note = ''
+  form.permissions = []
+  form.groups = []
+  form.leaderboardOptIn = true
+  form.leaderboardMaskName = false
+  form.dataUsageEnabled = true
+  form.maxConcurrency = ''
+  form.inviterId = ''
+  dialogOpen.value = true
+}
+
 function openManage(user: User) {
+  creating.value = false
   editing.value = user
   formError.value = ''
   form.id = ''
@@ -103,6 +132,7 @@ function openManage(user: User) {
   form.leaderboardMaskName = user.leaderboard_mask_name
   form.dataUsageEnabled = user.data_usage_enabled
   form.maxConcurrency = user.max_concurrency === null ? '' : String(user.max_concurrency)
+  form.inviterId = user.inviter_id ?? ''
   dialogOpen.value = true
 }
 
@@ -127,6 +157,13 @@ function buildUpdate(): UserUpdate | null {
     return null
   }
 
+  const rawInviterId = form.inviterId.trim()
+  const inviterId = rawInviterId === '' ? null : Number(rawInviterId)
+  if (inviterId !== null && (!Number.isSafeInteger(inviterId) || inviterId <= 0)) {
+    formError.value = t('admin.inviterInvalid')
+    return null
+  }
+
   const update: UserUpdate = {
     name,
     email,
@@ -138,6 +175,7 @@ function buildUpdate(): UserUpdate | null {
     leaderboard_mask_name: form.leaderboardMaskName,
     data_usage_enabled: form.dataUsageEnabled,
     max_concurrency: maxConcurrency,
+    inviter_id: inviterId,
   }
   if (form.password) update.password = form.password
 
@@ -164,15 +202,23 @@ function buildUpdate(): UserUpdate | null {
 }
 
 async function save() {
-  const target = editing.value
-  if (!target) return
   formError.value = ''
-  const update = buildUpdate()
-  if (!update) return
-
-  const ok = await run(() => endpoints.updateUser(target.id, update))
-  if (!ok) { toast.error(t('common.actionFailed')); return }
-  toast.success(t('admin.userSaved'))
+  if (creating.value) {
+    const update = buildUpdate()
+    if (!update || !update.password) { if (!update?.password) formError.value = t('admin.passwordRequired'); return }
+    const create: UserCreate = { name: update.name!, email: update.email!, password: update.password, role: update.role!, enabled: update.enabled!, permissions: update.permissions ?? [], groups: update.groups ?? [] }
+    const ok = await run(() => endpoints.createUser(create))
+    if (!ok) { toast.error(t('common.actionFailed')); return }
+    toast.success(t('admin.userCreated'))
+  } else {
+    const target = editing.value
+    if (!target) return
+    const update = buildUpdate()
+    if (!update) return
+    const ok = await run(() => endpoints.updateUser(target.id, update))
+    if (!ok) { toast.error(t('common.actionFailed')); return }
+    toast.success(t('admin.userSaved'))
+  }
   dialogOpen.value = false
   await users.refresh()
 }
@@ -241,9 +287,17 @@ const subsPending = ref(false)
 const subsError = ref('')
 const subPlans = ref<SubscriptionPlan[]>([])
 const editingSub = ref<AdminUserSubscription | null>(null)
+const resetQuotaTarget = ref<AdminUserSubscription | null>(null)
 const voidTarget = ref<AdminUserSubscription | null>(null)
 const deleteTarget = ref<AdminUserSubscription | null>(null)
-const subForm = reactive({ plan_id: '', start_at: '', end_at: '', auto_renew: false, remaining_requests: '', remaining_credit: '' })
+const subForm = reactive({
+  plan_id: '',
+  start_at: '',
+  end_at: '',
+  auto_renew: false,
+  remaining_requests: '' as string | number,
+  remaining_credit: '' as string | number,
+})
 const subFormError = ref('')
 
 const subPlanOptions = computed(() => subPlans.value.map(plan => ({ value: plan.id, label: plan.name })))
@@ -344,8 +398,8 @@ async function saveSubscription() {
   const target = subsUser.value
   if (!target) return
   if (editingSub.value) {
-    const remainingRequests = subForm.remaining_requests.trim()
-    const remainingCredit = subForm.remaining_credit.trim()
+    const remainingRequests = String(subForm.remaining_requests).trim()
+    const remainingCredit = String(subForm.remaining_credit).trim()
     if ((remainingRequests && (!Number.isInteger(Number(remainingRequests)) || Number(remainingRequests) < 0))
       || (remainingCredit && (!Number.isFinite(Number(remainingCredit)) || Number(remainingCredit) < 0))) {
       subFormError.value = t('admin.invalidRemainingQuota')
@@ -376,6 +430,16 @@ async function saveSubscription() {
   await loadSubscriptions()
 }
 
+async function resetSubscriptionQuota() {
+  const target = resetQuotaTarget.value
+  if (!target) return
+  resetQuotaTarget.value = null
+  const ok = await run(() => endpoints.resetAdminSubscriptionQuota(target.id))
+  if (!ok) { toast.error(t('common.actionFailed')); return }
+  toast.success(t('admin.subscriptionQuotaReset'))
+  await loadSubscriptions()
+}
+
 async function voidSubscription() {
   const target = voidTarget.value
   if (!target) return
@@ -403,6 +467,7 @@ async function deleteSubscription() {
   <div v-else class="space-y-4">
     <ConsoleOpsPageHeader :lead="t('admin.usersLead')">
       <template #actions>
+        <UiButton v-if="canManage" size="sm" @click="openCreate">{{ t('admin.createUser') }}</UiButton>
         <ConsoleOpsSearch v-model="search" :placeholder="t('admin.usersSearchPlaceholder')" />
         <UiButton variant="secondary" size="sm" @click="users.refresh()">{{ t('common.refresh') }}</UiButton>
       </template>
@@ -428,6 +493,7 @@ async function deleteSubscription() {
             <th>{{ t('admin.id') }}</th>
             <th>{{ t('admin.email') }}</th>
             <th>{{ t('common.name') }}</th>
+            <th>{{ t('admin.inviter') }}</th>
             <th>{{ t('admin.role') }}</th>
             <th>{{ t('common.status') }}</th>
             <th class="num">{{ t('admin.balance') }}</th>
@@ -442,6 +508,10 @@ async function deleteSubscription() {
             <td class="font-mono text-[13px] text-faint">{{ user.id }}</td>
             <td class="font-medium text-ink">{{ user.email }}</td>
             <td class="text-muted">{{ user.name }}</td>
+            <td>
+              <span v-if="user.inviter_id" class="text-muted">{{ user.inviter_name || user.inviter_email || user.inviter_id }}</span>
+              <span v-else class="text-faint">{{ t('common.none') }}</span>
+            </td>
             <td><UiBadge :tone="roleTone(user.role)">{{ roleLabel(user.role) }}</UiBadge></td>
             <td>
               <UiBadge :tone="user.enabled ? 'success' : 'neutral'" dot>
@@ -476,7 +546,7 @@ async function deleteSubscription() {
       />
     </ConsoleOpsListState>
 
-    <UiSlidePanel v-model:open="dialogOpen" size="lg" :title="t('admin.manageUser')" :description="t('admin.manageUserLead')">
+    <UiSlidePanel v-model:open="dialogOpen" size="lg" :title="creating ? t('admin.createUser') : t('admin.manageUser')" :description="creating ? t('admin.createUserLead') : t('admin.manageUserLead')">
       <div class="space-y-4">
         <UiAlert v-if="formError" tone="danger">{{ formError }}</UiAlert>
 
@@ -487,13 +557,13 @@ async function deleteSubscription() {
           <UiField :label="t('admin.email')" required>
             <UiInput v-model="form.email" type="email" autocomplete="off" />
           </UiField>
-          <UiField :label="t('admin.id')" :hint="t('admin.idHint')">
+          <UiField v-if="!creating" :label="t('admin.id')" :hint="t('admin.idHint')">
             <UiInput v-model="form.id" type="number" mono :placeholder="editing?.id" />
           </UiField>
           <UiField :label="t('admin.role')">
             <UiSelect v-model="form.role" :options="roleOptions" :placeholder="t('common.selectPlaceholder')" />
           </UiField>
-          <UiField :label="t('admin.newPassword')" :hint="t('admin.newPasswordHint')">
+          <UiField :label="t('admin.newPassword')" :hint="creating ? t('admin.passwordRequired') : t('admin.newPasswordHint')" :required="creating">
             <UiInput v-model="form.password" type="password" autocomplete="new-password" />
           </UiField>
           <UiField :label="t('admin.balance')" :hint="t('admin.balanceHint')">
@@ -501,6 +571,9 @@ async function deleteSubscription() {
           </UiField>
           <UiField :label="t('admin.userConcurrency')" :hint="t('admin.userConcurrencyHint')">
             <UiInput v-model="form.maxConcurrency" type="number" min="1" max="10000" step="1" mono :placeholder="t('admin.concurrencyPlaceholder')" />
+          </UiField>
+          <UiField :label="t('admin.inviter')" :hint="t('admin.inviterHint')">
+            <UiInput v-model="form.inviterId" type="number" min="1" step="1" mono :placeholder="t('admin.inviterPlaceholder')" />
           </UiField>
           <UiField :label="t('admin.note')" :hint="t('admin.noteHint')">
             <UiInput v-model="form.note" />
@@ -555,7 +628,7 @@ async function deleteSubscription() {
 
       <template #footer>
         <UiButton variant="secondary" @click="dialogOpen = false">{{ t('common.cancel') }}</UiButton>
-        <UiButton :loading="busy" @click="save">{{ t('common.save') }}</UiButton>
+        <UiButton :loading="busy" @click="save">{{ creating ? t('admin.createUser') : t('common.save') }}</UiButton>
       </template>
     </UiSlidePanel>
 
@@ -648,6 +721,7 @@ async function deleteSubscription() {
               <td>
                 <div class="flex gap-1">
                   <UiButton variant="ghost" size="sm" @click="startEditSubscription(sub)">{{ t('common.edit') }}</UiButton>
+                  <UiButton variant="ghost" size="sm" @click="resetQuotaTarget = sub">{{ t('admin.resetSubscriptionQuota') }}</UiButton>
                   <UiButton variant="ghost" size="sm" @click="voidTarget = sub">{{ t('admin.void') }}</UiButton>
                   <UiButton variant="ghost" size="sm" class="text-danger" @click="deleteTarget = sub">
                     {{ t('admin.delete') }}
@@ -687,6 +761,14 @@ async function deleteSubscription() {
       <template #footer>
         <UiButton variant="secondary" @click="balanceOpen = false">{{ t('common.cancel') }}</UiButton>
         <UiButton :loading="busy" @click="submitAdjustBalance">{{ t('common.confirm') }}</UiButton>
+      </template>
+    </UiDialog>
+
+    <UiDialog :open="resetQuotaTarget !== null" size="sm" :title="t('admin.resetSubscriptionQuota')">
+      <p class="text-sm text-muted">{{ t('admin.confirmResetSubscriptionQuota') }}</p>
+      <template #footer>
+        <UiButton variant="secondary" @click="resetQuotaTarget = null">{{ t('common.cancel') }}</UiButton>
+        <UiButton :loading="busy" @click="resetSubscriptionQuota">{{ t('common.confirm') }}</UiButton>
       </template>
     </UiDialog>
 

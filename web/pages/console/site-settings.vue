@@ -30,6 +30,12 @@ const EMPTY: AdminSiteSettings = {
   invitations_enabled: false,
   inviter_reward: '0',
   invitee_reward: '0',
+  checkin_base_reward: '1',
+  checkin_streak_bonus: '0.1',
+  checkin_max_bonus_days: 7,
+  registration_email_whitelist_enabled: false,
+  registration_email_whitelist: [],
+  registration_email_alias_blocked: false,
 }
 
 const { data, pending, error, refresh } = useResource(
@@ -53,6 +59,12 @@ const form = reactive({
   invitations_enabled: false,
   inviter_reward: '0',
   invitee_reward: '0',
+  checkin_base_reward: '1',
+  checkin_streak_bonus: '0.1',
+  checkin_max_bonus_days: 7,
+  registration_email_whitelist_enabled: false,
+  registration_email_whitelist: '',
+  registration_email_alias_blocked: false,
 })
 
 /** Write-only: never seeded from the API, cleared again after every save. */
@@ -84,6 +96,12 @@ watch(data, (next) => {
   form.invitations_enabled = next.invitations_enabled
   form.inviter_reward = next.inviter_reward
   form.invitee_reward = next.invitee_reward
+  form.checkin_base_reward = next.checkin_base_reward
+  form.checkin_streak_bonus = next.checkin_streak_bonus
+  form.checkin_max_bonus_days = next.checkin_max_bonus_days
+  form.registration_email_whitelist_enabled = next.registration_email_whitelist_enabled
+  form.registration_email_whitelist = next.registration_email_whitelist.join('\n')
+  form.registration_email_alias_blocked = next.registration_email_alias_blocked
   geetestKey.value = ''
   corptchaSecret.value = ''
   smtpPassword.value = ''
@@ -93,7 +111,7 @@ watch(() => form.icon_url, () => { iconBroken.value = false })
 
 const iconPreviewUrl = computed(() => form.icon_url.trim())
 
-type SiteSettingsPayload = Omit<AdminSiteSettings, 'inviter_reward' | 'invitee_reward'> & { inviter_reward: number; invitee_reward: number; geetest_captcha_key: string; corptcha_secret: string; smtp_password: string }
+type SiteSettingsPayload = Omit<AdminSiteSettings, 'inviter_reward' | 'invitee_reward' | 'checkin_base_reward' | 'checkin_streak_bonus'> & { inviter_reward: number; invitee_reward: number; checkin_base_reward: number; checkin_streak_bonus: number; geetest_captcha_key: string; corptcha_secret: string; smtp_password: string }
 
 async function save() {
   // The handler rejects unknown fields, so the read-only `has_*` flags that the
@@ -117,6 +135,12 @@ async function save() {
     invitations_enabled: form.invitations_enabled,
     inviter_reward: Number(form.inviter_reward),
     invitee_reward: Number(form.invitee_reward),
+    checkin_base_reward: Number(form.checkin_base_reward),
+    checkin_streak_bonus: Number(form.checkin_streak_bonus),
+    checkin_max_bonus_days: Number(form.checkin_max_bonus_days),
+    registration_email_whitelist_enabled: form.registration_email_whitelist_enabled,
+    registration_email_whitelist: form.registration_email_whitelist.split(/\r?\n/),
+    registration_email_alias_blocked: form.registration_email_alias_blocked,
   } as SiteSettingsPayload
 
   const ok = await run(() => endpoints.updateAdminSiteSettings(payload))
@@ -266,6 +290,20 @@ async function save() {
           </div>
         </UiCard>
 
+        <UiCard :title="t('system.registrationWhitelist')">
+          <div class="space-y-4">
+            <UiField :label="t('system.registrationAliasBlocked')" :hint="t('system.registrationAliasBlockedHint')">
+              <UiSwitch v-model="form.registration_email_alias_blocked" :label="t('system.registrationAliasBlocked')" />
+            </UiField>
+            <UiField :label="t('system.registrationWhitelistEnabled')" :hint="t('system.registrationWhitelistEnabledHint')">
+              <UiSwitch v-model="form.registration_email_whitelist_enabled" :label="t('system.registrationWhitelistEnabled')" />
+            </UiField>
+            <UiField :label="t('system.registrationWhitelistEmails')" :hint="t('system.registrationWhitelistEmailsHint')" for="registration-email-whitelist">
+              <UiTextarea id="registration-email-whitelist" v-model="form.registration_email_whitelist" :rows="6" :disabled="!form.registration_email_whitelist_enabled" />
+            </UiField>
+          </div>
+        </UiCard>
+
         <UiCard :title="t('system.invitations')">
           <div class="space-y-4">
             <UiField :label="t('system.invitationsEnabled')" :hint="t('system.invitationsEnabledHint')">
@@ -279,6 +317,20 @@ async function save() {
                 <UiInput id="invitee-reward" v-model="form.invitee_reward" type="number" min="0" step="0.00000001" />
               </UiField>
             </div>
+          </div>
+        </UiCard>
+
+        <UiCard :title="t('system.checkinRewards')">
+          <div class="grid gap-4 sm:grid-cols-3">
+            <UiField :label="t('system.checkinBaseReward')" :hint="t('system.checkinBaseRewardHint')" for="checkin-base-reward">
+              <UiInput id="checkin-base-reward" v-model="form.checkin_base_reward" type="number" min="0" step="0.00000001" />
+            </UiField>
+            <UiField :label="t('system.checkinStreakBonus')" :hint="t('system.checkinStreakBonusHint')" for="checkin-streak-bonus">
+              <UiInput id="checkin-streak-bonus" v-model="form.checkin_streak_bonus" type="number" min="0" step="0.00000001" />
+            </UiField>
+            <UiField :label="t('system.checkinMaxBonusDays')" :hint="t('system.checkinMaxBonusDaysHint')" for="checkin-max-bonus-days">
+              <UiInput id="checkin-max-bonus-days" v-model.number="form.checkin_max_bonus_days" type="number" min="1" max="365" step="1" />
+            </UiField>
           </div>
         </UiCard>
 

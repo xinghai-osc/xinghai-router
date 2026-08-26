@@ -21,23 +21,23 @@ const (
 )
 
 type redemptionCode struct {
-	ID          string `json:"id"`
-	BatchID     string `json:"batch_id"`
-	Code        string `json:"code"`
-	RewardType  string `json:"reward_type"`
-	Amount      string `json:"amount"`
-	PlanID      string `json:"plan_id"`
-	PlanName    string `json:"plan_name"`
-	PeriodDays  *int   `json:"period_days"`
-	MaxUses     int    `json:"max_uses"`
-	UsedCount   int    `json:"used_count"`
-	ExpiresAt   any    `json:"expires_at"`
-	Enabled     bool   `json:"enabled"`
-	Note        string `json:"note"`
-	RedeemedBy  any    `json:"redeemed_by"`
-	RedeemedAt  any    `json:"redeemed_at"`
-	CreatedAt   any    `json:"created_at"`
-	UpdatedAt   any    `json:"updated_at"`
+	ID         string `json:"id"`
+	BatchID    string `json:"batch_id"`
+	Code       string `json:"code"`
+	RewardType string `json:"reward_type"`
+	Amount     string `json:"amount"`
+	PlanID     string `json:"plan_id"`
+	PlanName   string `json:"plan_name"`
+	PeriodDays *int   `json:"period_days"`
+	MaxUses    int    `json:"max_uses"`
+	UsedCount  int    `json:"used_count"`
+	ExpiresAt  any    `json:"expires_at"`
+	Enabled    bool   `json:"enabled"`
+	Note       string `json:"note"`
+	RedeemedBy any    `json:"redeemed_by"`
+	RedeemedAt any    `json:"redeemed_at"`
+	CreatedAt  any    `json:"created_at"`
+	UpdatedAt  any    `json:"updated_at"`
 }
 
 type redemptionCodeRedemption struct {
@@ -213,10 +213,10 @@ func (s *Service) listRedemptionCodes(w http.ResponseWriter, r *http.Request) {
 func (s *Service) updateRedemptionCode(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var in struct {
-		Enabled   *bool  `json:"enabled"`
+		Enabled   *bool   `json:"enabled"`
 		ExpiresAt *string `json:"expires_at"`
 		Note      *string `json:"note"`
-		MaxUses   *int   `json:"max_uses"`
+		MaxUses   *int    `json:"max_uses"`
 	}
 	if decode(r, &in) != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", "invalid payload")

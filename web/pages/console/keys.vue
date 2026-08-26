@@ -275,9 +275,9 @@ async function saveQuota() {
   const target = editing.value
   if (!target) return
   quotaFormError.value = ''
-  const maxRequests = quotaForm.maxRequests.trim()
-  const maxTokens = quotaForm.maxTokens.trim()
-  const maxCost = quotaForm.maxCost.trim()
+  const maxRequests = String(quotaForm.maxRequests ?? '').trim()
+  const maxTokens = String(quotaForm.maxTokens ?? '').trim()
+  const maxCost = String(quotaForm.maxCost ?? '').trim()
   if (!maxRequests && !maxTokens && !maxCost) {
     quotaFormError.value = t('console.quotaLimitInvalid')
     return

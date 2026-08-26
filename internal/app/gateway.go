@@ -21,6 +21,7 @@ import (
 const (
 	maxGatewayMaxTokens     = 200_000
 	defaultGatewayMaxTokens = 4096
+	maxGatewayRequestBody   = 2 << 20
 	maxUpstreamResponseBody = 16 << 20
 	// settlementTimeout bounds the detached wallet/log writes that must complete even
 	// after the client has disconnected.
@@ -296,12 +297,23 @@ func (s *Service) models(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"object": "list", "data": data})
 }
 
+func readGatewayBody(r *http.Request) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxGatewayRequestBody+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > maxGatewayRequestBody {
+		return nil, fmt.Errorf("request body exceeds %d bytes", maxGatewayRequestBody)
+	}
+	return body, nil
+}
+
 func (s *Service) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
-	body, err := io.ReadAll(r.Body)
+	body, err := readGatewayBody(r)
 	if err != nil {
 		s.logReject(r.Context(), "", 400, "invalid_request", started)
-		writeError(w, 400, "invalid_request", "could not read request")
+		writeError(w, 400, "invalid_request", "request body is too large or could not be read")
 		return
 	}
 	var request struct {
@@ -325,6 +337,14 @@ func (s *Service) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_request", "max_tokens must be at most 200000")
 		return
 	}
+	key := r.Context().Value(contextKey{}).(keyContext)
+	allowed, policyCtx := s.enforceContentPolicy(r.Context(), key, request.Model, "/v1/chat/completions", body)
+	if !allowed {
+		s.logReject(policyCtx, request.Model, http.StatusBadRequest, "content_policy_violation", started)
+		writeError(w, http.StatusBadRequest, "content_policy_violation", "request content violates the content policy")
+		return
+	}
+	r = r.WithContext(policyCtx)
 	s.proxyChatCompletions(w, r, body, request.Model, request.Stream, request.MaxTokens, nil, nil, nil, nil, nil, nil)
 }
 

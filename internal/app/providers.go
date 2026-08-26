@@ -3,7 +3,6 @@ package app
 import (
 	"encoding/json"
 	"net/http"
-	"sort"
 	"strings"
 )
 
@@ -121,15 +120,24 @@ func (s *Service) deleteProvider(w http.ResponseWriter, r *http.Request) {
 }
 
 func providerForModel(model string, providers []modelProvider) modelProvider {
-	name := strings.ToLower(model)
-	matches := append([]modelProvider(nil), providers...)
-	sort.SliceStable(matches, func(i, j int) bool { return matches[i].Priority > matches[j].Priority })
-	for _, item := range matches {
+	name := strings.ToLower(strings.TrimSpace(model))
+	best := modelProvider{}
+	bestPrefixLength := -1
+	for _, item := range providers {
 		for _, prefix := range item.Prefixes {
-			if strings.HasPrefix(name, strings.ToLower(prefix)) {
-				return item
+			prefix = strings.ToLower(strings.TrimSpace(prefix))
+			if prefix == "" || !strings.HasPrefix(name, prefix) {
+				continue
+			}
+			prefixLength := len(prefix)
+			if prefixLength > bestPrefixLength || (prefixLength == bestPrefixLength && item.Priority > best.Priority) {
+				best = item
+				bestPrefixLength = prefixLength
 			}
 		}
+	}
+	if bestPrefixLength >= 0 {
+		return best
 	}
 	return modelProvider{Name: "其他", Slug: "other"}
 }

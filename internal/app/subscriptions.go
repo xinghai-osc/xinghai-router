@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -51,30 +52,30 @@ type subscriptionModelUsage struct {
 }
 
 type userSubscription struct {
-	ID                  string                       `json:"id"`
-	UserID              string                       `json:"user_id"`
-	PlanID              string                       `json:"plan_id"`
-	PlanName            string                       `json:"plan_name"`
-	Status              string                       `json:"status"`
-	CurrentPeriodStart  any                          `json:"current_period_start"`
-	CurrentPeriodEnd    any                          `json:"current_period_end"`
-	AutoRenew           bool                         `json:"auto_renew"`
-	CancelledAt         any                          `json:"cancelled_at"`
-	CreatedAt           any                          `json:"created_at"`
-	UpdatedAt           any                          `json:"updated_at"`
-	Price               string                       `json:"price"`
-	BillingPeriod       string                       `json:"billing_period"`
-	CreditAmount        string                       `json:"credit_amount"`
-	GroupID             string                       `json:"group_id"`
-	GroupName           string                       `json:"group_name"`
-	ModelWhitelist      []string                     `json:"model_whitelist"`
-	MaxRequestsPerRule  *int64                       `json:"max_requests_per_period"`
-	MaxCreditPerRule    *float64                     `json:"max_credit_per_period"`
-	OveragePolicy       string                       `json:"overage_policy"`
-	ModelQuotas         []subscriptionPlanModelQuota `json:"model_quotas"`
-	UsageRequests       int64                        `json:"usage_requests"`
-	UsageCredit         float64                      `json:"usage_credit"`
-	ModelUsage          []subscriptionModelUsage     `json:"model_usage"`
+	ID                 string                       `json:"id"`
+	UserID             string                       `json:"user_id"`
+	PlanID             string                       `json:"plan_id"`
+	PlanName           string                       `json:"plan_name"`
+	Status             string                       `json:"status"`
+	CurrentPeriodStart any                          `json:"current_period_start"`
+	CurrentPeriodEnd   any                          `json:"current_period_end"`
+	AutoRenew          bool                         `json:"auto_renew"`
+	CancelledAt        any                          `json:"cancelled_at"`
+	CreatedAt          any                          `json:"created_at"`
+	UpdatedAt          any                          `json:"updated_at"`
+	Price              string                       `json:"price"`
+	BillingPeriod      string                       `json:"billing_period"`
+	CreditAmount       string                       `json:"credit_amount"`
+	GroupID            string                       `json:"group_id"`
+	GroupName          string                       `json:"group_name"`
+	ModelWhitelist     []string                     `json:"model_whitelist"`
+	MaxRequestsPerRule *int64                       `json:"max_requests_per_period"`
+	MaxCreditPerRule   *float64                     `json:"max_credit_per_period"`
+	OveragePolicy      string                       `json:"overage_policy"`
+	ModelQuotas        []subscriptionPlanModelQuota `json:"model_quotas"`
+	UsageRequests      int64                        `json:"usage_requests"`
+	UsageCredit        float64                      `json:"usage_credit"`
+	ModelUsage         []subscriptionModelUsage     `json:"model_usage"`
 }
 
 type subscriptionOrder struct {
@@ -281,20 +282,20 @@ func (s *Service) syncPlanModelQuotas(ctx context.Context, planID string, quotas
 
 func readSubscriptionPlanInput(r *http.Request, s *Service, existingID string) (subscriptionPlan, error) {
 	var in struct {
-		Name            string                       `json:"name"`
-		Description     string                       `json:"description"`
-		Price           string                       `json:"price"`
-		Currency        string                       `json:"currency"`
-		BillingPeriod   string                       `json:"billing_period"`
-		CreditAmount    string                       `json:"credit_amount"`
-		GroupID         string                       `json:"group_id"`
-		ModelWhitelist  []string                     `json:"model_whitelist"`
-		MaxRequests     *int64                       `json:"max_requests_per_period"`
-		MaxCredit       *float64                     `json:"max_credit_per_period"`
-		OveragePolicy   string                       `json:"overage_policy"`
-		ModelQuotas     []subscriptionPlanModelQuota `json:"model_quotas"`
-		SortOrder       int                          `json:"sort_order"`
-		Enabled         *bool                        `json:"enabled"`
+		Name           string                       `json:"name"`
+		Description    string                       `json:"description"`
+		Price          string                       `json:"price"`
+		Currency       string                       `json:"currency"`
+		BillingPeriod  string                       `json:"billing_period"`
+		CreditAmount   string                       `json:"credit_amount"`
+		GroupID        string                       `json:"group_id"`
+		ModelWhitelist []string                     `json:"model_whitelist"`
+		MaxRequests    *int64                       `json:"max_requests_per_period"`
+		MaxCredit      *float64                     `json:"max_credit_per_period"`
+		OveragePolicy  string                       `json:"overage_policy"`
+		ModelQuotas    []subscriptionPlanModelQuota `json:"model_quotas"`
+		SortOrder      int                          `json:"sort_order"`
+		Enabled        *bool                        `json:"enabled"`
 	}
 	if decode(r, &in) != nil {
 		return subscriptionPlan{}, fmt.Errorf("invalid plan payload")
@@ -683,6 +684,124 @@ func (s *Service) createSubscription(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{"order_no": orderNo, "amount": priceStr, "status": "pending", "pay_url": settings.BaseURL + "/submit.php?" + params.Encode()})
 }
 
+func (s *Service) createBalanceSubscription(w http.ResponseWriter, r *http.Request) {
+	account := accountFromContext(r)
+	var in struct {
+		PlanID string `json:"plan_id"`
+	}
+	if decode(r, &in) != nil || strings.TrimSpace(in.PlanID) == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "plan_id is required")
+		return
+	}
+
+	var planID, planName, priceStr, billing, creditStr, groupID string
+	var price int64
+	var enabled bool
+	err := s.db.QueryRow(r.Context(), `select id,name,(price*100)::bigint,price::text,billing_period,coalesce(credit_amount::text,''),coalesce(group_id::text,''),enabled from subscription_plans where id=$1`, in.PlanID).Scan(&planID, &planName, &price, &priceStr, &billing, &creditStr, &groupID, &enabled)
+	if err != nil || !enabled {
+		writeError(w, http.StatusNotFound, "not_found", "plan not found or disabled")
+		return
+	}
+	if price <= 0 {
+		writeError(w, http.StatusBadRequest, "invalid_request", "plan requires a positive price")
+		return
+	}
+
+	subID, err := randomID()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not create subscription")
+		return
+	}
+	orderID, err := randomID()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not create subscription")
+		return
+	}
+	ledgerID, err := randomID()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not create subscription")
+		return
+	}
+	orderNo := fmt.Sprintf("xhsub%d%s", time.Now().UnixMilli(), strings.ReplaceAll(orderID, "-", "")[:12])
+	periodStart := time.Now()
+	periodEnd := subscriptionPeriodEnd(periodStart, billing)
+
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not create subscription")
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	if _, err = tx.Exec(r.Context(), `insert into user_wallets(user_id) values($1) on conflict do nothing`, account.userID); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not create subscription")
+		return
+	}
+	var balanceAfter string
+	err = tx.QueryRow(r.Context(), `update user_wallets set balance=balance-$1::numeric,updated_at=now() where user_id=$2 and balance-reserved >= $1::numeric returning balance::text`, priceStr, account.userID).Scan(&balanceAfter)
+	if err == pgx.ErrNoRows {
+		writeError(w, http.StatusConflict, "insufficient_balance", "insufficient available balance")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not create subscription")
+		return
+	}
+
+	periodKind := "new"
+	var existingActiveID string
+	_ = tx.QueryRow(r.Context(), `select id from user_subscriptions where user_id=$1 and plan_id=$2 and status='active' and (current_period_end is null or current_period_end > now()) limit 1`, account.userID, planID).Scan(&existingActiveID)
+	if existingActiveID != "" {
+		periodKind = "renewal"
+	}
+	if _, err = tx.Exec(r.Context(), `insert into user_subscriptions(id,user_id,plan_id,status,current_period_start,current_period_end,auto_renew) values($1,$2,$3,'active',$4,$5,false)`, subID, account.userID, planID, periodStart, periodEnd); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not create subscription")
+		return
+	}
+	if _, err = tx.Exec(r.Context(), `insert into subscription_orders(id,order_no,subscription_id,user_id,plan_id,provider,payment_type,amount,status,period_kind,paid_at) values($1,$2,$3,$4,$5,'wallet','balance',$6,'paid',$7,now())`, orderID, orderNo, subID, account.userID, planID, priceStr, periodKind); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not create subscription")
+		return
+	}
+	if _, err = tx.Exec(r.Context(), `insert into wallet_ledger(id,user_id,amount,balance_after,kind,request_id,note) values($1,$2,-$3::numeric,$4,'subscription_purchase',$5,$6)`, ledgerID, account.userID, priceStr, balanceAfter, orderNo, "Subscription purchase"); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not create subscription")
+		return
+	}
+	if err = s.initSubscriptionCountersTx(r.Context(), tx, subID); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not create subscription")
+		return
+	}
+	if credit, ok := parseCreditAmount(creditStr); ok && credit > 0 {
+		creditLedgerID, randomErr := randomID()
+		if randomErr != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "could not create subscription")
+			return
+		}
+		if err = tx.QueryRow(r.Context(), `update user_wallets set balance=balance+$1::numeric,updated_at=now() where user_id=$2 returning balance::text`, credit, account.userID).Scan(&balanceAfter); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "could not create subscription")
+			return
+		}
+		if _, err = tx.Exec(r.Context(), `insert into wallet_ledger(id,user_id,amount,balance_after,kind,request_id,note) values($1,$2,$3,$4,'subscription_topup',$5,$6)`, creditLedgerID, account.userID, credit, balanceAfter, orderNo, "Subscription credit"); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "could not create subscription")
+			return
+		}
+	}
+	if groupID != "" {
+		if _, err = tx.Exec(r.Context(), `insert into user_groups(user_id,group_id) values($1,$2) on conflict do nothing`, account.userID, groupID); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "could not create subscription")
+			return
+		}
+	}
+	if err = tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not create subscription")
+		return
+	}
+
+	s.audit(r, "subscription.balance_purchased", "user_subscription", subID, map[string]any{"order_no": orderNo, "plan_id": planID, "amount": priceStr})
+	s.notifyAdminsOfPurchase(r.Context(), "subscription", orderNo, account.userID, priceStr, planName)
+	s.subscriptionCache.clear()
+	writeJSON(w, http.StatusCreated, map[string]any{"order_no": orderNo, "subscription_id": subID, "amount": priceStr, "status": "paid", "balance": balanceAfter})
+}
+
 func (s *Service) cancelSubscription(w http.ResponseWriter, r *http.Request) {
 	account := accountFromContext(r)
 	result, err := s.db.Exec(r.Context(), `update user_subscriptions set auto_renew=false,status=case when status='active' then 'active' else status end, cancelled_at=now(), updated_at=now() where id=$1 and user_id=$2 and status in ('active','pending')`, r.PathValue("id"), account.userID)
@@ -788,13 +907,34 @@ func (s *Service) batchExtendSubscriptions(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Service) resetActiveSubscriptionQuotas(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Status string `json:"status"`
+	}
+	if err := decode(r, &in); err != nil && err != io.EOF {
+		writeError(w, http.StatusBadRequest, "invalid_request", "invalid payload")
+		return
+	}
+	if in.Status == "" {
+		in.Status = "active"
+	}
+	statusClause := "status='active'"
+	switch in.Status {
+	case "active":
+	case "inactive":
+		statusClause = "status in ('pending','expired','cancelled')"
+	case "all":
+		statusClause = "status in ('pending','active','expired','cancelled')"
+	default:
+		writeError(w, http.StatusBadRequest, "invalid_request", "status must be one of active, inactive, all")
+		return
+	}
 	tx, err := s.db.Begin(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not reset subscription quotas")
 		return
 	}
 	defer tx.Rollback(r.Context())
-	rows, err := tx.Query(r.Context(), `select id::text from user_subscriptions where status='active'`)
+	rows, err := tx.Query(r.Context(), `select id::text from user_subscriptions where `+statusClause)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not load active subscriptions")
 		return
@@ -823,9 +963,9 @@ func (s *Service) resetActiveSubscriptionQuotas(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not reset subscription quotas")
 		return
 	}
-	s.audit(r, "subscription.active_quotas_reset", "user_subscription", "", map[string]any{"affected": len(ids)})
+	s.audit(r, "subscription.quotas_reset", "user_subscription", "", map[string]any{"status": in.Status, "affected": len(ids)})
 	s.subscriptionCache.clear()
-	writeJSON(w, http.StatusOK, map[string]any{"affected": len(ids)})
+	writeJSON(w, http.StatusOK, map[string]any{"affected": len(ids), "status": in.Status})
 }
 
 func (s *Service) accountSubscriptionOrder(w http.ResponseWriter, r *http.Request) {
@@ -924,18 +1064,28 @@ func (s *Service) initSubscriptionCountersTx(ctx context.Context, tx pgx.Tx, sub
 		return err
 	}
 	defer rows.Close()
+	type modelQuotaRow struct {
+		model   string
+		mReq    *int64
+		mCredit *float64
+	}
+	var modelQuotas []modelQuotaRow
 	for rows.Next() {
-		var model string
-		var mReq *int64
-		var mCredit *float64
-		if err = rows.Scan(&model, &mReq, &mCredit); err != nil {
+		var q modelQuotaRow
+		if err = rows.Scan(&q.model, &q.mReq, &q.mCredit); err != nil {
 			return err
 		}
-		if _, err = tx.Exec(ctx, `insert into user_subscription_model_usage(subscription_id,model,remaining_requests,remaining_credit) values($1,$2,$3,$4)`, subID, model, mReq, mCredit); err != nil {
+		modelQuotas = append(modelQuotas, q)
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	for _, q := range modelQuotas {
+		if _, err = tx.Exec(ctx, `insert into user_subscription_model_usage(subscription_id,model,remaining_requests,remaining_credit) values($1,$2,$3,$4)`, subID, q.model, q.mReq, q.mCredit); err != nil {
 			return err
 		}
 	}
-	return rows.Err()
+	return nil
 }
 
 func subscriptionPeriodEnd(start time.Time, billing string) time.Time {
@@ -960,27 +1110,32 @@ type subscriptionAccess struct {
 	OveragePolicy  string
 }
 
-// subscriptionCoversModel reports whether the user has an active subscription whose plan
-// whitelists the requested model (empty whitelist = all models) and whose per-period
-// request/credit counters have not run out. Quota is tracked as remaining counters on
-// user_subscriptions / user_subscription_model_usage that are reset to the plan max on
-// every activation and decremented once per covered request at settlement time, so this
-// check is a plain counter read instead of an
-// on-the-fly aggregate over request_logs. When a per-model quota override exists for the
-// requested model, its counters take precedence over the plan-level counters: a null
-// override dimension inherits the plan-level counter for that model's requests. A null
-// current_period_end means the subscription has no expiry (e.g. migrated from a system
-// that does not track one). It runs on every proxied request, so matching and the
-// counter checks are pushed into a single query. The user_id comparison goes through
-// ::text so it works whether the column is uuid (pre-027 databases) or bigint. The
-// returned SubscriptionID is the subscription whose quota this request consumes, so the
-// settle path can decrement exactly that counter. The returned OveragePolicy tells the
-// gateway whether to fall through to wallet billing ('allow_wallet') or reject ('block')
-// once the quota is used up.
-func (s *Service) subscriptionCoversModel(ctx context.Context, userID, model string) subscriptionAccess {
-	access, err := s.subscriptionCache.get(ctx, subscriptionRouteKey{userID: userID, model: model}, func(ctx context.Context) (subscriptionAccess, error) {
-		return s.loadSubscriptionCoversModel(ctx, userID, model)
-	})
+// subscriptionCoversModel reports whether the user's request is covered by an
+// active subscription whose plan whitelists the requested model (empty whitelist
+// = all models) and whose per-period request/credit counters have not run out.
+// Quota is tracked as remaining counters on user_subscriptions /
+// user_subscription_model_usage that are reset to the plan max on every
+// activation and decremented once per covered request at settlement time, so
+// this check is a plain counter read instead of an on-the-fly aggregate over
+// request_logs. Coverage is scoped by the key's group: a plan bound to a group
+// is usable only by keys in that group (an ungrouped key may additionally use
+// plans bound to any of the user's groups via user_groups); a plan with no
+// group is usable by ungrouped keys and by keys whose group is among the user's
+// groups. Keys in different groups therefore never draw on each other's
+// bound-plan quota. When a per-model quota override exists for the requested model, its
+// counters take precedence over the plan-level counters: a null override
+// dimension inherits the plan-level counter for that model's requests. A null
+// current_period_end means the subscription has no expiry (e.g. migrated from a
+// system that does not track one). It runs on every proxied request, so
+// matching and the counter checks are pushed into a single query. The user_id
+// and group_id comparisons go through ::text so they work whether the columns
+// are uuid or bigint. The returned SubscriptionID is the subscription whose
+// quota this request consumes, so the settle path can decrement exactly that
+// counter. The returned OveragePolicy tells the gateway whether to fall through
+// to wallet billing ('allow_wallet') or reject ('block') once the quota is used
+// up.
+func (s *Service) subscriptionCoversModel(ctx context.Context, key keyContext, model string) subscriptionAccess {
+	access, err := s.loadSubscriptionCoversModel(ctx, key.userID, key.groupID, model)
 	if err != nil {
 		log.Printf("subscriptionCoversModel: %v", err)
 		return subscriptionAccess{Covered: false, OveragePolicy: "allow_wallet"}
@@ -988,7 +1143,7 @@ func (s *Service) subscriptionCoversModel(ctx context.Context, userID, model str
 	return access
 }
 
-func (s *Service) loadSubscriptionCoversModel(ctx context.Context, userID, model string) (subscriptionAccess, error) {
+func (s *Service) loadSubscriptionCoversModel(ctx context.Context, userID, groupID, model string) (subscriptionAccess, error) {
 	var access subscriptionAccess
 	var subscriptionID *string
 	err := s.db.QueryRow(ctx, `select exists(
@@ -998,6 +1153,9 @@ func (s *Service) loadSubscriptionCoversModel(ctx context.Context, userID, model
 		left join subscription_plan_model_quotas mq on mq.plan_id=p.id and mq.model=$2
 		left join user_subscription_model_usage uq on uq.subscription_id=us.id and uq.model=$2
 		where us.user_id::text=$1 and us.status='active' and (us.current_period_end is null or us.current_period_end > now())
+		  and (p.group_id::text=$3
+		    or (p.group_id is null and ($3='' or exists(select 1 from user_groups ug where ug.user_id::text=$1 and ug.group_id::text=$3)))
+		    or ($3='' and exists(select 1 from user_groups ug where ug.user_id::text=$1 and ug.group_id=p.group_id)))
 		  and (coalesce(array_length(p.model_whitelist,1),0)=0 or $2 = any(p.model_whitelist))
 		  and (coalesce(mq.max_requests_per_period,p.max_requests_per_period) is null
 		    or coalesce(uq.remaining_requests,us.remaining_requests) > 0)
@@ -1011,6 +1169,9 @@ func (s *Service) loadSubscriptionCoversModel(ctx context.Context, userID, model
 		left join subscription_plan_model_quotas mq2 on mq2.plan_id=p2.id and mq2.model=$2
 		left join user_subscription_model_usage uq2 on uq2.subscription_id=us2.id and uq2.model=$2
 		where us2.user_id::text=$1 and us2.status='active' and (us2.current_period_end is null or us2.current_period_end > now())
+		  and (p2.group_id::text=$3
+		    or (p2.group_id is null and ($3='' or exists(select 1 from user_groups ug where ug.user_id::text=$1 and ug.group_id::text=$3)))
+		    or ($3='' and exists(select 1 from user_groups ug where ug.user_id::text=$1 and ug.group_id=p2.group_id)))
 		  and (coalesce(array_length(p2.model_whitelist,1),0)=0 or $2 = any(p2.model_whitelist))
 		  and (coalesce(mq2.max_requests_per_period,p2.max_requests_per_period) is null
 		    or coalesce(uq2.remaining_requests,us2.remaining_requests) > 0)
@@ -1024,10 +1185,13 @@ func (s *Service) loadSubscriptionCoversModel(ctx context.Context, userID, model
 		from user_subscriptions us3
 		join subscription_plans p3 on p3.id=us3.plan_id
 		where us3.user_id::text=$1 and us3.status='active' and (us3.current_period_end is null or us3.current_period_end > now())
+		  and (p3.group_id::text=$3
+		    or (p3.group_id is null and ($3='' or exists(select 1 from user_groups ug where ug.user_id::text=$1 and ug.group_id::text=$3)))
+		    or ($3='' and exists(select 1 from user_groups ug where ug.user_id::text=$1 and ug.group_id=p3.group_id)))
 		  and (coalesce(array_length(p3.model_whitelist,1),0)=0 or $2 = any(p3.model_whitelist))
 		order by us3.created_at desc
 		limit 1
-	), 'allow_wallet') as overage_policy`, userID, model).Scan(&access.Covered, &subscriptionID, &access.OveragePolicy)
+	), 'allow_wallet') as overage_policy`, userID, model, groupID).Scan(&access.Covered, &subscriptionID, &access.OveragePolicy)
 	if err != nil {
 		log.Printf("subscriptionCoversModel: %v", err)
 		return subscriptionAccess{Covered: false, OveragePolicy: "allow_wallet"}, err

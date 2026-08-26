@@ -18,7 +18,7 @@ const props = withDefaults(defineProps<{
 
 const VARIANTS: Record<Variant, string> = {
   primary: 'bg-clay text-clay-ink hover:bg-clay-hover active:translate-y-px',
-  secondary: 'border border-line-strong bg-surface text-ink hover:bg-sunken active:translate-y-px',
+  secondary: 'border border-line-strong bg-surface/60 text-ink backdrop-blur-md hover:bg-sunken active:translate-y-px',
   ghost: 'text-muted hover:bg-sunken hover:text-ink',
   danger: 'bg-danger text-white hover:opacity-90 active:translate-y-px',
   link: 'text-clay underline-offset-4 hover:underline',
@@ -45,14 +45,44 @@ const isDisabled = computed(() => props.disabled || props.loading)
     :aria-busy="loading || undefined"
     :aria-disabled="isDisabled || undefined"
     :class="cn(
-      'inline-flex shrink-0 items-center rounded-control font-medium whitespace-nowrap transition-[background-color,color,opacity,transform] duration-150 ease-out',
+      'liquid-button relative isolate inline-flex shrink-0 items-center overflow-hidden rounded-button font-medium whitespace-nowrap transition-[background-color,color,opacity,transform] duration-150 ease-out',
       'disabled:pointer-events-none disabled:opacity-45 aria-disabled:pointer-events-none aria-disabled:opacity-45',
       VARIANTS[variant],
       SIZES[size],
       block && 'w-full justify-center',
     )"
   >
-    <Loader2 v-if="loading" class="size-4 animate-spin" />
-    <slot />
+    <span class="relative z-10 inline-flex items-center gap-2">
+      <Loader2 v-if="loading" class="size-4 animate-spin" />
+      <slot />
+    </span>
   </component>
 </template>
+
+<style scoped>
+.liquid-button::after {
+  content: '';
+  position: absolute;
+  z-index: 0;
+  top: 50%;
+  left: 50%;
+  width: 130%;
+  aspect-ratio: 1;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, -50%) scale(0);
+  transition: opacity 180ms ease-out, transform 360ms ease-out;
+}
+
+.liquid-button:hover::after {
+  opacity: 0.08;
+  transform: translate(-50%, -50%) scale(1);
+}
+
+.liquid-button:disabled::after,
+.liquid-button[aria-disabled='true']::after {
+  display: none;
+}
+</style>

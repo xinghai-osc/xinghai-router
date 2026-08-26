@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useClipboard } from '@vueuse/core'
 import { Copy, UserPlus } from 'lucide-vue-next'
 import { endpoints, type Invitation } from '~/src/api'
 import { formatDateTime, formatMoney } from '~/src/format'
@@ -21,8 +22,10 @@ const invitationLink = computed(() => {
 })
 const totalReward = computed(() => data.value.data.reduce((sum, item) => sum + Number(item.reward), 0))
 
-async function copy(value: string) {
-  await navigator.clipboard.writeText(value)
+const { copy } = useClipboard({ legacy: true })
+
+function copyValue(value: string) {
+  copy(value)
   toast.success(t('console.invitationCopied'))
 }
 </script>
@@ -40,14 +43,14 @@ async function copy(value: string) {
           <p class="text-[13px] text-muted">{{ t('console.invitationLead', { inviter: formatMoney(data.inviter_reward), invitee: formatMoney(data.invitee_reward) }) }}</p>
           <div class="mt-4 flex gap-2">
             <UiInput :model-value="invitationLink" readonly mono class="flex-1" />
-            <UiButton size="icon" variant="secondary" :aria-label="t('console.copyInvitationLink')" @click="copy(invitationLink)">
+            <UiButton size="icon" variant="secondary" :aria-label="t('console.copyInvitationLink')" @click="copyValue(invitationLink)">
               <Copy class="size-4" />
             </UiButton>
           </div>
           <div class="mt-3 flex items-center gap-2 text-[13px] text-muted">
             <span>{{ t('console.invitationCode') }}:</span>
             <code class="font-mono text-ink">{{ data.code }}</code>
-            <button type="button" :aria-label="t('console.copyInvitationCode')" class="text-clay" @click="copy(data.code)">{{ t('common.copy') }}</button>
+            <button type="button" :aria-label="t('console.copyInvitationCode')" class="text-clay" @click="copyValue(data.code)">{{ t('common.copy') }}</button>
           </div>
         </UiCard>
         <ConsoleUserStatCard :label="t('console.invitationTotalReward')" :value="formatMoney(totalReward)" :hint="t('console.invitationCount', { count: data.data.length })" :icon="UserPlus" />

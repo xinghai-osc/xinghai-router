@@ -38,6 +38,20 @@ func TestAnthropicToOpenAITools(t *testing.T) {
 	}
 }
 
+func TestOpenAIToAnthropicPreservesProviderParameters(t *testing.T) {
+	body, _, err := openAIRequestToAnthropic([]byte(`{"model":"claude-sonnet","messages":[{"role":"user","content":"hi"}],"max_tokens":128,"cache_control":{"type":"ephemeral"},"metadata":{"tenant":"acme"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["cache_control"].(map[string]any)["type"] != "ephemeral" || payload["metadata"].(map[string]any)["tenant"] != "acme" {
+		t.Fatalf("provider parameters dropped: %#v", payload)
+	}
+}
+
 func TestOpenAIToAnthropic(t *testing.T) {
 	body, err := openAIToAnthropic([]byte(`{"id":"chat_1","model":"kimi-k2.6","choices":[{"message":{"content":"","tool_calls":[{"id":"call_1","function":{"name":"weather","arguments":"{\"city\":\"Beijing\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":10,"completion_tokens":4}}`))
 	if err != nil {
@@ -86,7 +100,7 @@ func TestOpenAIToAnthropicDefaultsStopReason(t *testing.T) {
 }
 
 func TestOpenAIRequestToAnthropic(t *testing.T) {
-	body, prefill, err := openAIRequestToAnthropic([]byte(`{"model":"claude-sonnet","messages":[{"role":"system","content":"Be concise"},{"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"weather","arguments":"{\"city\":\"Beijing\"}"}}]},{"role":"tool","tool_call_id":"call_1","content":"sunny"}],"tools":[{"type":"function","function":{"name":"weather","parameters":{"type":"object"}}}],"max_tokens":256}`))
+	body, prefill, err := openAIRequestToAnthropic([]byte(`{"model":"claude-sonnet","messages":[{"role":"system","content":"Be concise"},{"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"weather","arguments":"{\"city\":\"Beijing\"}"}}]},{"role":"tool","tool_call_id":"call_1","content":"sunny"}],"tools":[{"type":"function","function":{"name":"weather","parameters":{"type":"object"}}}],"max_tokens":256,"reasoning_effort":"high"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +111,7 @@ func TestOpenAIRequestToAnthropic(t *testing.T) {
 	if err = json.Unmarshal(body, &request); err != nil {
 		t.Fatal(err)
 	}
-	if request["system"] != "Be concise" || request["max_tokens"].(float64) != 256 {
+	if request["system"] != "Be concise" || request["max_tokens"].(float64) != 256 || request["reasoning_effort"] != "high" {
 		t.Fatalf("unexpected request: %#v", request)
 	}
 	messages := request["messages"].([]any)

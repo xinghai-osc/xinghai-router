@@ -1,7 +1,7 @@
 import {
-  Activity, ArrowRightLeft, BadgeDollarSign, Bell, Blocks, CreditCard, Database, FileClock, FileText,
-  KeyRound, LayoutDashboard, Layers, LogIn, MessageSquareText, Receipt, Repeat, ScrollText, Server,
-  Settings, ShieldCheck, ShoppingCart, Sparkles, Stamp, Ticket, UserCog, UserPlus, Users, Wallet,
+  Activity, ArrowRightLeft, BadgeDollarSign, Bell, Blocks, CalendarCheck, CreditCard, Database, FileClock, FileText,
+  KeyRound, LayoutDashboard, Layers, LogIn, MessageSquareText, Repeat, ScrollText, Server,
+  Settings, ShieldAlert, ShieldCheck, ShoppingCart, Sparkles, Stamp, Ticket, UserCog, UserPlus, Users, Wallet,
 } from 'lucide-vue-next'
 import type { Component } from 'vue'
 
@@ -26,15 +26,15 @@ export const NAV_SECTIONS: NavSection[] = [
       { to: '/console', labelKey: 'nav.overview', icon: LayoutDashboard },
       { to: '/console/keys', labelKey: 'nav.keys', icon: KeyRound },
       { to: '/console/usage', labelKey: 'nav.usage', icon: Activity },
+      { to: '/console/checkin', labelKey: 'nav.checkin', icon: CalendarCheck },
     ],
   },
   {
     titleKey: 'nav.sectionBilling',
     items: [
-      { to: '/console/orders', labelKey: 'nav.orders', icon: ShoppingCart },
+      { to: '/console/ledger', labelKey: 'nav.orders', icon: ShoppingCart },
       { to: '/console/wallet', labelKey: 'nav.wallet', icon: Wallet },
       { to: '/console/redeem', labelKey: 'nav.redeem', icon: Ticket },
-      { to: '/console/ledger', labelKey: 'nav.ledger', icon: Receipt },
       { to: '/console/subscriptions', labelKey: 'nav.subscriptions', icon: Sparkles },
       { to: '/console/invoices', labelKey: 'nav.invoices', icon: FileText },
     ],
@@ -50,6 +50,9 @@ export const NAV_SECTIONS: NavSection[] = [
     titleKey: 'nav.sectionOperations',
     items: [
       { to: '/console/users', labelKey: 'nav.users', icon: Users, permission: 'users.read' },
+      { to: '/console/admin-checkins', labelKey: 'nav.adminCheckins', icon: CalendarCheck, permission: 'users.read' },
+      { to: '/console/admin-orders', labelKey: 'nav.adminOrders', icon: ShoppingCart, permission: 'users.read' },
+      { to: '/console/admin-wallet-ledger', labelKey: 'nav.walletLedger', icon: Wallet, permission: 'users.read' },
       { to: '/console/groups', labelKey: 'nav.groups', icon: Layers, permission: 'users.read' },
       { to: '/console/channels', labelKey: 'nav.channels', icon: Server, permission: 'channels.read' },
       { to: '/console/providers', labelKey: 'nav.providers', icon: Blocks, permission: 'system.manage' },
@@ -58,6 +61,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { to: '/console/logs', labelKey: 'nav.logs', icon: ScrollText, permission: 'logs.read' },
       { to: '/console/conversation-cache', labelKey: 'nav.conversationCache', icon: MessageSquareText, permission: 'logs.read' },
       { to: '/console/audit', labelKey: 'nav.audit', icon: FileClock, permission: 'audit.read' },
+      { to: '/console/request-audits', labelKey: 'nav.requestAudits', icon: ShieldAlert, permission: 'logs.read' },
     ],
   },
   {
@@ -67,6 +71,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { to: '/console/redemption-codes', labelKey: 'nav.redemptionCodes', icon: Ticket, permission: 'system.manage' },
       { to: '/console/admin-subscriptions', labelKey: 'nav.adminSubscriptions', icon: Repeat, permission: 'users.read' },
       { to: '/console/reliability', labelKey: 'nav.reliability', icon: ShieldCheck, permission: 'system.manage' },
+      { to: '/console/content-policy', labelKey: 'nav.contentPolicy', icon: ShieldAlert, permission: 'system.manage' },
       { to: '/console/conversation-cache-settings', labelKey: 'nav.conversationCacheSettings', icon: MessageSquareText, permission: 'system.manage' },
       { to: '/console/payment-settings', labelKey: 'nav.paymentSettings', icon: CreditCard, permission: 'system.manage' },
       { to: '/console/invoice-settings', labelKey: 'nav.invoiceSettings', icon: Stamp, permission: 'system.manage' },

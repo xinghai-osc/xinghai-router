@@ -3,7 +3,7 @@ defineProps<{ dense?: boolean }>()
 </script>
 
 <template>
-  <div class="ui-table overflow-x-auto rounded-card border border-line bg-surface" :class="dense && 'is-dense'">
+  <div class="ui-table overflow-x-auto rounded-card border border-line bg-surface/90 shadow-[0_1px_0_rgb(255_255_255/0.03)]" :class="dense && 'is-dense'">
     <table class="w-full border-collapse text-left text-sm">
       <slot />
     </table>
@@ -12,7 +12,11 @@ defineProps<{ dense?: boolean }>()
 
 <style scoped>
 .ui-table :deep(thead) {
-  background-color: var(--sunken);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background-color: color-mix(in srgb, var(--sunken) 88%, var(--surface));
+  backdrop-filter: blur(12px);
 }
 
 .ui-table :deep(th) {

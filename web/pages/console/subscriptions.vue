@@ -22,6 +22,7 @@ const SUB_STATUS_KEYS: Record<string, string> = {
 const { t } = useI18n()
 const { toast } = useToast()
 const { settings } = useSiteSettings()
+const { account, loadAccount } = useAccount()
 
 useHead({ title: () => `${t('nav.subscriptions')} · ${settings.value.name}` })
 
@@ -48,18 +49,23 @@ const subscribeOpen = ref(false)
 const cancelOpen = ref(false)
 const selectedPlan = ref<PublicSubscriptionPlan | null>(null)
 const cancelling = ref<UserSubscription | null>(null)
-const method = ref('')
+const method = ref('balance')
 const autoRenew = ref(true)
 
-const methodOptions = computed(() =>
-  payments.value.payment_methods.map(entry => ({ value: entry.code, label: entry.name })))
-
-const canSubscribe = computed(() => payments.value.enabled && methodOptions.value.length > 0)
+const availableBalance = computed(() => Math.max(0, (account.value?.balance ?? 0) - (account.value?.reserved ?? 0)))
+const methodOptions = computed(() => [
+  { value: 'balance', label: t('console.payWithBalance') },
+  ...payments.value.payment_methods.map(entry => ({ value: entry.code, label: entry.name })),
+])
+const payingWithBalance = computed(() => method.value === 'balance')
+const selectedPrice = computed(() => Number(selectedPlan.value?.price ?? 0))
+const balanceSufficient = computed(() => availableBalance.value >= selectedPrice.value)
+const canSubscribe = computed(() => methodOptions.value.length > 0)
 
 const sortedPlans = computed(() => [...plans.value.data].sort((a, b) => a.sort_order - b.sort_order))
 
 watch(methodOptions, (options) => {
-  if (!method.value && options.length) method.value = options[0].value
+  if (!options.some(option => option.value === method.value)) method.value = options[0]?.value ?? 'balance'
 })
 
 const PERIOD_KEYS: Record<string, string> = {
@@ -161,7 +167,8 @@ function quotaBars(subscription: UserSubscription): QuotaBar[] {
 
 function openSubscribe(plan: PublicSubscriptionPlan) {
   selectedPlan.value = plan
-  autoRenew.value = true
+  method.value = 'balance'
+  autoRenew.value = false
   subscribeOpen.value = true
 }
 
@@ -173,6 +180,16 @@ function openCancel(subscription: UserSubscription) {
 async function confirmSubscribe() {
   const plan = selectedPlan.value
   if (!plan || !method.value) return
+
+  if (payingWithBalance.value) {
+    if (!balanceSufficient.value) return
+    const ok = await run(() => endpoints.createBalanceSubscription(plan.id))
+    if (!ok) { toast.error(t('common.actionFailed')); return }
+    subscribeOpen.value = false
+    toast.success(t('console.balancePurchaseSuccess'))
+    await Promise.all([refreshSubs(), refreshOrders(), loadAccount(true)])
+    return
+  }
 
   let payUrl = ''
   const ok = await run(async () => {
@@ -289,10 +306,6 @@ async function confirmCancel() {
 
     <UiCard :title="t('console.availablePlans')" flush>
       <div class="px-5 py-4">
-        <UiAlert v-if="!canSubscribe && !plansPending" tone="warn" class="mb-3">
-          {{ t('console.subscribeUnavailable') }}
-        </UiAlert>
-
         <ConsoleUserDataState
           :pending="plansPending"
           :error="plansError"
@@ -395,15 +408,36 @@ async function confirmCancel() {
           />
         </UiField>
 
-        <UiField :label="t('console.autoRenew')">
+        <div v-if="payingWithBalance" class="space-y-3 rounded-card border border-line bg-sunken p-4 text-[13px]">
+          <div class="flex justify-between gap-3">
+            <span class="text-muted">{{ t('console.availableBalance') }}</span>
+            <span class="numeric text-ink">{{ formatMoney(availableBalance) }}</span>
+          </div>
+          <div class="flex justify-between gap-3">
+            <span class="text-muted">{{ t('console.purchaseAmount') }}</span>
+            <span class="numeric text-ink">{{ formatMoney(selectedPrice) }}</span>
+          </div>
+          <div v-if="balanceSufficient" class="flex justify-between gap-3 border-t border-line pt-3">
+            <span class="text-muted">{{ t('console.balanceAfterPurchase') }}</span>
+            <span class="numeric text-ink">{{ formatMoney(availableBalance - selectedPrice) }}</span>
+          </div>
+          <UiAlert v-else tone="warn">
+            {{ t('console.insufficientBalance', { amount: formatMoney(selectedPrice - availableBalance) }) }}
+            <UiButton to="/console/wallet" variant="link" size="sm" class="ml-1 h-auto p-0">
+              {{ t('console.topUpToContinue') }}
+            </UiButton>
+          </UiAlert>
+        </div>
+
+        <UiField v-else :label="t('console.autoRenew')">
           <UiSwitch v-model="autoRenew" :label="t('console.autoRenew')" />
         </UiField>
       </div>
 
       <template #footer>
         <UiButton variant="secondary" @click="subscribeOpen = false">{{ t('common.cancel') }}</UiButton>
-        <UiButton :loading="busy" :disabled="!method" @click="confirmSubscribe">
-          {{ t('console.subscribe') }}
+        <UiButton :loading="busy" :disabled="!method || (payingWithBalance && !balanceSufficient)" @click="confirmSubscribe">
+          {{ payingWithBalance ? t('console.payBalanceAndActivate') : t('console.subscribe') }}
         </UiButton>
       </template>
     </UiSlidePanel>

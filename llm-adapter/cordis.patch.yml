@@ -1,0 +1,8 @@
+# Xinghai Router LLM adapter bundle.
+# The profile patch can override this row's config after the bundle layer.
+- insert:
+    - id: llm-xinghai-router
+      name: xinghai-router-llm-adapter
+      config:
+        baseURL: https://platform.ai.hixinghai.top/api/v1
+        apiKeyEnv: XINGHAI_API_KEY

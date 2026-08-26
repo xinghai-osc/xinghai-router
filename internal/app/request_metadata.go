@@ -10,18 +10,18 @@ import (
 )
 
 type requestMetadataInfo struct {
-	clientIP, forwardedFor, userAgent string
-	browser, browserVersion           string
+	clientIP, forwardedFor, userAgent                   string
+	browser, browserVersion                             string
 	operatingSystem, operatingSystemVersion, deviceType string
-	isBot bool
+	isBot                                               bool
 }
 
 var uaVersion = regexp.MustCompile(`(?:Chrome|Firefox|Version|Edg|OPR|CriOS|FxiOS|MSIE)[ /]([\d.]+)`)
 
 var (
-	trustedProxiesMu   sync.RWMutex
-	trustedProxyNets   []netip.Prefix
-	trustProxyHeaders  bool
+	trustedProxiesMu  sync.RWMutex
+	trustedProxyNets  []netip.Prefix
+	trustProxyHeaders bool
 )
 
 func setTrustedProxies(specs string) error {

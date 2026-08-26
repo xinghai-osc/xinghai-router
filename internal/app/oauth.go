@@ -17,6 +17,7 @@ import (
 )
 
 var errOAuthEmailNotVerified = errors.New("refusing to use an unverified email for account matching or binding")
+var errOAuthEmailNotAllowed = errors.New("email is not allowed to register")
 
 type oauthProviderConfig struct {
 	ClientID     string
@@ -132,6 +133,10 @@ func (s *Service) oauthCallback(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, "email_not_verified", "cannot bind an unverified provider email to an existing account")
 			return
 		}
+		if errors.Is(err, errOAuthEmailNotAllowed) {
+			writeError(w, http.StatusForbidden, "email_not_allowed", "this email is not allowed to register")
+			return
+		}
 		log.Printf("oauth findOrCreateOAuthUser: %v", err)
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not process OAuth login")
 		return
@@ -163,6 +168,13 @@ func (s *Service) findOrCreateOAuthUser(ctx context.Context, provider, providerU
 	}
 	if email == "" {
 		email = fmt.Sprintf("%s-%s@oauth.local", provider, providerUserID)
+	}
+	allowed, err := s.registrationEmailAllowed(ctx, email)
+	if err != nil {
+		return "", err
+	}
+	if !allowed {
+		return "", errOAuthEmailNotAllowed
 	}
 	displayName := strings.TrimSpace(name)
 	if displayName == "" {
