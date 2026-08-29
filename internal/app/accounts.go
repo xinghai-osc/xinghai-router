@@ -572,7 +572,75 @@ func (s *Service) accountUsageDaily(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) accountUsage(w http.ResponseWriter, r *http.Request) {
 	account := accountFromContext(r)
-	rows, err := s.db.Query(r.Context(), `select rl.request_id,rl.model,coalesce(rl.prompt_tokens,0),coalesce(ur.cached_prompt_tokens,0),coalesce(rl.completion_tokens,0),coalesce(ur.cost,0),case when ur.status is not null then ur.status when rl.status_code>=400 or rl.error_code is not null then 'failed' else 'success' end,rl.created_at,rl.client_ip,rl.user_agent,case when rl.error_code is not null or rl.status_code>=400 then rl.error_detail else '' end,coalesce(ak.name,''),rl.subscription_covered,rl.duration_ms,coalesce(coalesce(g.display_name, g.name),'') from request_logs rl left join usage_records ur on ur.request_id=rl.request_id left join api_keys ak on ak.id=rl.api_key_id left join groups g on g.id=rl.group_id where rl.user_id=$1 order by rl.created_at desc limit 100`, account.userID)
+
+	model := strings.TrimSpace(r.URL.Query().Get("model"))
+	groupName := strings.TrimSpace(r.URL.Query().Get("group_name"))
+	keyName := strings.TrimSpace(r.URL.Query().Get("key_name"))
+	status := strings.TrimSpace(r.URL.Query().Get("status"))
+	requestID := strings.TrimSpace(r.URL.Query().Get("request_id"))
+	startStr := strings.TrimSpace(r.URL.Query().Get("start"))
+	endStr := strings.TrimSpace(r.URL.Query().Get("end"))
+
+	var start, end *time.Time
+	if startStr != "" {
+		if t, err := time.Parse(time.RFC3339, startStr); err == nil {
+			start = &t
+		}
+	}
+	if endStr != "" {
+		if t, err := time.Parse(time.RFC3339, endStr); err == nil {
+			end = &t
+		}
+	}
+
+	args := []any{account.userID}
+	argIdx := 2
+	where := []string{"rl.user_id=$1"}
+	if model != "" {
+		where = append(where, "rl.model ilike $"+strconv.Itoa(argIdx))
+		args = append(args, "%"+model+"%")
+		argIdx++
+	}
+	if groupName != "" {
+		where = append(where, "coalesce(coalesce(g.display_name, g.name),'') ilike $"+strconv.Itoa(argIdx))
+		args = append(args, "%"+groupName+"%")
+		argIdx++
+	}
+	if keyName != "" {
+		where = append(where, "ak.name ilike $"+strconv.Itoa(argIdx))
+		args = append(args, "%"+keyName+"%")
+		argIdx++
+	}
+	if requestID != "" {
+		where = append(where, "rl.request_id ilike $"+strconv.Itoa(argIdx))
+		args = append(args, requestID+"%")
+		argIdx++
+	}
+	if status == "success" {
+		where = append(where, "ur.status is null and rl.status_code>=200 and rl.status_code<400 and coalesce(rl.error_code,'')=''")
+	} else if status == "failed" {
+		where = append(where, "ur.status is null and (rl.status_code>=400 or coalesce(rl.error_code,'')<>'')")
+	} else if status == "settled" {
+		where = append(where, "ur.status='settled'")
+	}
+	if start != nil {
+		where = append(where, "rl.created_at>=$"+strconv.Itoa(argIdx))
+		args = append(args, *start)
+		argIdx++
+	}
+	if end != nil {
+		where = append(where, "rl.created_at<=$"+strconv.Itoa(argIdx))
+		args = append(args, *end)
+		argIdx++
+	}
+
+	// With filters the client expects the full matching set; without them keep
+	// the original recent-100 default.
+	query := `select rl.request_id,rl.model,coalesce(rl.prompt_tokens,0),coalesce(ur.cached_prompt_tokens,0),coalesce(rl.completion_tokens,0),coalesce(ur.cost,0),case when ur.status is not null then ur.status when rl.status_code>=400 or rl.error_code is not null then 'failed' else 'success' end,rl.created_at,rl.client_ip,rl.user_agent,case when rl.error_code is not null or rl.status_code>=400 then rl.error_detail else '' end,coalesce(ak.name,''),rl.subscription_covered,rl.duration_ms,rl.first_token_ms,coalesce(coalesce(g.display_name, g.name),'') from request_logs rl left join usage_records ur on ur.request_id=rl.request_id left join api_keys ak on ak.id=rl.api_key_id left join groups g on g.id=rl.group_id where ` + strings.Join(where, " and ") + ` order by rl.created_at desc`
+	if len(where) == 1 {
+		query += " limit 100"
+	}
+	rows, err := s.db.Query(r.Context(), query, args...)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
 		return
@@ -582,10 +650,11 @@ func (s *Service) accountUsage(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var requestID, model, status, clientIP, userAgent, errorDetail, keyName, groupName string
 		var prompt, cached, completion, durationMs int
+		var firstTokenMs *int
 		var subscriptionCovered bool
 		var cost, created any
-		if rows.Scan(&requestID, &model, &prompt, &cached, &completion, &cost, &status, &created, &clientIP, &userAgent, &errorDetail, &keyName, &subscriptionCovered, &durationMs, &groupName) == nil {
-			data = append(data, map[string]any{"request_id": requestID, "model": model, "prompt_tokens": prompt, "cached_prompt_tokens": cached, "completion_tokens": completion, "cost": cost, "status": status, "created_at": created, "client_ip": clientIP, "user_agent": userAgent, "error": errorDetail, "key_name": keyName, "subscription": subscriptionCovered, "duration_ms": durationMs, "group_name": groupName})
+		if rows.Scan(&requestID, &model, &prompt, &cached, &completion, &cost, &status, &created, &clientIP, &userAgent, &errorDetail, &keyName, &subscriptionCovered, &durationMs, &firstTokenMs, &groupName) == nil {
+			data = append(data, map[string]any{"request_id": requestID, "model": model, "prompt_tokens": prompt, "cached_prompt_tokens": cached, "completion_tokens": completion, "cost": cost, "status": status, "created_at": created, "client_ip": clientIP, "user_agent": userAgent, "error": errorDetail, "key_name": keyName, "subscription": subscriptionCovered, "duration_ms": durationMs, "first_token_ms": firstTokenMs, "group_name": groupName})
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": data})
@@ -593,7 +662,7 @@ func (s *Service) accountUsage(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) accountLedger(w http.ResponseWriter, r *http.Request) {
 	account := accountFromContext(r)
-	rows, err := s.db.Query(r.Context(), `select wl.id,wl.amount,wl.balance_after,wl.kind,wl.request_id,wl.note,wl.created_at,wl.settlement_status,wl.settlement_date,wl.settled_at,coalesce(ws.error,'') from wallet_ledger wl left join wallet_settlements ws on ws.ledger_id=wl.id where wl.user_id=$1 order by wl.created_at desc limit 100`, account.userID)
+	rows, err := s.db.Query(r.Context(), `select wl.id,wl.amount::text,wl.balance_after::text,wl.kind,wl.request_id,wl.note,wl.created_at,wl.settlement_status,wl.settlement_date,wl.settled_at,coalesce(ws.error,'') from wallet_ledger wl left join wallet_settlements ws on ws.ledger_id=wl.id where wl.user_id=$1 order by wl.created_at desc limit 100`, account.userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
 		return
@@ -687,19 +756,28 @@ func (s *Service) permission(permission string, next http.HandlerFunc) http.Hand
 	})
 }
 
-func (s *Service) createSession(w http.ResponseWriter, r *http.Request, userID string, status int) {
-	token, err := randomSecret("xh_session_")
+// createSessionToken mints a session row and returns the bearer token a client
+// must present. It is shared by the JSON login/register responses and the OAuth
+// callback, which instead plants the token in the same cookie the console uses
+// and redirects to the console.
+func (s *Service) createSessionToken(ctx context.Context, userID string) (token string, expiresAt time.Time, err error) {
+	token, err = randomSecret("xh_session_")
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "could not create session")
-		return
+		return "", time.Time{}, err
 	}
 	id, err := randomID()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "could not create session")
-		return
+		return "", time.Time{}, err
 	}
-	expiresAt := time.Now().Add(7 * 24 * time.Hour)
-	_, err = s.db.Exec(r.Context(), `insert into user_sessions(id,user_id,token_hash,expires_at) values($1,$2,$3,$4)`, id, userID, hashSecret(token), expiresAt)
+	expiresAt = time.Now().Add(7 * 24 * time.Hour)
+	if _, err = s.db.Exec(ctx, `insert into user_sessions(id,user_id,token_hash,expires_at) values($1,$2,$3,$4)`, id, userID, hashSecret(token), expiresAt); err != nil {
+		return "", time.Time{}, err
+	}
+	return token, expiresAt, nil
+}
+
+func (s *Service) createSession(w http.ResponseWriter, r *http.Request, userID string, status int) {
+	token, expiresAt, err := s.createSessionToken(r.Context(), userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not create session")
 		return

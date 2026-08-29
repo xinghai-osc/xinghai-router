@@ -44,7 +44,7 @@ func (s *Service) listAdminWalletLedger(w http.ResponseWriter, r *http.Request) 
 	pageArg := len(args) + 1
 	offsetArg := len(args) + 2
 	args = append(args, pageSize, offset)
-	query := `select wl.id,wl.user_id,u.email,u.name,wl.amount,wl.balance_after,wl.kind,wl.request_id,wl.note,wl.created_at,wl.settlement_status,wl.settlement_date,wl.settled_at,coalesce(ws.error,'')
+	query := `select wl.id,wl.user_id,u.email,u.name,wl.amount::text,wl.balance_after::text,wl.kind,wl.request_id,wl.note,wl.created_at,wl.settlement_status,wl.settlement_date,wl.settled_at,coalesce(ws.error,'')
 		from wallet_ledger wl join users u on u.id=wl.user_id
 		left join wallet_settlements ws on ws.ledger_id=wl.id` + filter + ` order by wl.created_at desc,wl.id desc limit $` + itoa(pageArg) + ` offset $` + itoa(offsetArg)
 	rows, err := s.db.Query(r.Context(), query, args...)

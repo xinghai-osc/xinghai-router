@@ -9,7 +9,7 @@ import (
 
 const (
 	// maxCacheEntries bounds a ttlCache so an attacker cannot grow it without limit by
-	// requesting unknown models. The whole map is dropped once the bound is reached.
+	// requesting unknown models. The oldest entry is evicted once the bound is reached.
 	maxCacheEntries = 4096
 
 	pricingCacheTTL     = 10 * time.Second
@@ -26,6 +26,11 @@ const (
 	// query per request otherwise. A short TTL means a subscription limit is
 	// enforced up to TTL seconds late, which is acceptable soft-quota behavior.
 	subscriptionCacheTTL = 10 * time.Second
+	// quotaCacheTTL bounds how long key/channel quota verdicts are reused. The
+	// aggregation they avoid runs on every proxied request otherwise; the short
+	// window keeps enforcement lag small while still removing the per-request
+	// database round-trips for keys and channels without quota limits.
+	quotaCacheTTL = 5 * time.Second
 	// rankingsCacheTTL short-circuits repeated multi-table rankings aggregations.
 	// Leaders change slowly, so the drift from a 30s window is acceptable for a
 	// public page and it protects the database against request floods.
@@ -44,14 +49,17 @@ type cacheEntry[V any] struct {
 
 // ttlCache memoises short-lived reads of slow-changing configuration rows. Values may
 // be up to ttl stale; every writer that changes the underlying row calls invalidate.
+// When the cache reaches maxCacheEntries, the oldest entry is evicted (FIFO) rather
+// than dropping the entire map, which avoids a thundering-herd of cache misses.
 type ttlCache[K comparable, V any] struct {
 	mu      sync.Mutex
 	ttl     time.Duration
 	entries map[K]cacheEntry[V]
+	order   []K // FIFO eviction order; updated on store/invalidate
 }
 
 func newTTLCache[K comparable, V any](ttl time.Duration) *ttlCache[K, V] {
-	return &ttlCache[K, V]{ttl: ttl, entries: map[K]cacheEntry[V]{}}
+	return &ttlCache[K, V]{ttl: ttl, entries: map[K]cacheEntry[V]{}, order: make([]K, 0, 64)}
 }
 
 func (c *ttlCache[K, V]) lookup(key K) (V, bool) {
@@ -75,7 +83,15 @@ func (c *ttlCache[K, V]) store(key K, value V) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if len(c.entries) >= maxCacheEntries {
-		c.entries = map[K]cacheEntry[V]{}
+		// FIFO eviction: drop the oldest entry.
+		if len(c.order) > 0 {
+			oldest := c.order[0]
+			delete(c.entries, oldest)
+			c.order = c.order[1:]
+		}
+	}
+	if _, exists := c.entries[key]; !exists {
+		c.order = append(c.order, key)
 	}
 	c.entries[key] = cacheEntry[V]{value: value, expires: time.Now().Add(c.ttl)}
 }
@@ -92,7 +108,14 @@ func (c *ttlCache[K, V]) storeOnce(key K, value V) bool {
 		return false
 	}
 	if len(c.entries) >= maxCacheEntries {
-		c.entries = map[K]cacheEntry[V]{}
+		if len(c.order) > 0 {
+			oldest := c.order[0]
+			delete(c.entries, oldest)
+			c.order = c.order[1:]
+		}
+	}
+	if _, exists := c.entries[key]; !exists {
+		c.order = append(c.order, key)
 	}
 	c.entries[key] = cacheEntry[V]{value: value, expires: time.Now().Add(c.ttl)}
 	return true
@@ -117,8 +140,17 @@ func (c *ttlCache[K, V]) invalidate(key K) {
 		return
 	}
 	c.mu.Lock()
-	delete(c.entries, key)
-	c.mu.Unlock()
+	defer c.mu.Unlock()
+	if _, ok := c.entries[key]; ok {
+		delete(c.entries, key)
+		for i, k := range c.order {
+			if k == key {
+				copy(c.order[i:], c.order[i+1:])
+				c.order = c.order[:len(c.order)-1]
+				break
+			}
+		}
+	}
 }
 
 func (c *ttlCache[K, V]) clear() {
@@ -127,6 +159,7 @@ func (c *ttlCache[K, V]) clear() {
 	}
 	c.mu.Lock()
 	c.entries = map[K]cacheEntry[V]{}
+	c.order = c.order[:0]
 	c.mu.Unlock()
 }
 

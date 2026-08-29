@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Check, Sparkles } from 'lucide-vue-next'
+import { Check, RotateCcw, Sparkles } from 'lucide-vue-next'
 import {
   endpoints,
   type PaymentMethod,
@@ -47,8 +47,10 @@ const { busy, run } = useAction()
 
 const subscribeOpen = ref(false)
 const cancelOpen = ref(false)
+const resetOpen = ref(false)
 const selectedPlan = ref<PublicSubscriptionPlan | null>(null)
 const cancelling = ref<UserSubscription | null>(null)
+const resetting = ref<UserSubscription | null>(null)
 const method = ref('balance')
 const autoRenew = ref(true)
 
@@ -214,6 +216,22 @@ async function confirmCancel() {
   toast.success(t('console.subscriptionCancelled'))
   await refreshSubs()
 }
+
+function openReset(subscription: UserSubscription) {
+  resetting.value = subscription
+  resetOpen.value = true
+}
+
+async function confirmReset() {
+  const target = resetting.value
+  if (!target) return
+  const ok = await run(() => endpoints.useResetCard(target.id))
+  resetOpen.value = false
+  resetting.value = null
+  if (!ok) { toast.error(t('common.actionFailed')); return }
+  toast.success(t('console.resetCardSuccess'))
+  await refreshSubs()
+}
 </script>
 
 <template>
@@ -291,13 +309,31 @@ async function confirmCancel() {
                 </p>
               </div>
 
-              <UiButton
-                v-if="subscription.status === 'active' || subscription.status === 'pending'"
-                variant="secondary"
-                size="sm"
-                @click="openCancel(subscription)"
-              >{{ t('console.cancelSubscription') }}</UiButton>
-              <p v-else class="text-[13px] text-faint">{{ statusLabel(subscription.status) }}</p>
+              <div class="flex items-center justify-between gap-3">
+                <div class="flex items-center gap-2">
+                  <UiButton
+                    v-if="subscription.status === 'active' || subscription.status === 'pending'"
+                    variant="secondary"
+                    size="sm"
+                    @click="openCancel(subscription)"
+                  >{{ t('console.cancelSubscription') }}</UiButton>
+                  <p v-else class="text-[13px] text-faint">{{ statusLabel(subscription.status) }}</p>
+                </div>
+                <div v-if="subscription.status === 'active' || subscription.status === 'pending'" class="flex items-center gap-2">
+                  <UiBadge :tone="subscription.reset_card_count > 0 ? 'success' : 'neutral'">
+                    {{ t('console.resetCardCount', { count: subscription.reset_card_count }) }}
+                  </UiBadge>
+                  <UiButton
+                    v-if="subscription.reset_card_count > 0"
+                    variant="secondary"
+                    size="sm"
+                    @click="openReset(subscription)"
+                  >
+                    <RotateCcw class="size-3.5" />
+                    {{ t('console.resetCardUse') }}
+                  </UiButton>
+                </div>
+              </div>
             </article>
           </div>
         </ConsoleUserDataState>
@@ -454,6 +490,22 @@ async function confirmCancel() {
         <UiButton variant="secondary" @click="cancelOpen = false">{{ t('common.cancel') }}</UiButton>
         <UiButton variant="danger" :loading="busy" @click="confirmCancel">
           {{ t('console.cancelSubscription') }}
+        </UiButton>
+      </template>
+    </UiDialog>
+
+    <UiDialog
+      :open="resetOpen"
+      size="sm"
+      :title="t('console.resetCardUse')"
+      :description="resetting?.plan_name"
+    >
+      <p class="text-[13px] text-muted">{{ t('console.resetCardConfirmBody') }}</p>
+
+      <template #footer>
+        <UiButton variant="secondary" @click="resetOpen = false; resetting = null">{{ t('common.cancel') }}</UiButton>
+        <UiButton :loading="busy" @click="confirmReset">
+          {{ t('console.resetCardUse') }}
         </UiButton>
       </template>
     </UiDialog>

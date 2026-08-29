@@ -88,7 +88,8 @@ onMounted(load)
               <th class="num">{{ t('admin.statPromptTokens') }}</th>
               <th class="num">{{ t('admin.statCompletionTokens') }}</th>
               <th class="num">{{ t('admin.statTotalTokens') }}</th>
-              <th class="num">{{ t('admin.duration') }}</th>
+               <th class="num">{{ t('admin.firstToken') }}</th>
+               <th class="num">{{ t('admin.duration') }}</th>
             </tr>
           </thead>
           <tbody>
@@ -99,7 +100,8 @@ onMounted(load)
               <td class="num">{{ formatNumber(log.prompt_tokens) }}</td>
               <td class="num">{{ formatNumber(log.completion_tokens) }}</td>
               <td class="num">{{ formatNumber(log.total_tokens) }}</td>
-              <td class="num">{{ t('admin.durationMs', { value: log.duration_ms }) }}</td>
+              <td class="num">{{ log.first_token_ms == null ? t('common.none') : t('admin.firstTokenMs', { value: log.first_token_ms }) }}</td>
+               <td class="num">{{ t('admin.durationMs', { value: log.duration_ms }) }}</td>
             </tr>
           </tbody>
         </UiTable>

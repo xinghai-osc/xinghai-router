@@ -9,6 +9,23 @@ import (
 	"time"
 )
 
+// commandCodeStreamTypes are the event types used by the Command Code
+// /alpha/generate SSE stream. They are distinct from Anthropic and OpenAI
+// event types, so they can be used to detect a Command Code upstream.
+var commandCodeStreamTypes = map[string]bool{
+	"text-delta":       true,
+	"reasoning-delta":  true,
+	"reasoning-start":  true,
+	"reasoning-end":    true,
+	"tool-call":        true,
+	"finish":           true,
+	"error":            true,
+}
+
+func isCommandCodeStreamType(t string) bool {
+	return commandCodeStreamTypes[t]
+}
+
 // responsesCompletions accepts OpenAI Responses API requests (POST /v1/responses).
 // OpenAI-format channels receive the original request body and their response is
 // relayed unchanged. Other channel formats keep using the compatibility
@@ -927,6 +944,73 @@ func (s *responsesStream) anthropicEvent(data string, st *streamStats, emit func
 	}
 }
 
+// commandCodeEvent consumes one Command Code /alpha/generate SSE event for
+// Responses streams, converting it to the Responses event vocabulary.
+func (s *responsesStream) commandCodeEvent(data string, st *streamStats, emit func(string, any)) {
+	var event commandCodeEvent
+	if json.Unmarshal([]byte(data), &event) != nil {
+		return
+	}
+	switch event.Type {
+	case "text-delta", "reasoning-delta":
+		if !s.started {
+			s.start(st, emit)
+		}
+		if !s.textOpen {
+			s.startTextItem(emit)
+		}
+		s.msgText.WriteString(event.Text)
+		emit("response.output_text.delta", map[string]any{
+			"type":          "response.output_text.delta",
+			"item_id":       s.msgItemID,
+			"output_index":  s.textOutput,
+			"content_index": 0,
+			"delta":         event.Text,
+		})
+	case "tool-call":
+		tool, toolErr := commandCodeToolEventFromEvent(event)
+		if toolErr != nil {
+			return
+		}
+		if !s.started {
+			s.start(st, emit)
+		}
+		s.closeTextItem(emit)
+		s.textOpen = false
+		toolItemID := "fc_" + randomIDString()
+		toolOutputIndex := s.nextOutputIndex()
+		emit("response.output_item.added", map[string]any{
+			"type":         "response.output_item.added",
+			"output_index": toolOutputIndex,
+			"item":         map[string]any{"id": toolItemID, "type": "function_call", "status": "in_progress", "call_id": tool.id, "name": tool.name, "arguments": ""},
+		})
+		emit("response.function_call_arguments.delta", map[string]any{
+			"type":         "response.function_call_arguments.delta",
+			"item_id":      toolItemID,
+			"output_index": toolOutputIndex,
+			"delta":        tool.argJSON,
+		})
+		emit("response.function_call_arguments.done", map[string]any{
+			"type":         "response.function_call_arguments.done",
+			"item_id":      toolItemID,
+			"output_index": toolOutputIndex,
+			"arguments":    tool.argJSON,
+		})
+	case "finish":
+		commandCodeUsageFromEvent(event.TotalUsage, st)
+		if s.textOpen {
+			s.closeTextItem(emit)
+		}
+		s.finish(st, emit)
+	case "error":
+		s.status = "failed"
+		if s.textOpen {
+			s.closeTextItem(emit)
+		}
+		s.finish(st, emit)
+	}
+}
+
 // streamChatCompletionsToResponses relays an upstream SSE stream to the client
 // as Responses events, converting both chat-completions chunks and Anthropic
 // events (for channels routed through the Anthropic adapter).
@@ -975,7 +1059,14 @@ func streamChatCompletionsToResponses(w http.ResponseWriter, resp *http.Response
 		if chatMode {
 			stream.chatEvent(data, &st, emit)
 		} else {
-			stream.anthropicEvent(data, &st, emit)
+			var probe map[string]any
+			if json.Unmarshal([]byte(data), &probe) == nil {
+				if kind, _ := probe["type"].(string); isCommandCodeStreamType(kind) {
+					stream.commandCodeEvent(data, &st, emit)
+				} else {
+					stream.anthropicEvent(data, &st, emit)
+				}
+			}
 		}
 		if stream.finished {
 			break

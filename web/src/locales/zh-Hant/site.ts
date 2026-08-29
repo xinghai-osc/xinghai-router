@@ -117,6 +117,16 @@ export default {
   sqDetailNote: '實際價格 = 模型基礎價格 × 模型倍率 × 分組倍率。',
   sqDetailCta: '創建密鑰調用',
   sqGroupCount: '{count} 個分組',
+  sqDetailPerfTitle: '性能表現',
+  sqDetailPerfWindow: '近 {hours} 小時',
+  sqDetailPerfRequests: '請求數',
+  sqDetailPerfTps: 'TPS',
+  sqDetailPerfLatency: '平均延遲',
+  sqDetailPerfFirstToken: '平均首字用時',
+  sqDetailPerfSuccess: '成功率',
+  sqDetailPerfEmptyTitle: '暫無性能數據',
+  sqDetailPerfEmptyBody: '該模型在統計窗口內還沒有請求記錄。',
+  sqDetailPerfErrorTitle: '性能數據加載失敗',
 
   // 排行榜
   rkMetaTitle: '模型排行榜',

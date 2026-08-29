@@ -141,6 +141,7 @@ watch([open, () => props.model?.model], ([nextOpen]) => {
               <th class="num">{{ t('site.sqDetailPerfRequests') }}</th>
               <th class="num">{{ t('site.sqDetailPerfTps') }}</th>
               <th class="num">{{ t('site.sqDetailPerfLatency') }}</th>
+               <th class="num">{{ t('site.sqDetailPerfFirstToken') }}</th>
               <th class="num">{{ t('site.sqDetailPerfSuccess') }}</th>
             </tr>
           </thead>
@@ -150,6 +151,7 @@ watch([open, () => props.model?.model], ([nextOpen]) => {
               <td class="num text-muted">{{ row.requests }}</td>
               <td class="num">{{ formatTPS(row.tps) }}</td>
               <td class="num">{{ formatLatency(row.avg_latency_ms) }}</td>
+               <td class="num text-muted">{{ row.avg_first_token_ms == null ? t('common.none') : formatLatency(row.avg_first_token_ms) }}</td>
               <td class="num text-muted">{{ formatSuccessRate(row.success_rate) }}</td>
             </tr>
           </tbody>

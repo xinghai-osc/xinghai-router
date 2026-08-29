@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ShieldAlert } from 'lucide-vue-next'
-import { endpoints, type ContentPolicyRule, type ContentPolicySettings } from '~/src/api'
+import { endpoints, type ContentPolicyBatchResult, type ContentPolicyRule, type ContentPolicySettings } from '~/src/api'
 import { formatDateTime } from '~/src/format'
 
 definePageMeta({ layout: 'console', middleware: 'console-auth' })
@@ -18,6 +18,7 @@ const rules = useResource(() => endpoints.getContentPolicyRules(), { data: [] as
 const form = reactive<ContentPolicySettings>({ ...defaults })
 const draft = reactive({ name: '', term: '', action: 'block' as ContentPolicyRule['action'], case_sensitive: false, enabled: true, priority: 100 })
 const editing = ref<string | null>(null)
+const batch = reactive({ terms: '', action: 'block' as ContentPolicyRule['action'], enabled: true, priority: 100 })
 
 watch(settings.data, value => Object.assign(form, value), { immediate: true })
 
@@ -55,6 +56,16 @@ async function saveRule() {
   else toast.error(t('common.actionFailed'))
 }
 
+async function importBatch() {
+  if (!batch.terms.trim()) { toast.error(t('system.contentPolicyBatchTermsRequired')); return }
+  let result: ContentPolicyBatchResult | null = null
+  const ok = await run(async () => {
+    result = await endpoints.batchCreateContentPolicyRules({ terms: batch.terms, action: batch.action, enabled: batch.enabled, priority: Number(batch.priority) || 0 })
+  })
+  if (ok && result) { toast.success(t('system.contentPolicyBatchResult', { created: result.created, skipped: result.skipped })); batch.terms = ''; await rules.refresh() }
+  else toast.error(t('common.actionFailed'))
+}
+
 async function removeRule(rule: ContentPolicyRule) {
   if (!window.confirm(t('system.contentPolicyRuleDeleteConfirm', { name: rule.name }))) return
   const ok = await run(() => endpoints.deleteContentPolicyRule(rule.id))
@@ -87,6 +98,20 @@ async function removeRule(rule: ContentPolicyRule) {
           <UiSwitch v-model="form.request_audit_enabled" :label="t('system.contentPolicyAuditEnabled')" />
           <div class="flex justify-end"><UiButton type="submit" :loading="busy">{{ t('common.save') }}</UiButton></div>
         </form>
+      </UiCard>
+
+      <UiCard :title="t('system.contentPolicyBatchSection')" :description="t('system.contentPolicyBatchLead')">
+        <div class="space-y-4">
+          <UiField :label="t('system.contentPolicyBatchTermsLabel')" required>
+            <UiTextarea v-model="batch.terms" mono :rows="6" :placeholder="t('system.contentPolicyBatchTermsPlaceholder')" />
+          </UiField>
+          <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <UiSelect v-model="batch.action" :options="[{ value: 'block', label: t('system.contentPolicyActionBlock') }, { value: 'audit', label: t('system.contentPolicyActionAudit') }]" />
+            <UiInput v-model.number="batch.priority" type="number" :placeholder="t('system.contentPolicyPriority')" />
+            <UiSwitch v-model="batch.enabled" :label="t('common.enabled')" />
+            <div class="flex justify-end"><UiButton size="sm" :loading="busy" @click="importBatch">{{ t('system.contentPolicyBatchImport') }}</UiButton></div>
+          </div>
+        </div>
       </UiCard>
 
       <UiCard :title="t('system.contentPolicyRulesSection')" :description="t('system.contentPolicyRulesHint')">

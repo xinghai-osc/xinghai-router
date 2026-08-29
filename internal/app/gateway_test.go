@@ -277,20 +277,66 @@ func TestResolveGatewayMaxTokens(t *testing.T) {
 	}
 }
 
-func TestStripGatewayExtensions(t *testing.T) {
-	got := stripGatewayExtensions([]byte(`{"model":"m","promptCacheKey":"abc"}`))
-	if strings.Contains(string(got), "promptCacheKey") {
-		t.Fatalf("extension field not stripped: %s", got)
+func TestRewriteJSONModel(t *testing.T) {
+	body := []byte(`{"model":"alias","input":"hello","store":false}`)
+	got := rewriteJSONModel(body, "real-model")
+	var payload map[string]any
+	if err := json.Unmarshal(got, &payload); err != nil {
+		t.Fatalf("rewritten body is invalid JSON: %v", err)
 	}
-	if !strings.Contains(string(got), `"model":"m"`) {
-		t.Fatalf("model dropped while stripping: %s", got)
+	if payload["model"] != "real-model" {
+		t.Fatalf("model = %v, want real-model", payload["model"])
 	}
-	want := `{"model":"m"}`
-	if got := string(stripGatewayExtensions([]byte(want))); got != want {
-		t.Fatalf("body without extensions must pass through unchanged: %s", got)
+	if payload["input"] != "hello" || payload["store"] != false {
+		t.Fatalf("rewrite dropped Responses fields: %#v", payload)
+	}
+	if got := string(rewriteJSONModel(body, "")); got != string(body) {
+		t.Fatalf("empty upstream model must preserve body: %s", got)
 	}
 	invalid := []byte(`not-json`)
-	if got := stripGatewayExtensions(invalid); string(got) != "not-json" {
+	if got := string(rewriteJSONModel(invalid, "real-model")); got != string(invalid) {
+		t.Fatalf("invalid JSON must pass through unchanged: %s", got)
+	}
+}
+
+func TestRewriteOpenAIBody(t *testing.T) {
+	// No rewrites needed: the body passes through byte-for-byte unchanged.
+	clean := []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`)
+	if got := string(rewriteOpenAIBody(clean, "", "m", false)); got != string(clean) {
+		t.Fatalf("clean body must pass through unchanged: %s", got)
+	}
+
+	// Model rewrite plus extension strip in one pass.
+	body := []byte(`{"model":"m","promptCacheKey":"k","messages":[{"role":"user","content":"hi"}]}`)
+	got := rewriteOpenAIBody(body, "real-model", "m", false)
+	var payload map[string]any
+	if err := json.Unmarshal(got, &payload); err != nil {
+		t.Fatalf("rewritten body is invalid JSON: %v", err)
+	}
+	if payload["model"] != "real-model" {
+		t.Fatalf("model = %v, want real-model", payload["model"])
+	}
+	if _, ok := payload["promptCacheKey"]; ok {
+		t.Fatalf("promptCacheKey not stripped: %#v", payload)
+	}
+	if payload["messages"] == nil {
+		t.Fatalf("messages dropped by rewrite: %#v", payload)
+	}
+
+	// Streaming injects include_usage and preserves an existing stream_options object.
+	streamBody := []byte(`{"model":"m","messages":[]}`)
+	got = rewriteOpenAIBody(streamBody, "", "m", true)
+	if err := json.Unmarshal(got, &payload); err != nil {
+		t.Fatalf("stream body is invalid JSON: %v", err)
+	}
+	so, _ := payload["stream_options"].(map[string]any)
+	if so == nil || so["include_usage"] != true {
+		t.Fatalf("stream_options.include_usage not injected: %#v", payload)
+	}
+
+	// Invalid JSON passes through unchanged even when rewrites are requested.
+	invalid := []byte(`not-json`)
+	if got := string(rewriteOpenAIBody(invalid, "real-model", "m", true)); got != string(invalid) {
 		t.Fatalf("invalid JSON must pass through unchanged: %s", got)
 	}
 }

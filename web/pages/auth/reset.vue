@@ -1,5 +1,10 @@
 <script setup lang="ts">
-import { endpoints } from '~/src/api'
+import { endpoints, ApiError } from '~/src/api'
+
+const RESET_ERROR_KEYS: Record<string, string> = {
+  invalid_token: 'auth.resetInvalidToken',
+  rate_limit_exceeded: 'auth.rateLimitExceeded',
+}
 
 const route = useRoute()
 const { t } = useI18n()
@@ -39,6 +44,10 @@ async function submit() {
     toast.success(t('auth.resetSuccess'))
     await navigateTo('/auth')
   } catch (cause) {
+    if (cause instanceof ApiError) {
+      const key = RESET_ERROR_KEYS[cause.code]
+      if (key) { formError.value = t(key); return }
+    }
     formError.value = cause instanceof Error && cause.message ? cause.message : t('common.requestFailed')
   } finally {
     busy.value = false

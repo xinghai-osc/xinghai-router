@@ -58,6 +58,8 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("GET /account/orders", s.account(s.accountOrders))
 	mux.Handle("POST /account/redeem", s.account(s.redeemCode))
 	mux.Handle("GET /account/redemptions", s.account(s.accountRedemptions))
+	mux.Handle("POST /account/subscriptions/{id}/reset", s.account(s.useResetCard))
+	mux.Handle("GET /account/reset-cards", s.account(s.accountResetCards))
 	mux.Handle("GET /account/invitations", s.account(s.accountInvitations))
 	mux.Handle("GET /account/groups", s.account(s.accountGroups))
 	mux.Handle("GET /account/oauth/connections", s.account(s.listOAuthConnections))
@@ -153,6 +155,7 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("PUT /admin/content-policy/settings", s.permission("system.manage", s.updateContentPolicySettings))
 	mux.Handle("GET /admin/content-policy/rules", s.permission("system.manage", s.listContentPolicyRules))
 	mux.Handle("POST /admin/content-policy/rules", s.permission("system.manage", s.createContentPolicyRule))
+	mux.Handle("POST /admin/content-policy/rules/batch", s.permission("system.manage", s.batchCreateContentPolicyRules))
 	mux.Handle("PUT /admin/content-policy/rules/{id}", s.permission("system.manage", s.updateContentPolicyRule))
 	mux.Handle("DELETE /admin/content-policy/rules/{id}", s.permission("system.manage", s.deleteContentPolicyRule))
 	mux.Handle("GET /admin/orders", s.permission("users.read", s.listAdminOrders))
@@ -172,6 +175,13 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("PUT /admin/redemption-codes/{id}", s.permission("system.manage", s.updateRedemptionCode))
 	mux.Handle("DELETE /admin/redemption-codes/{id}", s.permission("system.manage", s.deleteRedemptionCode))
 	mux.Handle("GET /admin/redemption-codes/{id}/redemptions", s.permission("system.manage", s.listCodeRedemptions))
+	mux.Handle("GET /admin/reset-cards", s.permission("system.manage", s.listResetCards))
+	mux.Handle("POST /admin/reset-cards", s.permission("system.manage", s.createResetCards))
+	mux.Handle("POST /admin/reset-cards/by-plan", s.permission("system.manage", s.createResetCardsByPlan))
+	mux.Handle("POST /admin/reset-cards/all", s.permission("system.manage", s.createResetCardsAll))
+	mux.Handle("PUT /admin/reset-cards/{id}", s.permission("system.manage", s.updateResetCard))
+	mux.Handle("DELETE /admin/reset-cards/{id}", s.permission("system.manage", s.deleteResetCard))
+	mux.Handle("POST /admin/users/{id}/reset-quotas", s.permission("system.manage", s.adminResetUserQuota))
 	mux.Handle("GET /admin/model-routes", s.permission("routes.manage", s.listModelRoutes))
 	mux.Handle("POST /admin/model-routes", s.permission("routes.manage", s.createModelRoute))
 	mux.Handle("PUT /admin/model-routes/{id}", s.permission("routes.manage", s.updateModelRoute))
@@ -208,6 +218,8 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("GET /me/groups", s.api(s.myGroups))
 	mux.Handle("GET /v1/models", s.api(s.models))
 	mux.Handle("POST /v1/chat/completions", s.api(s.chatCompletions))
+	mux.Handle("POST /v1/images/generations", s.api(s.imageGenerations))
+	mux.Handle("POST /v1/images/edits", s.api(s.imageEdits))
 	mux.Handle("POST /v1/responses", s.api(s.responsesCompletions))
 	mux.Handle("GET /v1/responses", s.api(s.responsesWebSocket))
 	mux.Handle("GET /responses", s.api(s.responsesWebSocket))
@@ -334,7 +346,7 @@ func (s *Service) myUsage(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Service) myLedger(w http.ResponseWriter, r *http.Request) {
 	key := r.Context().Value(contextKey{}).(keyContext)
-	rows, err := s.db.Query(r.Context(), `select wl.id,wl.amount,wl.balance_after,wl.kind,wl.request_id,wl.note,wl.created_at,wl.settlement_status,wl.settlement_date,wl.settled_at,coalesce(ws.error,'') from wallet_ledger wl left join wallet_settlements ws on ws.ledger_id=wl.id where wl.user_id=$1 order by wl.created_at desc limit 100`, key.userID)
+	rows, err := s.db.Query(r.Context(), `select wl.id,wl.amount::text,wl.balance_after::text,wl.kind,wl.request_id,wl.note,wl.created_at,wl.settlement_status,wl.settlement_date,wl.settled_at,coalesce(ws.error,'') from wallet_ledger wl left join wallet_settlements ws on ws.ledger_id=wl.id where wl.user_id=$1 order by wl.created_at desc limit 100`, key.userID)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return

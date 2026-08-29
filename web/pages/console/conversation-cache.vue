@@ -157,7 +157,8 @@ function prettyJson(value: unknown): string {
             <th>{{ t('admin.model') }}</th>
             <th>{{ t('admin.conversationStatusCode') }}</th>
             <th>{{ t('admin.conversationStream') }}</th>
-            <th class="num">{{ t('admin.duration') }}</th>
+            <th class="num">{{ t('admin.firstToken') }}</th>
+             <th class="num">{{ t('admin.duration') }}</th>
             <th>{{ t('common.detail') }}</th>
           </tr>
         </thead>
@@ -171,7 +172,8 @@ function prettyJson(value: unknown): string {
               <UiBadge :tone="statusTone(log.status_code)">{{ log.status_code }}</UiBadge>
             </td>
             <td class="text-muted">{{ log.stream ? t('admin.conversationYes') : t('admin.conversationNo') }}</td>
-            <td class="num">{{ t('admin.durationMs', { value: log.duration_ms }) }}</td>
+            <td class="num">{{ log.first_token_ms == null ? t('common.none') : t('admin.firstTokenMs', { value: log.first_token_ms }) }}</td>
+             <td class="num">{{ t('admin.durationMs', { value: log.duration_ms }) }}</td>
             <td>
               <UiButton variant="ghost" size="sm" @click="openDetail(log)">{{ t('common.detail') }}</UiButton>
             </td>
@@ -236,6 +238,10 @@ function prettyJson(value: unknown): string {
           <div>
             <div class="mb-1 text-xs text-muted">{{ t('admin.conversationStream') }}</div>
             <div class="text-muted">{{ detail.stream ? t('admin.conversationYes') : t('admin.conversationNo') }}</div>
+          </div>
+          <div>
+            <div class="mb-1 text-xs text-muted">{{ t('admin.firstToken') }}</div>
+            <div class="numeric text-ink">{{ detail.first_token_ms == null ? t('common.none') : t('admin.firstTokenMs', { value: detail.first_token_ms }) }}</div>
           </div>
           <div>
             <div class="mb-1 text-xs text-muted">{{ t('admin.duration') }}</div>

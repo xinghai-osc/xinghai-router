@@ -35,6 +35,7 @@ export default {
 
   subscriptionPlans: '订阅计划',
   redemptionCodes: '兑换码',
+  resetCards: '重置卡',
   adminSubscriptions: '订阅管理',
   reliability: '可靠性',
   conversationCacheSettings: '对话缓存设置',

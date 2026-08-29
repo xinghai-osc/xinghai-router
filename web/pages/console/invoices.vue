@@ -452,9 +452,9 @@ async function syncStatuses() {
 
     <UiDialog
       :open="!!confirmTarget"
-      @update:open="(v: boolean) => { if (!v) confirmTarget = null }"
       :title="t('console.invoiceCancelTitle')"
       :description="t('console.invoiceCancelBody')"
+      @update:open="(v: boolean) => { if (!v) confirmTarget = null }"
     >
       <template #footer>
         <UiButton variant="secondary" @click="confirmTarget = null">{{ t('common.cancel') }}</UiButton>

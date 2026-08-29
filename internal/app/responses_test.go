@@ -519,3 +519,17 @@ func TestStreamChatCompletionsToResponsesReasoning(t *testing.T) {
 		t.Fatalf("reasoning_content must be dropped when keepReasoning is false:\n%s", rec.Body.String())
 	}
 }
+
+func TestResponsesPassthroughEnabled(t *testing.T) {
+	// Only the plain openai format relays Responses requests verbatim; openai_chat
+	// channels (OpenAI wire format, chat-completions only) must go through the
+	// chat conversion instead.
+	if !responsesPassthroughEnabled("openai") {
+		t.Fatalf("openai must relay Responses requests verbatim")
+	}
+	for _, format := range []string{"", "openai_chat", "anthropic"} {
+		if responsesPassthroughEnabled(format) {
+			t.Fatalf("format %q must convert Responses requests to chat completions", format)
+		}
+	}
+}

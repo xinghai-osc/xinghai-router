@@ -67,29 +67,23 @@ func TestConfirmPasswordResetRejectsInvalidBodyBeforeDatabase(t *testing.T) {
 }
 
 func TestResetLink(t *testing.T) {
-	cases := []struct {
-		name string
-		req  *http.Request
-		want string
-	}{
-		{name: "plain http", req: httptest.NewRequest(http.MethodPost, "/auth/password-reset/request", nil), want: "http://example.com/auth/reset?token=abc"},
-		{name: "https via forward header", req: func() *http.Request {
-			req := httptest.NewRequest(http.MethodPost, "/auth/password-reset/request", nil)
-			req.Header.Set("X-Forwarded-Proto", "https")
-			return req
-		}(), want: "https://example.com/auth/reset?token=abc"},
-		{name: "host and token escaped", req: httptest.NewRequest(http.MethodPost, "/auth/password-reset/request", nil), want: "http://example.com/auth/reset?token=a+b"},
+	req := httptest.NewRequest(http.MethodPost, "/auth/password-reset/request", nil)
+	req.Host = "example.com"
+	wantA := "http://example.com/auth/reset?token=abc"
+	if got := (&Service{}).resetLink(req.Context(), req, "abc"); got != wantA {
+		t.Fatalf("http resetLink = %q, want %q", got, wantA)
 	}
-	cases[0].req.Host = "example.com"
-	cases[1].req.Host = "example.com"
-	cases[2].req.Host = "example.com"
-	if got := resetLink(cases[0].req, "abc"); got != cases[0].want {
-		t.Fatalf("http resetLink = %q, want %q", got, cases[0].want)
+	req2 := httptest.NewRequest(http.MethodPost, "/auth/password-reset/request", nil)
+	req2.Host = "example.com"
+	req2.Header.Set("X-Forwarded-Proto", "https")
+	wantB := "https://example.com/auth/reset?token=abc"
+	if got := (&Service{}).resetLink(req2.Context(), req2, "abc"); got != wantB {
+		t.Fatalf("https resetLink = %q, want %q", got, wantB)
 	}
-	if got := resetLink(cases[1].req, "abc"); got != cases[1].want {
-		t.Fatalf("https resetLink = %q, want %q", got, cases[1].want)
-	}
-	if got := resetLink(cases[2].req, "a b"); got != cases[2].want {
-		t.Fatalf("escaped resetLink = %q, want %q", got, cases[2].want)
+	req3 := httptest.NewRequest(http.MethodPost, "/auth/password-reset/request", nil)
+	req3.Host = "example.com"
+	wantC := "http://example.com/auth/reset?token=a+b"
+	if got := (&Service{}).resetLink(req3.Context(), req3, "a b"); got != wantC {
+		t.Fatalf("escaped resetLink = %q, want %q", got, wantC)
 	}
 }

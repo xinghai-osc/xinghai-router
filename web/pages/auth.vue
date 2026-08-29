@@ -1,9 +1,23 @@
 <script setup lang="ts">
-import { endpoints, getToken } from '~/src/api'
+import { endpoints, ApiError, getToken } from '~/src/api'
 import { GEETEST_CANCELLED } from '~/composables/useGeetest'
 import { CORPTCHA_CANCELLED, CORPTCHA_UNAVAILABLE } from '~/composables/useCorptcha'
 
 const RESEND_SECONDS = 60
+
+// Backend error codes that have friendlier localised text than the raw English
+// message the Go handlers emit. Anything unmapped falls back to that message.
+const AUTH_ERROR_KEYS: Record<string, string> = {
+  email_not_allowed: 'auth.emailNotAllowed',
+  invalid_credentials: 'auth.invalidCredentials',
+  rate_limit_exceeded: 'auth.rateLimitExceeded',
+  captcha_failed: 'auth.captchaRequired',
+  code_required: 'auth.codeRequired',
+  invalid_code: 'auth.invalidCode',
+  invalid_invitation_code: 'auth.invalidInvitationCode',
+  conflict: 'auth.emailOrUsernameExists',
+  email_send_failed: 'auth.emailSendFailed',
+}
 
 const route = useRoute()
 const router = useRouter()
@@ -111,7 +125,10 @@ async function runCaptcha(purpose: string): Promise<Record<string, string> | nul
 }
 
 function describe(cause: unknown): string {
-  if (cause instanceof Error && cause.message.includes('email_not_allowed')) return t('auth.emailNotAllowed')
+  if (cause instanceof ApiError) {
+    const key = AUTH_ERROR_KEYS[cause.code]
+    if (key) return t(key)
+  }
   return cause instanceof Error && cause.message ? cause.message : t('common.requestFailed')
 }
 

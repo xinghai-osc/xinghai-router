@@ -1,8 +1,5 @@
 -- Convert users.id and all user_id foreign-key columns from uuid to bigint.
--- User IDs are already numeric values stored as UUID, so we extract the
--- numeric portion directly instead of generating random bigints.
-
-begin;
+-- User IDs are assigned sequentially so no two uuid values can collide.
 
 -- Skip this migration on fresh installs. UUID-based IDs work fine
 -- for new deployments; this conversion is only needed when migrating
@@ -40,12 +37,11 @@ do $$ begin
 
     -- 3. Build a deterministic mapping from uuid ids to bigint.
     create temporary table user_id_mapping on commit drop as
-    select id as old_id,
-           ('x' || right(replace(id::text, '-', ''), 16))::bit(64)::bigint as new_id
+    select id as old_id, row_number() over (order by created_at, id) as new_id
     from users;
 
     alter table user_id_mapping add primary key (old_id);
-    create unique index user_id_mapping_new_idx on user_id_mapping(new_id);
+    create unique index user_id_mapping_new_idx on user_id_mapping (new_id);
 
     -- 4. Create new bigint primary key on users.
     alter table users add column new_id bigint not null default 0;
@@ -154,5 +150,3 @@ do $$ begin
 
   end if;
 end $$;
-
-commit;

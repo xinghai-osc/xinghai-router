@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"html"
 	"net/http"
@@ -11,10 +12,14 @@ import (
 
 const passwordResetTTL = 30 * time.Minute
 
-// resetLink builds the console URL that carries the reset token. The Go service
-// is reached through the Nuxt proxy, which preserves the public Host header, so
-// the link points at the console the user actually came from.
-func resetLink(r *http.Request, token string) string {
+// resetLink builds the console URL that carries the reset token. When an admin
+// has configured a public base URL it is used verbatim so links stay valid
+// behind proxies; otherwise the request Host (already the console origin through
+// the Nuxt proxy) is used.
+func (s *Service) resetLink(ctx context.Context, r *http.Request, token string) string {
+	if base := s.loadPublicBaseURL(ctx); base != "" {
+		return base + "/auth/reset?token=" + url.QueryEscape(token)
+	}
 	scheme := "http"
 	if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
 		scheme = "https"
@@ -61,13 +66,31 @@ func (s *Service) requestPasswordReset(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not create reset token")
 		return
 	}
-	if _, err = s.db.Exec(ctx, `update password_reset_tokens set consumed_at=now() where email=$1 and consumed_at is null`, email); err != nil {
+	// Atomically consume any existing active token and insert the new one so
+	// concurrent requests never leave two valid tokens. The transaction is
+	// committed before sending the email — if the email fails, the token is
+	// already stored but the user simply re-requests.
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not create reset token")
+		return
+	}
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, `update password_reset_tokens set consumed_at=now() where email=$1 and consumed_at is null`, email); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not create reset token")
+		return
+	}
+	if _, err = tx.Exec(ctx, `insert into password_reset_tokens(email, token_hash, expires_at) values($1, $2, $3)`, email, hashSecret(token), time.Now().Add(passwordResetTTL)); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not create reset token")
+		return
+	}
+	if err = tx.Commit(ctx); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not create reset token")
 		return
 	}
 	siteName := s.siteName(ctx)
 	subject := fmt.Sprintf("%s 密码重置 / Password reset", siteName)
-	link := html.EscapeString(resetLink(r, token))
+	link := html.EscapeString(s.resetLink(ctx, r, token))
 	body := fmt.Sprintf(`<div style="max-width:480px;margin:0 auto;padding:32px;font-family:-apple-system,'Segoe UI',sans-serif;color:#1a1a2e">
 	<h2 style="margin:0 0 8px;font-size:20px">%s</h2>
 	<p style="margin:0 0 24px;color:#666;font-size:14px">我们收到了重置密码的请求 / We received a request to reset your password</p>
@@ -77,10 +100,6 @@ func (s *Service) requestPasswordReset(w http.ResponseWriter, r *http.Request) {
 </div>`, siteName, link)
 	if err := s.sendEmail(ctx, email, subject, body); err != nil {
 		writeError(w, http.StatusBadGateway, "email_send_failed", "could not send the reset email")
-		return
-	}
-	if _, err = s.db.Exec(ctx, `insert into password_reset_tokens(email, token_hash, expires_at) values($1, $2, $3)`, email, hashSecret(token), time.Now().Add(passwordResetTTL)); err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "could not store the reset token")
 		return
 	}
 	s.auditActor(r, userID, "account.password_reset_requested", "user", userID, nil)
@@ -109,17 +128,6 @@ func (s *Service) confirmPasswordReset(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	ctx := r.Context()
-	var email string
-	var expiresAt time.Time
-	if err := s.db.QueryRow(ctx, `select email, expires_at from password_reset_tokens where token_hash=$1 and consumed_at is null order by created_at desc limit 1`, tokenHash).Scan(&email, &expiresAt); err != nil || time.Now().After(expiresAt) {
-		writeError(w, http.StatusBadRequest, "invalid_token", "this reset link is invalid or has expired")
-		return
-	}
-	var userID string
-	if err := s.db.QueryRow(ctx, `select id from users where email=$1 and enabled and password_hash is not null`, email).Scan(&userID); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_token", "this reset link is invalid or has expired")
-		return
-	}
 	newHash, err := hashPassword(in.Password)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not secure password")
@@ -131,6 +139,19 @@ func (s *Service) confirmPasswordReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(ctx)
+	// Lock the token row with FOR UPDATE so concurrent confirmations are
+	// serialized: the second one sees consumed_at is no longer null and fails.
+	var email string
+	var expiresAt time.Time
+	if err := tx.QueryRow(ctx, `select email, expires_at from password_reset_tokens where token_hash=$1 and consumed_at is null order by created_at desc limit 1 for update`, tokenHash).Scan(&email, &expiresAt); err != nil || time.Now().After(expiresAt) {
+		writeError(w, http.StatusBadRequest, "invalid_token", "this reset link is invalid or has expired")
+		return
+	}
+	var userID string
+	if err := tx.QueryRow(ctx, `select id from users where email=$1 and enabled and password_hash is not null`, email).Scan(&userID); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_token", "this reset link is invalid or has expired")
+		return
+	}
 	if _, err = tx.Exec(ctx, `update users set password_hash=$1, must_change_password=false where id=$2`, newHash, userID); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not reset password")
 		return

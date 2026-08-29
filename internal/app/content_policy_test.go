@@ -37,3 +37,16 @@ func TestRedactPolicyTerm(t *testing.T) {
 		t.Fatalf("redaction = %q", got)
 	}
 }
+
+func TestParsePolicyTermsSkipsBlankCommentsAndDuplicates(t *testing.T) {
+	terms := parsePolicyTerms("foo\n\n  bar  \r\n# comment\nfoo\n\t\nbaz")
+	want := []string{"foo", "bar", "baz"}
+	if len(terms) != len(want) {
+		t.Fatalf("parsed %d terms, want %d: %v", len(terms), len(want), terms)
+	}
+	for i := range want {
+		if terms[i] != want[i] {
+			t.Fatalf("term[%d] = %q, want %q", i, terms[i], want[i])
+		}
+	}
+}

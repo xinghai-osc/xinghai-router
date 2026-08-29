@@ -46,6 +46,8 @@ function go(p: number) {
 }
 
 const createOpen = ref(false)
+const generatedCodes = ref<string[]>([])
+const resultsOpen = ref(false)
 const editOpen = ref(false)
 const editing = ref<RedemptionCode | null>(null)
 const removing = ref<RedemptionCode | null>(null)
@@ -138,11 +140,12 @@ async function submitCreate() {
     toast.error(t('common.actionFailed'))
     return
   }
-  toast.success(t('admin.redemptionCodesCreated', { count: result.codes.length }))
+  generatedCodes.value = result.codes
   createOpen.value = false
   resetCreate()
   page.value = 1
   await refresh()
+  resultsOpen.value = true
 }
 
 const editForm = reactive({
@@ -253,7 +256,12 @@ async function viewRedemptions(code: RedemptionCode) {
           </thead>
           <tbody>
             <tr v-for="code in codesData.data" :key="code.id">
-              <td><code class="font-mono text-[13px] text-muted">{{ code.code }}</code></td>
+              <td>
+                <div class="flex items-center gap-2">
+                  <code class="font-mono text-[13px] text-muted">{{ code.code }}</code>
+                  <ConsoleUserCopyButton :value="code.code" :label="t('admin.redemptionCopyCode')" size="icon" variant="ghost" />
+                </div>
+              </td>
               <td>
                 <UiBadge :tone="REWARD_TONES[code.reward_type]">{{ rewardLabel(code.reward_type) }}</UiBadge>
               </td>
@@ -355,6 +363,38 @@ async function viewRedemptions(code: RedemptionCode) {
         <template #footer>
           <UiButton variant="secondary" @click="createOpen = false">{{ t('admin.redemptionFormCancel') }}</UiButton>
           <UiButton :loading="busy" @click="submitCreate">{{ t('admin.redemptionFormSubmit') }}</UiButton>
+        </template>
+      </UiDialog>
+
+      <UiDialog
+        v-model:open="resultsOpen"
+        :title="t('admin.redemptionCodesCreated', { count: generatedCodes.length })"
+        size="lg"
+      >
+        <div class="space-y-4">
+          <div class="flex items-center justify-between gap-3">
+            <p class="text-[13px] text-muted">{{ t('admin.redemptionGeneratedHint') }}</p>
+            <ConsoleUserCopyButton
+              :value="generatedCodes.join('\n')"
+              :label="t('admin.redemptionCopyAll')"
+              :success-message="t('admin.redemptionCopiedAll')"
+            />
+          </div>
+
+          <div class="max-h-72 overflow-y-auto rounded-card border border-line">
+            <div
+              v-for="code in generatedCodes"
+              :key="code"
+              class="flex items-center justify-between gap-3 border-b border-line px-3 py-1.5 last:border-b-0"
+            >
+              <code class="min-w-0 flex-1 truncate font-mono text-[13px] text-ink">{{ code }}</code>
+              <ConsoleUserCopyButton :value="code" :label="t('admin.redemptionCopyCode')" size="icon" variant="ghost" />
+            </div>
+          </div>
+        </div>
+
+        <template #footer>
+          <UiButton @click="resultsOpen = false">{{ t('common.close') }}</UiButton>
         </template>
       </UiDialog>
 

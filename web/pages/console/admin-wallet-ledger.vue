@@ -119,7 +119,7 @@ function statusLabel(value: AdminLedgerEntry['settlement_status']): string {
               </tr>
             </tbody>
           </UiTable>
-          <ConsoleOpsPagination v-model:page="page" v-model:pageSize="pageSize" :total="ledger.data.value.total" :page-size-options="['20', '50', '100']" />
+          <ConsoleOpsPagination v-model:page="page" v-model:page-size="pageSize" :total="ledger.data.value.total" :page-size-options="['20', '50', '100']" />
         </ConsoleOpsListState>
       </div>
     </UiCard>

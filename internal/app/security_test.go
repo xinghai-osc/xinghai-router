@@ -117,7 +117,7 @@ func TestLimiter(t *testing.T) {
 	if !l.allow("key") || !l.allow("key") || l.allow("key") {
 		t.Fatal("unexpected rate-limit result")
 	}
-	l.entries["key"] = rateWindow{start: time.Now().Add(-time.Minute)}
+	l.shard("key").entries["key"] = rateWindow{start: time.Now().Add(-time.Minute)}
 	if !l.allow("key") {
 		t.Fatal("window did not reset")
 	}

@@ -122,6 +122,7 @@ export default {
   sqDetailPerfRequests: '请求数',
   sqDetailPerfTps: 'TPS',
   sqDetailPerfLatency: '平均延迟',
+  sqDetailPerfFirstToken: '平均首字用时',
   sqDetailPerfSuccess: '成功率',
   sqDetailPerfEmptyTitle: '暂无性能数据',
   sqDetailPerfEmptyBody: '该模型在统计窗口内还没有请求记录。',

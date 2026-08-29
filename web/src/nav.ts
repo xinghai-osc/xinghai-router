@@ -1,6 +1,6 @@
 import {
   Activity, ArrowRightLeft, BadgeDollarSign, Bell, Blocks, CalendarCheck, CreditCard, Database, FileClock, FileText,
-  KeyRound, LayoutDashboard, Layers, LogIn, MessageSquareText, Repeat, ScrollText, Server,
+  KeyRound, LayoutDashboard, Layers, LogIn, MessageSquareText, Repeat, RotateCcw, ScrollText, Server,
   Settings, ShieldAlert, ShieldCheck, ShoppingCart, Sparkles, Stamp, Ticket, UserCog, UserPlus, Users, Wallet,
 } from 'lucide-vue-next'
 import type { Component } from 'vue'
@@ -69,6 +69,7 @@ export const NAV_SECTIONS: NavSection[] = [
     items: [
       { to: '/console/subscription-plans', labelKey: 'nav.subscriptionPlans', icon: Sparkles, permission: 'system.manage' },
       { to: '/console/redemption-codes', labelKey: 'nav.redemptionCodes', icon: Ticket, permission: 'system.manage' },
+      { to: '/console/reset-cards', labelKey: 'nav.resetCards', icon: RotateCcw, permission: 'system.manage' },
       { to: '/console/admin-subscriptions', labelKey: 'nav.adminSubscriptions', icon: Repeat, permission: 'users.read' },
       { to: '/console/reliability', labelKey: 'nav.reliability', icon: ShieldCheck, permission: 'system.manage' },
       { to: '/console/content-policy', labelKey: 'nav.contentPolicy', icon: ShieldAlert, permission: 'system.manage' },

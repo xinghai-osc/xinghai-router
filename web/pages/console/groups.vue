@@ -375,7 +375,7 @@ async function remove() {
 
       <ConsoleOpsPagination
         v-model:page="page"
-        v-model:pageSize="pageSize"
+        v-model:page-size="pageSize"
         :total="groups.data.value.total"
       />
     </ConsoleOpsListState>

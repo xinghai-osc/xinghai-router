@@ -197,7 +197,7 @@ func (s *Service) queryOpenCodeGoUsage(ctx context.Context, baseURL, apiKey stri
 }
 
 func (s *Service) queryUpstreamBalance(ctx context.Context, baseURL, apiKey, provider string) (upstreamBalance, error) {
-	if provider == "anthropic" || provider == "ollama" {
+	if provider == "anthropic" || provider == "ollama" || provider == "commandcode" {
 		return upstreamBalance{}, fmt.Errorf("balance query is not supported for %s", provider)
 	}
 	if provider == "opencode_go" {

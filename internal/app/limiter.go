@@ -1,7 +1,7 @@
 package app
 
 import (
-	"net"
+	"hash/fnv"
 	"net/http"
 	"sync"
 	"time"
@@ -21,6 +21,10 @@ const (
 	// which aggregates request_logs per group for a single model on every panel open.
 	// The short cache absorbs repeats from the same model.
 	performancePerMinute = 120
+
+	// limiterShards splits the in-process limiter's map so the single mutex is not a
+	// contention point for the memory fallback under concurrent gateway traffic.
+	limiterShards = 16
 )
 
 type rateLimiter interface {
@@ -36,19 +40,33 @@ type rateWindow struct {
 }
 
 type memoryLimiter struct {
-	mu        sync.Mutex
 	perMinute int
-	entries   map[string]rateWindow
+	shards    [limiterShards]memoryLimiterShard
+}
+
+type memoryLimiterShard struct {
+	mu      sync.Mutex
+	entries map[string]rateWindow
 }
 
 func newMemoryLimiter(n int) *memoryLimiter {
 	if n <= 0 {
 		n = 60
 	}
-	return &memoryLimiter{perMinute: n, entries: map[string]rateWindow{}}
+	l := &memoryLimiter{perMinute: n}
+	for i := range l.shards {
+		l.shards[i].entries = map[string]rateWindow{}
+	}
+	return l
 }
 
 func newLimiter(n int) *memoryLimiter { return newMemoryLimiter(n) }
+
+func (l *memoryLimiter) shard(key string) *memoryLimiterShard {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(key))
+	return &l.shards[h.Sum32()%limiterShards]
+}
 
 func (l *memoryLimiter) allow(key string) bool {
 	return l.allowN(key, l.perMinute)
@@ -58,73 +76,45 @@ func (l *memoryLimiter) allowN(key string, n int) bool {
 	if n <= 0 {
 		n = l.perMinute
 	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	sh := l.shard(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
 	now := time.Now()
-	w := l.entries[key]
+	w := sh.entries[key]
 	if now.Sub(w.start) >= time.Minute {
 		w = rateWindow{start: now}
 	}
 	if w.count >= n {
-		l.entries[key] = w
+		sh.entries[key] = w
 		return false
 	}
 	w.count++
-	l.entries[key] = w
+	sh.entries[key] = w
 	return true
 }
 
 // cleanup removes entries that have not been touched in over a minute.
 // Call it periodically to prevent unbounded map growth.
 func (l *memoryLimiter) cleanup() {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	for k, w := range l.entries {
-		if time.Since(w.start) > time.Minute {
-			delete(l.entries, k)
+	for i := range l.shards {
+		sh := &l.shards[i]
+		sh.mu.Lock()
+		for k, w := range sh.entries {
+			if time.Since(w.start) > time.Minute {
+				delete(sh.entries, k)
+			}
 		}
+		sh.mu.Unlock()
 	}
 }
 
-// clientIP extracts the real client IP from headers or the remote address.
+// clientIP extracts the real client IP only when the direct peer is a configured
+// trusted proxy. Direct clients cannot rotate forwarded headers to bypass limits.
 func clientIP(r *http.Request) string {
-	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-		if ip := firstIP(fwd); ip != "" {
-			return ip
-		}
-	}
-	if real := r.Header.Get("X-Real-IP"); real != "" {
-		if ip := firstIP(real); ip != "" {
-			return ip
-		}
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
-}
-
-func firstIP(s string) string {
-	for i := 0; i < len(s); i++ {
-		if s[i] != ' ' {
-			s = s[i:]
-			break
-		}
-	}
-	if idx := commaIndex(s); idx >= 0 {
-		s = s[:idx]
-	}
-	return s
-}
-
-func commaIndex(s string) int {
-	for i := 0; i < len(s); i++ {
-		if s[i] == ',' {
-			return i
-		}
-	}
-	return -1
+	trustedProxiesMu.RLock()
+	nets := trustedProxyNets
+	trustedProxiesMu.RUnlock()
+	return clientIPFromRequest(r, nets)
 }
 
 // ipRateLimit is middleware that rate-limits by client IP.

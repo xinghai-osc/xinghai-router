@@ -33,6 +33,12 @@ export default {
   codeSent: '验证码已发送，请查收邮件',
   orContinueWith: '或使用第三方登录',
   captchaUnavailable: '人机验证加载失败，请稍后重试',
+  invalidCredentials: '邮箱、用户名或密码错误',
+  rateLimitExceeded: '操作太频繁，请稍后再试',
+  invalidCode: '验证码错误或已过期',
+  invalidInvitationCode: '邀请码无效',
+  emailOrUsernameExists: '该邮箱或用户名已被注册',
+  emailSendFailed: '邮件发送失败，请稍后再试',
 
   forgotPassword: '忘记密码？',
   resetTitle: '重置密码',

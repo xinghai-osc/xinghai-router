@@ -19,12 +19,39 @@ type subscriptionRouteKey struct {
 	model   string
 }
 
+// quotaRouteKey identifies a key's quota absence status. The cache is used only
+// for the common case where a key has no quota limits configured, so the
+// per-request aggregation query over request_logs can be skipped entirely.
+type quotaRouteKey struct {
+	userID string
+	keyID  string
+	model  string
+}
+
 // invalidateChannels drops the cached channel lists and keys. It is called after
 // any channel, channel key, model route, or group-membership write so the gateway
 // picks up configuration changes immediately instead of waiting out the TTL.
 func (s *Service) invalidateChannels() {
 	s.channelCache.clear()
 	s.channelKeyCache.clear()
+}
+
+// invalidateQuotaAbsence drops the cached "key has no quota" answers. It is
+// called after any quota_limits write so newly-configured quotas take effect
+// immediately instead of waiting out the TTL.
+func (s *Service) invalidateQuotaAbsence() {
+	if s.quotaAbsentCache != nil {
+		s.quotaAbsentCache.clear()
+	}
+}
+
+// invalidateChannelQuota drops the cached channel quota verdicts. It is called
+// after any channel_quota_limits write so newly-configured channel quotas take
+// effect immediately instead of waiting out the TTL.
+func (s *Service) invalidateChannelQuota() {
+	if s.channelQuotaCache != nil {
+		s.channelQuotaCache.clear()
+	}
 }
 
 // cloneChannels returns a shallow copy of a cached channel list. The retry loop

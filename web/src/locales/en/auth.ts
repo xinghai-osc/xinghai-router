@@ -33,6 +33,12 @@ export default {
   codeSent: 'Verification code sent, check your inbox',
   orContinueWith: 'Or continue with',
   captchaUnavailable: 'Could not load the captcha, please try again later',
+  invalidCredentials: 'Invalid email, username, or password',
+  rateLimitExceeded: 'Too many attempts, please try again later',
+  invalidCode: 'The verification code is invalid or has expired',
+  invalidInvitationCode: 'Invalid invitation code',
+  emailOrUsernameExists: 'This email or username is already registered',
+  emailSendFailed: 'Failed to send the email, please try again later',
 
   forgotPassword: 'Forgot password?',
   resetTitle: 'Reset password',

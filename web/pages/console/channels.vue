@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { Component } from 'vue'
-import { Server, KeyRound, Play, ArrowRightLeft, BarChart3, X, ListChecks, SortAsc, Eye, EyeOff, Sparkles, Cpu, Moon, SquareTerminal, Hexagon, Brain, Plug, WalletCards, Copy } from 'lucide-vue-next'
+import { Server, KeyRound, Play, ArrowRightLeft, BarChart3, X, ListChecks, SortAsc, Eye, EyeOff, Sparkles, Cpu, Moon, SquareTerminal, Hexagon, Brain, Plug, WalletCards, Copy, Command } from 'lucide-vue-next'
 import { endpoints, type Channel, type ChannelForm, type ChannelKey, type ChannelKeyTestResult, type ChannelQuota, type ChannelQuotaForm, type ChannelTestResult, type ChannelUsageStats, type ChannelUsageWindow, type Group, type ModelRoute, type ModelRouteForm } from '~/src/api'
 import { formatCompact, formatNumber, formatMoney, formatDateTime } from '~/src/format'
 
@@ -14,7 +14,7 @@ const { busy, run } = useAction()
 const allowed = computed(() => can('channels.read'))
 const canManage = computed(() => can('channels.manage'))
 
-const PROVIDERS = ['openai', 'ollama', 'kimi', 'opencode_go', 'anthropic', 'deepseek', 'custom']
+const PROVIDERS = ['openai', 'ollama', 'kimi', 'opencode_go', 'anthropic', 'deepseek', 'commandcode', 'custom']
 const KEY_TYPES = [
   { value: 'single', label: t('admin.singleKey') },
   { value: 'multi', label: t('admin.multiKey') },
@@ -27,6 +27,7 @@ const PROVIDER_ICONS: Record<string, Component> = {
   opencode_go: SquareTerminal,
   anthropic: Hexagon,
   deepseek: Brain,
+  commandcode: Command,
   custom: Plug,
 }
 
@@ -76,6 +77,7 @@ const providerOptions = computed(() => PROVIDERS.map(value => ({ value, label: t
 const formatOptions = computed(() => [
   { value: '', label: t('admin.formatAuto') },
   { value: 'openai', label: t('admin.formatOpenAI') },
+  { value: 'openai_chat', label: t('admin.formatOpenAIChat') },
   { value: 'anthropic', label: t('admin.formatAnthropic') },
 ])
 
@@ -595,7 +597,7 @@ async function save() {
   } else {
     payload.user_email = ''
   }
-  if (form.provider === 'custom') {
+  if (form.provider !== 'anthropic' && form.provider !== 'commandcode') {
     payload.upstream_path = form.upstream_path.trim()
     payload.upstream_format = form.upstream_format
   }
@@ -826,7 +828,7 @@ const usageTabs = computed(() => [
 const EMPTY_USAGE_STATS: ChannelUsageStats = {
   total_requests: 0, success_count: 0, error_count: 0,
   prompt_tokens: 0, completion_tokens: 0, total_tokens: 0,
-  total_cost: '0', avg_duration_ms: 0,
+  total_cost: '0', avg_duration_ms: 0, avg_first_token_ms: null,
 }
 const channelUsageStats = useResource(
   () => usageChannelId.value ? endpoints.getChannelUsageStats(usageChannelId.value) : Promise.resolve(EMPTY_USAGE_STATS),
@@ -846,6 +848,7 @@ const usageStatTiles = computed(() => [
   { key: 'statTotalTokens', value: formatCompact(channelUsageStats.data.value.total_tokens) },
   { key: 'statCost', value: formatMoney(channelUsageStats.data.value.total_cost, 4) },
   { key: 'statAvgDuration', value: t('admin.durationMs', { value: Math.round(channelUsageStats.data.value.avg_duration_ms) }) },
+  { key: 'statAvgFirstToken', value: channelUsageStats.data.value.avg_first_token_ms == null ? t('common.none') : t('admin.firstTokenMs', { value: Math.round(channelUsageStats.data.value.avg_first_token_ms) }) },
 ])
 
 const QUOTA_WINDOWS = [
@@ -1014,6 +1017,7 @@ function quotaUsageForWindow(window: string) {
               <th>{{ t('admin.usedTokens') }}</th>
               <th>{{ t('admin.channelBalance') }}</th>
               <th>{{ t('admin.responseTime') }}</th>
+               <th class="num">{{ t('admin.firstToken') }}</th>
               <th>{{ t('admin.lastTested') }}</th>
               <th v-if="canManage">{{ t('common.actions') }}</th>
             </tr>
@@ -1076,7 +1080,10 @@ function quotaUsageForWindow(window: string) {
                 <UiBadge :tone="responseTone(channel.response_time_ms)">
                   {{ formatDuration(channel.response_time_ms) }}
                 </UiBadge>
-              </td>
+               </td>
+               <td class="num text-muted">
+                 {{ channel.avg_first_token_ms == null ? t('common.none') : t('admin.firstTokenMs', { value: Math.round(channel.avg_first_token_ms) }) }}
+               </td>
               <td class="text-muted">
                 <UiTooltip :content="formatDateTime(channel.last_test_time)">
                   <span class="text-[13px]">{{ sensitiveVisible ? formatRelativeTime(channel.last_test_time) : '••••' }}</span>
@@ -1113,7 +1120,7 @@ function quotaUsageForWindow(window: string) {
 
         <ConsoleOpsPagination
           v-model:page="page"
-          v-model:pageSize="pageSize"
+          v-model:page-size="pageSize"
           :total="channels.data.value.total"
         />
       </template>
@@ -1140,7 +1147,7 @@ function quotaUsageForWindow(window: string) {
           <UiInput v-model="form.base_url" mono :placeholder="t('admin.baseUrlPlaceholder')" />
         </UiField>
 
-        <div v-if="form.provider === 'custom'" class="grid gap-4 sm:grid-cols-2">
+        <div v-if="form.provider !== 'anthropic' && form.provider !== 'commandcode'" class="grid gap-4 sm:grid-cols-2">
           <UiField :label="t('admin.upstreamFormat')" :hint="t('admin.upstreamFormatHint')">
             <UiSelect v-model="form.upstream_format" :options="formatOptions" />
           </UiField>

@@ -122,6 +122,7 @@ export default {
   sqDetailPerfRequests: 'Requests',
   sqDetailPerfTps: 'TPS',
   sqDetailPerfLatency: 'Avg latency',
+  sqDetailPerfFirstToken: 'Avg. first token',
   sqDetailPerfSuccess: 'Success rate',
   sqDetailPerfEmptyTitle: 'No performance data yet',
   sqDetailPerfEmptyBody: 'This model has no request records in the window yet.',

@@ -76,6 +76,7 @@ type userSubscription struct {
 	UsageRequests      int64                        `json:"usage_requests"`
 	UsageCredit        float64                      `json:"usage_credit"`
 	ModelUsage         []subscriptionModelUsage     `json:"model_usage"`
+	ResetCardCount     int64                        `json:"reset_card_count"`
 }
 
 type subscriptionOrder struct {
@@ -575,6 +576,10 @@ func (s *Service) accountSubscriptions(w http.ResponseWriter, r *http.Request) {
 		if sub.ModelUsage == nil {
 			sub.ModelUsage = []subscriptionModelUsage{}
 		}
+		var resetCardCount int64
+		if err := s.db.QueryRow(r.Context(), `select count(*) from reset_cards where subscription_id=$1 and enabled and used_at is null and (expires_at is null or expires_at>now())`, sub.ID).Scan(&resetCardCount); err == nil {
+			sub.ResetCardCount = resetCardCount
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": subs})
 }
@@ -997,7 +1002,7 @@ func (s *Service) activateSubscriptionOrderTx(ctx context.Context, tx pgx.Tx, or
 		return false, fmt.Errorf("subscription order amount mismatch")
 	}
 	if status == "paid" {
-		return false, nil
+		return true, nil
 	}
 	if status != "pending" {
 		return false, fmt.Errorf("subscription order not pending: %s", status)
@@ -1013,8 +1018,16 @@ func (s *Service) activateSubscriptionOrderTx(ctx context.Context, tx pgx.Tx, or
 	if _, err = tx.Exec(ctx, `update subscription_orders set status='paid',provider_trade_no=$1,paid_at=now(),updated_at=now() where id=$2`, tradeNo, id); err != nil {
 		return false, err
 	}
-	if _, err = tx.Exec(ctx, `update user_subscriptions set status='active',current_period_start=$1,current_period_end=$2,auto_renew=true,updated_at=now() where id=$3 and status in ('pending','active')`, periodStart, periodEnd, subID); err != nil {
+	// Preserve the user's auto_renew choice instead of forcing it on. The
+	// subscription must still be pending/active: an order paid after the
+	// subscription was cancelled must not be activated (and the caller rolls
+	// the whole transaction back).
+	tag, err := tx.Exec(ctx, `update user_subscriptions set status='active',current_period_start=$1,current_period_end=$2,updated_at=now() where id=$3 and status in ('pending','active')`, periodStart, periodEnd, subID)
+	if err != nil {
 		return false, err
+	}
+	if tag.RowsAffected() == 0 {
+		return false, fmt.Errorf("subscription is not activatable")
 	}
 	if err = s.initSubscriptionCountersTx(ctx, tx, subID); err != nil {
 		return false, err

@@ -369,6 +369,9 @@ func (s *Service) disableChannelIfKeyless(ctx context.Context, channelID int64, 
 // it falls back to GET /v1/models.
 func (s *Service) testChannel(ctx context.Context, baseURL, apiKey, provider, testModel string, uaPool []string) (int, []byte, time.Duration, error) {
 	path, method := "/v1/models", http.MethodGet
+	if provider == "commandcode" {
+		path = commandCodeModelsPath
+	}
 	var requestBody []byte
 	if testModel != "" {
 		payload := map[string]any{
@@ -377,9 +380,15 @@ func (s *Service) testChannel(ctx context.Context, baseURL, apiKey, provider, te
 			"messages":   []map[string]any{{"role": "user", "content": "ping"}},
 		}
 		requestBody, _ = json.Marshal(payload)
-		if provider == "anthropic" {
+		switch provider {
+		case "anthropic":
 			path, method = "/v1/messages", http.MethodPost
-		} else {
+		case "commandcode":
+			path, method = commandCodeGeneratePath, http.MethodPost
+			if ccBody, ccErr := commandCodeBodyFromOpenAI(requestBody, commandCodeWorkingDir); ccErr == nil {
+				requestBody = ccBody
+			}
+		default:
 			path, method = "/v1/chat/completions", http.MethodPost
 		}
 	}
@@ -395,6 +404,13 @@ func (s *Service) testChannel(ctx context.Context, baseURL, apiKey, provider, te
 		request.Header.Set("Anthropic-Version", "2023-06-01")
 	} else {
 		request.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	if provider == "commandcode" && testModel != "" {
+		request.Header.Set("x-command-code-version", commandCodeCLIVersion)
+		request.Header.Set("x-cli-environment", "production")
+		request.Header.Set("x-project-slug", commandCodeProjectSlug(commandCodeWorkingDir))
+		request.Header.Set("x-taste-learning", "true")
+		request.Header.Set("x-co-flag", "false")
 	}
 	if ua := randomUA(uaPool); ua != "" {
 		request.Header.Set("User-Agent", ua)

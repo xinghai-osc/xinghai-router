@@ -26,6 +26,7 @@ type conversationFile struct {
 	StatusCode   int             `json:"status_code"`
 	Stream       bool            `json:"stream"`
 	DurationMS   int64           `json:"duration_ms"`
+	FirstTokenMS *int            `json:"first_token_ms,omitempty"`
 	CreatedAt    time.Time       `json:"created_at"`
 	RequestBody  json.RawMessage `json:"request_body"`
 	ResponseBody json.RawMessage `json:"response_body"`
@@ -83,7 +84,7 @@ func (s *Service) updateConversationCacheSettings(w http.ResponseWriter, r *http
 	writeJSON(w, http.StatusOK, current)
 }
 
-func (s *Service) storeConversationCache(ctx context.Context, key keyContext, model string, stream bool, request, response []byte, statusCode int, durationMs int64) {
+func (s *Service) storeConversationCache(ctx context.Context, key keyContext, model string, stream bool, request, response []byte, statusCode int, durationMs int64, firstTokenMs *int) {
 	settings := s.conversationCacheSettings(ctx)
 	if !settings.Enabled || !key.dataUsageEnabled {
 		return
@@ -111,6 +112,7 @@ func (s *Service) storeConversationCache(ctx context.Context, key keyContext, mo
 		StatusCode:   statusCode,
 		Stream:       stream,
 		DurationMS:   durationMs,
+		FirstTokenMS: firstTokenMs,
 		CreatedAt:    time.Now(),
 		RequestBody:  reqJSON,
 		ResponseBody: respJSON,
@@ -217,17 +219,18 @@ func (s *Service) getConversationCacheDetail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"id":            entry.ID,
-		"request_id":    entry.RequestID,
-		"user_id":       entry.UserID,
-		"api_key_id":    entry.APIKeyID,
-		"model":         entry.Model,
-		"status_code":   entry.StatusCode,
-		"stream":        entry.Stream,
-		"duration_ms":   entry.DurationMS,
-		"request_body":  json.RawMessage(entry.RequestBody),
-		"response_body": json.RawMessage(entry.ResponseBody),
-		"created_at":    entry.CreatedAt,
+		"id":             entry.ID,
+		"request_id":     entry.RequestID,
+		"user_id":        entry.UserID,
+		"api_key_id":     entry.APIKeyID,
+		"model":          entry.Model,
+		"status_code":    entry.StatusCode,
+		"stream":         entry.Stream,
+		"duration_ms":    entry.DurationMS,
+		"first_token_ms": entry.FirstTokenMS,
+		"request_body":   json.RawMessage(entry.RequestBody),
+		"response_body":  json.RawMessage(entry.ResponseBody),
+		"created_at":     entry.CreatedAt,
 	})
 }
 
@@ -346,15 +349,16 @@ type conversationEntry = conversationFile
 
 func conversationSummary(e conversationEntry) map[string]any {
 	return map[string]any{
-		"id":          e.ID,
-		"request_id":  e.RequestID,
-		"user_id":     e.UserID,
-		"api_key_id":  e.APIKeyID,
-		"model":       e.Model,
-		"status_code": e.StatusCode,
-		"stream":      e.Stream,
-		"duration_ms": e.DurationMS,
-		"created_at":  e.CreatedAt,
+		"id":             e.ID,
+		"request_id":     e.RequestID,
+		"user_id":        e.UserID,
+		"api_key_id":     e.APIKeyID,
+		"model":          e.Model,
+		"status_code":    e.StatusCode,
+		"stream":         e.Stream,
+		"duration_ms":    e.DurationMS,
+		"first_token_ms": e.FirstTokenMS,
+		"created_at":     e.CreatedAt,
 	}
 }
 

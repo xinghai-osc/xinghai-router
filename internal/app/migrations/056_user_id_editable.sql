@@ -7,16 +7,13 @@
 --      edited id propagates automatically, and
 --   3. guarantees users.id defaults to an auto-incrementing bigint sequence.
 
-begin;
-
 do $$ begin
   if (select data_type from information_schema.columns where table_name = 'users' and column_name = 'id') = 'uuid' then
 
     -- Fresh-install path: convert users.id and every user_id column to
-    -- bigint, using the same deterministic mapping scheme as 027.
+    -- bigint, using sequential ids so no two uuid values can collide.
     create temporary table user_id_mapping on commit drop as
-    select id as old_id,
-           ('x' || right(replace(id::text, '-', ''), 16))::bit(64)::bigint as new_id
+    select id as old_id, row_number() over (order by created_at, id) as new_id
     from users;
     alter table user_id_mapping add primary key (old_id);
     create unique index user_id_mapping_new_idx on user_id_mapping (new_id);
@@ -95,19 +92,21 @@ do $$ begin
     alter table user_oauth_connections drop column user_id;
     alter table user_oauth_connections rename column new_user_id to user_id;
 
-    -- Recreate indexes dropped along with the converted columns.
-    create index request_logs_user_id_idx         on request_logs(user_id, created_at desc);
-    create index wallet_ledger_user_idx           on wallet_ledger(user_id, created_at desc);
-    create index usage_records_user_idx           on usage_records(user_id, created_at desc);
-    create index quota_limits_scope_idx           on quota_limits (coalesce(user_id, 0), coalesce(api_key_id, '00000000-0000-0000-0000-000000000000'::uuid), coalesce(model, ''), "window");
-    create index user_sessions_user_id_idx        on user_sessions(user_id);
-    create index user_permissions_user_id_idx     on user_permissions(user_id);
-    create index user_groups_group_id_idx         on user_groups(group_id);
-    create index payment_orders_user_idx          on payment_orders(user_id, created_at desc);
-    create index user_subscriptions_user_idx      on user_subscriptions(user_id, created_at desc);
-    create index user_subscriptions_active_idx    on user_subscriptions(user_id, status, current_period_end);
-    create index subscription_orders_user_idx     on subscription_orders(user_id, created_at desc);
-    create index user_oauth_connections_user_id_idx on user_oauth_connections(user_id);
+    -- Recreate indexes dropped along with the converted columns. Guard against
+    -- collisions with indexes that survive the column swap (e.g. group_id-only
+    -- indexes whose columns are not converted).
+    create index if not exists request_logs_user_id_idx         on request_logs(user_id, created_at desc);
+    create index if not exists wallet_ledger_user_idx           on wallet_ledger(user_id, created_at desc);
+    create index if not exists usage_records_user_idx           on usage_records(user_id, created_at desc);
+    create index if not exists quota_limits_scope_idx           on quota_limits (coalesce(user_id, 0), coalesce(api_key_id, '00000000-0000-0000-0000-000000000000'::uuid), coalesce(model, ''), "window");
+    create index if not exists user_sessions_user_id_idx        on user_sessions(user_id);
+    create index if not exists user_permissions_user_id_idx     on user_permissions(user_id);
+    create index if not exists user_groups_group_id_idx         on user_groups(group_id);
+    create index if not exists payment_orders_user_idx          on payment_orders(user_id, created_at desc);
+    create index if not exists user_subscriptions_user_idx      on user_subscriptions(user_id, created_at desc);
+    create index if not exists user_subscriptions_active_idx    on user_subscriptions(user_id, status, current_period_end);
+    create index if not exists subscription_orders_user_idx     on subscription_orders(user_id, created_at desc);
+    create index if not exists user_oauth_connections_user_id_idx on user_oauth_connections(user_id);
 
   else
 
@@ -152,5 +151,3 @@ create sequence if not exists users_id_seq as bigint;
 select setval('users_id_seq', greatest(coalesce((select max(id) from users), 1), 1));
 alter table users alter column id set default nextval('users_id_seq');
 alter sequence users_id_seq owned by users.id;
-
-commit;

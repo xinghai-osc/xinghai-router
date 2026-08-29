@@ -39,17 +39,18 @@ func TestSystemConfigCaptchaProvider(t *testing.T) {
 	}
 }
 
-func TestRegistrationEmailWhitelistMatchesSuffix(t *testing.T) {
+func TestRegistrationEmailWhitelistUsesExactMatches(t *testing.T) {
 	whitelist := []string{"alice@example.com", "@allowed.example.com"}
 	cases := []struct {
 		email string
 		want  bool
 	}{
 		{"alice@example.com", true},
-		{"not-alice@example.com", true},
+		{"not-alice@example.com", false},
 		{"user@allowed.example.com", true},
 		{"user@sub.allowed.example.com", false},
 		{"user@other.example.com", false},
+		{"user@evil-allowed.example.com", false},
 	}
 	for _, tc := range cases {
 		if got := emailWhitelistAllowed(whitelist, tc.email); got != tc.want {

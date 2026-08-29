@@ -8,7 +8,20 @@ import (
 
 // checkChannelQuota evaluates every matching channel quota row in one query.
 // Each row's usage window is aggregated by a lateral join on request_logs.
+//
+// The result is cached for a short TTL: channel quotas are soft limits (a quota
+// hit only skips that channel, it never rejects the request), so a brief lag in
+// enforcement is acceptable, and the cache removes the aggregation query from
+// the retry loop of every proxied request.
 func (s *Service) checkChannelQuota(ctx context.Context, channelID int64, model string) error {
+	if s.channelQuotaCache != nil {
+		if allowed, ok := s.channelQuotaCache.lookup(channelID); ok {
+			if allowed {
+				return nil
+			}
+			return errInvalid
+		}
+	}
 	rows, err := s.db.Query(ctx, `select q.max_requests,q.max_tokens,agg.requests,agg.tokens
 	from channel_quota_limits q
 	cross join lateral (
@@ -21,6 +34,7 @@ func (s *Service) checkChannelQuota(ctx context.Context, channelID int64, model 
 		return err
 	}
 	defer rows.Close()
+	allowed := true
 	for rows.Next() {
 		var maxRequests, maxTokens *int64
 		var count, tokens int64
@@ -28,10 +42,19 @@ func (s *Service) checkChannelQuota(ctx context.Context, channelID int64, model 
 			return errInvalid
 		}
 		if (maxRequests != nil && count >= *maxRequests) || (maxTokens != nil && tokens >= *maxTokens) {
-			return errInvalid
+			allowed = false
 		}
 	}
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if s.channelQuotaCache != nil {
+		s.channelQuotaCache.store(channelID, allowed)
+	}
+	if !allowed {
+		return errInvalid
+	}
+	return nil
 }
 
 // channelQuotaUsage returns the current usage and limits for a channel, grouped by window.
@@ -133,6 +156,7 @@ func (s *Service) upsertChannelQuotaHandler(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	s.audit(r, "channel.quota_updated", "channel", channelID, map[string]any{"window": in.Window, "max_requests": in.MaxRequests, "max_tokens": in.MaxTokens})
+	s.invalidateChannelQuota()
 	writeJSON(w, 200, map[string]any{"id": id})
 }
 
@@ -150,6 +174,7 @@ func (s *Service) deleteChannelQuotaHandler(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	s.audit(r, "channel.quota_deleted", "channel", channelID, map[string]any{"window": window})
+	s.invalidateChannelQuota()
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -157,9 +182,9 @@ func (s *Service) deleteChannelQuotaHandler(w http.ResponseWriter, r *http.Reque
 func (s *Service) channelUsageStatsHandler(w http.ResponseWriter, r *http.Request) {
 	channelID := r.PathValue("id")
 	var totalRequests, totalPrompt, totalCompletion, totalTokens int64
-	var avgDuration float64
+	var avgDuration, avgFirstTokenMs *float64
 	var totalCost float64
-	err := s.db.QueryRow(r.Context(), `select count(*),coalesce(sum(rl.prompt_tokens),0),coalesce(sum(rl.completion_tokens),0),coalesce(sum(rl.total_tokens),0),coalesce(avg(rl.duration_ms),0),coalesce(sum(ur.cost),0) from request_logs rl left join usage_records ur on ur.request_id=rl.request_id where rl.channel_id=$1`, channelID).Scan(&totalRequests, &totalPrompt, &totalCompletion, &totalTokens, &avgDuration, &totalCost)
+	err := s.db.QueryRow(r.Context(), `select count(*),coalesce(sum(rl.prompt_tokens),0),coalesce(sum(rl.completion_tokens),0),coalesce(sum(rl.total_tokens),0),coalesce(avg(rl.duration_ms),0),avg(rl.first_token_ms),coalesce(sum(ur.cost),0) from request_logs rl left join usage_records ur on ur.request_id=rl.request_id where rl.channel_id=$1`, channelID).Scan(&totalRequests, &totalPrompt, &totalCompletion, &totalTokens, &avgDuration, &avgFirstTokenMs, &totalCost)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
@@ -167,13 +192,14 @@ func (s *Service) channelUsageStatsHandler(w http.ResponseWriter, r *http.Reques
 	var successCount, errorCount int64
 	_ = s.db.QueryRow(r.Context(), `select coalesce(sum(case when status_code>=200 and status_code<400 then 1 else 0 end),0),coalesce(sum(case when status_code>=400 then 1 else 0 end),0) from request_logs rl where rl.channel_id=$1`, channelID).Scan(&successCount, &errorCount)
 	writeJSON(w, 200, map[string]any{
-		"total_requests":    totalRequests,
-		"success_count":     successCount,
-		"error_count":       errorCount,
-		"prompt_tokens":     totalPrompt,
-		"completion_tokens": totalCompletion,
-		"total_tokens":      totalTokens,
-		"total_cost":        totalCost,
-		"avg_duration_ms":   avgDuration,
+		"total_requests":     totalRequests,
+		"success_count":      successCount,
+		"error_count":        errorCount,
+		"prompt_tokens":      totalPrompt,
+		"completion_tokens":  totalCompletion,
+		"total_tokens":       totalTokens,
+		"total_cost":         totalCost,
+		"avg_duration_ms":    avgDuration,
+		"avg_first_token_ms": avgFirstTokenMs,
 	})
 }

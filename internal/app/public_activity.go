@@ -6,6 +6,7 @@ type publicActivityItem struct {
 	Model            string `json:"model"`
 	StatusCode       int    `json:"status_code"`
 	DurationMs       int    `json:"duration_ms"`
+	FirstTokenMs     *int   `json:"first_token_ms"`
 	PromptTokens     int    `json:"prompt_tokens"`
 	CompletionTokens int    `json:"completion_tokens"`
 	TotalTokens      int    `json:"total_tokens"`
@@ -14,7 +15,7 @@ type publicActivityItem struct {
 
 func (s *Service) publicActivity(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.db.Query(r.Context(), `
-		select rl.model, rl.status_code, rl.duration_ms,
+		select rl.model, rl.status_code, rl.duration_ms, rl.first_token_ms,
 			coalesce(ur.prompt_tokens,0),
 			coalesce(ur.completion_tokens,0),
 			coalesce(ur.prompt_tokens+ur.completion_tokens,0),
@@ -32,7 +33,7 @@ func (s *Service) publicActivity(w http.ResponseWriter, r *http.Request) {
 	data := []publicActivityItem{}
 	for rows.Next() {
 		var item publicActivityItem
-		if rows.Scan(&item.Model, &item.StatusCode, &item.DurationMs, &item.PromptTokens, &item.CompletionTokens, &item.TotalTokens, &item.CreatedAt) == nil {
+		if rows.Scan(&item.Model, &item.StatusCode, &item.DurationMs, &item.FirstTokenMs, &item.PromptTokens, &item.CompletionTokens, &item.TotalTokens, &item.CreatedAt) == nil {
 			data = append(data, item)
 		}
 	}

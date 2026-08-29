@@ -87,8 +87,22 @@ func (s *Service) registrationEmailAllowed(ctx context.Context, email string) (b
 
 func emailWhitelistAllowed(whitelist []string, email string) bool {
 	email = strings.ToLower(strings.TrimSpace(email))
-	for _, allowed := range whitelist {
-		if strings.HasSuffix(email, strings.ToLower(strings.TrimSpace(allowed))) {
+	_, domain, ok := strings.Cut(email, "@")
+	if !ok || domain == "" {
+		return false
+	}
+	for _, raw := range whitelist {
+		allowed := strings.ToLower(strings.TrimSpace(raw))
+		if allowed == "" {
+			continue
+		}
+		if strings.HasPrefix(allowed, "@") {
+			if domain == strings.TrimPrefix(allowed, "@") {
+				return true
+			}
+			continue
+		}
+		if email == allowed {
 			return true
 		}
 	}

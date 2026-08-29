@@ -35,6 +35,7 @@ export default {
 
   subscriptionPlans: 'Plans',
   redemptionCodes: 'Redemption codes',
+  resetCards: 'Reset cards',
   adminSubscriptions: 'Subscriptions',
   reliability: 'Reliability',
   conversationCacheSettings: 'Conversation cache',

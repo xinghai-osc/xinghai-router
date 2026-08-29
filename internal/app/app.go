@@ -44,6 +44,8 @@ type Service struct {
 	channelCache          *ttlCache[channelRouteKey, []channel]
 	channelKeyCache       *ttlCache[int64, []channelKeyCredential]
 	subscriptionCache     *ttlCache[subscriptionRouteKey, subscriptionAccess]
+	channelQuotaCache     *ttlCache[int64, bool]
+	quotaAbsentCache      *ttlCache[quotaRouteKey, struct{}]
 	promptCache           *promptPrefixCache
 	keyTouchCache         *ttlCache[string, struct{}]
 	scheduler             context.CancelFunc
@@ -135,6 +137,8 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 		channelCache:          newTTLCache[channelRouteKey, []channel](channelCacheTTL),
 		channelKeyCache:       newTTLCache[int64, []channelKeyCredential](channelCacheTTL),
 		subscriptionCache:     newTTLCache[subscriptionRouteKey, subscriptionAccess](subscriptionCacheTTL),
+		channelQuotaCache:     newTTLCache[int64, bool](quotaCacheTTL),
+		quotaAbsentCache:      newTTLCache[quotaRouteKey, struct{}](quotaCacheTTL),
 		promptCache:           newPromptPrefixCache(cfg.LocalPromptCache, cfg.LocalPromptCacheSize),
 		keyTouchCache:         newTTLCache[string, struct{}](keyTouchInterval),
 		migration:             migrationStatus{mu: &sync.Mutex{}},

@@ -290,6 +290,9 @@ const editingSub = ref<AdminUserSubscription | null>(null)
 const resetQuotaTarget = ref<AdminUserSubscription | null>(null)
 const voidTarget = ref<AdminUserSubscription | null>(null)
 const deleteTarget = ref<AdminUserSubscription | null>(null)
+const issueCardTarget = ref<AdminUserSubscription | null>(null)
+const issueCardForm = reactive({ quantity: '1', expires_at: '', note: '' })
+const issueCardError = ref('')
 const subForm = reactive({
   plan_id: '',
   start_at: '',
@@ -459,6 +462,38 @@ async function deleteSubscription() {
   toast.success(t('admin.subscriptionDeleted'))
   await loadSubscriptions()
 }
+
+function openIssueCard(sub: AdminUserSubscription) {
+  issueCardTarget.value = sub
+  issueCardForm.quantity = '1'
+  issueCardForm.expires_at = ''
+  issueCardForm.note = ''
+  issueCardError.value = ''
+}
+
+async function issueResetCards() {
+  const target = issueCardTarget.value
+  if (!target) return
+  issueCardError.value = ''
+  const quantity = Number(issueCardForm.quantity.trim())
+  if (!Number.isInteger(quantity) || quantity < 1 || quantity > 1000) {
+    issueCardError.value = t('admin.resetCardQuantityHint')
+    return
+  }
+  let result: { quantity: number } | null = null
+  const ok = await run(async () => {
+    result = await endpoints.createResetCards({
+      subscription_id: target.id,
+      quantity,
+      expires_at: issueCardForm.expires_at,
+      note: issueCardForm.note.trim(),
+    })
+  })
+  if (!ok || !result) { toast.error(t('common.actionFailed')); return }
+  toast.success(t('admin.resetCardCodesCreated', { count: result.quantity }))
+  issueCardTarget.value = null
+  await loadSubscriptions()
+}
 </script>
 
 <template>
@@ -540,7 +575,7 @@ async function deleteSubscription() {
 
       <ConsoleOpsPagination
         v-model:page="page"
-        v-model:pageSize="pageSize"
+        v-model:page-size="pageSize"
         :total="users.data.value.total"
         :page-size-options="['20', '50', '100']"
       />
@@ -721,6 +756,7 @@ async function deleteSubscription() {
               <td>
                 <div class="flex gap-1">
                   <UiButton variant="ghost" size="sm" @click="startEditSubscription(sub)">{{ t('common.edit') }}</UiButton>
+                  <UiButton variant="ghost" size="sm" @click="openIssueCard(sub)">{{ t('admin.issueResetCard') }}</UiButton>
                   <UiButton variant="ghost" size="sm" @click="resetQuotaTarget = sub">{{ t('admin.resetSubscriptionQuota') }}</UiButton>
                   <UiButton variant="ghost" size="sm" @click="voidTarget = sub">{{ t('admin.void') }}</UiButton>
                   <UiButton variant="ghost" size="sm" class="text-danger" @click="deleteTarget = sub">
@@ -785,6 +821,28 @@ async function deleteSubscription() {
       <template #footer>
         <UiButton variant="secondary" @click="deleteTarget = null">{{ t('common.cancel') }}</UiButton>
         <UiButton variant="danger" :loading="busy" @click="deleteSubscription">{{ t('common.delete') }}</UiButton>
+      </template>
+    </UiDialog>
+
+    <UiDialog :open="issueCardTarget !== null" :title="t('admin.issueResetCard')" size="md">
+      <div class="space-y-4">
+        <p v-if="issueCardTarget" class="text-[13px] text-muted">
+          {{ t('admin.issueResetCardLead', { plan: issueCardTarget.plan_name }) }}
+        </p>
+        <UiAlert v-if="issueCardError" tone="danger" :title="issueCardError" />
+        <UiField :label="t('admin.resetCardQuantity')" :hint="t('admin.resetCardQuantityHint')" required>
+          <UiInput v-model="issueCardForm.quantity" type="number" min="1" max="1000" />
+        </UiField>
+        <UiField :label="t('admin.resetCardExpiresAt')" :hint="t('admin.resetCardExpiresAtHint')">
+          <UiInput v-model="issueCardForm.expires_at" type="datetime-local" />
+        </UiField>
+        <UiField :label="t('admin.resetCardNote')">
+          <UiTextarea v-model="issueCardForm.note" :rows="2" />
+        </UiField>
+      </div>
+      <template #footer>
+        <UiButton variant="secondary" @click="issueCardTarget = null">{{ t('admin.resetCardFormCancel') }}</UiButton>
+        <UiButton :loading="busy" @click="issueResetCards">{{ t('admin.resetCardFormSubmit') }}</UiButton>
       </template>
     </UiDialog>
   </div>

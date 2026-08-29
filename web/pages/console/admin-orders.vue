@@ -57,7 +57,7 @@ function typeLabel(order: AdminOrder) {
               </tr>
             </tbody>
           </UiTable>
-          <ConsoleOpsPagination v-model:page="page" v-model:pageSize="pageSize" :total="orders.data.value.total" :page-size-options="['20', '50', '100']" />
+          <ConsoleOpsPagination v-model:page="page" v-model:page-size="pageSize" :total="orders.data.value.total" :page-size-options="['20', '50', '100']" />
         </ConsoleOpsListState>
       </div>
     </UiCard>

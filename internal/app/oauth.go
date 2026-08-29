@@ -12,12 +12,26 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
 
 var errOAuthEmailNotVerified = errors.New("refusing to use an unverified email for account matching or binding")
 var errOAuthEmailNotAllowed = errors.New("email is not allowed to register")
+
+// oauthStateCookie binds an OAuth authorize request to the browser that started
+// it, so a callback for one user cannot be replayed into another browser. It is
+// HttpOnly and SameSite=Lax (the callback is a top-level GET navigation).
+const oauthStateCookie = "xinghai.oauth.state"
+
+// oauthStateTTL bounds how long an issued state remains valid, in seconds.
+const oauthStateTTL = 600
+
+// oauthCookieSecure reports whether the OAuth state cookie must be marked Secure.
+func oauthCookieSecure(r *http.Request) bool {
+	return r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+}
 
 type oauthProviderConfig struct {
 	ClientID     string
@@ -48,12 +62,19 @@ func oauthStateSignature(encryptionKey, data string) string {
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
-func callbackURI(r *http.Request, provider string) string {
+func (s *Service) callbackURI(r *http.Request, provider string) string {
+	if base := s.loadPublicBaseURL(r.Context()); base != "" {
+		return strings.TrimRight(base, "/") + "/api/auth/oauth/" + provider + "/callback"
+	}
 	scheme := "https"
 	if r.TLS == nil && (strings.HasPrefix(r.Host, "localhost:") || r.Host == "localhost" || strings.HasPrefix(r.Host, "127.0.0.1")) {
 		scheme = "http"
 	}
 	return fmt.Sprintf("%s://%s/api/auth/oauth/%s/callback", scheme, r.Host, provider)
+}
+
+func clearOAuthStateCookie(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{Name: oauthStateCookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: oauthCookieSecure(r)})
 }
 
 func (s *Service) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
@@ -63,14 +84,23 @@ func (s *Service) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_provider", "OAuth provider is not configured or disabled")
 		return
 	}
-	stateNonce := fmt.Sprintf("%s:%d", provider, time.Now().Unix())
+	nonce, err := randomSecret("")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not start OAuth")
+		return
+	}
+	stateNonce := fmt.Sprintf("%s:%d:%s", provider, time.Now().Unix(), nonce)
 	sig := oauthStateSignature(s.cfg.EncryptionKey, stateNonce)
-	cb := callbackURI(r, provider)
+	state := stateNonce + "." + sig
+	// Bind the state to the initiating browser so an attacker-backed callback
+	// cannot be replayed into a victim's session.
+	http.SetCookie(w, &http.Cookie{Name: oauthStateCookie, Value: state, Path: "/", MaxAge: oauthStateTTL, HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: oauthCookieSecure(r)})
+	cb := s.callbackURI(r, provider)
 	var authURL string
 	switch provider {
 	case "github":
-		authURL = fmt.Sprintf("https://github.com/login/oauth/authorize?client_id=%s&redirect_uri=%s&state=%s.%s&scope=read:user,user:email",
-			url.QueryEscape(cfg.ClientID), url.QueryEscape(cb), url.QueryEscape(stateNonce), url.QueryEscape(sig))
+		authURL = fmt.Sprintf("https://github.com/login/oauth/authorize?client_id=%s&redirect_uri=%s&state=%s&scope=read:user,user:email",
+			url.QueryEscape(cfg.ClientID), url.QueryEscape(cb), url.QueryEscape(state))
 	default:
 		writeError(w, http.StatusBadRequest, "unsupported_provider", "unsupported OAuth provider")
 		return
@@ -86,6 +116,19 @@ func (s *Service) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "missing code or state")
 		return
 	}
+	// The state must match the cookie set on the authorize request, and the
+	// cookie is consumed here, so a state cannot be replayed into another
+	// browser or reused a second time.
+	stateCookie, err := r.Cookie(oauthStateCookie)
+	if err != nil || stateCookie.Value == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "invalid state")
+		return
+	}
+	clearOAuthStateCookie(w, r)
+	if stateCookie.Value != stateRaw {
+		writeError(w, http.StatusBadRequest, "invalid_request", "invalid state")
+		return
+	}
 	dot := strings.LastIndexByte(stateRaw, '.')
 	if dot < 0 {
 		writeError(w, http.StatusBadRequest, "invalid_request", "invalid state")
@@ -98,9 +141,14 @@ func (s *Service) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "invalid state signature")
 		return
 	}
-	parts := strings.SplitN(stateNonce, ":", 2)
-	if len(parts) < 1 || parts[0] != provider {
+	parts := strings.SplitN(stateNonce, ":", 3)
+	if len(parts) < 3 || parts[0] != provider {
 		writeError(w, http.StatusBadRequest, "invalid_request", "state provider mismatch")
+		return
+	}
+	issued, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil || time.Now().Unix()-issued > oauthStateTTL {
+		writeError(w, http.StatusBadRequest, "invalid_request", "state expired")
 		return
 	}
 	cfg, err := s.loadOAuthProvider(r.Context(), provider)
@@ -108,7 +156,7 @@ func (s *Service) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_provider", "OAuth provider is not configured")
 		return
 	}
-	cb := callbackURI(r, provider)
+	cb := s.callbackURI(r, provider)
 	var accessToken, userEmail, userName, userAvatar, providerUserID string
 	var emailVerified bool
 	switch provider {
@@ -146,12 +194,23 @@ func (s *Service) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	if err := s.db.QueryRow(r.Context(), `select email from users where id=$1`, userID).Scan(&email); err == nil {
 		s.notifyLogin(r.Context(), email, requestMetadata(r))
 	}
-	s.createSession(w, r, userID, http.StatusOK)
+	// The OAuth callback is a top-level browser navigation, so the console's
+	// bearer token must be delivered as a cookie and the browser sent to the
+	// console — returning JSON here would strand the user on a raw response.
+	token, _, err := s.createSessionToken(r.Context(), userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not create session")
+		return
+	}
+	// Mirrors the console's JS cookie (web/src/api.ts TOKEN_COOKIE), so the SSR
+	// console-auth middleware and the client both pick the token up on redirect.
+	http.SetCookie(w, &http.Cookie{Name: "xinghai.admin-token", Value: token, Path: "/", MaxAge: 60 * 60 * 24 * 7, SameSite: http.SameSiteStrictMode, Secure: oauthCookieSecure(r)})
+	http.Redirect(w, r, "/console", http.StatusFound)
 }
 
 func (s *Service) findOrCreateOAuthUser(ctx context.Context, provider, providerUserID, email string, emailVerified bool, name, avatar string) (string, error) {
 	var userID string
-	err := s.db.QueryRow(ctx, `select user_id from user_oauth_connections where provider=$1 and provider_user_id=$2`, provider, providerUserID).Scan(&userID)
+	err := s.db.QueryRow(ctx, `select c.user_id from user_oauth_connections c join users u on u.id=c.user_id where c.provider=$1 and c.provider_user_id=$2 and u.enabled`, provider, providerUserID).Scan(&userID)
 	if err == nil {
 		return userID, nil
 	}
@@ -160,7 +219,7 @@ func (s *Service) findOrCreateOAuthUser(ctx context.Context, provider, providerU
 		if !emailVerified {
 			return "", errOAuthEmailNotVerified
 		}
-		err = s.db.QueryRow(ctx, `select id from users where email=$1`, email).Scan(&userID)
+		err = s.db.QueryRow(ctx, `select id from users where email=$1 and enabled`, email).Scan(&userID)
 		if err == nil {
 			_, _ = s.db.Exec(ctx, `insert into user_oauth_connections(user_id,provider,provider_user_id,provider_username,provider_avatar_url) values($1,$2,$3,$4,$5) on conflict do nothing`, userID, provider, providerUserID, name, avatar)
 			return userID, nil

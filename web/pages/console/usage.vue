@@ -16,8 +16,9 @@ useHead({ title: () => `${t('nav.usage')} · ${settings.value.name}` })
 
 const adminView = ref(false)
 
-const { data: usage, pending, error } = useResource(
-  () => endpoints.getAccountUsage(),
+const usageQuery = ref('')
+const { data: usage, pending, error, refresh: refreshUsage } = useResource(
+  () => endpoints.getAccountUsage(usageQuery.value),
   { data: [] as UsageRecord[] },
 )
 
@@ -193,6 +194,7 @@ const EMPTY_STATS: UsageStats = {
   total_tokens: 0,
   total_cost: '0',
   avg_duration_ms: 0,
+  avg_first_token_ms: null,
 }
 
 const adminUsage = useResource(
@@ -221,6 +223,7 @@ function normalizeRow(log: UsageLog): UsageRow {
     key_name: log.key_name,
     subscription: false,
     duration_ms: log.duration_ms,
+    first_token_ms: log.first_token_ms,
     group_name: log.group_name,
     user_name: log.user_name,
     user_id: log.user_id,
@@ -257,6 +260,19 @@ function commitClientFilters() {
   applied.key = key.value
   applied.requestId = requestId.value
   applied.status = status.value
+  const params = new URLSearchParams()
+  if (model.value.trim()) params.set('model', model.value.trim())
+  if (group.value.trim()) params.set('group_name', group.value.trim())
+  if (key.value.trim()) params.set('key_name', key.value.trim())
+  if (requestId.value.trim()) params.set('request_id', requestId.value.trim())
+  if (status.value) params.set('status', status.value)
+  const start = toRfc3339(range.start)
+  if (start) params.set('start', start)
+  const end = toRfc3339(range.end)
+  if (end) params.set('end', end)
+  const qs = params.toString()
+  usageQuery.value = qs ? `?${qs}` : ''
+  void refreshUsage()
 }
 
 async function applySearch() {
@@ -278,7 +294,9 @@ async function resetFilters() {
   applied.key = ''
   applied.requestId = ''
   applied.status = ''
+  usageQuery.value = ''
   if (adminView.value) await applyAdminFilters()
+  else void refreshUsage()
 }
 
 async function setAdminView(on: boolean) {
@@ -441,6 +459,11 @@ const clientTarget = ref<UsageRow | null>(null)
               <span class="h-3.5 w-0.5 rounded-full bg-danger" />
               <span class="text-muted">{{ t('admin.statErrors') }}</span>
               <span class="numeric font-semibold text-ink">{{ formatNumber(adminStats.data.value.error_count) }}</span>
+             </span>
+             <span v-if="adminView" class="inline-flex h-7 items-center gap-2 rounded-md border border-line bg-surface px-2.5 text-xs">
+               <span class="h-3.5 w-0.5 rounded-full bg-clay" />
+               <span class="text-muted">{{ t('admin.statAvgFirstToken') }}</span>
+               <span class="numeric font-semibold text-ink">{{ adminStats.data.value.avg_first_token_ms == null ? t('common.none') : t('admin.firstTokenMs', { value: Math.round(adminStats.data.value.avg_first_token_ms) }) }}</span>
             </span>
           </div>
           <div class="ml-auto">
@@ -469,8 +492,9 @@ const clientTarget = ref<UsageRow | null>(null)
               <th>{{ t('console.model') }}</th>
               <th class="num">{{ t('console.promptTokens') }} / {{ t('console.completionTokens') }}</th>
               <th class="num">{{ t('console.cost') }}</th>
-              <th class="num">{{ t('console.duration') }}</th>
-              <th>{{ t('common.detail') }}</th>
+               <th class="num">{{ t('console.firstToken') }}</th>
+               <th class="num">{{ t('console.duration') }}</th>
+               <th>{{ t('common.detail') }}</th>
             </tr>
           </thead>
           <tbody>
@@ -512,7 +536,8 @@ const clientTarget = ref<UsageRow | null>(null)
                   {{ formatMoney(record.cost, 4) }}
                 </span>
               </td>
-              <td class="num text-muted">{{ t('console.durationMs', { value: record.duration_ms }) }}</td>
+              <td class="num text-muted">{{ record.first_token_ms == null ? t('common.none') : t('console.firstTokenMs', { value: record.first_token_ms }) }}</td>
+               <td class="num text-muted">{{ t('console.durationMs', { value: record.duration_ms }) }}</td>
               <td>
                 <button
                   type="button"
@@ -566,8 +591,12 @@ const clientTarget = ref<UsageRow | null>(null)
             <div class="font-mono text-[13px] text-ink">{{ clientTarget ? formatDateTime(clientTarget.created_at) : '-' }}</div>
           </div>
           <div>
-            <div class="mb-1 text-xs text-muted">{{ t('console.duration') }}</div>
-            <div class="numeric text-[13px] text-ink">{{ clientTarget ? t('console.durationMs', { value: clientTarget.duration_ms }) : '-' }}</div>
+             <div class="mb-1 text-xs text-muted">{{ t('console.firstToken') }}</div>
+             <div class="numeric text-[13px] text-ink">{{ clientTarget?.first_token_ms == null ? t('common.none') : t('console.firstTokenMs', { value: clientTarget.first_token_ms }) }}</div>
+           </div>
+           <div>
+             <div class="mb-1 text-xs text-muted">{{ t('console.duration') }}</div>
+             <div class="numeric text-[13px] text-ink">{{ clientTarget ? t('console.durationMs', { value: clientTarget.duration_ms }) : '-' }}</div>
           </div>
           <div>
             <div class="mb-1 text-xs text-muted">{{ t('console.cost') }}</div>

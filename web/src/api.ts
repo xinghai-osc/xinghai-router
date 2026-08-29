@@ -8,7 +8,7 @@ export interface KeyQuotaForm { window: 'day' | 'month' | 'total'; max_requests?
 /** `groups` holds group ids, not names — resolve them through /admin/groups. */
 export interface RequestOverrides { delete: string[]; set: Record<string, unknown> }
 export interface ChannelUsageWindow { window: string; used: number | null; limit: number | null; remaining: number | null; percent: number | null; reset_at?: string; unit?: string }
-export interface Channel { id: string; name: string; base_url: string; upstream_balance: number | null; upstream_used: number | null; upstream_total: number | null; upstream_currency: string; upstream_usage_windows: ChannelUsageWindow[]; upstream_balance_supported: boolean; upstream_balance_error: string; upstream_balance_fetched_at: string | null; provider: 'openai' | 'ollama' | 'kimi' | 'opencode_go' | 'anthropic' | 'deepseek' | 'custom'; models: string[]; test_model: string; enabled: boolean; auto_disabled: boolean; auto_disable: boolean; disabled_reason: string; priority: number; weight: number; last_test_time: string | null; last_error: string | null; response_time_ms: number; used_requests: number; used_tokens: number; groups: string[]; key_type: 'single' | 'multi'; key_count: number; upstream_path: string; upstream_format: string; request_overrides: RequestOverrides; ua_pool: string[]; created_at: string; updated_at: string; model_routes: ModelRoute[]; user_id: string | null; user_email: string; user_name: string }
+export interface Channel { id: string; name: string; base_url: string; avg_first_token_ms: number | null; upstream_balance: number | null; upstream_used: number | null; upstream_total: number | null; upstream_currency: string; upstream_usage_windows: ChannelUsageWindow[]; upstream_balance_supported: boolean; upstream_balance_error: string; upstream_balance_fetched_at: string | null; provider: 'openai' | 'ollama' | 'kimi' | 'opencode_go' | 'anthropic' | 'deepseek' | 'commandcode' | 'custom'; models: string[]; test_model: string; enabled: boolean; auto_disabled: boolean; auto_disable: boolean; disabled_reason: string; priority: number; weight: number; last_test_time: string | null; last_error: string | null; response_time_ms: number; used_requests: number; used_tokens: number; groups: string[]; key_type: 'single' | 'multi'; key_count: number; upstream_path: string; upstream_format: string; request_overrides: RequestOverrides; ua_pool: string[]; created_at: string; updated_at: string; model_routes: ModelRoute[]; user_id: string | null; user_email: string; user_name: string }
 
 export interface ChannelKey { id: string; name: string; enabled: boolean; priority: number; last_checked_at: string | null; last_error: string | null; created_at: string; upstream_balance: number | null; upstream_used: number | null; upstream_total: number | null; upstream_currency: string; upstream_usage_windows: ChannelUsageWindow[]; upstream_balance_supported: boolean; upstream_balance_error: string; upstream_balance_fetched_at: string | null }
 export interface ChannelKeyForm { name?: string; api_key?: string; priority?: number }
@@ -30,13 +30,14 @@ export interface ChannelUsageStats {
   total_tokens: number
   total_cost: string
   avg_duration_ms: number
+  avg_first_token_ms: number | null
 }
 
 export interface ModelRoute { id: string; public_model: string; upstream_model: string; channel_id?: string; priority: number; weight: number; enabled: boolean; hidden: boolean; created_at: string }
 export interface ModelRouteForm { public_model: string; upstream_model: string; priority?: number; weight?: number; hidden?: boolean }
 export interface Group { id: string; name: string; display_name: string | null; description: string | null; multiplier: number; max_concurrency: number | null; public: boolean; created_at: string }
 export interface GroupUpdate { id: string; multiplier: number; max_concurrency: number | null; public: boolean; display_name?: string; description?: string }
-export interface RequestLog { request_id: string; user_id: string | null; user_name: string; api_key_id: string | null; key_name: string; channel_id: string | null; channel_name: string; channel_key_id: string | null; channel_key_name: string; group_id: string | null; group_name: string; model: string; status_code: number; prompt_tokens: number | null; completion_tokens: number | null; total_tokens: number | null; duration_ms: number; error_code: string | null; error_detail: string; client_ip: string; user_agent: string; created_at: string }
+export interface RequestLog { request_id: string; user_id: string | null; user_name: string; api_key_id: string | null; key_name: string; channel_id: string | null; channel_name: string; channel_key_id: string | null; channel_key_name: string; group_id: string | null; group_name: string; model: string; status_code: number; prompt_tokens: number | null; completion_tokens: number | null; total_tokens: number | null; duration_ms: number; first_token_ms: number | null; error_code: string | null; error_detail: string; client_ip: string; user_agent: string; created_at: string }
 export interface Account { id: string; email: string; name: string; role: string; avatar_url: string; permissions: string[]; balance: number; reserved: number; pending_settlement: number; leaderboard_opt_in: boolean; leaderboard_mask_name: boolean; data_usage_enabled: boolean; must_change_password?: boolean }
 export interface Pricing { id: string; model: string; input_per_million: number; cached_input_per_million: number; output_per_million: number; multiplier: number; enabled: boolean; updated_at: string }
 export interface PricingTier { id: string; model: string; from_tokens: number; input_per_million: number; cached_input_per_million: number; output_per_million: number; created_at: string }
@@ -45,14 +46,14 @@ export interface PricingTimeRule { id: string; model: string; name: string; star
 export interface PricingTimeRuleForm { id?: string; model: string; name: string; start_minute: number; end_minute: number; weekdays: string; input_per_million: number; cached_input_per_million: number; output_per_million: number; enabled?: boolean }
 export interface CatalogGroup { id: string; name: string; multiplier: number; public: boolean; display_name?: string | null }
 export interface CatalogModel { id: string; model: string; provider: string; provider_slug: string; input_per_million: number | null; cached_input_per_million: number | null; output_per_million: number | null; multiplier: number | null; groups: CatalogGroup[] }
-export interface ModelPerformanceGroup { group_id: string; group_name: string; requests: number; tps: number; avg_latency_ms: number; success_rate: number }
+export interface ModelPerformanceGroup { group_id: string; group_name: string; requests: number; tps: number; avg_latency_ms: number; avg_first_token_ms: number | null; success_rate: number }
 export interface ModelPerformance { model: string; window_hours: number; groups: ModelPerformanceGroup[]; updated_at: string }
 export interface ModelProvider { id: string; name: string; slug: string; prefixes: string[]; priority: number }
-export interface UsageRecord { request_id: string; model: string; prompt_tokens: number; cached_prompt_tokens: number; completion_tokens: number; cost: string; status: string; created_at: string; client_ip: string; user_agent: string; error: string; key_name: string; subscription: boolean; duration_ms: number; group_name: string }
+export interface UsageRecord { request_id: string; model: string; prompt_tokens: number; cached_prompt_tokens: number; completion_tokens: number; cost: string; status: string; created_at: string; client_ip: string; user_agent: string; error: string; key_name: string; subscription: boolean; duration_ms: number; first_token_ms: number | null; group_name: string }
 
 export interface AccountUsageSummary { requests: number; tokens: number; cost: string }
 export interface DailyUsageRecord { day: string; requests: number; prompt_tokens: number; completion_tokens: number }
-export interface ActivityLog { id: string; type: 'request' | 'login' | 'register' | 'logout' | 'topup' | 'operation'; action: string; user_id: string; user_name: string; model: string; group_id: string; group_name: string; status_code: number | null; duration_ms: number | null; prompt_tokens: number; completion_tokens: number; total_tokens: number; cost: number; details: Record<string, unknown>; created_at: string }
+export interface ActivityLog { id: string; type: 'request' | 'login' | 'register' | 'logout' | 'topup' | 'operation'; action: string; user_id: string; user_name: string; model: string; group_id: string; group_name: string; status_code: number | null; duration_ms: number | null; first_token_ms: number | null; prompt_tokens: number; completion_tokens: number; total_tokens: number; cost: number; details: Record<string, unknown>; created_at: string }
 export interface LedgerEntry { id: string; amount: string; balance_after: string; kind: string; request_id: string | null; note: string | null; created_at: string; settlement_status: 'not_applicable' | 'pending' | 'processing' | 'settled' | 'failed'; settlement_date: string | null; settled_at: string | null; settlement_error?: string }
 export interface AdminLedgerEntry extends LedgerEntry { user_id: string; user_email: string; user_name: string }
 
@@ -76,6 +77,7 @@ export interface InvitationSummary { enabled: boolean; code: string; inviter_rew
 export interface ReliabilitySettings { retry_count: number; retry_status_codes: string; health_check_mode: 'off' | 'scheduled_all' | 'passive_recovery'; health_check_interval_minutes: number; health_check_auto_recover: boolean; health_check_channel_ids: string; auto_disable_on_test_failure: boolean; auto_disable_slow_seconds: number; auto_disable_status_codes: string; auto_disable_keywords: string }
 export interface ContentPolicySettings { request_audit_enabled: boolean; request_audit_store_mode: 'none' | 'hash' | 'excerpt'; request_audit_retention_days: number; content_policy_mode: 'off' | 'audit' | 'block' }
 export interface ContentPolicyRule { id: string; name: string; term: string; action: 'block' | 'audit'; case_sensitive: boolean; enabled: boolean; priority: number; created_at: string; updated_at: string }
+export interface ContentPolicyBatchResult { created: number; skipped: number }
 export interface RequestContentAudit { id: string; request_id: string; user_id: string; api_key_id: string; model: string; endpoint: string; decision: 'allow' | 'audit' | 'block'; matched_rule_ids: string[]; request_bytes: number; content_length: number; content_hash: string; excerpt: string; created_at: string }
 
 export interface ConversationCacheSettings { conversation_cache_enabled: boolean }
@@ -89,6 +91,7 @@ export interface ConversationLog {
   status_code: number
   stream: boolean
   duration_ms: number
+  first_token_ms: number | null
   created_at: string
 }
 
@@ -121,6 +124,7 @@ export interface UsageLog {
   total_tokens: number | null
   cached_prompt_tokens: number
   duration_ms: number
+  first_token_ms: number | null
   error_code: string | null
   error_detail: string
   client_ip: string
@@ -140,6 +144,7 @@ export interface UsageStats {
   total_tokens: number
   total_cost: string
   avg_duration_ms: number
+  avg_first_token_ms: number | null
   breakdown?: UsageStatBreakdown[]
 }
 
@@ -150,6 +155,7 @@ export interface UsageStatBreakdown {
   cached_prompt_tokens: number
   completion_tokens: number
   total_tokens: number
+  avg_first_token_ms: number | null
   cost: string
 }
 
@@ -232,6 +238,7 @@ export interface UserSubscription {
   usage_requests: number
   usage_credit: number
   model_usage: SubscriptionModelUsage[]
+  reset_card_count: number
 }
 
 export interface SubscriptionOrder {
@@ -331,6 +338,63 @@ export interface RedemptionCodeUpdate {
   note?: string
   max_uses?: number
 }
+
+export interface ResetCard {
+  id: string
+  batch_id: string
+  subscription_id: string
+  user_id: string
+  user_email: string
+  user_name: string
+  plan_id: string
+  plan_name: string
+  enabled: boolean
+  expires_at: string | null
+  note: string
+  used_by: string | null
+  used_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ResetCardForm {
+  subscription_id: string
+  quantity: number
+  expires_at: string
+  note: string
+}
+
+export interface ResetCardUpdate {
+  enabled?: boolean
+  expires_at?: string | null
+  note?: string
+}
+
+export interface ResetCardByPlanForm {
+  plan_id: string
+  status: string
+  quantity: number
+  expires_at: string
+  note: string
+}
+
+export interface ResetCardAllForm {
+  status: string
+  quantity: number
+  expires_at: string
+  note: string
+}
+
+export interface AccountResetCard {
+  id: string
+  subscription_id: string
+  enabled: boolean
+  expires_at: string | null
+  note: string
+  used_at: string | null
+  created_at: string
+  available: boolean
+}
 export interface AdminInvoiceSettings { enabled: boolean; base_url: string; client_id: string; has_client_secret: boolean; need_pay_tax: boolean }
 export interface AdminInvoiceSettingsForm { enabled: boolean; base_url: string; client_id: string; client_secret: string; need_pay_tax: boolean }
 export interface InvoiceEligibleOrder { order_no: string; invoice_no: string; order_type: 'payment' | 'subscription'; plan_name: string; amount: string; paid_at: string | null }
@@ -429,6 +493,7 @@ export interface PublicActivityItem {
   model: string
   status_code: number
   duration_ms: number
+  first_token_ms: number | null
   prompt_tokens: number
   completion_tokens: number
   total_tokens: number
@@ -519,11 +584,36 @@ export const getToken = () => token
 export const setToken = (value: string) => { token = value.trim(); writeCookie(TOKEN_COOKIE, token, TOKEN_MAX_AGE) }
 export const clearToken = () => { token = ''; deleteCookie(TOKEN_COOKIE) }
 
+/**
+ * API error carrying the backend's stable `code` (e.g. "email_not_allowed",
+ * "invalid_credentials") alongside the human-readable message, so views can map
+ * known codes to translated strings while still falling back to the raw message.
+ */
+export class ApiError extends Error {
+  code: string
+  status: number
+  constructor(message: string, status: number, code = '') {
+    super(message)
+    this.name = 'ApiError'
+    this.code = code
+    this.status = status
+  }
+}
+
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`/api${path}`, { ...init, headers: { Authorization: `Bearer ${token}`, ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...init.headers } })
+  // A 401 from the console means the session is gone. Drop the stale token and
+  // send the user back to sign-in instead of leaving them staring at dead UI.
+  if (response.status === 401 && path !== '/auth/login') {
+    clearToken()
+    if (import.meta.client && !window.location.pathname.startsWith('/auth')) {
+      window.location.assign('/auth')
+    }
+  }
   if (!response.ok) {
     const body = await response.json().catch(() => null)
-    throw new Error(body?.error?.message ?? `请求失败 (${response.status})`)
+    const code = typeof body?.error?.code === 'string' ? body.error.code : ''
+    throw new ApiError(body?.error?.message ?? `请求失败 (${response.status})`, response.status, code)
   }
   if (response.status === 204) return undefined as T
   return response.json() as Promise<T>
@@ -537,9 +627,16 @@ async function send(path: string, method: 'POST' | 'PUT' | 'DELETE', body?: unkn
 /** Downloads a binary response (invoice PDF) as a Blob, keeping the auth header. */
 async function download(path: string): Promise<Blob> {
   const response = await fetch(`/api${path}`, { headers: { Authorization: `Bearer ${token}` } })
+  if (response.status === 401) {
+    clearToken()
+    if (import.meta.client && !window.location.pathname.startsWith('/auth')) {
+      window.location.assign('/auth')
+    }
+  }
   if (!response.ok) {
     const body = await response.json().catch(() => null)
-    throw new Error(body?.error?.message ?? `请求失败 (${response.status})`)
+    const code = typeof body?.error?.code === 'string' ? body.error.code : ''
+    throw new ApiError(body?.error?.message ?? `请求失败 (${response.status})`, response.status, code)
   }
   return response.blob()
 }
@@ -588,7 +685,7 @@ export const endpoints = {
   getSiteSettings: () => get<SiteSettings>('/site-settings'),
   getAccount: () => get<Account>('/account/me'),
   getAccountKeys: () => get<{ data: ApiKey[] }>('/account/keys'),
-  getAccountUsage: () => get<{ data: UsageRecord[] }>('/account/usage'),
+  getAccountUsage: (query = '') => get<{ data: UsageRecord[] }>(`/account/usage${query}`),
   getAccountUsageDaily: (days: number, offsetMinutes: number) => get<{ data: DailyUsageRecord[] }>(`/account/usage/daily?days=${days}&offset=${offsetMinutes}`),
   getAccountUsageSummary: () => get<AccountUsageSummary>('/account/usage/summary'),
   getAccountLedger: () => get<{ data: LedgerEntry[] }>('/account/ledger'),
@@ -607,6 +704,8 @@ export const endpoints = {
   getAccountOrders: () => get<{ data: OrderRecord[] }>('/account/orders'),
   redeemCode: (code: string) => post<RedemptionResult>('/account/redeem', { code }),
   getAccountRedemptions: () => get<{ data: RedemptionCodeRedemption[] }>('/account/redemptions'),
+  useResetCard: (subscriptionId: string) => post<{ used: boolean; card_id: string }>(`/account/subscriptions/${encodeURIComponent(subscriptionId)}/reset`),
+  getAccountResetCards: () => get<{ data: AccountResetCard[] }>('/account/reset-cards'),
   getAccountInvitations: () => get<InvitationSummary>('/account/invitations'),
   getInvoiceSettings: () => get<InvoiceSettings>('/account/invoice/settings'),
   getInvoiceEligibleOrders: () => get<{ data: InvoiceEligibleOrder[] }>('/account/invoices/eligible-orders'),
@@ -638,6 +737,8 @@ export const endpoints = {
   register: (body: RegisterBody) => post<{ token: string }>('/auth/register', body),
   logout: () => send('/auth/logout', 'POST'),
   sendEmailCode: (email: string, captcha?: Record<string, string>) => send('/auth/email-code', 'POST', { email, ...captcha }),
+  requestPasswordReset: (email: string, captcha?: Record<string, string>) => send('/auth/password-reset/request', 'POST', { email, ...captcha }),
+  confirmPasswordReset: (token: string, password: string) => send('/auth/password-reset/confirm', 'POST', { token, password }),
 
   getAdminUsers: (query = '') => get<Page<User>>(`/admin/users${query}`),
   getAdminCheckins: (query = '') => get<Page<AdminCheckin>>(`/admin/checkins${query}`),
@@ -692,6 +793,7 @@ export const endpoints = {
   createContentPolicyRule: (form: Omit<ContentPolicyRule, 'id' | 'created_at' | 'updated_at'>) => post<{ id: string }>('/admin/content-policy/rules', form),
   updateContentPolicyRule: (id: string, form: Partial<Omit<ContentPolicyRule, 'id' | 'created_at' | 'updated_at'>>) => put<{ id: string }>(`/admin/content-policy/rules/${encodeURIComponent(id)}`, form),
   deleteContentPolicyRule: (id: string) => send(`/admin/content-policy/rules/${encodeURIComponent(id)}`, 'DELETE'),
+  batchCreateContentPolicyRules: (form: { terms: string; action: ContentPolicyRule['action']; enabled?: boolean; priority?: number }) => post<ContentPolicyBatchResult>('/admin/content-policy/rules/batch', form),
 
   getConversationCacheSettings: () => get<ConversationCacheSettings>('/admin/conversation-cache/settings'),
   updateConversationCacheSettings: (form: ConversationCacheSettings) => put<ConversationCacheSettings>('/admin/conversation-cache/settings', form),
@@ -756,6 +858,13 @@ export const endpoints = {
   updateRedemptionCode: (id: string, form: RedemptionCodeUpdate) => send(`/admin/redemption-codes/${encodeURIComponent(id)}`, 'PUT', form),
   deleteRedemptionCode: (id: string) => send(`/admin/redemption-codes/${encodeURIComponent(id)}`, 'DELETE'),
   getRedemptionCodeRedemptions: (id: string) => get<Page<RedemptionCodeRedemption>>(`/admin/redemption-codes/${encodeURIComponent(id)}/redemptions`),
+  getResetCards: (query = '') => get<Page<ResetCard>>(`/admin/reset-cards${query}`),
+  createResetCards: (form: ResetCardForm) => post<{ batch_id: string; quantity: number }>('/admin/reset-cards', form),
+  createResetCardsByPlan: (form: ResetCardByPlanForm) => post<{ batch_id: string; subscriptions: number; quantity: number }>('/admin/reset-cards/by-plan', form),
+  createResetCardsAll: (form: ResetCardAllForm) => post<{ batch_id: string; subscriptions: number; quantity: number }>('/admin/reset-cards/all', form),
+  updateResetCard: (id: string, form: ResetCardUpdate) => send(`/admin/reset-cards/${encodeURIComponent(id)}`, 'PUT', form),
+  deleteResetCard: (id: string) => send(`/admin/reset-cards/${encodeURIComponent(id)}`, 'DELETE'),
+  resetAdminUserQuota: (userId: string) => post<{ reset_subscriptions: number }>(`/admin/users/${encodeURIComponent(userId)}/reset-quotas`),
   getMigrationRequests: () => get<{ data: MigrationRequest[] }>('/admin/migrate/requests'),
 
   getOAuthProviders: () => get<{ data: OAuthProvider[] }>('/admin/oauth/providers'),

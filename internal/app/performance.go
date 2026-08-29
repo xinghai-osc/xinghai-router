@@ -10,12 +10,13 @@ import (
 const performanceWindow = 24 * time.Hour
 
 type modelPerformanceGroup struct {
-	GroupID      string  `json:"group_id"`
-	GroupName    string  `json:"group_name"`
-	Requests     int64   `json:"requests"`
-	TPS          float64 `json:"tps"`
-	AvgLatencyMs float64 `json:"avg_latency_ms"`
-	SuccessRate  float64 `json:"success_rate"`
+	GroupID         string   `json:"group_id"`
+	GroupName       string   `json:"group_name"`
+	Requests        int64    `json:"requests"`
+	TPS             float64  `json:"tps"`
+	AvgLatencyMs    float64  `json:"avg_latency_ms"`
+	AvgFirstTokenMs *float64 `json:"avg_first_token_ms"`
+	SuccessRate     float64  `json:"success_rate"`
 }
 
 type modelPerformancePayload struct {
@@ -52,7 +53,8 @@ func (s *Service) computeModelPerformance(ctx context.Context, model string) (mo
 			coalesce(g.name, '公共'),
 			count(*),
 			count(*) filter (where rl.status_code >= 200 and rl.status_code < 400),
-			coalesce(avg(rl.duration_ms), 0)
+			coalesce(avg(rl.duration_ms), 0),
+			avg(rl.first_token_ms)
 		from request_logs rl
 		left join groups g on g.id = rl.group_id
 		where rl.model = $1 and rl.created_at >= $2
@@ -68,7 +70,8 @@ func (s *Service) computeModelPerformance(ctx context.Context, model string) (mo
 		var groupID, groupName string
 		var requests, success int64
 		var avgLatency float64
-		if rows.Scan(&groupID, &groupName, &requests, &success, &avgLatency) != nil {
+		var avgFirstTokenMs *float64
+		if rows.Scan(&groupID, &groupName, &requests, &success, &avgLatency, &avgFirstTokenMs) != nil {
 			continue
 		}
 		successRate := 0.0
@@ -76,12 +79,13 @@ func (s *Service) computeModelPerformance(ctx context.Context, model string) (mo
 			successRate = float64(success) / float64(requests)
 		}
 		groups = append(groups, modelPerformanceGroup{
-			GroupID:      groupID,
-			GroupName:    groupName,
-			Requests:     requests,
-			TPS:          float64(requests) / performanceWindow.Seconds(),
-			AvgLatencyMs: avgLatency,
-			SuccessRate:  successRate,
+			GroupID:         groupID,
+			GroupName:       groupName,
+			Requests:        requests,
+			TPS:             float64(requests) / performanceWindow.Seconds(),
+			AvgLatencyMs:    avgLatency,
+			AvgFirstTokenMs: avgFirstTokenMs,
+			SuccessRate:     successRate,
 		})
 	}
 	if rows.Err() != nil {

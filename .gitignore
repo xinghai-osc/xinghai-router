@@ -12,3 +12,5 @@ web/dist/
 web/.nuxt/
 web/.output/
 web/*.tsbuildinfo
+web/dist
+web/.output/

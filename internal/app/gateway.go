@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"log"
 	"math/rand"
@@ -150,11 +151,19 @@ func (ch *channel) pickUA(seed []byte) string {
 
 // uaSeed derives the User-Agent pick seed for a channel from the request ID so
 // every attempt of one request uses the same UA while different requests pick
-// different entries of the pool.
+// different entries of the pool. A fast non-cryptographic hash is sufficient:
+// the seed only needs to be deterministic per request and spread across the
+// pool, not be unpredictable.
 func uaSeed(ctx context.Context, channelID int64) []byte {
-	seed := sha256.Sum256([]byte(requestID(ctx) + "|ua|" + strconv.FormatInt(channelID, 10)))
-	return seed[:]
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(requestID(ctx)))
+	_, _ = h.Write(uaSeedChannelBytes)
+	_, _ = h.Write([]byte(strconv.FormatInt(channelID, 10)))
+	sum := h.Sum32()
+	return []byte{byte(sum), byte(sum >> 8), byte(sum >> 16), byte(sum >> 24)}
 }
+
+var uaSeedChannelBytes = []byte("|ua|")
 
 // randomUA returns a uniformly chosen entry of a UA pool, or "" when empty.
 // Used by out-of-request probes (health checks and channel tests) that have no
@@ -224,30 +233,74 @@ func validGatewayMaxTokens(maxTokens int) bool {
 	return maxTokens > 0 && maxTokens <= maxGatewayMaxTokens
 }
 
-// stripGatewayExtensions removes router-reserved extension fields from a
-// request body before it is forwarded to an upstream. Clients may add these
-// fields for gateway-local behavior (e.g. prompt caching), but strict
-// OpenAI-compatible upstreams reject unknown fields with a 400.
-func stripGatewayExtensions(body []byte) []byte {
+// gatewayExtensionKeyBytes is the raw JSON key stripped from request bodies before
+// they are forwarded upstream. bytes.Contains over the body is used as a cheap
+// pre-filter so bodies that never carry the field skip the JSON round-trip.
+var gatewayExtensionKeyBytes = []byte("promptCacheKey")
+
+// rewriteJSONModel replaces the top-level model in a JSON request body. Invalid
+// or non-object bodies are left unchanged so callers can preserve their existing
+// fallback behavior.
+func rewriteJSONModel(body []byte, model string) []byte {
+	if model == "" {
+		return body
+	}
 	var payload map[string]any
-	if json.Unmarshal(body, &payload) != nil {
+	if json.Unmarshal(body, &payload) != nil || payload == nil {
+		return body
+	}
+	payload["model"] = model
+	rewritten, err := json.Marshal(payload)
+	if err != nil {
+		return body
+	}
+	return rewritten
+}
+
+// rewriteOpenAIBody applies the built-in request-body rewrites for the OpenAI
+// wire format in a single JSON pass: router-reserved extension fields are
+// stripped, stream_options.include_usage is injected when stream is true, and
+// the top-level model is rewritten to upstreamModel when it differs from the
+// requested model. When no rewrite applies the original slice is returned
+// untouched, so a clean request body is never parsed or re-encoded.
+func rewriteOpenAIBody(body []byte, upstreamModel, requestedModel string, stream bool) []byte {
+	needStream := stream
+	needModel := upstreamModel != "" && upstreamModel != requestedModel
+	if !needStream && !needModel && !bytes.Contains(body, gatewayExtensionKeyBytes) {
+		return body
+	}
+	var payload map[string]any
+	if json.Unmarshal(body, &payload) != nil || payload == nil {
 		return body
 	}
 	changed := false
-	for _, key := range []string{"promptCacheKey"} {
-		if _, ok := payload[key]; ok {
-			delete(payload, key)
+	if bytes.Contains(body, gatewayExtensionKeyBytes) {
+		if _, ok := payload["promptCacheKey"]; ok {
+			delete(payload, "promptCacheKey")
 			changed = true
 		}
+	}
+	if needStream {
+		so, _ := payload["stream_options"].(map[string]any)
+		if so == nil {
+			so = map[string]any{}
+		}
+		so["include_usage"] = true
+		payload["stream_options"] = so
+		changed = true
+	}
+	if needModel {
+		payload["model"] = upstreamModel
+		changed = true
 	}
 	if !changed {
 		return body
 	}
-	stripped, err := json.Marshal(payload)
+	out, err := json.Marshal(payload)
 	if err != nil {
 		return body
 	}
-	return stripped
+	return out
 }
 
 func resolveGatewayMaxTokens(maxTokens int) (int, bool) {
@@ -267,12 +320,12 @@ func (s *Service) models(w http.ResponseWriter, r *http.Request) {
 	// channel restricted to the caller alone. Public and ungrouped channels are
 	// not exposed to callers.
 	rows, err := s.db.Query(r.Context(), `select model from (
-		select jsonb_array_elements_text(c.models) as model from channels c where c.enabled and (
+		select jsonb_array_elements_text(c.models) as model from channels c where c.enabled and not c.auto_disabled and (c.api_key <> '' or exists(select 1 from channel_api_keys ak where ak.channel_id=c.id and ak.enabled and ak.key_encrypted <> '')) and (
 			($2<>'' and (exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($2,'')::uuid) or c.user_id=$1))
 			or ($2='' and (exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$1) or c.user_id=$1))
 		)
 		union
-		select m.public_model as model from model_routes m join channels c on c.id=m.channel_id where m.enabled and not m.hidden and c.enabled and (
+		select m.public_model as model from model_routes m join channels c on c.id=m.channel_id where m.enabled and not m.hidden and c.enabled and not c.auto_disabled and (c.api_key <> '' or exists(select 1 from channel_api_keys ak where ak.channel_id=c.id and ak.enabled and ak.key_encrypted <> '')) and (
 			($2<>'' and (exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($2,'')::uuid) or c.user_id=$1))
 			or ($2='' and (exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$1) or c.user_id=$1))
 		)
@@ -361,7 +414,16 @@ type providerStreamTransform func(http.ResponseWriter, *http.Response, string) (
 // reasoning text of a prior assistant turn to be passed back unchanged; every
 // other provider (including OpenCode Go) follows OpenAI behavior and drops it.
 func reasoningProvider(provider string) bool {
-	return provider == "deepseek"
+	return provider == "deepseek" || provider == "commandcode"
+}
+
+// responsesPassthroughEnabled reports whether an upstream of the given format
+// receives OpenAI Responses requests verbatim at /v1/responses. Only the plain
+// openai format is eligible: openai_chat channels speak the OpenAI wire format
+// but only the chat-completions subset, so their Responses requests go through
+// the chat-completions conversion like any other format.
+func responsesPassthroughEnabled(upstreamFormat string) bool {
+	return upstreamFormat == "openai"
 }
 
 // streamStats carries the token counts extracted from an SSE stream's usage
@@ -372,6 +434,104 @@ type streamStats struct {
 	usageComplete              bool
 	promptReported             bool
 	completionReported         bool
+}
+
+type firstTokenTracker struct {
+	started time.Time
+	at      time.Time
+}
+
+func (t *firstTokenTracker) mark() {
+	if t != nil && t.at.IsZero() {
+		t.at = time.Now()
+	}
+}
+
+func (t *firstTokenTracker) milliseconds() *int {
+	if t == nil || t.at.IsZero() {
+		return nil
+	}
+	ms := int(t.at.Sub(t.started).Milliseconds())
+	if ms < 0 {
+		ms = 0
+	}
+	return &ms
+}
+
+// hasVisibleStreamText recognizes the first client-visible text fragment in
+// the supported SSE formats. Metadata, role-only chunks, usage, tool arguments,
+// and terminal events are deliberately excluded from first-character timing.
+func hasVisibleStreamText(data []byte) bool {
+	var event struct {
+		Type    string          `json:"type"`
+		Delta   json.RawMessage `json:"delta"`
+		Choices []struct {
+			Delta struct {
+				Content string `json:"content"`
+			} `json:"delta"`
+		} `json:"choices"`
+	}
+	if json.Unmarshal(data, &event) != nil {
+		return false
+	}
+	if len(event.Choices) > 0 && strings.TrimSpace(event.Choices[0].Delta.Content) != "" {
+		return true
+	}
+	if event.Type == "content_block_delta" {
+		var delta struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		return json.Unmarshal(event.Delta, &delta) == nil && delta.Type == "text_delta" && strings.TrimSpace(delta.Text) != ""
+	}
+	if event.Type == "response.output_text.delta" {
+		var delta string
+		return json.Unmarshal(event.Delta, &delta) == nil && strings.TrimSpace(delta) != ""
+	}
+	return false
+}
+
+type firstTokenWriter struct {
+	http.ResponseWriter
+	tracker *firstTokenTracker
+	pending bytes.Buffer
+}
+
+func newFirstTokenWriter(w http.ResponseWriter, tracker *firstTokenTracker) *firstTokenWriter {
+	return &firstTokenWriter{ResponseWriter: w, tracker: tracker}
+}
+
+func (w *firstTokenWriter) Write(p []byte) (int, error) {
+	if len(p) > 0 && w.tracker != nil && w.tracker.at.IsZero() {
+		w.pending.Write(p)
+		for {
+			raw := w.pending.Bytes()
+			i := bytes.IndexByte(raw, '\n')
+			if i < 0 {
+				break
+			}
+			line := strings.TrimSpace(string(raw[:i]))
+			w.pending.Next(i + 1)
+			if strings.HasPrefix(line, "data:") {
+				data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+				if data != "" && data != "[DONE]" && hasVisibleStreamText([]byte(data)) {
+					w.tracker.mark()
+					break
+				}
+			}
+		}
+	}
+	return w.ResponseWriter.Write(p)
+}
+
+func (w *firstTokenWriter) WriteHeader(code int) {
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *firstTokenWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 type streamTransform func(http.ResponseWriter, *http.Response) (streamStats, error)
@@ -391,6 +551,13 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 	started := time.Now()
 	ctx := r.Context()
 	key := ctx.Value(contextKey{}).(keyContext)
+	imageOptions := imageGatewayOptionsFromContext(ctx)
+	// The normalized prompt is derived once and reused by both the local prefix
+	// cache lookup and store; deriving it on each call parsed the body twice.
+	normalized := ""
+	if s.promptCache != nil && s.promptCache.enabled {
+		normalized = normalizedPrompt(body)
+	}
 	if maxTokens > maxGatewayMaxTokens {
 		s.logReject(ctx, model, 400, "invalid_request", started)
 		writeError(w, 400, "invalid_request", "max_tokens must be at most 200000")
@@ -513,52 +680,63 @@ tryChannels:
 			if s.checkChannelQuota(ctx, ch.id, model) != nil {
 				continue
 			}
+			if imageOptions.image && (ch.provider == "anthropic" || ch.provider == "commandcode" || ch.upstreamFormat == "anthropic") {
+				continue
+			}
 			upstreamFormat := ch.upstreamFormat
+			if imageOptions.image {
+				upstreamFormat = "openai"
+			}
 			if upstreamFormat == "" {
-				if ch.provider == "anthropic" {
+				switch ch.provider {
+				case "anthropic":
 					upstreamFormat = "anthropic"
-				} else {
+				case "commandcode":
+					upstreamFormat = "commandcode"
+				default:
 					upstreamFormat = "openai"
 				}
 			}
-			directResponses := responsesBody != nil && upstreamFormat == "openai"
+			directResponses := responsesBody != nil && responsesPassthroughEnabled(upstreamFormat)
 			selectedDirectResponses = directResponses
 			upstreamPath := ch.upstreamPath
-			if directResponses {
+			if imageOptions.image {
+				upstreamPath = imageOptions.path
+			} else if directResponses {
 				upstreamPath = "/v1/responses"
 			} else if upstreamPath == "" {
 				if upstreamFormat == "anthropic" {
 					upstreamPath = "/v1/messages"
+				} else if upstreamFormat == "commandcode" {
+					upstreamPath = commandCodeGeneratePath
 				} else {
 					upstreamPath = "/v1/chat/completions"
 				}
 			}
 			upstreamURL := ch.baseURL + upstreamPath
-			upstreamBody := stripGatewayExtensions(body)
+			upstreamContentType := "application/json"
+			var upstreamBody []byte
 			if directResponses {
 				upstreamBody = responsesBody
-			}
-			if stream && upstreamFormat != "anthropic" && !directResponses {
-				var payload map[string]any
-				if json.Unmarshal(upstreamBody, &payload) == nil {
-					so, _ := payload["stream_options"].(map[string]any)
-					if so == nil {
-						so = map[string]any{}
-					}
-					so["include_usage"] = true
-					payload["stream_options"] = so
-					if upstreamBody, err = json.Marshal(payload); err != nil {
-						continue
-					}
-				}
-			}
-			if !directResponses {
 				if ch.upstreamModel != "" && ch.upstreamModel != model {
-					var payload map[string]any
-					if json.Unmarshal(upstreamBody, &payload) == nil {
-						payload["model"] = ch.upstreamModel
-						upstreamBody, _ = json.Marshal(payload)
+					upstreamBody = rewriteJSONModel(upstreamBody, ch.upstreamModel)
+				}
+			} else {
+				upstreamBody = body
+				if imageOptions.image {
+					upstreamContentType = imageOptions.contentType
+					if ch.upstreamModel != "" && ch.upstreamModel != model {
+						if strings.HasPrefix(imageOptions.contentType, "multipart/form-data") {
+							upstreamBody, upstreamContentType = rewriteMultipartModel(upstreamBody, imageOptions.contentType, ch.upstreamModel)
+						} else {
+							upstreamBody = rewriteJSONModel(upstreamBody, ch.upstreamModel)
+						}
 					}
+				} else {
+					// Apply the built-in rewrites in one JSON pass instead of
+					// unmarshalling and re-encoding the body up to three times.
+					injectStreamUsage := stream && upstreamFormat != "anthropic" && upstreamFormat != "commandcode"
+					upstreamBody = rewriteOpenAIBody(body, ch.upstreamModel, model, injectStreamUsage)
 				}
 				if upstreamFormat == "anthropic" {
 					var prefillText string
@@ -567,6 +745,12 @@ tryChannels:
 						continue
 					}
 					prefill = prefillText
+				}
+				if upstreamFormat == "commandcode" {
+					upstreamBody, err = commandCodeBodyFromOpenAI(upstreamBody, commandCodeWorkingDir)
+					if err != nil {
+						continue
+					}
 				}
 				if requestFn != nil {
 					upstreamBody = requestFn(upstreamBody, ch.provider)
@@ -582,10 +766,17 @@ tryChannels:
 			if upstreamFormat == "anthropic" {
 				upstreamReq.Header.Set("X-API-Key", ch.apiKey)
 				upstreamReq.Header.Set("Anthropic-Version", "2023-06-01")
+			} else if upstreamFormat == "commandcode" {
+				upstreamReq.Header.Set("Authorization", "Bearer "+ch.apiKey)
+				upstreamReq.Header.Set("x-command-code-version", commandCodeCLIVersion)
+				upstreamReq.Header.Set("x-cli-environment", "production")
+				upstreamReq.Header.Set("x-project-slug", commandCodeProjectSlug(commandCodeWorkingDir))
+				upstreamReq.Header.Set("x-taste-learning", "true")
+				upstreamReq.Header.Set("x-co-flag", "false")
 			} else {
 				upstreamReq.Header.Set("Authorization", "Bearer "+ch.apiKey)
 			}
-			upstreamReq.Header.Set("Content-Type", "application/json")
+			upstreamReq.Header.Set("Content-Type", upstreamContentType)
 			upstreamReq.Header.Set("Accept", accept)
 			if ua := ch.pickUA(uaSeed(r.Context(), ch.id)); ua != "" {
 				upstreamReq.Header.Set("User-Agent", ua)
@@ -600,8 +791,13 @@ tryChannels:
 					break tryChannels
 				}
 			}
+			nonRetryable := false
 			if err == nil && !reliability.retryable(resp.StatusCode) {
-				break tryChannels
+				// The upstream status is not configured as retryable, so retrying
+				// other channels cannot help. The failure is still counted and the
+				// auto-disable rules still apply, so fall through to the shared
+				// failure handling below and break the retry loop afterwards.
+				nonRetryable = true
 			}
 			failureReason := "upstream_unreachable"
 			failDetail = failureReason
@@ -630,6 +826,9 @@ tryChannels:
 			// Retries rotate to the next credential in priority order so a
 			// multi-key channel is not replayed with the same key.
 			retryChannels[i].rotateKey()
+			if nonRetryable {
+				break tryChannels
+			}
 		}
 	}
 	if resp == nil {
@@ -658,9 +857,12 @@ tryChannels:
 	defer resp.Body.Close()
 	selectedFormat := ch.upstreamFormat
 	if selectedFormat == "" {
-		if ch.provider == "anthropic" {
+		switch ch.provider {
+		case "anthropic":
 			selectedFormat = "anthropic"
-		} else {
+		case "commandcode":
+			selectedFormat = "commandcode"
+		default:
 			selectedFormat = "openai"
 		}
 	}
@@ -669,6 +871,8 @@ tryChannels:
 			copyResponseHeaders(w.Header(), resp.Header)
 		}
 		var st streamStats
+		firstToken := &firstTokenTracker{started: started}
+		w = newFirstTokenWriter(w, firstToken)
 		cacheEnabled := s.conversationCacheSettings(ctx).Enabled
 		capture := newStreamCaptureWriter(w, cacheEnabled)
 		w = capture
@@ -685,6 +889,8 @@ tryChannels:
 			st, streamErr = streamFn(w, resp)
 		} else if selectedFormat == "anthropic" {
 			st, streamErr = streamAnthropicToOpenAI(w, resp, prefill)
+		} else if selectedFormat == "commandcode" {
+			st, streamErr = streamCommandCodeToOpenAI(w, resp)
 		} else {
 			st, streamErr = s.streamResponse(w, resp)
 		}
@@ -699,7 +905,7 @@ tryChannels:
 			// The upstream did not serve this prompt from its cache. Fall back to the
 			// local prefix cache so overlapping prompts are billed at the cached rate
 			// instead of paying full input price every time.
-			st.cached = int(s.promptCache.cached(model, normalizedPrompt(body), int64(st.prompt)))
+			st.cached = int(s.promptCache.cached(model, normalized, int64(st.prompt)))
 		}
 		total := st.prompt + st.completion
 		code, detail := "", ""
@@ -727,7 +933,7 @@ tryChannels:
 				st.prompt = len(body) / 3
 				total = st.prompt + st.completion
 			}
-			s.logRequest(ctx, key, ch.id, ch.keyID, model, status, st.prompt, st.completion, total, time.Since(started), code, detail)
+			s.logRequest(ctx, key, ch.id, ch.keyID, model, status, st.prompt, st.completion, total, time.Since(started), code, detail, firstToken.milliseconds())
 			if !capture.wrote && !capture.headerSent {
 				writeError(w, status, "upstream_error", s.clientUpstreamError(ctx, detail, reliability))
 			}
@@ -735,9 +941,9 @@ tryChannels:
 				s.channelFailed(ctx, ch.id, ch.keyID, code)
 			}
 		} else {
-			s.logRequest(ctx, key, ch.id, ch.keyID, model, status, st.prompt, st.completion, total, time.Since(started), "", "")
+			s.logRequest(ctx, key, ch.id, ch.keyID, model, status, st.prompt, st.completion, total, time.Since(started), "", "", firstToken.milliseconds())
 			if streamErr == nil {
-				s.promptCache.store(model, normalizedPrompt(body), int64(st.prompt))
+				s.promptCache.store(model, normalized, int64(st.prompt))
 			}
 			if st.prompt > 0 || st.completion > 0 {
 				if subscriptionAccess.Covered {
@@ -752,7 +958,7 @@ tryChannels:
 		// client disconnect or an upstream error is partial output and useless for
 		// offline analysis, plus dropping it avoids recording half-sent turns.
 		if cacheEnabled && streamErr == nil {
-			s.storeConversationCache(ctx, key, model, true, body, capture.bytes(), status, time.Since(started).Milliseconds())
+			s.storeConversationCache(ctx, key, model, true, body, capture.bytes(), status, time.Since(started).Milliseconds(), firstToken.milliseconds())
 		}
 		return
 	}
@@ -786,11 +992,20 @@ tryChannels:
 			return
 		}
 	}
+	if selectedFormat == "commandcode" && resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		responseBody, err = commandCodeStreamToOpenAI(responseBody)
+		if err != nil {
+			s.logRequest(ctx, key, ch.id, ch.keyID, model, 502, 0, 0, 0, time.Since(started), "upstream_convert_error", err.Error())
+			writeError(w, 502, "upstream_error", "could not convert upstream response")
+			s.channelFailed(ctx, ch.id, ch.keyID, "upstream_convert_error")
+			return
+		}
+	}
 	prompt, completion, total, cached := usage(responseBody)
 	if cached == 0 {
 		// Same accounting assist as the streaming path: an upstream cache miss does
 		// not mean the prompt prefixes were never seen here before.
-		cached = int(s.promptCache.cached(model, normalizedPrompt(body), int64(prompt)))
+		cached = int(s.promptCache.cached(model, normalized, int64(prompt)))
 	}
 	detail := ""
 	if resp.StatusCode >= 400 {
@@ -802,7 +1017,7 @@ tryChannels:
 	}
 	s.logRequest(ctx, key, ch.id, ch.keyID, model, resp.StatusCode, prompt, completion, total, time.Since(started), errorCode(resp.StatusCode), detail)
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		s.promptCache.store(model, normalizedPrompt(body), int64(prompt))
+		s.promptCache.store(model, normalized, int64(prompt))
 		if subscriptionAccess.Covered {
 			s.settleSubscriptionUsage(ctx, key, model, prompt, cached, completion, pricing, groupMultiplier)
 		} else {
@@ -847,7 +1062,7 @@ tryChannels:
 	}
 	w.WriteHeader(resp.StatusCode)
 	w.Write(responseBody)
-	s.storeConversationCache(ctx, key, model, false, body, responseBody, resp.StatusCode, time.Since(started).Milliseconds())
+	s.storeConversationCache(ctx, key, model, false, body, responseBody, resp.StatusCode, time.Since(started).Milliseconds(), nil)
 }
 
 // reserveUsage holds the worst-case cost of a request before it is proxied. The whole
@@ -946,20 +1161,26 @@ func (s *Service) settleUsage(ctx context.Context, key keyContext, held reservat
 	defer cancel()
 	createdAt := time.Now().UTC()
 	businessDate := walletBusinessDate(createdAt)
-	tag, err := s.db.Exec(settleCtx, `with settled as (
+	tag, err := s.db.Exec(settleCtx, `with existing as (
+		select 1 from wallet_settlements where request_id=$5::text
+	), settled as (
 		update user_wallets set reserved=greatest(0,reserved-$2)+$1,updated_at=now()
 		where user_id=$3 and reserved >= $2 and balance-reserved+$2 >= $1
+		  and not exists (select 1 from existing)
 		returning balance
-	), ledger as (
-		insert into wallet_ledger(id,user_id,amount,balance_after,kind,request_id,note,settlement_status,settlement_date)
-		select $4::uuid,$3,-$1,balance,'charge',$5::text,$6::text,'pending',$7::date from settled
 	), settlement as (
 		insert into wallet_settlements(id,ledger_id,user_id,request_id,business_date,amount)
 		select $8::uuid,$4::uuid,$3,$5::text,$7::date,$1 from settled
 		on conflict(request_id) do nothing
+		returning 1
+	), ledger as (
+		insert into wallet_ledger(id,user_id,amount,balance_after,kind,request_id,note,settlement_status,settlement_date)
+		select $4::uuid,$3,-$1,balance,'charge',$5::text,$6::text,'pending',$7::date from settled
+		where exists (select 1 from settlement)
 	)
 	insert into usage_records(id,request_id,user_id,api_key_id,model,prompt_tokens,cached_prompt_tokens,completion_tokens,cost)
 	select $9::uuid,$5::text,$3,$10::uuid,$6::text,$11::int,$12::int,$13::int,$1 from settled
+	where exists (select 1 from settlement)
 	on conflict(request_id) do update set prompt_tokens=excluded.prompt_tokens,cached_prompt_tokens=excluded.cached_prompt_tokens,completion_tokens=excluded.completion_tokens,cost=excluded.cost`,
 		cost, held.amount, key.userID, ledgerID, requestID(ctx), model, businessDate, settlementID, usageID, key.keyID, prompt, cached, completion)
 	if err != nil || tag.RowsAffected() == 0 {
@@ -1051,7 +1272,17 @@ func (s *Service) releaseReservation(ctx context.Context, key keyContext, held r
 // "total" rows aggregate lifetime usage (no created_at cutoff); day/month/minute
 // rows use a rolling window. Cost is summed from usage_records via the shared
 // request_id so a key can also be capped on spend.
+//
+// When a key has no quota limits configured the query returns zero rows. The
+// result is cached for a short TTL so the hot path skips the database round-trip
+// for the majority of keys that have no quota.
 func (s *Service) checkQuota(ctx context.Context, key keyContext, model string) error {
+	if s.quotaAbsentCache != nil {
+		qk := quotaRouteKey{userID: key.userID, keyID: key.keyID, model: model}
+		if _, ok := s.quotaAbsentCache.lookup(qk); ok {
+			return nil
+		}
+	}
 	rows, err := s.db.Query(ctx, `select q.max_requests,q.max_tokens,q.max_cost,agg.requests,agg.tokens,agg.cost
 	from quota_limits q
 	cross join lateral (
@@ -1065,7 +1296,9 @@ func (s *Service) checkQuota(ctx context.Context, key keyContext, model string) 
 		return err
 	}
 	defer rows.Close()
+	hasRows := false
 	for rows.Next() {
+		hasRows = true
 		var maxRequests, maxTokens *int64
 		var maxCost *float64
 		var count, tokens int64
@@ -1077,7 +1310,14 @@ func (s *Service) checkQuota(ctx context.Context, key keyContext, model string) 
 			return errInvalid
 		}
 	}
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if !hasRows && s.quotaAbsentCache != nil {
+		qk := quotaRouteKey{userID: key.userID, keyID: key.keyID, model: model}
+		s.quotaAbsentCache.store(qk, struct{}{})
+	}
+	return nil
 }
 
 // channelsForModel returns the candidate channels for a model, memoised for a
@@ -1097,7 +1337,7 @@ func (s *Service) channelsForModel(ctx context.Context, key keyContext, model st
 }
 
 func (s *Service) loadChannelsForModel(ctx context.Context, key keyContext, model string) ([]channel, error) {
-	rows, err := s.db.Query(ctx, `select c.id,c.base_url,c.api_key,coalesce(m.priority,c.priority),coalesce(m.weight,c.weight),coalesce(m.upstream_model,''),c.provider,c.upstream_path,c.upstream_format,c.request_overrides,c.ua_pool,case when $3='' then exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$2) or c.user_id=$2 else exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($3,'')::uuid) or c.user_id=$2 end as in_key_group from channels c left join model_routes m on m.channel_id=c.id and m.public_model=$1 and m.enabled where (c.enabled or c.auto_disabled) and (c.models ? $1 or m.public_model is not null) and (($3<>'' and (exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($3,'')::uuid) or c.user_id=$2)) or ($3='' and (exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$2) or c.user_id=$2))) order by (c.enabled and not c.auto_disabled) desc, coalesce(m.priority,c.priority) desc, c.priority desc, c.id`, model, key.userID, key.groupID)
+	rows, err := s.db.Query(ctx, `select c.id,c.base_url,c.api_key,coalesce(m.priority,c.priority),coalesce(m.weight,c.weight),coalesce(m.upstream_model,''),c.provider,c.upstream_path,c.upstream_format,c.request_overrides,c.ua_pool,case when $3='' then exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$2) or c.user_id=$2 else exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($3,'')::uuid) or c.user_id=$2 end as in_key_group from channels c left join model_routes m on m.channel_id=c.id and m.public_model=$1 and m.enabled where c.enabled and not c.auto_disabled and (c.models ? $1 or m.public_model is not null) and (($3<>'' and (exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($3,'')::uuid) or c.user_id=$2)) or ($3='' and (exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$2) or c.user_id=$2))) order by (c.enabled and not c.auto_disabled) desc, coalesce(m.priority,c.priority) desc, c.priority desc, c.id`, model, key.userID, key.groupID)
 	if err != nil {
 		return nil, err
 	}
@@ -1158,14 +1398,16 @@ func (s *Service) loadChannelsForModel(ctx context.Context, key keyContext, mode
 		for _, ch := range result[:end] {
 			sum += ch.weight
 		}
-		pick := int(seed[0])<<8 | int(seed[1])
-		pick %= sum
 		selected := 0
-		for i, ch := range result[:end] {
-			pick -= ch.weight
-			if pick < 0 {
-				selected = i
-				break
+		if sum > 0 {
+			pick := int(seed[0])<<8 | int(seed[1])
+			pick %= sum
+			for i, ch := range result[:end] {
+				pick -= ch.weight
+				if pick < 0 {
+					selected = i
+					break
+				}
 			}
 		}
 		result[0], result[selected] = result[selected], result[0]
@@ -1334,8 +1576,12 @@ func (s *Service) testFailedChannelKey(channelID int64, keyID string) {
 // times. Success clears the failure bookkeeping for the channel or key; three
 // failed attempts auto-disable the credential.
 func (s *Service) testFailedCredential(ctx context.Context, channelID int64, keyID, baseURL, apiKey, provider, upstreamFormat string, uaPool []string) {
+	testPath := "/v1/models"
+	if provider == "commandcode" {
+		testPath = commandCodeModelsPath
+	}
 	for attempt := 0; attempt < 3; attempt++ {
-		request, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/v1/models", nil)
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+testPath, nil)
 		if err != nil {
 			s.disableFailedChannel(ctx, channelID, keyID, "invalid_test_request")
 			return
@@ -1452,18 +1698,6 @@ func (c *streamCaptureWriter) bytes() []byte {
 // stream_options.include_usage was requested); Anthropic streams carry
 // input/cache tokens in the message_start event and output tokens in the
 // message_delta event.
-type sseUsage struct {
-	Prompt              int `json:"prompt_tokens"`
-	Completion          int `json:"completion_tokens"`
-	Total               int `json:"total_tokens"`
-	Input               int `json:"input_tokens"`
-	Output              int `json:"output_tokens"`
-	PromptTokensDetails struct {
-		Cached int `json:"cached_tokens"`
-	} `json:"prompt_tokens_details"`
-	CacheReadInputTokens int `json:"cache_read_input_tokens"`
-}
-
 func parseSSEUsage(data []byte, st *streamStats) {
 	var chunk struct {
 		Usage   json.RawMessage `json:"usage"`
@@ -1488,46 +1722,46 @@ func parseSSEUsage(data []byte, st *streamStats) {
 	if len(rawUsage) == 0 || string(rawUsage) == "null" {
 		return
 	}
-	var u sseUsage
+	// Pointer fields double as presence flags, so the usage object is parsed once
+	// instead of once into a struct and again into a field map.
+	var u struct {
+		Prompt              *int `json:"prompt_tokens"`
+		Completion          *int `json:"completion_tokens"`
+		Total               *int `json:"total_tokens"`
+		Input               *int `json:"input_tokens"`
+		Output              *int `json:"output_tokens"`
+		PromptTokensDetails struct {
+			Cached *int `json:"cached_tokens"`
+		} `json:"prompt_tokens_details"`
+		CacheReadInputTokens *int `json:"cache_read_input_tokens"`
+	}
 	if json.Unmarshal(rawUsage, &u) != nil {
 		return
 	}
-	var fields map[string]json.RawMessage
-	if json.Unmarshal(rawUsage, &fields) != nil {
-		return
-	}
 	st.usageReported = true
-	if _, ok := fields["prompt_tokens"]; ok {
+	if u.Prompt != nil || u.Input != nil {
 		st.promptReported = true
 	}
-	if _, ok := fields["input_tokens"]; ok {
-		st.promptReported = true
+	if !isMessageStart && (u.Completion != nil || u.Output != nil) {
+		st.completionReported = true
 	}
-	if !isMessageStart {
-		if _, ok := fields["completion_tokens"]; ok {
-			st.completionReported = true
-		}
-		if _, ok := fields["output_tokens"]; ok {
-			st.completionReported = true
-		}
+	if u.Prompt != nil && *u.Prompt > st.prompt {
+		st.prompt = *u.Prompt
 	}
-	if u.Prompt > st.prompt {
-		st.prompt = u.Prompt
+	if u.Input != nil && *u.Input > st.prompt {
+		st.prompt = *u.Input
 	}
-	if u.Input > st.prompt {
-		st.prompt = u.Input
+	if u.Completion != nil && *u.Completion > st.completion {
+		st.completion = *u.Completion
 	}
-	if u.Completion > st.completion {
-		st.completion = u.Completion
+	if u.Output != nil && *u.Output > st.completion {
+		st.completion = *u.Output
 	}
-	if u.Output > st.completion {
-		st.completion = u.Output
+	if u.PromptTokensDetails.Cached != nil && *u.PromptTokensDetails.Cached > st.cached {
+		st.cached = *u.PromptTokensDetails.Cached
 	}
-	if u.PromptTokensDetails.Cached > st.cached {
-		st.cached = u.PromptTokensDetails.Cached
-	}
-	if u.CacheReadInputTokens > st.cached {
-		st.cached = u.CacheReadInputTokens
+	if u.CacheReadInputTokens != nil && *u.CacheReadInputTokens > st.cached {
+		st.cached = *u.CacheReadInputTokens
 	}
 	st.usageComplete = st.promptReported && st.completionReported && (st.prompt > 0 || st.completion > 0)
 }
@@ -1583,7 +1817,10 @@ func (s *Service) streamResponse(w http.ResponseWriter, resp *http.Response) (st
 	scanner.Buffer(make([]byte, 64*1024), 2<<20)
 	for scanner.Scan() {
 		line := scanner.Text()
-		if _, err := fmt.Fprintln(w, line); err != nil {
+		if _, err := io.WriteString(w, line); err != nil {
+			return st, err
+		}
+		if _, err := io.WriteString(w, "\n"); err != nil {
 			return st, err
 		}
 		flusher.Flush()
@@ -1604,7 +1841,7 @@ func (s *Service) streamResponse(w http.ResponseWriter, resp *http.Response) (st
 // middleware.
 type subscriptionCoveredKey struct{}
 
-func (s *Service) logRequest(ctx context.Context, key keyContext, channelID int64, channelKeyID, model string, status, prompt, completion, total int, d time.Duration, errorCode, detail string) {
+func (s *Service) logRequest(ctx context.Context, key keyContext, channelID int64, channelKeyID, model string, status, prompt, completion, total int, d time.Duration, errorCode, detail string, firstTokenMs ...*int) {
 	if s.db == nil {
 		return
 	}
@@ -1612,9 +1849,13 @@ func (s *Service) logRequest(ctx context.Context, key keyContext, channelID int6
 	info := clientInfoFromContext(ctx)
 	detail = sanitizeErrorDetail(detail)
 	subscriptionAccess, _ := ctx.Value(subscriptionCoveredKey{}).(subscriptionAccess)
+	var firstToken *int
+	if len(firstTokenMs) > 0 {
+		firstToken = firstTokenMs[0]
+	}
 	logCtx, cancel := detach(ctx, settlementTimeout)
 	defer cancel()
-	_, err := s.db.Exec(logCtx, `insert into request_logs(id,request_id,user_id,api_key_id,channel_id,channel_key_id,group_id,model,status_code,prompt_tokens,completion_tokens,total_tokens,duration_ms,error_code,client_ip,user_agent,error_detail,subscription_covered) values($1::uuid,$2::text,$3::bigint,$4::uuid,nullif($5,0),nullif($6,'')::uuid,nullif($7,'')::uuid,$8,$9::int,$10::int,$11::int,$12::int,$13::int,nullif($14,''),$15,$16,$17,$18)`, id, requestID(ctx), key.userID, key.keyID, channelID, channelKeyID, key.groupID, model, status, prompt, completion, total, d.Milliseconds(), errorCode, info.ip, info.userAgent, detail, subscriptionAccess.Covered)
+	_, err := s.db.Exec(logCtx, `insert into request_logs(id,request_id,user_id,api_key_id,channel_id,channel_key_id,group_id,model,status_code,prompt_tokens,completion_tokens,total_tokens,duration_ms,first_token_ms,error_code,client_ip,user_agent,error_detail,subscription_covered) values($1::uuid,$2::text,$3::bigint,$4::uuid,nullif($5,0),nullif($6,'')::uuid,nullif($7,'')::uuid,$8,$9::int,$10::int,$11::int,$12::int,$13::int,$14::int,nullif($15,''),$16,$17,$18,$19)`, id, requestID(ctx), key.userID, key.keyID, channelID, channelKeyID, key.groupID, model, status, prompt, completion, total, d.Milliseconds(), firstToken, errorCode, info.ip, info.userAgent, detail, subscriptionAccess.Covered)
 	if err != nil {
 		log.Printf("logRequest failed: %v", err)
 	}

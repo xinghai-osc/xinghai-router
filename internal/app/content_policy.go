@@ -15,11 +15,12 @@ import (
 )
 
 const (
-	maxContentPolicyRules = 1000
-	maxContentPolicyTerm  = 512
-	maxContentPolicyName  = 200
-	maxPolicyScanBytes    = 2 << 20
-	maxAuditExcerpt       = 1000
+	maxContentPolicyRules      = 1000
+	maxContentPolicyTerm       = 512
+	maxContentPolicyName       = 200
+	maxPolicyScanBytes         = 2 << 20
+	maxAuditExcerpt            = 1000
+	maxContentPolicyBatchTerms = 1000
 )
 
 var policyUUIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
@@ -94,6 +95,14 @@ type contentPolicySettingsInput struct {
 	StoreMode     *string `json:"request_audit_store_mode"`
 	RetentionDays *int    `json:"request_audit_retention_days"`
 	Mode          *string `json:"content_policy_mode"`
+}
+
+type contentPolicyBatchInput struct {
+	Terms         string `json:"terms"`
+	Action        *string `json:"action"`
+	CaseSensitive *bool   `json:"case_sensitive"`
+	Enabled       *bool   `json:"enabled"`
+	Priority      *int    `json:"priority"`
 }
 
 func defaultContentPolicySettings() contentPolicySettings {
@@ -292,19 +301,29 @@ func containsString(values []string, target string) bool {
 	return false
 }
 
+// recordContentAudit persists the content-policy decision for a request. It is
+// best-effort: the audit row has no foreign keys, so the insert runs on the
+// background writer and a slow database never adds latency to a gateway request.
 func (s *Service) recordContentAudit(ctx context.Context, key keyContext, model, endpoint string, requestBytes int, result contentPolicyResult, settings contentPolicySettings) {
 	if s.db == nil || !settings.Enabled {
 		return
 	}
-	id, err := randomID()
-	if err != nil {
-		return
-	}
+	requestID := requestID(ctx)
+	userID, keyID := key.userID, key.keyID
+	decision := result.Decision
+	matchedRules := result.MatchedRuleIDs
+	contentLength := result.ContentLength
 	storedHash, storedExcerpt := result.ContentHash, result.Excerpt
 	if settings.StoreMode == "none" {
 		storedHash, storedExcerpt = "", ""
 	}
-	_, _ = s.db.Exec(ctx, `insert into request_content_audits(id,request_id,user_id,api_key_id,model,endpoint,decision,matched_rule_ids,request_bytes,content_length,content_hash,excerpt) values($1,$2,$3,$4,$5,$6,$7,$8::text[],$9,$10,$11,$12) on conflict(request_id) do update set decision=excluded.decision,matched_rule_ids=excluded.matched_rule_ids,request_bytes=excluded.request_bytes,content_length=excluded.content_length,content_hash=excluded.content_hash,excerpt=excluded.excerpt`, id, requestID(ctx), key.userID, key.keyID, model, endpoint, result.Decision, result.MatchedRuleIDs, requestBytes, result.ContentLength, storedHash, storedExcerpt)
+	s.background.submit(func(ctx context.Context) {
+		id, err := randomID()
+		if err != nil {
+			return
+		}
+		_, _ = s.db.Exec(ctx, `insert into request_content_audits(id,request_id,user_id,api_key_id,model,endpoint,decision,matched_rule_ids,request_bytes,content_length,content_hash,excerpt) values($1,$2,$3,$4,$5,$6,$7,$8::text[],$9,$10,$11,$12) on conflict(request_id) do update set decision=excluded.decision,matched_rule_ids=excluded.matched_rule_ids,request_bytes=excluded.request_bytes,content_length=excluded.content_length,content_hash=excluded.content_hash,excerpt=excluded.excerpt`, id, requestID, userID, keyID, model, endpoint, decision, matchedRules, requestBytes, contentLength, storedHash, storedExcerpt)
+	})
 }
 
 func (s *Service) enforceContentPolicy(ctx context.Context, key keyContext, model, endpoint string, body []byte) (bool, context.Context) {
@@ -422,6 +441,122 @@ func (s *Service) createContentPolicyRule(w http.ResponseWriter, r *http.Request
 	s.contentPolicyData.clear()
 	s.audit(r, "content_policy.rule_created", "content_policy_rule", id, map[string]any{"name": rule.Name, "action": rule.Action, "enabled": rule.Enabled})
 	writeJSON(w, http.StatusCreated, map[string]any{"id": id})
+}
+
+func parsePolicyTerms(raw string) []string {
+	seen := map[string]bool{}
+	terms := []string{}
+	for _, line := range strings.Split(raw, "\n") {
+		term := strings.TrimSpace(line)
+		if term == "" || strings.HasPrefix(term, "#") || seen[term] {
+			continue
+		}
+		seen[term] = true
+		terms = append(terms, term)
+	}
+	return terms
+}
+
+func (s *Service) batchCreateContentPolicyRules(w http.ResponseWriter, r *http.Request) {
+	var in contentPolicyBatchInput
+	if decode(r, &in) != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "invalid content policy batch")
+		return
+	}
+	terms := parsePolicyTerms(in.Terms)
+	if len(terms) == 0 {
+		writeError(w, http.StatusBadRequest, "invalid_request", "no content policy terms provided")
+		return
+	}
+	if len(terms) > maxContentPolicyBatchTerms {
+		writeError(w, http.StatusBadRequest, "invalid_request", "too many content policy terms in one batch")
+		return
+	}
+	rule := contentPolicyRule{Name: terms[0], Term: terms[0], Action: "block", Enabled: true, Priority: 100}
+	if in.Action != nil {
+		rule.Action = strings.TrimSpace(*in.Action)
+	}
+	if in.CaseSensitive != nil {
+		rule.CaseSensitive = *in.CaseSensitive
+	}
+	if in.Enabled != nil {
+		rule.Enabled = *in.Enabled
+	}
+	if in.Priority != nil {
+		rule.Priority = *in.Priority
+	}
+	for _, term := range terms {
+		rule.Term = term
+		rule.Name = term
+		if !validPolicyRule(rule) {
+			writeError(w, http.StatusBadRequest, "invalid_request", "invalid content policy term: "+term)
+			return
+		}
+	}
+	var current int
+	if err := s.db.QueryRow(r.Context(), `select count(*) from content_policy_rules`).Scan(&current); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
+		return
+	}
+	rows, err := s.db.Query(r.Context(), `select term from content_policy_rules where term = any($1::text[])`, terms)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
+		return
+	}
+	defer rows.Close()
+	existing := map[string]bool{}
+	for rows.Next() {
+		var term string
+		if rows.Scan(&term) == nil {
+			existing[term] = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
+		return
+	}
+	toInsert := []string{}
+	for _, term := range terms {
+		if !existing[term] {
+			toInsert = append(toInsert, term)
+		}
+	}
+	skipped := len(terms) - len(toInsert)
+	if len(toInsert) == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{"created": 0, "skipped": skipped})
+		return
+	}
+	if current+len(toInsert) > maxContentPolicyRules {
+		writeError(w, http.StatusBadRequest, "invalid_request", "content policy rule limit reached")
+		return
+	}
+	ids := make([]string, 0, len(toInsert))
+	names := make([]string, 0, len(toInsert))
+	actions := make([]string, 0, len(toInsert))
+	caseSensitive := make([]bool, 0, len(toInsert))
+	enabled := make([]bool, 0, len(toInsert))
+	priorities := make([]int, 0, len(toInsert))
+	for _, term := range toInsert {
+		id, err := randomID()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "could not generate rule id")
+			return
+		}
+		ids = append(ids, id)
+		names = append(names, term)
+		actions = append(actions, rule.Action)
+		caseSensitive = append(caseSensitive, rule.CaseSensitive)
+		enabled = append(enabled, rule.Enabled)
+		priorities = append(priorities, rule.Priority)
+	}
+	actor := accountFromContext(r).userID
+	if _, err := s.db.Exec(r.Context(), `insert into content_policy_rules(id,name,term,action,case_sensitive,enabled,priority,created_by,updated_by) select id,name,term,action,case_sensitive,enabled,priority,nullif($8,'')::bigint,nullif($8,'')::bigint from unnest($1::uuid[],$2::text[],$3::text[],$4::text[],$5::bool[],$6::bool[],$7::int[]) as t(id,name,term,action,case_sensitive,enabled,priority)`, ids, names, toInsert, actions, caseSensitive, enabled, priorities, actor); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not create content policy rules")
+		return
+	}
+	s.contentPolicyData.clear()
+	s.audit(r, "content_policy.rules_batch_created", "content_policy_rule", "", map[string]any{"created": len(toInsert), "skipped": skipped, "action": rule.Action, "enabled": rule.Enabled, "priority": rule.Priority})
+	writeJSON(w, http.StatusCreated, map[string]any{"created": len(toInsert), "skipped": skipped})
 }
 
 func (s *Service) updateContentPolicyRule(w http.ResponseWriter, r *http.Request) {

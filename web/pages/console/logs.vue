@@ -157,8 +157,9 @@ const EMPTY_STATS: UsageStats = {
   cached_prompt_tokens: 0,
   completion_tokens: 0,
   total_tokens: 0,
-  total_cost: 0,
+  total_cost: '0',
   avg_duration_ms: 0,
+  avg_first_token_ms: null,
 }
 
 const usage = useResource(() => endpoints.getUsageLogs(logsQuery()), {
@@ -179,6 +180,7 @@ const statTiles = computed(() => [
   { key: 'statTotalTokens', value: formatCompact(stats.data.value.total_tokens) },
   { key: 'statCost', value: formatMoney(stats.data.value.total_cost, 4) },
   { key: 'statAvgDuration', value: t('admin.durationMs', { value: Math.round(stats.data.value.avg_duration_ms) }) },
+  { key: 'statAvgFirstToken', value: stats.data.value.avg_first_token_ms == null ? t('common.none') : t('admin.firstTokenMs', { value: Math.round(stats.data.value.avg_first_token_ms) }) },
 ])
 
 async function applyFilters() {
@@ -351,6 +353,7 @@ const detailTarget = ref<UsageLog | RequestLog | null>(null)
                 <th class="num">{{ t('admin.statPromptTokens') }}</th>
                 <th class="num">{{ t('admin.statCachedTokens') }}</th>
                 <th class="num">{{ t('admin.statCompletionTokens') }}</th>
+                <th class="num">{{ t('admin.firstToken') }}</th>
                 <th class="num">{{ t('admin.duration') }}</th>
                 <th class="num">{{ t('admin.cost') }}</th>
                 <th>{{ t('common.detail') }}</th>
@@ -372,6 +375,7 @@ const detailTarget = ref<UsageLog | RequestLog | null>(null)
                 <td class="num">{{ formatNumber(log.prompt_tokens) }}</td>
                 <td class="num">{{ formatNumber(log.cached_prompt_tokens) }}</td>
                 <td class="num">{{ formatNumber(log.completion_tokens) }}</td>
+                <td class="num">{{ log.first_token_ms == null ? t('common.none') : t('admin.firstTokenMs', { value: log.first_token_ms }) }}</td>
                 <td class="num">{{ t('admin.durationMs', { value: log.duration_ms }) }}</td>
                 <td class="num">
                   <span class="inline-flex items-center justify-end gap-1.5">
@@ -442,6 +446,7 @@ const detailTarget = ref<UsageLog | RequestLog | null>(null)
                 <th class="num">{{ t('admin.statPromptTokens') }}</th>
                 <th class="num">{{ t('admin.statCompletionTokens') }}</th>
                 <th class="num">{{ t('admin.statTotalTokens') }}</th>
+                <th class="num">{{ t('admin.firstToken') }}</th>
                 <th class="num">{{ t('admin.duration') }}</th>
                 <th>{{ t('admin.errorCode') }}</th>
                 <th>{{ t('common.detail') }}</th>
@@ -460,6 +465,7 @@ const detailTarget = ref<UsageLog | RequestLog | null>(null)
                 <td class="num">{{ formatNumber(log.prompt_tokens) }}</td>
                 <td class="num">{{ formatNumber(log.completion_tokens) }}</td>
                 <td class="num">{{ formatNumber(log.total_tokens) }}</td>
+                <td class="num">{{ log.first_token_ms == null ? t('common.none') : t('admin.firstTokenMs', { value: log.first_token_ms }) }}</td>
                 <td class="num">{{ t('admin.durationMs', { value: log.duration_ms }) }}</td>
                 <td class="text-muted">{{ log.error_code || '—' }}</td>
                 <td>
