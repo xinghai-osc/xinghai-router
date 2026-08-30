@@ -1312,11 +1312,14 @@ func (s *Service) modelCatalog(w http.ResponseWriter, r *http.Request) {
 	providers := s.providers(r)
 	rows, err := s.db.Query(r.Context(), `
 		with available as (
-			select trim(jsonb_array_elements_text(c.models)) as model, c.id as channel_id
-			from channels c where c.enabled
+			select trim(item.model) as model, c.id as channel_id, c.user_id::text as channel_user_id
+			from channels c
+			cross join lateral jsonb_array_elements_text(c.models) as item(model)
+			where c.enabled and not c.auto_disabled and trim(item.model) <> ''
 			union
-			select trim(m.public_model), c.id from model_routes m join channels c on c.id=m.channel_id
-			where m.enabled and not m.hidden and c.enabled and trim(m.public_model) <> ''
+			select trim(m.public_model), c.id, c.user_id::text
+			from model_routes m join channels c on c.id=m.channel_id
+			where m.enabled and not m.hidden and c.enabled and not c.auto_disabled and trim(m.public_model) <> ''
 		), catalog as (
 			select distinct a.model, coalesce(g.id::text, '__public') as group_id,
 				coalesce(g.display_name, g.name, '公共') as group_name, coalesce(g.multiplier, 1) as group_multiplier,
@@ -1324,12 +1327,36 @@ func (s *Service) modelCatalog(w http.ResponseWriter, r *http.Request) {
 			from available a
 			left join channel_groups cg on cg.channel_id=a.channel_id
 			left join groups g on g.id=cg.group_id
-			where g.id is null or g."public" or exists(select 1 from user_groups ug where ug.user_id=nullif($1, '')::bigint and ug.group_id=g.id)
-		)
-		select c.model,c.group_id,c.group_name,c.group_multiplier,c.group_public,
-			p.input_per_million,p.cached_input_per_million,p.output_per_million,p.multiplier
-		from catalog c left join pricing_rules p on p.model=c.model and p.enabled
-		order by c.model,c.group_name`, account.userID)
+			where (a.channel_user_id is not null and a.channel_user_id=$1)
+				or (a.channel_user_id is null and (g.id is null or g."public" or exists(select 1 from user_groups ug where ug.user_id::text=$1 and ug.group_id=g.id)))
+			), public_channels as (
+				select c.id
+				from channels c
+				where c.enabled and not c.auto_disabled and c.user_id is null
+			), performance as (
+				select trim(rl.model) as model,
+					count(*)::bigint as requests,
+					(count(*) filter (where rl.status_code >= 200 and rl.status_code < 400))::float8 / nullif(count(*), 0) as success_rate,
+					avg(rl.duration_ms)::float8 as avg_latency_ms,
+					avg(rl.first_token_ms)::float8 as avg_first_token_ms
+				from request_logs rl
+				join public_channels pc on pc.id=rl.channel_id
+				left join groups g on g.id=rl.group_id
+					where rl.created_at >= now() - interval '24 hours'
+						and trim(rl.model) <> ''
+						and (rl.group_id is null or g."public")
+					group by trim(rl.model)
+
+			)
+			select c.model,c.group_id,c.group_name,c.group_multiplier,c.group_public,
+				p.input_per_million,p.cached_input_per_million,p.output_per_million,p.multiplier,
+				coalesce(m.description,''),coalesce(m.input_modalities,'{}'),coalesce(m.output_modalities,'{}'),m.context_window,
+				perf.requests,perf.success_rate,perf.avg_latency_ms,perf.avg_first_token_ms
+			from catalog c
+			left join pricing_rules p on p.model=c.model and p.enabled
+			left join model_catalog_metadata m on m.model=c.model
+			left join performance perf on perf.model=c.model
+			order by c.model,c.group_name`, account.userID)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
@@ -1338,6 +1365,10 @@ func (s *Service) modelCatalog(w http.ResponseWriter, r *http.Request) {
 	type catalogModel struct {
 		ID, Model                         string
 		Input, Cached, Output, Multiplier any
+		Description                       string
+		InputModalities, OutputModalities []string
+		ContextWindow                     *int64
+		Performance                       map[string]any
 		Groups                            []map[string]any
 	}
 	models := map[string]*catalogModel{}
@@ -1348,25 +1379,47 @@ func (s *Service) modelCatalog(w http.ResponseWriter, r *http.Request) {
 		var groupMultiplier any
 		var groupPublic bool
 		var input, cached, output, modelMultiplier any
-		if rows.Scan(&model, &groupID, &groupName, &groupMultiplier, &groupPublic, &input, &cached, &output, &modelMultiplier) != nil {
-			continue
+		var description *string
+		var inputModalities, outputModalities []string
+		var contextWindow *int64
+		var requests *int64
+		var successRate, avgLatency, avgFirstToken *float64
+		if err := rows.Scan(&model, &groupID, &groupName, &groupMultiplier, &groupPublic, &input, &cached, &output, &modelMultiplier, &description, &inputModalities, &outputModalities, &contextWindow, &requests, &successRate, &avgLatency, &avgFirstToken); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "could not read model catalog")
+			return
 		}
 		group := map[string]any{"id": groupID, "name": groupName, "multiplier": groupMultiplier, "public": groupPublic}
 		groups[groupID] = group
 		item := models[model]
 		if item == nil {
-			item = &catalogModel{Model: model, Input: input, Cached: cached, Output: output, Multiplier: modelMultiplier, Groups: []map[string]any{}}
+			if inputModalities == nil {
+				inputModalities = []string{}
+			}
+			if outputModalities == nil {
+				outputModalities = []string{}
+			}
+			item = &catalogModel{Model: model, Input: input, Cached: cached, Output: output, Multiplier: modelMultiplier, InputModalities: inputModalities, OutputModalities: outputModalities, ContextWindow: contextWindow, Groups: []map[string]any{}}
+			if description != nil {
+				item.Description = *description
+			}
+			if requests != nil {
+				item.Performance = map[string]any{"requests": *requests, "success_rate": successRate, "avg_latency_ms": avgLatency, "avg_first_token_ms": avgFirstToken}
+			}
 			item.ID = catalogModelID(model)
 			models[model] = item
 			order = append(order, model)
 		}
 		item.Groups = append(item.Groups, group)
 	}
+	if err := rows.Err(); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not read model catalog")
+		return
+	}
 	data := make([]map[string]any, 0, len(order))
 	for _, model := range order {
 		item := models[model]
 		provider := providerForModel(item.Model, providers)
-		data = append(data, map[string]any{"id": item.ID, "model": item.Model, "provider": provider.Name, "provider_slug": provider.Slug, "input_per_million": item.Input, "cached_input_per_million": item.Cached, "output_per_million": item.Output, "multiplier": item.Multiplier, "groups": item.Groups})
+		data = append(data, map[string]any{"id": item.ID, "model": item.Model, "provider": provider.Name, "provider_slug": provider.Slug, "description": item.Description, "input_modalities": item.InputModalities, "output_modalities": item.OutputModalities, "context_window": item.ContextWindow, "input_per_million": item.Input, "cached_input_per_million": item.Cached, "output_per_million": item.Output, "multiplier": item.Multiplier, "performance": item.Performance, "groups": item.Groups})
 	}
 	groupList := make([]map[string]any, 0, len(groups))
 	for _, group := range groups {
@@ -2810,7 +2863,7 @@ func (s *Service) testChannelKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	settings := s.reliabilitySettings(r.Context())
-	status, body, latency, testErr := s.testChannel(r.Context(), baseURL, apiKey, provider, testModel, parsedUAPool(uaPool))
+	status, body, latency, testErr := s.testChannel(r.Context(), baseURL, apiKey, provider, testModel, parsedUAPool(uaPool), healthCheckProbeTimeout)
 	success := testErr == nil && status >= 200 && status < 300
 	reason := healthFailureReason(status, testErr)
 
@@ -2917,7 +2970,7 @@ func (s *Service) testChannelHandler(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		status, body, latency, testErr := s.testChannel(r.Context(), baseURL, apiKey, provider, testModel, parsedUAPool(uaPool))
+		status, body, latency, testErr := s.testChannel(r.Context(), baseURL, apiKey, provider, testModel, parsedUAPool(uaPool), healthCheckProbeTimeout)
 		success := testErr == nil && status >= 200 && status < 300
 		reason := healthFailureReason(status, testErr)
 		if success && settings.AutoDisableSlowSeconds > 0 && latency > time.Duration(settings.AutoDisableSlowSeconds)*time.Second {

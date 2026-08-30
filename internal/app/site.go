@@ -2,9 +2,12 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
+	"unicode"
 )
 
 // systemConfig is the effective runtime configuration for integrations
@@ -158,12 +161,19 @@ func (s *Service) loadSystemConfig(ctx context.Context) systemConfig {
 	return cfg
 }
 
+type featuredCopy map[string]map[string]string
+
 func (s *Service) siteSettings(w http.ResponseWriter, r *http.Request) {
-	var name, iconURL, announcement, contactEmail string
-	var autoDisableFailedChannels, invitationsEnabled, whitelistEnabled, aliasBlocked bool
-	if err := s.db.QueryRow(r.Context(), `select name,icon_url,announcement,contact_email,auto_disable_failed_channels,invitations_enabled,registration_email_whitelist_enabled,registration_email_alias_blocked from site_settings where id=true`).Scan(&name, &iconURL, &announcement, &contactEmail, &autoDisableFailedChannels, &invitationsEnabled, &whitelistEnabled, &aliasBlocked); err != nil {
+	var name, iconURL, announcement, contactEmail, featuredModel string
+	var autoDisableFailedChannels, invitationsEnabled, whitelistEnabled, aliasBlocked, featuredEnabled bool
+	var featuredCopyJSON []byte
+	if err := s.db.QueryRow(r.Context(), `select name,icon_url,announcement,contact_email,auto_disable_failed_channels,invitations_enabled,registration_email_whitelist_enabled,registration_email_alias_blocked,featured_enabled,featured_model,featured_copy from site_settings where id=true`).Scan(&name, &iconURL, &announcement, &contactEmail, &autoDisableFailedChannels, &invitationsEnabled, &whitelistEnabled, &aliasBlocked, &featuredEnabled, &featuredModel, &featuredCopyJSON); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not load site settings")
 		return
+	}
+	copy, err := decodeFeaturedCopy(featuredCopyJSON)
+	if err != nil {
+		copy = defaultFeaturedCopy()
 	}
 	sys := s.loadSystemConfig(r.Context())
 	var oauthProviders []string
@@ -177,51 +187,59 @@ func (s *Service) siteSettings(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"name": name, "icon_url": iconURL, "announcement": announcement, "contact_email": contactEmail, "auto_disable_failed_channels": autoDisableFailedChannels, "invitations_enabled": invitationsEnabled, "registration_email_whitelist_enabled": whitelistEnabled, "registration_email_alias_blocked": aliasBlocked, "captcha_provider": sys.captchaProvider(), "geetest_enabled": sys.geetestEnabled(), "geetest_captcha_id": sys.GeetestCaptchaID, "corptcha_site_id": sys.CorptchaSiteID, "email_verification_enabled": sys.emailVerificationEnabled(), "oauth_providers": oauthProviders})
+	writeJSON(w, http.StatusOK, map[string]any{"name": name, "icon_url": iconURL, "announcement": announcement, "contact_email": contactEmail, "auto_disable_failed_channels": autoDisableFailedChannels, "invitations_enabled": invitationsEnabled, "registration_email_whitelist_enabled": whitelistEnabled, "registration_email_alias_blocked": aliasBlocked, "featured_enabled": featuredEnabled, "featured_model": featuredModel, "featured_copy": copy, "captcha_provider": sys.captchaProvider(), "geetest_enabled": sys.geetestEnabled(), "geetest_captcha_id": sys.GeetestCaptchaID, "corptcha_site_id": sys.CorptchaSiteID, "email_verification_enabled": sys.emailVerificationEnabled(), "oauth_providers": oauthProviders})
 }
 
 func (s *Service) adminSiteSettings(w http.ResponseWriter, r *http.Request) {
-	var name, iconURL, announcement, contactEmail string
-	var autoDisableFailedChannels, invitationsEnabled, whitelistEnabled, aliasBlocked bool
+	var name, iconURL, announcement, contactEmail, featuredModel string
+	var autoDisableFailedChannels, invitationsEnabled, whitelistEnabled, aliasBlocked, featuredEnabled bool
 	var whitelist []string
+	var featuredCopyJSON []byte
 	var inviterReward, inviteeReward, checkinBaseReward, checkinStreakBonus string
 	var checkinMaxBonusDays int
 	var captchaProvider, geetestID, geetestKeyEnc, corptchaSiteID, corptchaSecretEnc, smtpHost, smtpPort, smtpUser, smtpPassEnc, smtpFrom, publicBaseURL string
-	err := s.db.QueryRow(r.Context(), `select name,icon_url,announcement,contact_email,auto_disable_failed_channels,registration_email_whitelist_enabled,registration_email_whitelist,registration_email_alias_blocked,captcha_provider,geetest_captcha_id,geetest_captcha_key_encrypted,corptcha_site_id,corptcha_secret_encrypted,smtp_host,smtp_port,smtp_username,smtp_password_encrypted,smtp_from,public_base_url,invitations_enabled,inviter_reward::text,invitee_reward::text,checkin_base_reward::text,checkin_streak_bonus::text,checkin_max_bonus_days from site_settings where id=true`).Scan(&name, &iconURL, &announcement, &contactEmail, &autoDisableFailedChannels, &whitelistEnabled, &whitelist, &aliasBlocked, &captchaProvider, &geetestID, &geetestKeyEnc, &corptchaSiteID, &corptchaSecretEnc, &smtpHost, &smtpPort, &smtpUser, &smtpPassEnc, &smtpFrom, &publicBaseURL, &invitationsEnabled, &inviterReward, &inviteeReward, &checkinBaseReward, &checkinStreakBonus, &checkinMaxBonusDays)
+	err := s.db.QueryRow(r.Context(), `select name,icon_url,announcement,contact_email,auto_disable_failed_channels,registration_email_whitelist_enabled,registration_email_whitelist,registration_email_alias_blocked,captcha_provider,geetest_captcha_id,geetest_captcha_key_encrypted,corptcha_site_id,corptcha_secret_encrypted,smtp_host,smtp_port,smtp_username,smtp_password_encrypted,smtp_from,public_base_url,invitations_enabled,inviter_reward::text,invitee_reward::text,checkin_base_reward::text,checkin_streak_bonus::text,checkin_max_bonus_days,featured_enabled,featured_model,featured_copy from site_settings where id=true`).Scan(&name, &iconURL, &announcement, &contactEmail, &autoDisableFailedChannels, &whitelistEnabled, &whitelist, &aliasBlocked, &captchaProvider, &geetestID, &geetestKeyEnc, &corptchaSiteID, &corptchaSecretEnc, &smtpHost, &smtpPort, &smtpUser, &smtpPassEnc, &smtpFrom, &publicBaseURL, &invitationsEnabled, &inviterReward, &inviteeReward, &checkinBaseReward, &checkinStreakBonus, &checkinMaxBonusDays, &featuredEnabled, &featuredModel, &featuredCopyJSON)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not load site settings")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"name": name, "icon_url": iconURL, "announcement": announcement, "contact_email": contactEmail, "auto_disable_failed_channels": autoDisableFailedChannels, "captcha_provider": captchaProvider, "geetest_captcha_id": geetestID, "has_geetest_captcha_key": strings.TrimSpace(geetestKeyEnc) != "", "corptcha_site_id": corptchaSiteID, "has_corptcha_secret": strings.TrimSpace(corptchaSecretEnc) != "", "smtp_host": smtpHost, "smtp_port": smtpPort, "smtp_username": smtpUser, "has_smtp_password": strings.TrimSpace(smtpPassEnc) != "", "smtp_from": smtpFrom, "public_base_url": publicBaseURL, "invitations_enabled": invitationsEnabled, "inviter_reward": inviterReward, "invitee_reward": inviteeReward, "registration_email_whitelist_enabled": whitelistEnabled, "registration_email_whitelist": whitelist, "registration_email_alias_blocked": aliasBlocked, "checkin_base_reward": checkinBaseReward, "checkin_streak_bonus": checkinStreakBonus, "checkin_max_bonus_days": checkinMaxBonusDays})
+	copy, err := decodeFeaturedCopy(featuredCopyJSON)
+	if err != nil {
+		copy = defaultFeaturedCopy()
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"name": name, "icon_url": iconURL, "announcement": announcement, "contact_email": contactEmail, "auto_disable_failed_channels": autoDisableFailedChannels, "featured_enabled": featuredEnabled, "featured_model": featuredModel, "featured_copy": copy, "captcha_provider": captchaProvider, "geetest_captcha_id": geetestID, "has_geetest_captcha_key": strings.TrimSpace(geetestKeyEnc) != "", "corptcha_site_id": corptchaSiteID, "has_corptcha_secret": strings.TrimSpace(corptchaSecretEnc) != "", "smtp_host": smtpHost, "smtp_port": smtpPort, "smtp_username": smtpUser, "has_smtp_password": strings.TrimSpace(smtpPassEnc) != "", "smtp_from": smtpFrom, "public_base_url": publicBaseURL, "invitations_enabled": invitationsEnabled, "inviter_reward": inviterReward, "invitee_reward": inviteeReward, "registration_email_whitelist_enabled": whitelistEnabled, "registration_email_whitelist": whitelist, "registration_email_alias_blocked": aliasBlocked, "checkin_base_reward": checkinBaseReward, "checkin_streak_bonus": checkinStreakBonus, "checkin_max_bonus_days": checkinMaxBonusDays})
 }
 
 func (s *Service) updateSiteSettings(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Name                      string   `json:"name"`
-		IconURL                   string   `json:"icon_url"`
-		Announcement              string   `json:"announcement"`
-		ContactEmail              *string  `json:"contact_email"`
-		AutoDisableFailedChannels *bool    `json:"auto_disable_failed_channels"`
-		CaptchaProvider           *string  `json:"captcha_provider"`
-		GeetestCaptchaID          *string  `json:"geetest_captcha_id"`
-		GeetestCaptchaKey         string   `json:"geetest_captcha_key"`
-		CorptchaSiteID            *string  `json:"corptcha_site_id"`
-		CorptchaSecret            string   `json:"corptcha_secret"`
-		SMTPHost                  *string  `json:"smtp_host"`
-		SMTPPort                  *string  `json:"smtp_port"`
-		SMTPUsername              *string  `json:"smtp_username"`
-		SMTPPassword              string   `json:"smtp_password"`
-		SMTPFrom                  *string  `json:"smtp_from"`
-		PublicBaseURL             *string  `json:"public_base_url"`
-		InvitationsEnabled        *bool    `json:"invitations_enabled"`
-		InviterReward             *float64 `json:"inviter_reward"`
-		InviteeReward             *float64 `json:"invitee_reward"`
-		CheckinBaseReward         *float64 `json:"checkin_base_reward"`
-		CheckinStreakBonus        *float64 `json:"checkin_streak_bonus"`
-		CheckinMaxBonusDays       *int     `json:"checkin_max_bonus_days"`
-		WhitelistEnabled          *bool    `json:"registration_email_whitelist_enabled"`
-		Whitelist                 []string `json:"registration_email_whitelist"`
-		AliasBlocked              *bool    `json:"registration_email_alias_blocked"`
+		Name                      string          `json:"name"`
+		IconURL                   string          `json:"icon_url"`
+		Announcement              string          `json:"announcement"`
+		ContactEmail              *string         `json:"contact_email"`
+		AutoDisableFailedChannels *bool           `json:"auto_disable_failed_channels"`
+		FeaturedEnabled           *bool           `json:"featured_enabled"`
+		FeaturedModel             *string         `json:"featured_model"`
+		FeaturedCopy              json.RawMessage `json:"featured_copy"`
+		CaptchaProvider           *string         `json:"captcha_provider"`
+		GeetestCaptchaID          *string         `json:"geetest_captcha_id"`
+		GeetestCaptchaKey         string          `json:"geetest_captcha_key"`
+		CorptchaSiteID            *string         `json:"corptcha_site_id"`
+		CorptchaSecret            string          `json:"corptcha_secret"`
+		SMTPHost                  *string         `json:"smtp_host"`
+		SMTPPort                  *string         `json:"smtp_port"`
+		SMTPUsername              *string         `json:"smtp_username"`
+		SMTPPassword              string          `json:"smtp_password"`
+		SMTPFrom                  *string         `json:"smtp_from"`
+		PublicBaseURL             *string         `json:"public_base_url"`
+		InvitationsEnabled        *bool           `json:"invitations_enabled"`
+		InviterReward             *float64        `json:"inviter_reward"`
+		InviteeReward             *float64        `json:"invitee_reward"`
+		CheckinBaseReward         *float64        `json:"checkin_base_reward"`
+		CheckinStreakBonus        *float64        `json:"checkin_streak_bonus"`
+		CheckinMaxBonusDays       *int            `json:"checkin_max_bonus_days"`
+		WhitelistEnabled          *bool           `json:"registration_email_whitelist_enabled"`
+		Whitelist                 []string        `json:"registration_email_whitelist"`
+		AliasBlocked              *bool           `json:"registration_email_alias_blocked"`
 	}
 	if decode(r, &in) != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", "invalid site settings")
@@ -230,6 +248,31 @@ func (s *Service) updateSiteSettings(w http.ResponseWriter, r *http.Request) {
 	in.Name = strings.TrimSpace(in.Name)
 	in.IconURL = strings.TrimSpace(in.IconURL)
 	in.Announcement = strings.TrimSpace(in.Announcement)
+	if in.FeaturedModel != nil {
+		model := strings.TrimSpace(*in.FeaturedModel)
+		if len([]rune(model)) > maxFeaturedModelLen {
+			writeError(w, http.StatusBadRequest, "invalid_request", "featured_model must be at most 200 characters")
+			return
+		}
+		if model != "" && !validModelName(model) {
+			writeError(w, http.StatusBadRequest, "invalid_request", "invalid featured_model")
+			return
+		}
+		*in.FeaturedModel = model
+	}
+	var featuredCopyJSON []byte
+	if len(in.FeaturedCopy) > 0 {
+		copy, err := decodeFeaturedCopy(in.FeaturedCopy)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+			return
+		}
+		featuredCopyJSON, err = json.Marshal(copy)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "could not encode featured copy")
+			return
+		}
+	}
 	if in.ContactEmail != nil {
 		email := strings.TrimSpace(*in.ContactEmail)
 		if email != "" && (len(email) > maxContactEmailLen || !validEmail(email)) {
@@ -369,40 +412,130 @@ func (s *Service) updateSiteSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		smtpPassEnc = encrypted
 	}
+	var featuredCopyValue *string
+	if featuredCopyJSON != nil {
+		value := string(featuredCopyJSON)
+		featuredCopyValue = &value
+	}
 	if _, err := s.db.Exec(r.Context(), `update site_settings set name=$1,icon_url=$2,announcement=$3,
-		contact_email=coalesce($4,contact_email),
-		auto_disable_failed_channels=coalesce($5,auto_disable_failed_channels),
-		captcha_provider=coalesce($6,captcha_provider),
-		geetest_captcha_id=coalesce($7,geetest_captcha_id),
-		geetest_captcha_key_encrypted=case when $8='' then geetest_captcha_key_encrypted else $8 end,
-		corptcha_site_id=coalesce($9,corptcha_site_id),
-		corptcha_secret_encrypted=case when $10='' then corptcha_secret_encrypted else $10 end,
-		smtp_host=coalesce($11,smtp_host),
-		smtp_port=coalesce($12,smtp_port),
-		smtp_username=coalesce($13,smtp_username),
-		smtp_password_encrypted=case when $14='' then smtp_password_encrypted else $14 end,
-		smtp_from=coalesce($15,smtp_from),
-		public_base_url=coalesce($16,public_base_url),
-		invitations_enabled=coalesce($17,invitations_enabled),
-		inviter_reward=coalesce($18,inviter_reward),
-		invitee_reward=coalesce($19,invitee_reward),
-		checkin_base_reward=coalesce($20,checkin_base_reward),
-		checkin_streak_bonus=coalesce($21,checkin_streak_bonus),
-		checkin_max_bonus_days=coalesce($22,checkin_max_bonus_days),
-		registration_email_whitelist_enabled=coalesce($23,registration_email_whitelist_enabled),
-		registration_email_whitelist=$24,
-		registration_email_alias_blocked=coalesce($25,registration_email_alias_blocked),
-		updated_at=now() where id=true`,
+			contact_email=coalesce($4,contact_email),
+			auto_disable_failed_channels=coalesce($5,auto_disable_failed_channels),
+			captcha_provider=coalesce($6,captcha_provider),
+			geetest_captcha_id=coalesce($7,geetest_captcha_id),
+			geetest_captcha_key_encrypted=case when $8='' then geetest_captcha_key_encrypted else $8 end,
+			corptcha_site_id=coalesce($9,corptcha_site_id),
+			corptcha_secret_encrypted=case when $10='' then corptcha_secret_encrypted else $10 end,
+			smtp_host=coalesce($11,smtp_host),
+			smtp_port=coalesce($12,smtp_port),
+			smtp_username=coalesce($13,smtp_username),
+			smtp_password_encrypted=case when $14='' then smtp_password_encrypted else $14 end,
+			smtp_from=coalesce($15,smtp_from),
+			public_base_url=coalesce($16,public_base_url),
+			invitations_enabled=coalesce($17,invitations_enabled),
+			inviter_reward=coalesce($18,inviter_reward),
+			invitee_reward=coalesce($19,invitee_reward),
+			checkin_base_reward=coalesce($20,checkin_base_reward),
+			checkin_streak_bonus=coalesce($21,checkin_streak_bonus),
+			checkin_max_bonus_days=coalesce($22,checkin_max_bonus_days),
+			registration_email_whitelist_enabled=coalesce($23,registration_email_whitelist_enabled),
+			registration_email_whitelist=$24,
+			registration_email_alias_blocked=coalesce($25,registration_email_alias_blocked),
+			featured_enabled=coalesce($26,featured_enabled),
+			featured_model=coalesce($27,featured_model),
+			featured_copy=coalesce($28::jsonb,featured_copy),
+			updated_at=now() where id=true`,
 		in.Name, in.IconURL, in.Announcement, trimmedPtr(in.ContactEmail), in.AutoDisableFailedChannels,
 		trimmedPtr(in.CaptchaProvider), trimmedPtr(in.GeetestCaptchaID), geetestKeyEnc,
 		trimmedPtr(in.CorptchaSiteID), corptchaSecretEnc,
-		trimmedPtr(in.SMTPHost), trimmedPtr(in.SMTPPort), trimmedPtr(in.SMTPUsername), smtpPassEnc, trimmedPtr(in.SMTPFrom), trimmedPtr(in.PublicBaseURL), in.InvitationsEnabled, in.InviterReward, in.InviteeReward, in.CheckinBaseReward, in.CheckinStreakBonus, in.CheckinMaxBonusDays, in.WhitelistEnabled, whitelist, in.AliasBlocked); err != nil {
+		trimmedPtr(in.SMTPHost), trimmedPtr(in.SMTPPort), trimmedPtr(in.SMTPUsername), smtpPassEnc, trimmedPtr(in.SMTPFrom), trimmedPtr(in.PublicBaseURL), in.InvitationsEnabled, in.InviterReward, in.InviteeReward, in.CheckinBaseReward, in.CheckinStreakBonus, in.CheckinMaxBonusDays, in.WhitelistEnabled, whitelist, in.AliasBlocked, in.FeaturedEnabled, trimmedPtr(in.FeaturedModel), featuredCopyValue); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not save site settings")
 		return
 	}
-	s.audit(r, "settings.updated", "site_settings", "site", map[string]any{"name": in.Name})
+	s.audit(r, "settings.updated", "site_settings", "site", map[string]any{
+		"name":             in.Name,
+		"featured_enabled": in.FeaturedEnabled,
+		"featured_model":   in.FeaturedModel,
+		"featured_copy":    featuredCopyJSON != nil,
+	})
 	s.adminSiteSettings(w, r)
 }
+
+func defaultFeaturedCopy() featuredCopy {
+	return featuredCopy{
+		"zh":      {"badge": "推荐模型", "title": "探索最新模型", "body": "浏览已接入模型，按价格与分组选择适合你的模型。", "cta": "查看详情"},
+		"zh-Hant": {"badge": "推薦模型", "title": "探索最新模型", "body": "瀏覽已接入模型，按價格與分組選擇適合你的模型。", "cta": "查看詳情"},
+		"en":      {"badge": "Featured model", "title": "Explore the latest models", "body": "Browse connected models and choose one by price and group.", "cta": "View details"},
+	}
+}
+
+func decodeFeaturedCopy(raw []byte) (featuredCopy, error) {
+	var copy featuredCopy
+	if err := json.Unmarshal(raw, &copy); err != nil {
+		return nil, errors.New("featured_copy must be valid JSON")
+	}
+	if len(copy) != len(featuredLocales) {
+		return nil, errors.New("featured_copy must contain only zh, zh-Hant and en locales")
+	}
+	for locale, fields := range copy {
+		if !featuredLocales[locale] || len(fields) != len(featuredCopyFields) {
+			return nil, errors.New("featured_copy must contain only badge, title, body and cta fields for each locale")
+		}
+		for field, value := range fields {
+			if !featuredCopyFields[field] {
+				return nil, errors.New("featured_copy must contain only badge, title, body and cta fields for each locale")
+			}
+			value = strings.TrimSpace(value)
+			if value == "" {
+				return nil, errors.New("featured_copy fields must not be empty")
+			}
+			if err := validatePlainText(value, featuredCopyFieldMaxLength[field]); err != nil {
+				return nil, fmt.Errorf("featured_copy.%s.%s %w", locale, field, err)
+			}
+			fields[field] = value
+		}
+	}
+	for locale := range featuredLocales {
+		if _, ok := copy[locale]; !ok {
+			return nil, errors.New("featured_copy must contain zh, zh-Hant and en locales")
+		}
+	}
+	return copy, nil
+}
+
+func validatePlainText(value string, maxLength int) error {
+	if len([]rune(value)) > maxLength {
+		return fmt.Errorf("must be at most %d characters", maxLength)
+	}
+	if strings.ContainsAny(value, "<>") {
+		return errors.New("must contain plain text only")
+	}
+	for _, r := range value {
+		if unicode.IsControl(r) && r != '\n' && r != '\r' && r != '\t' {
+			return errors.New("must contain plain text only")
+		}
+	}
+	return nil
+}
+
+var (
+	featuredLocales = map[string]bool{
+		"zh":      true,
+		"zh-Hant": true,
+		"en":      true,
+	}
+	featuredCopyFields = map[string]bool{
+		"badge": true,
+		"title": true,
+		"body":  true,
+		"cta":   true,
+	}
+	featuredCopyFieldMaxLength = map[string]int{
+		"badge": 100,
+		"title": 200,
+		"body":  1000,
+		"cta":   100,
+	}
+)
 
 func isEmailAlias(email string) bool {
 	local, _, ok := strings.Cut(email, "@")
@@ -453,6 +586,7 @@ const (
 	maxSMTPPasswordLen  = 4096
 	maxPublicBaseURLLen = 2048
 	maxContactEmailLen  = 255
+	maxFeaturedModelLen = 200
 )
 
 // loadPublicBaseURL returns the admin-configured public origin used for

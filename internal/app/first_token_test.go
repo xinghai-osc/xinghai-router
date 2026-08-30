@@ -17,9 +17,16 @@ func TestHasVisibleStreamText(t *testing.T) {
 		// OpenAI chat-completions: visible text content
 		{`openai content delta`, `{"choices":[{"index":0,"delta":{"content":"Hello"}}]}`, true},
 		{`openai content delta non-ASCII`, `{"choices":[{"index":0,"delta":{"content":"你好"}}]}`, true},
-		{`openai content whitespace only`, `{"choices":[{"index":0,"delta":{"content":" "}}}`, false},
-		{`openai content newline only`, `{"choices":[{"index":0,"delta":{"content":"\n"}}}`, false},
-		{`openai content empty string`, `{"choices":[{"index":0,"delta":{"content":""}}}`, false},
+		{`openai content in later choice`, `{"choices":[{"index":0,"delta":{}},{"index":1,"delta":{"content":"Hello"}}]}`, true},
+		{`openai content array`, `{"choices":[{"index":0,"delta":{"content":[{"type":"text","text":"Hello"}]}}]}`, true},
+		{`openai content array output text`, `{"choices":[{"index":0,"delta":{"content":[{"type":"output_text","text":"Hello"}]}}]}`, true},
+		{`openai content array whitespace`, `{"choices":[{"index":0,"delta":{"content":[{"type":"text","text":" "}]}}]}`, false},
+		{`openai content array tool call`, `{"choices":[{"index":0,"delta":{"content":[{"type":"tool_use","text":"ignored"}]}}]}`, false},
+
+		{`openai content whitespace only`, `{"choices":[{"index":0,"delta":{"content":" "}}]}`, false},
+		{`openai content newline only`, `{"choices":[{"index":0,"delta":{"content":"\n"}}]}`, false},
+		{`openai content empty string`, `{"choices":[{"index":0,"delta":{"content":""}}]}`, false},
+
 		// OpenAI role-only chunk
 		{`openai role only`, `{"choices":[{"index":0,"delta":{"role":"assistant"}}]}`, false},
 		// OpenAI tool_calls-only chunk
@@ -173,6 +180,24 @@ func TestFirstTokenWriter(t *testing.T) {
 			t.Fatalf("body mismatch:\ngot  %q\nwant %q", rec.Body.String(), body)
 		}
 	})
+	t.Run("final data line without newline", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		tracker := &firstTokenTracker{started: time.Now()}
+		w := newFirstTokenWriter(rec, tracker)
+		body := "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hi\"}}]}"
+		w.Write([]byte(body))
+		if tracker.milliseconds() != nil {
+			t.Fatal("incomplete line must wait for finish")
+		}
+		w.finish()
+		if tracker.milliseconds() == nil {
+			t.Fatal("finish must mark a final data line without newline")
+		}
+		if rec.Body.String() != body {
+			t.Fatalf("body mismatch:\ngot  %q\nwant %q", rec.Body.String(), body)
+		}
+	})
+
 	t.Run("underlying write errors are propagated", func(t *testing.T) {
 		// A writer that returns an error after the first byte simulates an
 		// underlying transport failure.

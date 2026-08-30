@@ -482,15 +482,17 @@ func hasVisibleStreamText(data []byte) bool {
 		Delta   json.RawMessage `json:"delta"`
 		Choices []struct {
 			Delta struct {
-				Content string `json:"content"`
+				Content json.RawMessage `json:"content"`
 			} `json:"delta"`
 		} `json:"choices"`
 	}
 	if json.Unmarshal(data, &event) != nil {
 		return false
 	}
-	if len(event.Choices) > 0 && strings.TrimSpace(event.Choices[0].Delta.Content) != "" {
-		return true
+	for _, choice := range event.Choices {
+		if hasVisibleContent(choice.Delta.Content) {
+			return true
+		}
 	}
 	if event.Type == "content_block_delta" {
 		var delta struct {
@@ -506,6 +508,29 @@ func hasVisibleStreamText(data []byte) bool {
 	return false
 }
 
+func hasVisibleContent(raw json.RawMessage) bool {
+	if len(raw) == 0 || string(raw) == "null" {
+		return false
+	}
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		return strings.TrimSpace(text) != ""
+	}
+	var parts []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(raw, &parts) != nil {
+		return false
+	}
+	for _, part := range parts {
+		if (part.Type == "text" || part.Type == "output_text") && strings.TrimSpace(part.Text) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 type firstTokenWriter struct {
 	http.ResponseWriter
 	tracker *firstTokenTracker
@@ -516,10 +541,20 @@ func newFirstTokenWriter(w http.ResponseWriter, tracker *firstTokenTracker) *fir
 	return &firstTokenWriter{ResponseWriter: w, tracker: tracker}
 }
 
+func (w *firstTokenWriter) processLine(line string) {
+	if w.tracker == nil || !w.tracker.at.IsZero() || !strings.HasPrefix(line, "data:") {
+		return
+	}
+	data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+	if data != "" && data != "[DONE]" && hasVisibleStreamText([]byte(data)) {
+		w.tracker.mark()
+	}
+}
+
 func (w *firstTokenWriter) Write(p []byte) (int, error) {
 	if len(p) > 0 && w.tracker != nil && w.tracker.at.IsZero() {
 		w.pending.Write(p)
-		for {
+		for w.tracker.at.IsZero() {
 			raw := w.pending.Bytes()
 			i := bytes.IndexByte(raw, '\n')
 			if i < 0 {
@@ -527,16 +562,29 @@ func (w *firstTokenWriter) Write(p []byte) (int, error) {
 			}
 			line := strings.TrimSpace(string(raw[:i]))
 			w.pending.Next(i + 1)
-			if strings.HasPrefix(line, "data:") {
-				data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-				if data != "" && data != "[DONE]" && hasVisibleStreamText([]byte(data)) {
-					w.tracker.mark()
-					break
-				}
-			}
+			w.processLine(line)
 		}
 	}
 	return w.ResponseWriter.Write(p)
+}
+
+// finish parses buffered SSE lines that were not followed by another write. It
+// only inspects the buffered copy and never changes the bytes sent to the client.
+func (w *firstTokenWriter) finish() {
+	if w.tracker == nil || !w.tracker.at.IsZero() || w.pending.Len() == 0 {
+		return
+	}
+	raw := w.pending.String()
+	for w.tracker.at.IsZero() {
+		i := strings.IndexByte(raw, '\n')
+		if i < 0 {
+			w.processLine(strings.TrimSpace(raw))
+			break
+		}
+		w.processLine(strings.TrimSpace(raw[:i]))
+		raw = raw[i+1:]
+	}
+	w.pending.Reset()
 }
 
 func (w *firstTokenWriter) WriteHeader(code int) {
@@ -656,9 +704,16 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 		return
 	}
 	reliability := s.reliabilitySettings(ctx)
-	client := s.httpClient
-	if stream && s.streamClient != nil {
-		client = s.streamClient
+	requestTimeout := requestTimeoutDuration(reliability.RequestTimeoutSeconds)
+	requestContext := ctx
+	if !stream {
+		var cancel context.CancelFunc
+		requestContext, cancel = context.WithTimeout(ctx, requestTimeout)
+		defer cancel()
+	}
+	client := clientWithTimeout(s.httpClient, requestTimeout)
+	if stream {
+		client = streamClientWithHeaderTimeout(s.streamClient, requestTimeout)
 	}
 	accept := "application/json"
 	if stream {
@@ -772,7 +827,7 @@ tryChannels:
 				// rewrite, so the admin's configuration is authoritative.
 				upstreamBody = applyRequestOverrides(upstreamBody, ch.overrides)
 			}
-			upstreamReq, requestErr := http.NewRequestWithContext(r.Context(), http.MethodPost, upstreamURL, bytes.NewReader(upstreamBody))
+			upstreamReq, requestErr := http.NewRequestWithContext(requestContext, http.MethodPost, upstreamURL, bytes.NewReader(upstreamBody))
 			if requestErr != nil {
 				continue
 			}
@@ -791,7 +846,7 @@ tryChannels:
 			}
 			upstreamReq.Header.Set("Content-Type", upstreamContentType)
 			upstreamReq.Header.Set("Accept", accept)
-			if ua := ch.pickUA(uaSeed(r.Context(), ch.id)); ua != "" {
+			if ua := ch.pickUA(uaSeed(requestContext, ch.id)); ua != "" {
 				upstreamReq.Header.Set("User-Agent", ua)
 			}
 			resp, err = client.Do(upstreamReq)
@@ -830,6 +885,13 @@ tryChannels:
 				bodyPeek, readErr := io.ReadAll(io.LimitReader(resp.Body, maxUpstreamResponseBody))
 				contentType := resp.Header.Get("Content-Type")
 				resp.Body.Close()
+				if readErr != nil {
+					if code, detail, ok := classifyContextError(readErr); ok {
+						failCode, failDetail = code, detail
+						resp = nil
+						break tryChannels
+					}
+				}
 				lastUpstreamStatus = resp.StatusCode
 				lastUpstreamBody = bodyPeek
 				lastUpstreamContentType = contentType
@@ -852,6 +914,11 @@ tryChannels:
 	}
 	if resp == nil {
 		prompt := len(body) / 3
+		if failCode == "request_timeout" || failCode == "client_canceled" {
+			s.logRequest(ctx, key, ch.id, ch.keyID, model, 502, prompt, 0, prompt, time.Since(started), failCode, failDetail)
+			writeError(w, 502, "upstream_error", failDetail)
+			return
+		}
 		if lastUpstreamStatus != 0 {
 			status := lastUpstreamStatus
 			detail := string(lastUpstreamBody)
@@ -881,8 +948,10 @@ tryChannels:
 		}
 		var st streamStats
 		firstToken := &firstTokenTracker{started: started}
-		w = newFirstTokenWriter(w, firstToken)
+		firstTokenWriter := newFirstTokenWriter(w, firstToken)
+		w = firstTokenWriter
 		cacheEnabled := s.conversationCacheSettings(ctx).Enabled
+
 		capture := newStreamCaptureWriter(w, cacheEnabled)
 		w = capture
 		var streamErr error
@@ -903,7 +972,9 @@ tryChannels:
 		} else {
 			st, streamErr = s.streamResponse(w, resp)
 		}
+		firstTokenWriter.finish()
 		status := resp.StatusCode
+
 		if !st.usageComplete && streamErr == nil {
 			// Do not let providers that omit streaming usage turn a successful request
 			// into a free request. Fall back to the same conservative token estimate
@@ -979,7 +1050,11 @@ tryChannels:
 			code, detail = "upstream_read_error", err.Error()
 		}
 		s.logRequest(ctx, key, ch.id, ch.keyID, model, 502, prompt, 0, prompt, time.Since(started), code, detail)
-		writeError(w, 502, "upstream_error", "could not read upstream response")
+		clientDetail := "could not read upstream response"
+		if contextError {
+			clientDetail = detail
+		}
+		writeError(w, 502, "upstream_error", clientDetail)
 		if !contextError {
 			s.channelFailed(ctx, ch.id, ch.keyID, "upstream_read_error")
 		}
@@ -1549,7 +1624,7 @@ func (s *Service) channelFailed(ctx context.Context, channelID int64, keyID, rea
 // Used for legacy channels without channel_api_keys rows; multi-key channels go
 // through testFailedChannelKey so only the failing key is retired.
 func (s *Service) testFailedChannel(id int64) {
-	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.RequestTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), healthCheckProbeTimeout)
 	defer cancel()
 	var baseURL, encrypted, provider, upstreamFormat string
 	var enabled, autoDisable bool
@@ -1569,7 +1644,7 @@ func (s *Service) testFailedChannel(id int64) {
 // testFailedChannelKey verifies a channel API key that failed repeatedly, so only
 // that key is auto-disabled when the upstream really rejects it.
 func (s *Service) testFailedChannelKey(channelID int64, keyID string) {
-	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.RequestTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), healthCheckProbeTimeout)
 	defer cancel()
 	var baseURL, encrypted, provider, upstreamFormat string
 	var enabled, autoDisable bool
@@ -1608,7 +1683,7 @@ func (s *Service) testFailedCredential(ctx context.Context, channelID int64, key
 		if ua := randomUA(uaPool); ua != "" {
 			request.Header.Set("User-Agent", ua)
 		}
-		response, err := s.httpClient.Do(request)
+		response, err := clientWithTimeout(s.httpClient, healthCheckProbeTimeout).Do(request)
 		if err == nil {
 			response.Body.Close()
 			if response.StatusCode >= 200 && response.StatusCode < 300 {

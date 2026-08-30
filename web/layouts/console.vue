@@ -31,7 +31,7 @@ watchEffect(() => {
 </script>
 
 <template>
-  <div class="min-h-dvh bg-paper lg:grid lg:grid-cols-[15rem_1fr]">
+  <div class="console-shell min-h-dvh bg-paper lg:grid lg:grid-cols-[15rem_1fr]">
     <aside class="sticky top-0 hidden h-dvh border-r border-line bg-surface/35 lg:block">
       <ConsoleSidebar :can="can" :site-name="settings.name" :icon-url="settings.icon_url" />
     </aside>

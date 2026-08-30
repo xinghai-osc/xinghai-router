@@ -117,7 +117,7 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 		cfg:                   cfg,
 		db:                    db,
 		httpClient:            newHTTPClient(cfg.RequestTimeout),
-		streamClient:          newStreamClient(cfg.RequestTimeout),
+		streamClient:          newStreamClient(0),
 		limiter:               limiter,
 		ipLimiter:             ipLimiter,
 		rankingsLimiter:       rankingsLimiter,

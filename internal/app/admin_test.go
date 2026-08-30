@@ -64,6 +64,38 @@ func TestFetchChannelModelsRejectsInvalidRequestBeforeNetworkAccess(t *testing.T
 	}
 }
 
+func TestValidateModelMetadataInput(t *testing.T) {
+	valid := modelMetadataInput{
+		Model:           "vendor/model",
+		Description:     "A useful model",
+		InputModalities: []string{" text ", "image"},
+		OutputModalities: []string{"text"},
+		ContextWindow:   ptrInt64(128000),
+	}
+	if !validateModelMetadataInput(&valid) {
+		t.Fatal("valid model metadata was rejected")
+	}
+	if valid.Model != "vendor/model" || valid.InputModalities[0] != "text" {
+		t.Fatalf("metadata was not normalized: %#v", valid)
+	}
+	cases := []modelMetadataInput{
+		{Model: "", InputModalities: []string{"text"}},
+		{Model: "model", InputModalities: []string{"unknown"}},
+		{Model: "model", InputModalities: []string{"text", "text"}},
+		{Model: "model", ContextWindow: ptrInt64(0)},
+		{Model: "model", ContextWindow: ptrInt64(-1)},
+		{Model: "model", ContextWindow: ptrInt64(maxModelMetadataContextWindow + 1)},
+		{Model: "model", Description: strings.Repeat("x", maxModelMetadataDescriptionLength+1)},
+	}
+	for _, item := range cases {
+		if validateModelMetadataInput(&item) {
+			t.Fatalf("invalid metadata was accepted: %#v", item)
+		}
+	}
+}
+
+func ptrInt64(value int64) *int64 { return &value }
+
 func TestValidPricePerQuotaUnit(t *testing.T) {
 	if !validPricePerQuotaUnit(0) || !validPricePerQuotaUnit(maxPricePerQuotaUnit) {
 		t.Fatal("boundary price_per_quota_unit must be valid")

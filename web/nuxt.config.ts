@@ -1,6 +1,6 @@
 import tailwindcss from '@tailwindcss/vite'
 
-const publicRoutes = ['/', '/auth', '/auth/reset', '/models', '/rankings', '/pricing', '/terms', '/privacy']
+const publicRoutes = ['/', '/auth', '/auth/reset', '/redeem', '/models', '/rankings', '/pricing', '/terms', '/privacy']
 
 export default defineNuxtConfig({
   modules: ['@nuxt/eslint'],

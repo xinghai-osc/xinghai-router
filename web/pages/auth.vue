@@ -92,7 +92,11 @@ onMounted(() => {
   if (getToken()) navigateTo(consoleTarget())
 })
 
+/** Post-sign-in destination. `redirect` (e.g. a shared redeem link) wins over
+ * the console; only same-origin relative paths are accepted. */
 function consoleTarget() {
+  const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : ''
+  if (redirect && redirect.startsWith('/') && !redirect.startsWith('//')) return redirect
   return { path: '/console', query: plan.value ? { plan: plan.value } : {} }
 }
 

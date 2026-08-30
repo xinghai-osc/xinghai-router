@@ -1,13 +1,16 @@
 package app
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -54,14 +57,87 @@ func newHTTPClient(timeout time.Duration) *http.Client {
 	}
 }
 
+func clientWithTimeout(base *http.Client, timeout time.Duration) *http.Client {
+	if base == nil {
+		return newHTTPClient(timeout)
+	}
+	client := *base
+	client.Timeout = timeout
+	return &client
+}
+
+type headerTimeoutTransport struct {
+	base    http.RoundTripper
+	timeout time.Duration
+}
+
+func (t headerTimeoutTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if t.base == nil {
+		t.base = http.DefaultTransport
+	}
+	if t.timeout <= 0 {
+		return t.base.RoundTrip(req)
+	}
+	ctx, cancel := context.WithCancel(req.Context())
+	var timedOut atomic.Bool
+	timer := time.AfterFunc(t.timeout, func() {
+		timedOut.Store(true)
+		cancel()
+	})
+	response, err := t.base.RoundTrip(req.WithContext(ctx))
+	if err != nil {
+		if !timer.Stop() {
+			timedOut.Store(true)
+		}
+		cancel()
+		if timedOut.Load() {
+			return nil, fmt.Errorf("upstream response headers: %w", context.DeadlineExceeded)
+		}
+		return nil, err
+	}
+	if !timer.Stop() {
+		timedOut.Store(true)
+	}
+	if timedOut.Load() {
+		_ = response.Body.Close()
+		cancel()
+		return nil, fmt.Errorf("upstream response headers: %w", context.DeadlineExceeded)
+	}
+	response.Body = &headerTimeoutBody{ReadCloser: response.Body, cancel: cancel}
+	return response, nil
+}
+
+type headerTimeoutBody struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (b *headerTimeoutBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.cancel()
+	return err
+}
+
+func streamClientWithHeaderTimeout(base *http.Client, headerTimeout time.Duration) *http.Client {
+	if base == nil {
+		return newStreamClient(headerTimeout)
+	}
+	client := *base
+	client.Timeout = 0
+	transport := base.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	client.Transport = headerTimeoutTransport{base: transport, timeout: headerTimeout}
+	return &client
+}
+
 // newStreamClient has no overall deadline because an SSE response legitimately stays
 // open far longer than RequestTimeout; the upstream must still send response headers
-// within headerTimeout, and the request context still bounds the whole exchange.
+// within headerTimeout, while the request context still handles caller cancellation.
 func newStreamClient(headerTimeout time.Duration) *http.Client {
-	base := upstreamTransport().Clone()
-	base.ResponseHeaderTimeout = headerTimeout
 	return &http.Client{
-		Transport:     base,
+		Transport:     headerTimeoutTransport{base: upstreamTransport(), timeout: headerTimeout},
 		CheckRedirect: checkUpstreamRedirect,
 	}
 }

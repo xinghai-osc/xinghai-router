@@ -1,19 +1,14 @@
 <script setup lang="ts">
-import { LayoutGrid, Rows3, Search } from 'lucide-vue-next'
-import type { CatalogGroup } from '~/src/api'
-import { FILTER_ALL, type SortOption, type TokenUnit, type ViewMode } from '~/src/marketplace'
+import { GitCompareArrows, LayoutGrid, Rows3, Search } from 'lucide-vue-next'
+import type { SortOption, TokenUnit, ViewMode } from '~/src/marketplace'
 
 const search = defineModel<string>('search', { required: true })
-const vendor = defineModel<string>('vendor', { required: true })
-const group = defineModel<string>('group', { required: true })
 const sortBy = defineModel<SortOption>('sortBy', { required: true })
 const view = defineModel<ViewMode>('view', { required: true })
 const unit = defineModel<TokenUnit>('unit', { required: true })
+const compareMode = defineModel<boolean>('compareMode', { default: false })
 
-const props = defineProps<{
-  vendors: { name: string; slug: string; count: number }[]
-  groups: CatalogGroup[]
-}>()
+defineProps<{ compareCount?: number }>()
 
 const { t } = useI18n()
 const searchShell = ref<HTMLElement | null>(null)
@@ -24,23 +19,12 @@ function focusSearch() {
 
 defineExpose({ focusSearch })
 
-const vendorOptions = computed(() => [
-  { value: FILTER_ALL, label: t('site.sqAllVendors') },
-  ...props.vendors.map(item => ({ value: item.name, label: `${item.name} · ${item.count}` })),
-])
-
-const groupOptions = computed(() => [
-  { value: FILTER_ALL, label: t('site.sqAllGroups') },
-  ...props.groups.map(item => ({ value: item.id, label: item.name })),
-])
-
 const sortOptions = computed(() => [
   { value: 'name', label: t('site.sqSortName') },
   { value: 'price-low', label: t('site.sqSortPriceLow') },
   { value: 'price-high', label: t('site.sqSortPriceHigh') },
 ])
 
-// UiSelect models a plain string; the union type stays on the page side.
 const sortProxy = computed({
   get: () => sortBy.value as string,
   set: (value: string) => { sortBy.value = value as SortOption },
@@ -61,8 +45,8 @@ const SEGMENT_ITEM = 'rounded-[7px] transition-colors duration-150'
 </script>
 
 <template>
-  <div class="flex flex-col gap-3 lg:flex-row lg:items-center">
-    <div ref="searchShell" class="lg:max-w-xs lg:flex-1">
+  <div class="flex min-w-0 flex-col gap-2.5 sm:flex-row sm:items-start sm:justify-end">
+    <div ref="searchShell" class="min-w-0 flex-1 sm:w-auto sm:max-w-md">
       <label for="sq-search" class="sr-only">{{ t('site.sqSearchPlaceholder') }}</label>
       <UiInput id="sq-search" v-model="search" :placeholder="t('site.sqSearchPlaceholder')">
         <template #leading>
@@ -74,18 +58,23 @@ const SEGMENT_ITEM = 'rounded-[7px] transition-colors duration-150'
       </UiInput>
     </div>
 
-    <div class="flex min-w-0 flex-wrap items-center gap-2 lg:ml-auto">
-      <div class="min-w-0 flex-1 basis-36 lg:w-40 lg:flex-none">
-        <label for="sq-vendor" class="sr-only">{{ t('site.sqVendorLabel') }}</label>
-        <UiSelect id="sq-vendor" v-model="vendor" :options="vendorOptions" />
-      </div>
-      <div class="min-w-0 flex-1 basis-32 lg:w-36 lg:flex-none">
-        <label for="sq-group" class="sr-only">{{ t('site.sqGroupLabel') }}</label>
-        <UiSelect id="sq-group" v-model="group" :options="groupOptions" />
-      </div>
-      <div class="min-w-0 flex-1 basis-36 lg:w-40 lg:flex-none">
+    <div class="flex min-w-0 flex-wrap items-center justify-end gap-2">
+      <button
+        type="button"
+        class="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-control border px-3 text-[13px] transition-colors duration-150"
+        :class="compareMode ? 'border-clay bg-clay-soft text-clay' : 'border-line-strong bg-surface text-muted hover:border-faint hover:text-ink'"
+        :aria-pressed="compareMode"
+        :title="t('site.sqCompareHint')"
+        @click="compareMode = !compareMode"
+      >
+        <GitCompareArrows class="size-3.5" />
+        <span class="hidden sm:inline">{{ t('site.sqCompare') }}</span>
+        <span v-if="compareCount" class="numeric text-2xs">{{ compareCount }}</span>
+      </button>
+
+      <div class="w-28 shrink-0 sm:w-32">
         <label for="sq-sort" class="sr-only">{{ t('site.sqSortLabel') }}</label>
-        <UiSelect id="sq-sort" v-model="sortProxy" :options="sortOptions" />
+        <UiSelect id="sq-sort" v-model="sortProxy" :options="sortOptions" size="sm" />
       </div>
 
       <div :class="[SEGMENT, 'shrink-0']" role="group" :aria-label="t('site.sqUnitLabel')">
@@ -93,7 +82,7 @@ const SEGMENT_ITEM = 'rounded-[7px] transition-colors duration-150'
           v-for="item in units"
           :key="item.value"
           type="button"
-          :class="[SEGMENT_ITEM, 'numeric px-2.5 py-1.5 text-[13px]', unit === item.value ? 'bg-sunken text-ink' : 'text-muted hover:text-ink']"
+          :class="[SEGMENT_ITEM, 'numeric px-2 py-1.5 text-[12px]', unit === item.value ? 'bg-sunken text-ink' : 'text-muted hover:text-ink']"
           :aria-pressed="unit === item.value"
           @click="unit = item.value"
         >{{ t(item.labelKey) }}</button>

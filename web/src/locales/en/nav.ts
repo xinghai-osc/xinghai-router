@@ -27,6 +27,7 @@ export default {
   providers: 'Providers',
   modelRoutes: 'Model routes',
   pricing: 'Model pricing',
+  modelMetadata: 'Model metadata',
   logs: 'Request logs',
   audit: 'Audit logs',
   conversationCache: 'Conversations',

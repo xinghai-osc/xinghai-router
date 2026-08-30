@@ -45,7 +45,45 @@ export interface PricingTierForm { id?: string; model: string; from_tokens: numb
 export interface PricingTimeRule { id: string; model: string; name: string; start_minute: number; end_minute: number; weekdays: string; input_per_million: number; cached_input_per_million: number; output_per_million: number; enabled: boolean; created_at: string }
 export interface PricingTimeRuleForm { id?: string; model: string; name: string; start_minute: number; end_minute: number; weekdays: string; input_per_million: number; cached_input_per_million: number; output_per_million: number; enabled?: boolean }
 export interface CatalogGroup { id: string; name: string; multiplier: number; public: boolean; display_name?: string | null }
-export interface CatalogModel { id: string; model: string; provider: string; provider_slug: string; input_per_million: number | null; cached_input_per_million: number | null; output_per_million: number | null; multiplier: number | null; groups: CatalogGroup[] }
+export interface ModelCatalogMetadata {
+  description: string | null
+  input_modalities: string[]
+  output_modalities: string[]
+  context_window: number | null
+}
+export interface ModelCatalogPerformance {
+  requests: number | null
+  success_rate: number | null
+  avg_latency_ms: number | null
+  avg_first_token_ms: number | null
+}
+export interface CatalogModel {
+  id: string
+  model: string
+  provider: string
+  provider_slug: string
+  input_per_million: number | null
+  cached_input_per_million: number | null
+  output_per_million: number | null
+  multiplier: number | null
+  description: string | null
+  input_modalities: string[]
+  output_modalities: string[]
+  context_window: number | null
+  performance: ModelCatalogPerformance | null
+  groups: CatalogGroup[]
+}
+export interface ModelMetadata {
+  id: string
+  model: string
+  description: string
+  input_modalities: string[]
+  output_modalities: string[]
+  context_window: number | null
+  created_at?: string
+  updated_at?: string
+}
+export type ModelMetadataForm = Omit<ModelMetadata, 'id' | 'created_at' | 'updated_at'>
 export interface ModelPerformanceGroup { group_id: string; group_name: string; requests: number; tps: number; avg_latency_ms: number; avg_first_token_ms: number | null; success_rate: number }
 export interface ModelPerformance { model: string; window_hours: number; groups: ModelPerformanceGroup[]; updated_at: string }
 export interface ModelProvider { id: string; name: string; slug: string; prefixes: string[]; priority: number }
@@ -68,13 +106,16 @@ export interface VendorRanking { rank: number; vendor: string; total_tokens: num
 export interface RankingMover { model_name: string; vendor: string; rank_delta: number; current_rank: number; growth_pct: number }
 export interface UserRanking { rank: number; name: string; total_tokens: number; total_cost: number; share: number; growth_pct: number; requests: number; top_model: string }
 export interface Rankings { period: string; models: ModelRanking[]; vendors: VendorRanking[]; top_movers: RankingMover[]; top_droppers: RankingMover[]; users: UserRanking[]; total_tokens: number; updated_at: string }
-export interface SiteSettings { name: string; icon_url: string; announcement: string; contact_email?: string; auto_disable_failed_channels: boolean; invitations_enabled?: boolean; registration_email_whitelist_enabled?: boolean; registration_email_alias_blocked?: boolean; captcha_provider?: string; geetest_enabled?: boolean; geetest_captcha_id?: string; corptcha_site_id?: string; email_verification_enabled?: boolean; oauth_providers?: string[] }
-export interface AdminSiteSettings { name: string; icon_url: string; announcement: string; contact_email: string; auto_disable_failed_channels: boolean; captcha_provider: string; geetest_captcha_id: string; has_geetest_captcha_key: boolean; corptcha_site_id: string; has_corptcha_secret: boolean; smtp_host: string; smtp_port: string; smtp_username: string; has_smtp_password: boolean; smtp_from: string; public_base_url: string; invitations_enabled: boolean; inviter_reward: string; invitee_reward: string; checkin_base_reward: string; checkin_streak_bonus: string; checkin_max_bonus_days: number; registration_email_whitelist_enabled: boolean; registration_email_whitelist: string[]; registration_email_alias_blocked: boolean }
+export type FeaturedLocale = 'zh' | 'zh-Hant' | 'en'
+export type FeaturedCopyField = 'badge' | 'title' | 'body' | 'cta'
+export type FeaturedCopy = Record<FeaturedLocale, Record<FeaturedCopyField, string>>
+export interface SiteSettings { name: string; icon_url: string; announcement: string; contact_email?: string; auto_disable_failed_channels: boolean; invitations_enabled?: boolean; registration_email_whitelist_enabled?: boolean; registration_email_alias_blocked?: boolean; featured_enabled: boolean; featured_model: string; featured_copy: FeaturedCopy; captcha_provider?: string; geetest_enabled?: boolean; geetest_captcha_id?: string; corptcha_site_id?: string; email_verification_enabled?: boolean; oauth_providers?: string[] }
+export interface AdminSiteSettings { name: string; icon_url: string; announcement: string; contact_email: string; auto_disable_failed_channels: boolean; featured_enabled: boolean; featured_model: string; featured_copy: FeaturedCopy; captcha_provider: string; geetest_captcha_id: string; has_geetest_captcha_key: boolean; corptcha_site_id: string; has_corptcha_secret: boolean; smtp_host: string; smtp_port: string; smtp_username: string; has_smtp_password: boolean; smtp_from: string; public_base_url: string; invitations_enabled: boolean; inviter_reward: string; invitee_reward: string; checkin_base_reward: string; checkin_streak_bonus: string; checkin_max_bonus_days: number; registration_email_whitelist_enabled: boolean; registration_email_whitelist: string[]; registration_email_alias_blocked: boolean }
 export interface Notification { id: string; title: string; content: string; enabled: boolean; sort_order: number; created_at: string; updated_at: string }
 export interface NotificationForm { title: string; content: string; enabled: boolean; sort_order: number }
 export interface Invitation { id: string; name: string; email: string; reward: string; created_at: string }
 export interface InvitationSummary { enabled: boolean; code: string; inviter_reward: string; invitee_reward: string; data: Invitation[] }
-export interface ReliabilitySettings { retry_count: number; retry_status_codes: string; health_check_mode: 'off' | 'scheduled_all' | 'passive_recovery'; health_check_interval_minutes: number; health_check_auto_recover: boolean; health_check_channel_ids: string; auto_disable_on_test_failure: boolean; auto_disable_slow_seconds: number; auto_disable_status_codes: string; auto_disable_keywords: string }
+export interface ReliabilitySettings { request_timeout_seconds: number; retry_count: number; retry_status_codes: string; health_check_mode: 'off' | 'scheduled_all' | 'passive_recovery'; health_check_interval_minutes: number; health_check_auto_recover: boolean; health_check_channel_ids: string; auto_disable_on_test_failure: boolean; auto_disable_slow_seconds: number; auto_disable_status_codes: string; auto_disable_keywords: string }
 export interface ContentPolicySettings { request_audit_enabled: boolean; request_audit_store_mode: 'none' | 'hash' | 'excerpt'; request_audit_retention_days: number; content_policy_mode: 'off' | 'audit' | 'block' }
 export interface ContentPolicyRule { id: string; name: string; term: string; action: 'block' | 'audit'; case_sensitive: boolean; enabled: boolean; priority: number; created_at: string; updated_at: string }
 export interface ContentPolicyBatchResult { created: number; skipped: number }
@@ -607,7 +648,8 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (response.status === 401 && path !== '/auth/login') {
     clearToken()
     if (import.meta.client && !window.location.pathname.startsWith('/auth')) {
-      window.location.assign('/auth')
+      const current = window.location.pathname + window.location.search
+      window.location.assign(`/auth?redirect=${encodeURIComponent(current)}`)
     }
   }
   if (!response.ok) {
@@ -630,7 +672,8 @@ async function download(path: string): Promise<Blob> {
   if (response.status === 401) {
     clearToken()
     if (import.meta.client && !window.location.pathname.startsWith('/auth')) {
-      window.location.assign('/auth')
+      const current = window.location.pathname + window.location.search
+      window.location.assign(`/auth?redirect=${encodeURIComponent(current)}`)
     }
   }
   if (!response.ok) {
@@ -731,6 +774,10 @@ export const endpoints = {
   getActivityLogs: (query = '') => get<{ data: ActivityLog[] }>(`/activity-logs${query}`),
   getModelCatalog: () => get<{ data: CatalogModel[]; groups: CatalogGroup[] }>('/model-catalog'),
   getModelPerformance: (model: string) => get<ModelPerformance>(`/model-performance?model=${encodeURIComponent(model)}`),
+  getAdminModelMetadata: () => get<{ data: ModelMetadata[] }>('/admin/model-metadata'),
+  createAdminModelMetadata: (form: ModelMetadataForm) => post<{ id: string; model: string }>('/admin/model-metadata', form),
+  updateAdminModelMetadata: (id: string, form: ModelMetadataForm) => put<{ id: string; model: string }>(`/admin/model-metadata/${encodeURIComponent(id)}`, form),
+  deleteAdminModelMetadata: (id: string) => send(`/admin/model-metadata/${encodeURIComponent(id)}`, 'DELETE'),
   getPublicSubscriptionPlans: () => get<{ data: PublicSubscriptionPlan[] }>('/subscription-plans'),
 
   login: (body: LoginBody) => post<{ token: string }>('/auth/login', body),

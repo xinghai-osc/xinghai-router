@@ -27,6 +27,7 @@ export default {
   providers: '供应商',
   modelRoutes: '模型路由',
   pricing: '模型定价',
+  modelMetadata: '模型元数据',
   logs: '请求日志',
   audit: '审计日志',
   conversationCache: '对话缓存',

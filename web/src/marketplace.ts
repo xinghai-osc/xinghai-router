@@ -1,4 +1,4 @@
-import type { CatalogGroup, CatalogModel } from '~/src/api'
+import type { CatalogGroup, CatalogModel, ModelCatalogMetadata, ModelCatalogPerformance } from '~/src/api'
 
 // ----------------------------------------------------------------------------
 // Model square (模型广场) pricing and filtering logic.
@@ -19,6 +19,9 @@ export interface SquareModel extends CatalogModel {
   vendor_slug: string
 }
 
+export type Modality = 'text' | 'image' | 'audio' | 'video' | 'file'
+export type ContextBucket = '64k' | '128k' | '256k' | '1m' | '1m-plus'
+
 export function normalizeCatalogValue(value: string): string {
   return value.normalize('NFKC').trim().toLowerCase()
 }
@@ -28,7 +31,15 @@ export function squareModelKey(model: Pick<SquareModel, 'model' | 'vendor_slug'>
 }
 
 export function toSquareModel(item: CatalogModel): SquareModel {
-  const model = { ...item, vendor_name: item.provider, vendor_slug: item.provider_slug }
+  const model: SquareModel = {
+    ...item,
+    description: item.description ?? null,
+    input_modalities: item.input_modalities ?? [],
+    output_modalities: item.output_modalities ?? [],
+    performance: item.performance ?? null,
+    vendor_name: item.provider,
+    vendor_slug: item.provider_slug,
+  }
   return { ...model, id: model.id || squareModelKey(model) }
 }
 
@@ -124,8 +135,8 @@ export function formatRatio(multiplier: number | string): string {
   return `x${formatted}`
 }
 
-/** Format a requests-per-second figure, trimming trailing zeros. */
-export function formatTPS(value: number): string {
+/** Format the recent request rate, trimming trailing zeros. */
+export function formatRequestRate(value: number): string {
   if (!Number.isFinite(value) || value <= 0) return '0'
   const formatted = value >= 1 ? value.toFixed(2) : value.toPrecision(2)
   return String(Number.parseFloat(formatted))
@@ -149,11 +160,62 @@ export function vendorInitial(name: string): string {
   return (name.trim()[0] ?? '?').toUpperCase()
 }
 
+export function modelMetadata(model: SquareModel): ModelCatalogMetadata {
+  return {
+    description: model.description,
+    input_modalities: model.input_modalities,
+    output_modalities: model.output_modalities,
+    context_window: model.context_window,
+  }
+}
+
+export function modelPerformance(model: SquareModel): ModelCatalogPerformance {
+  return model.performance ?? {
+    requests: null,
+    success_rate: null,
+    avg_latency_ms: null,
+    avg_first_token_ms: null,
+  }
+}
+
+export function contextBucket(value: number | null | undefined): ContextBucket | null {
+  if (value == null || !Number.isFinite(Number(value)) || Number(value) <= 0) return null
+  const context = Number(value)
+  if (context <= 64_000) return '64k'
+  if (context <= 128_000) return '128k'
+  if (context <= 256_000) return '256k'
+  if (context <= 1_000_000) return '1m'
+  return '1m-plus'
+}
+
+export function matchesContextBucket(value: number | null | undefined, buckets: ContextBucket[]): boolean {
+  if (!buckets.length) return true
+  const bucket = contextBucket(value)
+  return bucket != null && buckets.includes(bucket)
+}
+
+export function modelSupportsModality(model: SquareModel, field: 'input_modalities' | 'output_modalities', modalities: Modality[]): boolean {
+  if (!modalities.length) return true
+  const values = modelMetadata(model)[field] ?? []
+  return modalities.every(modality => values.includes(modality))
+}
+
+export function formatContextWindow(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(Number(value)) || Number(value) <= 0) return '—'
+  const context = Number(value)
+  if (context >= 1_000_000) return `${Number((context / 1_000_000).toFixed(2))}M`
+  if (context >= 1_000) return `${Number((context / 1_000).toFixed(1))}K`
+  return String(Math.round(context))
+}
+
 export interface SquareFilters {
   search: string
   vendor: string
   group: string
   sortBy: SortOption
+  inputModalities?: Modality[]
+  outputModalities?: Modality[]
+  contextBuckets?: ContextBucket[]
 }
 
 function searchText(value: string): string {
@@ -203,6 +265,15 @@ export function filterAndSort(models: SquareModel[], filters: SquareFilters): Sq
   }
   if (filters.vendor !== FILTER_ALL) result = result.filter(model => model.vendor_name === filters.vendor)
   if (filters.group !== FILTER_ALL) result = result.filter(model => model.groups.some(group => group.id === filters.group))
+  if (filters.inputModalities?.length) {
+    result = result.filter(model => modelSupportsModality(model, 'input_modalities', filters.inputModalities!))
+  }
+  if (filters.outputModalities?.length) {
+    result = result.filter(model => modelSupportsModality(model, 'output_modalities', filters.outputModalities!))
+  }
+  if (filters.contextBuckets?.length) {
+    result = result.filter(model => matchesContextBucket(modelMetadata(model).context_window, filters.contextBuckets!))
+  }
 
   const sorted = [...result]
   const byName = (a: SquareModel, b: SquareModel) =>

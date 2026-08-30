@@ -30,6 +30,12 @@
   --shimmer-highlight: rgb(255 255 255 / 0.5);
 }
 
+:root[data-preset='default'] .console-shell .rounded-card.bg-surface\/90,
+:root[data-preset='default'] .console-shell .rounded-card.bg-surface\/75,
+:root[data-preset='default'] .console-shell .rounded-card.bg-surface\/45 {
+  background-color: var(--surface);
+}
+
 :root[data-preset='default'][data-theme='dark'] {
   --paper: #1f1e1d;
   --surface: #262624;

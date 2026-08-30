@@ -216,6 +216,11 @@ async function viewRedemptions(code: RedemptionCode) {
     redemptionsPending.value = false
   }
 }
+
+/** Public redeem link that pre-fills the code on the /redeem page. */
+function redeemLink(code: string) {
+  return `${window.location.origin}/redeem?code=${encodeURIComponent(code)}`
+}
 </script>
 
 <template>
@@ -260,6 +265,13 @@ async function viewRedemptions(code: RedemptionCode) {
                 <div class="flex items-center gap-2">
                   <code class="font-mono text-[13px] text-muted">{{ code.code }}</code>
                   <ConsoleUserCopyButton :value="code.code" :label="t('admin.redemptionCopyCode')" size="icon" variant="ghost" />
+                  <ConsoleUserCopyButton
+                    :value="redeemLink(code.code)"
+                    :label="t('admin.redemptionCopyLink')"
+                    :success-message="t('admin.redemptionLinkCopied')"
+                    size="icon"
+                    variant="ghost"
+                  />
                 </div>
               </td>
               <td>
@@ -374,11 +386,18 @@ async function viewRedemptions(code: RedemptionCode) {
         <div class="space-y-4">
           <div class="flex items-center justify-between gap-3">
             <p class="text-[13px] text-muted">{{ t('admin.redemptionGeneratedHint') }}</p>
-            <ConsoleUserCopyButton
-              :value="generatedCodes.join('\n')"
-              :label="t('admin.redemptionCopyAll')"
-              :success-message="t('admin.redemptionCopiedAll')"
-            />
+            <div class="flex items-center gap-2">
+              <ConsoleUserCopyButton
+                :value="generatedCodes.join('\n')"
+                :label="t('admin.redemptionCopyAll')"
+                :success-message="t('admin.redemptionCopiedAll')"
+              />
+              <ConsoleUserCopyButton
+                :value="generatedCodes.map(code => redeemLink(code)).join('\n')"
+                :label="t('admin.redemptionCopyAllLinks')"
+                :success-message="t('admin.redemptionLinksCopied')"
+              />
+            </div>
           </div>
 
           <div class="max-h-72 overflow-y-auto rounded-card border border-line">

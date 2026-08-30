@@ -11,11 +11,12 @@ const { busy, run } = useAction()
 useHead({ title: () => `${t('system.reliabilityTitle')} · ${site.value.name}` })
 
 const DEFAULTS: ReliabilitySettings = {
-  retry_count: 0,
-  retry_status_codes: '',
+  request_timeout_seconds: 90,
+  retry_count: 3,
+  retry_status_codes: '100-199,300-407,409-503,505-523,525-599',
   health_check_mode: 'off',
-  health_check_interval_minutes: 0,
-  health_check_auto_recover: false,
+  health_check_interval_minutes: 5,
+  health_check_auto_recover: true,
   health_check_channel_ids: '',
   auto_disable_on_test_failure: false,
   auto_disable_slow_seconds: 0,
@@ -30,15 +31,17 @@ const { data, pending, error, refresh } = useResource(
 
 const form = reactive<ReliabilitySettings>({ ...DEFAULTS })
 const mode = ref<string>(DEFAULTS.health_check_mode)
-const retryCount = ref('0')
-const interval = ref('0')
-const slowSeconds = ref('0')
+const requestTimeout = ref(String(DEFAULTS.request_timeout_seconds))
+const retryCount = ref(String(DEFAULTS.retry_count))
+const interval = ref(String(DEFAULTS.health_check_interval_minutes))
+const slowSeconds = ref(String(DEFAULTS.auto_disable_slow_seconds))
 
 watch(data, (next) => {
   Object.assign(form, next)
   mode.value = next.health_check_mode || 'off'
-  retryCount.value = String(next.retry_count ?? 0)
-  interval.value = String(next.health_check_interval_minutes ?? 0)
+  requestTimeout.value = String(next.request_timeout_seconds ?? DEFAULTS.request_timeout_seconds)
+  retryCount.value = String(next.retry_count ?? DEFAULTS.retry_count)
+  interval.value = String(next.health_check_interval_minutes ?? DEFAULTS.health_check_interval_minutes)
   slowSeconds.value = String(next.auto_disable_slow_seconds ?? 0)
 }, { immediate: true })
 
@@ -48,18 +51,26 @@ const modeOptions = computed(() => [
   { value: 'passive_recovery', label: t('system.modePassiveRecovery') },
 ])
 
-function toInt(value: string): number {
-  const parsed = Number.parseInt(value.trim(), 10)
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0
+function toInt(value: string, fallback: number, min = 0, max = Number.MAX_SAFE_INTEGER): number {
+  const normalized = value.trim()
+  if (!/^\d+$/.test(normalized)) return fallback
+  const parsed = Number(normalized)
+  return Number.isSafeInteger(parsed) && parsed >= min && parsed <= max ? parsed : fallback
 }
 
 async function save() {
+  const timeout = toInt(requestTimeout.value, 0, 1, 3600)
+  if (timeout === 0) {
+    toast.error(t('system.requestTimeoutInvalid'))
+    return
+  }
   const payload: ReliabilitySettings = {
     ...form,
+    request_timeout_seconds: toInt(requestTimeout.value, DEFAULTS.request_timeout_seconds, 1, 3600),
     health_check_mode: mode.value as ReliabilitySettings['health_check_mode'],
-    retry_count: toInt(retryCount.value),
-    health_check_interval_minutes: toInt(interval.value),
-    auto_disable_slow_seconds: toInt(slowSeconds.value),
+    retry_count: toInt(retryCount.value, DEFAULTS.retry_count, 0, 10),
+    health_check_interval_minutes: toInt(interval.value, DEFAULTS.health_check_interval_minutes, 1, 1440),
+    auto_disable_slow_seconds: toInt(slowSeconds.value, DEFAULTS.auto_disable_slow_seconds, 0, 600),
   }
   const ok = await run(() => endpoints.updateReliabilitySettings(payload))
   if (!ok) {
@@ -93,6 +104,10 @@ async function save() {
       <form v-else class="space-y-4" @submit.prevent="save">
         <UiCard :title="t('system.retrySection')">
           <div class="grid gap-4 sm:grid-cols-2">
+            <UiField :label="t('system.requestTimeout')" :hint="t('system.requestTimeoutHint')" for="request-timeout">
+              <UiInput id="request-timeout" v-model="requestTimeout" type="number" min="1" max="3600" step="1" />
+            </UiField>
+
             <UiField :label="t('system.retryCount')" :hint="t('system.retryCountHint')" for="retry-count">
               <UiInput id="retry-count" v-model="retryCount" />
             </UiField>

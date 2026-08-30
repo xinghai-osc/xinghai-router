@@ -5,10 +5,11 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestUpdateReliabilitySettingsRejectsInvalidValues(t *testing.T) {
-	for _, body := range []string{`{"retry_count":-1}`, `{"retry_count":11}`, `{"health_check_mode":"always"}`, `{"health_check_interval_minutes":0}`, `{"health_check_interval_minutes":1441}`, `{"auto_disable_slow_seconds":-1}`} {
+	for _, body := range []string{`{"request_timeout_seconds":0}`, `{"request_timeout_seconds":3601}`, `{"request_timeout_seconds":-1}`, `{"retry_count":-1}`, `{"retry_count":11}`, `{"health_check_mode":"always"}`, `{"health_check_interval_minutes":0}`, `{"health_check_interval_minutes":1441}`, `{"auto_disable_slow_seconds":-1}`} {
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodPut, "/admin/reliability-settings", strings.NewReader(body))
 		(&Service{}).updateReliabilitySettings(recorder, request)
@@ -123,8 +124,26 @@ func TestParseIDList(t *testing.T) {
 	}
 }
 
+func TestRequestTimeoutDuration(t *testing.T) {
+	if got := requestTimeoutDuration(1); got != time.Second {
+		t.Fatalf("minimum timeout = %s, want 1s", got)
+	}
+	if got := requestTimeoutDuration(3600); got != time.Hour {
+		t.Fatalf("maximum timeout = %s, want 1h", got)
+	}
+	if got := requestTimeoutDuration(0); got != 90*time.Second {
+		t.Fatalf("invalid timeout = %s, want 90s", got)
+	}
+	if got := requestTimeoutDuration(3601); got != 90*time.Second {
+		t.Fatalf("oversized timeout = %s, want 90s", got)
+	}
+}
+
 func TestDefaultReliabilitySettings(t *testing.T) {
 	s := defaultReliabilitySettings()
+	if s.RequestTimeoutSeconds != defaultRequestTimeoutSeconds {
+		t.Errorf("default request timeout = %d, want %d", s.RequestTimeoutSeconds, defaultRequestTimeoutSeconds)
+	}
 	if s.RetryCount != 3 {
 		t.Errorf("default retry count = %d, want 3", s.RetryCount)
 	}

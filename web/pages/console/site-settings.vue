@@ -1,10 +1,18 @@
 <script setup lang="ts">
 import { ImageOff } from 'lucide-vue-next'
-import { endpoints, type AdminSiteSettings } from '~/src/api'
+import { endpoints, type AdminSiteSettings, type CatalogModel, type FeaturedCopy, type FeaturedLocale } from '~/src/api'
 
 definePageMeta({ layout: 'console', middleware: 'console-auth' })
 
 const { t } = useI18n()
+
+function emptyFeaturedCopy(): FeaturedCopy {
+  return {
+    zh: { badge: '', title: '', body: '', cta: '' },
+    'zh-Hant': { badge: '', title: '', body: '', cta: '' },
+    en: { badge: '', title: '', body: '', cta: '' },
+  }
+}
 const { settings: site } = useSiteSettings()
 const { toast } = useToast()
 const { busy, run } = useAction()
@@ -17,6 +25,9 @@ const EMPTY: AdminSiteSettings = {
   announcement: '',
   contact_email: '',
   auto_disable_failed_channels: false,
+  featured_enabled: true,
+  featured_model: '',
+  featured_copy: emptyFeaturedCopy(),
   captcha_provider: '',
   geetest_captcha_id: '',
   has_geetest_captcha_key: false,
@@ -43,6 +54,7 @@ const { data, pending, error, refresh } = useResource(
   () => endpoints.getAdminSiteSettings(),
   { ...EMPTY },
 )
+const catalog = useResource(() => endpoints.getModelCatalog(), { data: [] as CatalogModel[], groups: [] })
 
 const form = reactive({
   name: '',
@@ -67,7 +79,12 @@ const form = reactive({
   registration_email_whitelist_enabled: false,
   registration_email_whitelist: '',
   registration_email_alias_blocked: false,
+  featured_enabled: true,
+  featured_model: '',
+  featured_copy: emptyFeaturedCopy(),
 })
+
+const featuredLocale = ref<FeaturedLocale>('zh')
 
 /** Write-only: never seeded from the API, cleared again after every save. */
 const geetestKey = ref('')
@@ -105,6 +122,9 @@ watch(data, (next) => {
   form.registration_email_whitelist_enabled = next.registration_email_whitelist_enabled
   form.registration_email_whitelist = next.registration_email_whitelist.join('\n')
   form.registration_email_alias_blocked = next.registration_email_alias_blocked
+  form.featured_enabled = next.featured_enabled ?? true
+  form.featured_model = next.featured_model ?? ''
+  form.featured_copy = JSON.parse(JSON.stringify(next.featured_copy ?? emptyFeaturedCopy())) as FeaturedCopy
   geetestKey.value = ''
   corptchaSecret.value = ''
   smtpPassword.value = ''
@@ -145,6 +165,9 @@ async function save() {
     registration_email_whitelist_enabled: form.registration_email_whitelist_enabled,
     registration_email_whitelist: form.registration_email_whitelist.split(/\r?\n/),
     registration_email_alias_blocked: form.registration_email_alias_blocked,
+    featured_enabled: form.featured_enabled,
+    featured_model: form.featured_model.trim(),
+    featured_copy: form.featured_copy,
   } as SiteSettingsPayload
 
   const ok = await run(() => endpoints.updateAdminSiteSettings(payload))
@@ -158,6 +181,18 @@ async function save() {
   toast.success(t('system.siteSettingsSaved'))
   await refresh()
 }
+
+const featuredLocaleOptions = computed(() => [
+  { value: 'zh', label: t('system.featuredLocaleZh') },
+  { value: 'zh-Hant', label: t('system.featuredLocaleHant') },
+  { value: 'en', label: t('system.featuredLocaleEn') },
+])
+
+const featuredModelOptions = computed(() => [
+  { value: '', label: t('system.featuredModelAutomatic') },
+  ...catalog.data.value.data.map(model => ({ value: model.model, label: model.model })),
+])
+
 </script>
 
 <template>
@@ -236,6 +271,58 @@ async function save() {
             >
               <UiInput id="public-base-url" v-model="form.public_base_url" type="url" />
             </UiField>
+          </div>
+        </UiCard>
+
+        <UiCard :title="t('system.featuredSectionTitle')" :description="t('system.featuredSectionLead')">
+          <div class="space-y-4">
+            <UiField :label="t('system.featuredEnabled')" :hint="t('system.featuredEnabledHint')">
+              <UiSwitch v-model="form.featured_enabled" :label="t('system.featuredEnabled')" />
+            </UiField>
+
+            <UiField :label="t('system.featuredModel')" :hint="t('system.featuredModelHint')" for="featured-model">
+              <UiSelect id="featured-model" v-model="form.featured_model" :options="featuredModelOptions" :disabled="!form.featured_enabled" />
+            </UiField>
+
+            <div class="space-y-3">
+              <div class="flex flex-wrap gap-1 border-b border-line">
+                <button
+                  v-for="option in featuredLocaleOptions"
+                  :key="option.value"
+                  type="button"
+                  :class="option.value === featuredLocale ? 'border-b-2 border-clay text-clay-ink' : 'text-muted hover:text-ink'"
+                  class="px-3 py-2 text-[13px] font-medium transition-colors"
+                  @click="featuredLocale = option.value as FeaturedLocale"
+                >
+                  {{ option.label }}
+                </button>
+              </div>
+
+              <div class="grid gap-4 sm:grid-cols-2">
+                <UiField :label="t('system.featuredBadge')" for="featured-badge">
+                  <UiInput id="featured-badge" v-model="form.featured_copy[featuredLocale].badge" :disabled="!form.featured_enabled" />
+                </UiField>
+                <UiField :label="t('system.featuredTitle')" for="featured-title">
+                  <UiInput id="featured-title" v-model="form.featured_copy[featuredLocale].title" :disabled="!form.featured_enabled" />
+                </UiField>
+                <UiField :label="t('system.featuredBody')" for="featured-body" class="sm:col-span-2">
+                  <UiTextarea id="featured-body" v-model="form.featured_copy[featuredLocale].body" :rows="3" :maxlength="1000" :disabled="!form.featured_enabled" />
+                </UiField>
+                <UiField :label="t('system.featuredCta')" for="featured-cta">
+                  <UiInput id="featured-cta" v-model="form.featured_copy[featuredLocale].cta" :disabled="!form.featured_enabled" />
+                </UiField>
+              </div>
+            </div>
+
+            <div class="rounded-control border border-line bg-sunken px-4 py-3">
+              <p class="text-2xs font-medium uppercase tracking-wider text-faint">{{ t('system.featuredPreview') }}</p>
+              <div class="mt-2 space-y-1">
+                <UiBadge tone="clay">{{ form.featured_copy[featuredLocale].badge || t('system.featuredPreviewBadge') }}</UiBadge>
+                <p class="text-base font-semibold text-ink">{{ form.featured_copy[featuredLocale].title || t('system.featuredPreviewTitle') }}</p>
+                <p class="text-[13px] text-muted">{{ form.featured_copy[featuredLocale].body || t('system.featuredPreviewBody') }}</p>
+                <p class="pt-1 text-[13px] font-medium text-clay-ink">{{ form.featured_copy[featuredLocale].cta || t('system.featuredPreviewCta') }}</p>
+              </div>
+            </div>
           </div>
         </UiCard>
 

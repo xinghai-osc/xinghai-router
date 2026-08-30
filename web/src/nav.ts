@@ -57,6 +57,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { to: '/console/channels', labelKey: 'nav.channels', icon: Server, permission: 'channels.read' },
       { to: '/console/providers', labelKey: 'nav.providers', icon: Blocks, permission: 'system.manage' },
       { to: '/console/pricing', labelKey: 'nav.pricing', icon: BadgeDollarSign, permission: 'pricing.read' },
+      { to: '/console/model-metadata', labelKey: 'nav.modelMetadata', icon: Database, permission: 'system.manage' },
       { to: '/console/model-routes', labelKey: 'nav.modelRoutes', icon: ArrowRightLeft, permission: 'routes.manage' },
       { to: '/console/logs', labelKey: 'nav.logs', icon: ScrollText, permission: 'logs.read' },
       { to: '/console/conversation-cache', labelKey: 'nav.conversationCache', icon: MessageSquareText, permission: 'logs.read' },
