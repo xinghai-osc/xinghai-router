@@ -684,7 +684,7 @@ func (s *Service) updateUser(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if in.Balance != nil && !validUserBalance(*in.Balance) {
-		writeError(w, 400, "invalid_request", "balance must be a non-negative number up to 1e9")
+		writeError(w, 400, "invalid_request", "balance must be a non-negative number up to 999999999999")
 		return
 	}
 	if in.Note != nil {
@@ -1475,6 +1475,7 @@ const maxPricingRate = 1_000_000.0
 const maxPricePerQuotaUnit = 1_000_000.0
 const maxNewAPIPricingModels = 5000
 const maxWalletAdjustAmount = 1_000_000_000.0
+const maxUserBalance = 999_999_999_999.0
 const maxWalletNoteLength = 500
 const maxQuotaLimit = int64(1_000_000_000_000)
 
@@ -1494,7 +1495,7 @@ func validWalletAdjustAmount(value float64) bool {
 }
 
 func validUserBalance(value float64) bool {
-	return validNonNegativeFinite(value) && value <= maxWalletAdjustAmount
+	return validNonNegativeFinite(value) && value <= maxUserBalance
 }
 
 func validQuotaLimit(value *int64) bool {
@@ -2790,7 +2791,8 @@ func (s *Service) testChannelKey(w http.ResponseWriter, r *http.Request) {
 
 	var baseURL, provider, testModel string
 	var uaPool []byte
-	if err := s.db.QueryRow(r.Context(), `select base_url,provider,test_model,ua_pool from channels where id=$1`, channelID).Scan(&baseURL, &provider, &testModel, &uaPool); err != nil {
+	var autoDisable bool
+	if err := s.db.QueryRow(r.Context(), `select base_url,provider,test_model,ua_pool,auto_disable from channels where id=$1`, channelID).Scan(&baseURL, &provider, &testModel, &uaPool, &autoDisable); err != nil {
 		writeError(w, http.StatusNotFound, "not_found", "channel not found")
 		return
 	}
@@ -2841,16 +2843,20 @@ func (s *Service) testChannelKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result["reason"] = reason
-	_, _ = s.db.Exec(r.Context(), `update channel_api_keys set enabled=false,last_checked_at=now(),last_error=$1 where id=$2 and channel_id=$3`, reason, keyID, channelID)
+	result["auto_disabled"] = false
+	_, _ = s.db.Exec(r.Context(), `update channel_api_keys set last_checked_at=now(),last_error=$1 where id=$2 and channel_id=$3`, reason, keyID, channelID)
 	_, _ = s.db.Exec(r.Context(), `update channels set last_checked_at=now(),last_error=$1,updated_at=now() where id=$2`, reason, channelID)
-	s.syncChannelKeyType(r.Context(), channelID)
-	result["auto_disabled"] = true
-	s.audit(r, "channel_key.auto_disabled", "channel_api_key", keyID, map[string]any{"channel_id": channelID, "reason": reason})
-	var remaining int
-	if err := s.db.QueryRow(r.Context(), `select count(*) from channel_api_keys where channel_id=$1 and enabled`, channelID).Scan(&remaining); err == nil && remaining == 0 {
-		_, _ = s.db.Exec(r.Context(), `update channels set enabled=false,auto_disabled=true,disabled_reason=$1,last_error=$1,last_checked_at=now(),updated_at=now() where id=$2`, reason, channelID)
-		s.audit(r, "channel.auto_disabled", "channel", channelID, map[string]any{"key_id": keyID, "reason": reason})
-		result["channel_disabled"] = true
+	if autoDisable {
+		_, _ = s.db.Exec(r.Context(), `update channel_api_keys set enabled=false where id=$1 and channel_id=$2`, keyID, channelID)
+		s.syncChannelKeyType(r.Context(), channelID)
+		result["auto_disabled"] = true
+		s.audit(r, "channel_key.auto_disabled", "channel_api_key", keyID, map[string]any{"channel_id": channelID, "reason": reason})
+		var remaining int
+		if err := s.db.QueryRow(r.Context(), `select count(*) from channel_api_keys where channel_id=$1 and enabled`, channelID).Scan(&remaining); err == nil && remaining == 0 {
+			_, _ = s.db.Exec(r.Context(), `update channels set enabled=false,auto_disabled=true,disabled_reason=$1,last_error=$1,last_checked_at=now(),updated_at=now() where id=$2`, reason, channelID)
+			s.audit(r, "channel.auto_disabled", "channel", channelID, map[string]any{"key_id": keyID, "reason": reason})
+			result["channel_disabled"] = true
+		}
 	}
 	writeJSON(w, http.StatusOK, result)
 }
@@ -2860,7 +2866,8 @@ func (s *Service) testChannelHandler(w http.ResponseWriter, r *http.Request) {
 
 	var baseURL, provider, legacyKey, testModel string
 	var uaPool []byte
-	if err := s.db.QueryRow(r.Context(), `select base_url,provider,api_key,test_model,ua_pool from channels where id=$1`, channelID).Scan(&baseURL, &provider, &legacyKey, &testModel, &uaPool); err != nil {
+	var autoDisable bool
+	if err := s.db.QueryRow(r.Context(), `select base_url,provider,api_key,test_model,ua_pool,auto_disable from channels where id=$1`, channelID).Scan(&baseURL, &provider, &legacyKey, &testModel, &uaPool, &autoDisable); err != nil {
 		writeError(w, http.StatusNotFound, "not_found", "channel not found")
 		return
 	}
@@ -2940,9 +2947,12 @@ func (s *Service) testChannelHandler(w http.ResponseWriter, r *http.Request) {
 
 		kr.Reason = reason
 		if k.id != "" {
-			_, _ = s.db.Exec(r.Context(), `update channel_api_keys set enabled=false,last_checked_at=now(),last_error=$1 where id=$2 and channel_id=$3`, reason, k.id, channelID)
-			s.audit(r, "channel_key.auto_disabled", "channel_api_key", k.id, map[string]any{"channel_id": channelID, "reason": reason})
-			kr.AutoDisabled = true
+			_, _ = s.db.Exec(r.Context(), `update channel_api_keys set last_checked_at=now(),last_error=$1 where id=$2 and channel_id=$3`, reason, k.id, channelID)
+			if autoDisable {
+				_, _ = s.db.Exec(r.Context(), `update channel_api_keys set enabled=false where id=$1 and channel_id=$2`, k.id, channelID)
+				s.audit(r, "channel_key.auto_disabled", "channel_api_key", k.id, map[string]any{"channel_id": channelID, "reason": reason})
+				kr.AutoDisabled = true
+			}
 		}
 		keyResults = append(keyResults, kr)
 		channelReason = reason
@@ -2952,7 +2962,7 @@ func (s *Service) testChannelHandler(w http.ResponseWriter, r *http.Request) {
 	if anySuccess {
 		_, _ = s.db.Exec(r.Context(), `update channels set enabled=true,auto_disabled=false,disabled_reason='',failure_count=0,cooldown_until=null,last_error=null,last_checked_at=now(),updated_at=now() where id=$1`, channelID)
 		s.syncChannelKeyType(r.Context(), channelID)
-	} else {
+	} else if autoDisable {
 		_, _ = s.db.Exec(r.Context(), `update channels set enabled=false,auto_disabled=true,disabled_reason=$1,last_checked_at=now(),last_error=$1,updated_at=now() where id=$2`, channelReason, channelID)
 		s.syncChannelKeyType(r.Context(), channelID)
 		s.audit(r, "channel.auto_disabled", "channel", channelID, map[string]any{"reason": channelReason})

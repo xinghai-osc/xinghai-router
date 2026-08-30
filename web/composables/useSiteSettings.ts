@@ -3,6 +3,7 @@ import { endpoints, type SiteSettings } from '~/src/api'
 const FALLBACK: Omit<SiteSettings, 'name'> = {
   icon_url: '',
   announcement: '',
+  contact_email: '',
   auto_disable_failed_channels: false,
 }
 

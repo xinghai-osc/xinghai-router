@@ -271,6 +271,8 @@ export default {
   basicSection: 'Basics',
   siteNameHint: 'Shown in the navigation, the browser title and outgoing email.',
   siteIconHint: 'Image URL for the icon. A square PNG or SVG works best.',
+  contactEmail: 'Legal contact email',
+  contactEmailHint: 'Contact email shown in the Terms of Service and Privacy Policy. Leave blank to use the default contact.',
   iconPreview: 'Icon preview',
   iconPreviewEmpty: 'Enter an icon URL to see a preview',
   geetestId: 'Geetest captcha id',

@@ -13,6 +13,49 @@ import (
 	"time"
 )
 
+func TestSuccessfulUpstreamResponseIsNotTreatedAsFailure(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"OK"},"finish_reason":"stop"}],"usage":{"prompt_tokens":9,"completion_tokens":5,"total_tokens":14}}`)
+	}))
+	defer upstream.Close()
+
+	resp, err := http.Post(upstream.URL, "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		t.Fatalf("successful upstream status = %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt, completion, total, _ := usage(body)
+	if prompt != 9 || completion != 5 || total != 14 {
+		t.Fatalf("usage = %d/%d/%d", prompt, completion, total)
+	}
+}
+
+func TestResolveUpstreamFormatDefaultsToChat(t *testing.T) {
+	tests := []struct {
+		provider, configured, want string
+	}{
+		{"openai", "", "openai_chat"},
+		{"custom", "", "openai_chat"},
+		{"anthropic", "", "anthropic"},
+		{"commandcode", "", "commandcode"},
+		{"openai", "openai", "openai"},
+		{"openai", "openai_chat", "openai_chat"},
+	}
+	for _, tt := range tests {
+		if got := resolveUpstreamFormat(tt.provider, tt.configured); got != tt.want {
+			t.Fatalf("resolveUpstreamFormat(%q, %q) = %q, want %q", tt.provider, tt.configured, got, tt.want)
+		}
+	}
+}
+
 func TestClientUpstreamErrorHidesKeywordErrors(t *testing.T) {
 	s := &Service{}
 	ctx := context.Background()
@@ -678,6 +721,24 @@ func TestStreamCaptureNonEmptyStream(t *testing.T) {
 	}
 }
 
+func TestStreamResponseAddsFinishReasonWhenUpstreamOmitsIt(t *testing.T) {
+	rec := httptest.NewRecorder()
+	body := "data: {\"id\":\"chatcmpl-1\",\"model\":\"test-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\"},\"finish_reason\":null}]}\n\ndata: [DONE]\n\n"
+	if _, err := (&Service{}).streamResponse(rec, streamBody(t, body)); err != nil {
+		t.Fatal(err)
+	}
+	out := rec.Body.String()
+	if !strings.Contains(out, `"finish_reason":"stop"`) {
+		t.Fatalf("stream must contain a terminal finish_reason, got:\n%s", out)
+	}
+	if strings.Count(out, `"finish_reason":"stop"`) != 1 {
+		t.Fatalf("stream must contain exactly one synthesized finish_reason, got:\n%s", out)
+	}
+	if !strings.HasSuffix(out, "data: [DONE]\n\n") {
+		t.Fatalf("stream must preserve terminal [DONE], got:\n%s", out)
+	}
+}
+
 func TestParseSSEUsageRequiresUsageObject(t *testing.T) {
 	var st streamStats
 	parseSSEUsage([]byte(`{"id":"chunk","choices":[]}`), &st)
@@ -687,6 +748,11 @@ func TestParseSSEUsageRequiresUsageObject(t *testing.T) {
 	parseSSEUsage([]byte(`{"usage":{"prompt_tokens":8,"completion_tokens":5,"total_tokens":13}}`), &st)
 	if !st.usageReported || !st.usageComplete || st.prompt != 8 || st.completion != 5 {
 		t.Fatalf("parsed usage = %+v, want reported 8/5", st)
+	}
+	var responses streamStats
+	parseSSEUsage([]byte(`{"type":"response.completed","response":{"usage":{"input_tokens":20,"output_tokens":7,"input_tokens_details":{"cached_tokens":15}}}}`), &responses)
+	if !responses.usageComplete || responses.prompt != 20 || responses.completion != 7 || responses.cached != 15 {
+		t.Fatalf("Responses usage = %+v, want 20/15/7", responses)
 	}
 	var anthropic streamStats
 	parseSSEUsage([]byte(`{"type":"message_start","message":{"usage":{"input_tokens":10,"output_tokens":0}}}`), &anthropic)

@@ -237,7 +237,7 @@ export default {
   termsS4L1: 'Balance is reserved from an estimate before each call, then settled against actual tokens with the difference returned.',
   termsS4L2: 'Effective price = base model price × model multiplier × the multiplier of your group. All three are published.',
   termsS4L3: 'Credit purchases buy usage of the Service. Except where the law requires otherwise, they are non-refundable, non-transferable and cannot be withdrawn as cash.',
-  termsS4L4: 'Subscriptions are charged at the start of each billing period. You can turn off auto-renewal before a period ends; a period already started is not pro-rated.',
+  termsS4L4: 'Subscription refunds are calculated by the remaining days. Refunds are not guaranteed after a subscription has been active for more than seven days, except where otherwise stated on this site.',
   termsS4L5: 'Requests are rejected with an explicit error code when your balance is insufficient, so you never run a debt.',
 
   termsS5Title: '5. Availability and changes',

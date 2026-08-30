@@ -159,9 +159,9 @@ func (s *Service) loadSystemConfig(ctx context.Context) systemConfig {
 }
 
 func (s *Service) siteSettings(w http.ResponseWriter, r *http.Request) {
-	var name, iconURL, announcement string
+	var name, iconURL, announcement, contactEmail string
 	var autoDisableFailedChannels, invitationsEnabled, whitelistEnabled, aliasBlocked bool
-	if err := s.db.QueryRow(r.Context(), `select name,icon_url,announcement,auto_disable_failed_channels,invitations_enabled,registration_email_whitelist_enabled,registration_email_alias_blocked from site_settings where id=true`).Scan(&name, &iconURL, &announcement, &autoDisableFailedChannels, &invitationsEnabled, &whitelistEnabled, &aliasBlocked); err != nil {
+	if err := s.db.QueryRow(r.Context(), `select name,icon_url,announcement,contact_email,auto_disable_failed_channels,invitations_enabled,registration_email_whitelist_enabled,registration_email_alias_blocked from site_settings where id=true`).Scan(&name, &iconURL, &announcement, &contactEmail, &autoDisableFailedChannels, &invitationsEnabled, &whitelistEnabled, &aliasBlocked); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not load site settings")
 		return
 	}
@@ -177,22 +177,22 @@ func (s *Service) siteSettings(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"name": name, "icon_url": iconURL, "announcement": announcement, "auto_disable_failed_channels": autoDisableFailedChannels, "invitations_enabled": invitationsEnabled, "registration_email_whitelist_enabled": whitelistEnabled, "registration_email_alias_blocked": aliasBlocked, "captcha_provider": sys.captchaProvider(), "geetest_enabled": sys.geetestEnabled(), "geetest_captcha_id": sys.GeetestCaptchaID, "corptcha_site_id": sys.CorptchaSiteID, "email_verification_enabled": sys.emailVerificationEnabled(), "oauth_providers": oauthProviders})
+	writeJSON(w, http.StatusOK, map[string]any{"name": name, "icon_url": iconURL, "announcement": announcement, "contact_email": contactEmail, "auto_disable_failed_channels": autoDisableFailedChannels, "invitations_enabled": invitationsEnabled, "registration_email_whitelist_enabled": whitelistEnabled, "registration_email_alias_blocked": aliasBlocked, "captcha_provider": sys.captchaProvider(), "geetest_enabled": sys.geetestEnabled(), "geetest_captcha_id": sys.GeetestCaptchaID, "corptcha_site_id": sys.CorptchaSiteID, "email_verification_enabled": sys.emailVerificationEnabled(), "oauth_providers": oauthProviders})
 }
 
 func (s *Service) adminSiteSettings(w http.ResponseWriter, r *http.Request) {
-	var name, iconURL, announcement string
+	var name, iconURL, announcement, contactEmail string
 	var autoDisableFailedChannels, invitationsEnabled, whitelistEnabled, aliasBlocked bool
 	var whitelist []string
 	var inviterReward, inviteeReward, checkinBaseReward, checkinStreakBonus string
 	var checkinMaxBonusDays int
 	var captchaProvider, geetestID, geetestKeyEnc, corptchaSiteID, corptchaSecretEnc, smtpHost, smtpPort, smtpUser, smtpPassEnc, smtpFrom, publicBaseURL string
-	err := s.db.QueryRow(r.Context(), `select name,icon_url,announcement,auto_disable_failed_channels,registration_email_whitelist_enabled,registration_email_whitelist,registration_email_alias_blocked,captcha_provider,geetest_captcha_id,geetest_captcha_key_encrypted,corptcha_site_id,corptcha_secret_encrypted,smtp_host,smtp_port,smtp_username,smtp_password_encrypted,smtp_from,public_base_url,invitations_enabled,inviter_reward::text,invitee_reward::text,checkin_base_reward::text,checkin_streak_bonus::text,checkin_max_bonus_days from site_settings where id=true`).Scan(&name, &iconURL, &announcement, &autoDisableFailedChannels, &whitelistEnabled, &whitelist, &aliasBlocked, &captchaProvider, &geetestID, &geetestKeyEnc, &corptchaSiteID, &corptchaSecretEnc, &smtpHost, &smtpPort, &smtpUser, &smtpPassEnc, &smtpFrom, &publicBaseURL, &invitationsEnabled, &inviterReward, &inviteeReward, &checkinBaseReward, &checkinStreakBonus, &checkinMaxBonusDays)
+	err := s.db.QueryRow(r.Context(), `select name,icon_url,announcement,contact_email,auto_disable_failed_channels,registration_email_whitelist_enabled,registration_email_whitelist,registration_email_alias_blocked,captcha_provider,geetest_captcha_id,geetest_captcha_key_encrypted,corptcha_site_id,corptcha_secret_encrypted,smtp_host,smtp_port,smtp_username,smtp_password_encrypted,smtp_from,public_base_url,invitations_enabled,inviter_reward::text,invitee_reward::text,checkin_base_reward::text,checkin_streak_bonus::text,checkin_max_bonus_days from site_settings where id=true`).Scan(&name, &iconURL, &announcement, &contactEmail, &autoDisableFailedChannels, &whitelistEnabled, &whitelist, &aliasBlocked, &captchaProvider, &geetestID, &geetestKeyEnc, &corptchaSiteID, &corptchaSecretEnc, &smtpHost, &smtpPort, &smtpUser, &smtpPassEnc, &smtpFrom, &publicBaseURL, &invitationsEnabled, &inviterReward, &inviteeReward, &checkinBaseReward, &checkinStreakBonus, &checkinMaxBonusDays)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not load site settings")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"name": name, "icon_url": iconURL, "announcement": announcement, "auto_disable_failed_channels": autoDisableFailedChannels, "captcha_provider": captchaProvider, "geetest_captcha_id": geetestID, "has_geetest_captcha_key": strings.TrimSpace(geetestKeyEnc) != "", "corptcha_site_id": corptchaSiteID, "has_corptcha_secret": strings.TrimSpace(corptchaSecretEnc) != "", "smtp_host": smtpHost, "smtp_port": smtpPort, "smtp_username": smtpUser, "has_smtp_password": strings.TrimSpace(smtpPassEnc) != "", "smtp_from": smtpFrom, "public_base_url": publicBaseURL, "invitations_enabled": invitationsEnabled, "inviter_reward": inviterReward, "invitee_reward": inviteeReward, "registration_email_whitelist_enabled": whitelistEnabled, "registration_email_whitelist": whitelist, "registration_email_alias_blocked": aliasBlocked, "checkin_base_reward": checkinBaseReward, "checkin_streak_bonus": checkinStreakBonus, "checkin_max_bonus_days": checkinMaxBonusDays})
+	writeJSON(w, http.StatusOK, map[string]any{"name": name, "icon_url": iconURL, "announcement": announcement, "contact_email": contactEmail, "auto_disable_failed_channels": autoDisableFailedChannels, "captcha_provider": captchaProvider, "geetest_captcha_id": geetestID, "has_geetest_captcha_key": strings.TrimSpace(geetestKeyEnc) != "", "corptcha_site_id": corptchaSiteID, "has_corptcha_secret": strings.TrimSpace(corptchaSecretEnc) != "", "smtp_host": smtpHost, "smtp_port": smtpPort, "smtp_username": smtpUser, "has_smtp_password": strings.TrimSpace(smtpPassEnc) != "", "smtp_from": smtpFrom, "public_base_url": publicBaseURL, "invitations_enabled": invitationsEnabled, "inviter_reward": inviterReward, "invitee_reward": inviteeReward, "registration_email_whitelist_enabled": whitelistEnabled, "registration_email_whitelist": whitelist, "registration_email_alias_blocked": aliasBlocked, "checkin_base_reward": checkinBaseReward, "checkin_streak_bonus": checkinStreakBonus, "checkin_max_bonus_days": checkinMaxBonusDays})
 }
 
 func (s *Service) updateSiteSettings(w http.ResponseWriter, r *http.Request) {
@@ -200,6 +200,7 @@ func (s *Service) updateSiteSettings(w http.ResponseWriter, r *http.Request) {
 		Name                      string   `json:"name"`
 		IconURL                   string   `json:"icon_url"`
 		Announcement              string   `json:"announcement"`
+		ContactEmail              *string  `json:"contact_email"`
 		AutoDisableFailedChannels *bool    `json:"auto_disable_failed_channels"`
 		CaptchaProvider           *string  `json:"captcha_provider"`
 		GeetestCaptchaID          *string  `json:"geetest_captcha_id"`
@@ -229,6 +230,14 @@ func (s *Service) updateSiteSettings(w http.ResponseWriter, r *http.Request) {
 	in.Name = strings.TrimSpace(in.Name)
 	in.IconURL = strings.TrimSpace(in.IconURL)
 	in.Announcement = strings.TrimSpace(in.Announcement)
+	if in.ContactEmail != nil {
+		email := strings.TrimSpace(*in.ContactEmail)
+		if email != "" && (len(email) > maxContactEmailLen || !validEmail(email)) {
+			writeError(w, http.StatusBadRequest, "invalid_request", "invalid contact email")
+			return
+		}
+		*in.ContactEmail = email
+	}
 	whitelist, err := normalizeEmailWhitelist(in.Whitelist)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
@@ -361,29 +370,30 @@ func (s *Service) updateSiteSettings(w http.ResponseWriter, r *http.Request) {
 		smtpPassEnc = encrypted
 	}
 	if _, err := s.db.Exec(r.Context(), `update site_settings set name=$1,icon_url=$2,announcement=$3,
-		auto_disable_failed_channels=coalesce($4,auto_disable_failed_channels),
-		captcha_provider=coalesce($5,captcha_provider),
-		geetest_captcha_id=coalesce($6,geetest_captcha_id),
-		geetest_captcha_key_encrypted=case when $7='' then geetest_captcha_key_encrypted else $7 end,
-		corptcha_site_id=coalesce($8,corptcha_site_id),
-		corptcha_secret_encrypted=case when $9='' then corptcha_secret_encrypted else $9 end,
-		smtp_host=coalesce($10,smtp_host),
-		smtp_port=coalesce($11,smtp_port),
-		smtp_username=coalesce($12,smtp_username),
-		smtp_password_encrypted=case when $13='' then smtp_password_encrypted else $13 end,
-		smtp_from=coalesce($14,smtp_from),
-		public_base_url=coalesce($15,public_base_url),
-		invitations_enabled=coalesce($16,invitations_enabled),
-		inviter_reward=coalesce($17,inviter_reward),
-		invitee_reward=coalesce($18,invitee_reward),
-		checkin_base_reward=coalesce($19,checkin_base_reward),
-		checkin_streak_bonus=coalesce($20,checkin_streak_bonus),
-		checkin_max_bonus_days=coalesce($21,checkin_max_bonus_days),
-		registration_email_whitelist_enabled=coalesce($22,registration_email_whitelist_enabled),
-		registration_email_whitelist=$23,
-		registration_email_alias_blocked=coalesce($24,registration_email_alias_blocked),
+		contact_email=coalesce($4,contact_email),
+		auto_disable_failed_channels=coalesce($5,auto_disable_failed_channels),
+		captcha_provider=coalesce($6,captcha_provider),
+		geetest_captcha_id=coalesce($7,geetest_captcha_id),
+		geetest_captcha_key_encrypted=case when $8='' then geetest_captcha_key_encrypted else $8 end,
+		corptcha_site_id=coalesce($9,corptcha_site_id),
+		corptcha_secret_encrypted=case when $10='' then corptcha_secret_encrypted else $10 end,
+		smtp_host=coalesce($11,smtp_host),
+		smtp_port=coalesce($12,smtp_port),
+		smtp_username=coalesce($13,smtp_username),
+		smtp_password_encrypted=case when $14='' then smtp_password_encrypted else $14 end,
+		smtp_from=coalesce($15,smtp_from),
+		public_base_url=coalesce($16,public_base_url),
+		invitations_enabled=coalesce($17,invitations_enabled),
+		inviter_reward=coalesce($18,inviter_reward),
+		invitee_reward=coalesce($19,invitee_reward),
+		checkin_base_reward=coalesce($20,checkin_base_reward),
+		checkin_streak_bonus=coalesce($21,checkin_streak_bonus),
+		checkin_max_bonus_days=coalesce($22,checkin_max_bonus_days),
+		registration_email_whitelist_enabled=coalesce($23,registration_email_whitelist_enabled),
+		registration_email_whitelist=$24,
+		registration_email_alias_blocked=coalesce($25,registration_email_alias_blocked),
 		updated_at=now() where id=true`,
-		in.Name, in.IconURL, in.Announcement, in.AutoDisableFailedChannels,
+		in.Name, in.IconURL, in.Announcement, trimmedPtr(in.ContactEmail), in.AutoDisableFailedChannels,
 		trimmedPtr(in.CaptchaProvider), trimmedPtr(in.GeetestCaptchaID), geetestKeyEnc,
 		trimmedPtr(in.CorptchaSiteID), corptchaSecretEnc,
 		trimmedPtr(in.SMTPHost), trimmedPtr(in.SMTPPort), trimmedPtr(in.SMTPUsername), smtpPassEnc, trimmedPtr(in.SMTPFrom), trimmedPtr(in.PublicBaseURL), in.InvitationsEnabled, in.InviterReward, in.InviteeReward, in.CheckinBaseReward, in.CheckinStreakBonus, in.CheckinMaxBonusDays, in.WhitelistEnabled, whitelist, in.AliasBlocked); err != nil {
@@ -442,6 +452,7 @@ const (
 	maxSMTPUsernameLen  = 255
 	maxSMTPPasswordLen  = 4096
 	maxPublicBaseURLLen = 2048
+	maxContactEmailLen  = 255
 )
 
 // loadPublicBaseURL returns the admin-configured public origin used for

@@ -3,6 +3,7 @@ interface Section { id: string; titleKey: string; blocks: { kind: 'p' | 'ul'; ke
 
 const { t } = useI18n()
 const { settings } = useSiteSettings()
+const contactEmail = computed(() => settings.value.contact_email?.trim() || t('site.legalPrivacyEmail'))
 
 useHead({
   title: () => `${t('site.privacyMetaTitle')} · ${settings.value.name}`,
@@ -93,7 +94,7 @@ const toc = computed(() => [
 
     <section id="contact">
       <h2>{{ t('site.privacyS10Title') }}</h2>
-      <p>{{ t('site.privacyS10P1', { email: t('site.legalPrivacyEmail') }) }}</p>
+      <p>{{ t('site.privacyS10P1', { email: contactEmail }) }}</p>
       <p>
         <NuxtLink to="/terms" class="text-clay underline-offset-4 hover:underline">{{ t('nav.terms') }}</NuxtLink>
       </p>

@@ -238,6 +238,8 @@ export default {
   basicSection: '基本信息',
   siteNameHint: '顯示在導航欄、瀏覽器標題與郵件中的名稱。',
   siteIconHint: '圖標的圖片地址，建議使用正方形 PNG 或 SVG。',
+  contactEmail: '協議聯繫方式',
+  contactEmailHint: '顯示在服務條款與隱私政策中的聯繫郵箱；留空則使用預設聯繫方式。',
   iconPreview: '圖標預覽',
   iconPreviewEmpty: '填寫圖標地址後顯示預覽',
   geetestId: '極驗 Captcha ID',

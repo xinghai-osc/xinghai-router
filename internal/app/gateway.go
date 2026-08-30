@@ -418,12 +418,27 @@ func reasoningProvider(provider string) bool {
 }
 
 // responsesPassthroughEnabled reports whether an upstream of the given format
-// receives OpenAI Responses requests verbatim at /v1/responses. Only the plain
-// openai format is eligible: openai_chat channels speak the OpenAI wire format
-// but only the chat-completions subset, so their Responses requests go through
-// the chat-completions conversion like any other format.
+// receives OpenAI Responses requests verbatim at /v1/responses. Only an
+// explicitly configured plain openai format is eligible: an empty format is
+// resolved to openai_chat, and openai_chat channels speak only chat completions.
 func responsesPassthroughEnabled(upstreamFormat string) bool {
 	return upstreamFormat == "openai"
+}
+
+// resolveUpstreamFormat keeps the legacy empty channel setting compatible with
+// chat-completions while allowing explicitly configured Responses channels.
+func resolveUpstreamFormat(provider, configured string) string {
+	if configured != "" {
+		return configured
+	}
+	switch provider {
+	case "anthropic":
+		return "anthropic"
+	case "commandcode":
+		return "commandcode"
+	default:
+		return "openai_chat"
+	}
 }
 
 // streamStats carries the token counts extracted from an SSE stream's usage
@@ -673,8 +688,16 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 			retryChannels = inGroup
 		}
 	}
+	// Keep the runtime bounded even if an old or manually modified database row
+	// contains a value outside the API validation range.
+	retryCount := reliability.RetryCount
+	if retryCount < 0 {
+		retryCount = 0
+	} else if retryCount > 10 {
+		retryCount = 10
+	}
 tryChannels:
-	for pass := 0; pass <= reliability.RetryCount; pass++ {
+	for pass := 0; pass <= retryCount; pass++ {
 		for i := range retryChannels {
 			ch = retryChannels[i]
 			if s.checkChannelQuota(ctx, ch.id, model) != nil {
@@ -683,19 +706,9 @@ tryChannels:
 			if imageOptions.image && (ch.provider == "anthropic" || ch.provider == "commandcode" || ch.upstreamFormat == "anthropic") {
 				continue
 			}
-			upstreamFormat := ch.upstreamFormat
+			upstreamFormat := resolveUpstreamFormat(ch.provider, ch.upstreamFormat)
 			if imageOptions.image {
 				upstreamFormat = "openai"
-			}
-			if upstreamFormat == "" {
-				switch ch.provider {
-				case "anthropic":
-					upstreamFormat = "anthropic"
-				case "commandcode":
-					upstreamFormat = "commandcode"
-				default:
-					upstreamFormat = "openai"
-				}
 			}
 			directResponses := responsesBody != nil && responsesPassthroughEnabled(upstreamFormat)
 			selectedDirectResponses = directResponses
@@ -790,6 +803,12 @@ tryChannels:
 					failCode, failDetail = code, detail
 					break tryChannels
 				}
+			} else if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+				// A successful response is the selected upstream. Previously it fell
+				// through into the shared failure path, so the gateway consumed the
+				// response body, logged completion_tokens=0, and returned a rewritten
+				// "no channel" error despite the upstream having returned valid usage.
+				break tryChannels
 			}
 			nonRetryable := false
 			if err == nil && !reliability.retryable(resp.StatusCode) {
@@ -855,17 +874,7 @@ tryChannels:
 		return
 	}
 	defer resp.Body.Close()
-	selectedFormat := ch.upstreamFormat
-	if selectedFormat == "" {
-		switch ch.provider {
-		case "anthropic":
-			selectedFormat = "anthropic"
-		case "commandcode":
-			selectedFormat = "commandcode"
-		default:
-			selectedFormat = "openai"
-		}
-	}
+	selectedFormat := resolveUpstreamFormat(ch.provider, ch.upstreamFormat)
 	if stream && resp.StatusCode >= 200 && resp.StatusCode < 300 && strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
 		if selectedDirectResponses {
 			copyResponseHeaders(w.Header(), resp.Header)
@@ -1079,9 +1088,13 @@ func (s *Service) reserveUsage(ctx context.Context, key keyContext, model string
 	}
 	// Apply time-based pricing override for the current moment.
 	input, cachedInput, output := pricing.resolvePricing(time.Now())
+	// Reserve against the effective tier for the worst-case token count too. Using
+	// only the flat rule can under-hold when a higher volume tier applies, causing
+	// settlement to be clamped and the request to be silently under-billed.
+	estimatedPrompt := bodyLen / 3
+	input, cachedInput, output = pricing.resolveTier(int64(estimatedPrompt+resolved), input, cachedInput, output)
 	// Reserve the configured maximum output plus a conservative request-body estimate.
-	amount := (float64(bodyLen/3)*input + float64(resolved)*output) / 1000000 * pricing.multiplier * groupMultiplier
-	_ = cachedInput // not used in reservation estimate
+	amount := (float64(estimatedPrompt)*input + float64(resolved)*output) / 1000000 * pricing.multiplier * groupMultiplier
 	if amount == 0 {
 		// Zero list prices are allowed only when an explicit enabled rule exists.
 		return reservation{}, nil
@@ -1733,6 +1746,9 @@ func parseSSEUsage(data []byte, st *streamStats) {
 		PromptTokensDetails struct {
 			Cached *int `json:"cached_tokens"`
 		} `json:"prompt_tokens_details"`
+		InputTokensDetails struct {
+			Cached *int `json:"cached_tokens"`
+		} `json:"input_tokens_details"`
 		CacheReadInputTokens *int `json:"cache_read_input_tokens"`
 	}
 	if json.Unmarshal(rawUsage, &u) != nil {
@@ -1759,6 +1775,9 @@ func parseSSEUsage(data []byte, st *streamStats) {
 	}
 	if u.PromptTokensDetails.Cached != nil && *u.PromptTokensDetails.Cached > st.cached {
 		st.cached = *u.PromptTokensDetails.Cached
+	}
+	if u.InputTokensDetails.Cached != nil && *u.InputTokensDetails.Cached > st.cached {
+		st.cached = *u.InputTokensDetails.Cached
 	}
 	if u.CacheReadInputTokens != nil && *u.CacheReadInputTokens > st.cached {
 		st.cached = *u.CacheReadInputTokens
@@ -1803,6 +1822,17 @@ func streamResponseDirect(w http.ResponseWriter, resp *http.Response) (streamSta
 	}
 }
 
+// openAIStreamFinishChunk returns the terminal chat-completions chunk used when
+// an upstream closes an otherwise valid stream without sending finish_reason.
+func openAIStreamFinishChunk(id, model string) []byte {
+	chunk := map[string]any{
+		"id": id, "object": "chat.completion.chunk", "model": model,
+		"choices": []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": "stop"}},
+	}
+	data, _ := json.Marshal(chunk)
+	return []byte("data: " + string(data) + "\n\n")
+}
+
 func (s *Service) streamResponse(w http.ResponseWriter, resp *http.Response) (streamStats, error) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -1813,25 +1843,64 @@ func (s *Service) streamResponse(w http.ResponseWriter, resp *http.Response) (st
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
 	var st streamStats
+	var id, model string
+	validChunk, finished := false, false
+	writeFinish := func() error {
+		if !validChunk || finished {
+			return nil
+		}
+		if _, err := w.Write(openAIStreamFinishChunk(id, model)); err != nil {
+			return err
+		}
+		flusher.Flush()
+		finished = true
+		return nil
+	}
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64*1024), 2<<20)
 	for scanner.Scan() {
 		line := scanner.Text()
-		if _, err := io.WriteString(w, line); err != nil {
-			return st, err
-		}
-		if _, err := io.WriteString(w, "\n"); err != nil {
-			return st, err
-		}
-		flusher.Flush()
 		if strings.HasPrefix(line, "data:") {
 			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-			if data != "" && data != "[DONE]" {
+			if data == "[DONE]" {
+				if err := writeFinish(); err != nil {
+					return st, err
+				}
+			} else if data != "" {
+				var chunk struct {
+					ID      string `json:"id"`
+					Model   string `json:"model"`
+					Choices []struct {
+						FinishReason *string `json:"finish_reason"`
+					} `json:"choices"`
+				}
+				if json.Unmarshal([]byte(data), &chunk) == nil {
+					validChunk = true
+					if chunk.ID != "" {
+						id = chunk.ID
+					}
+					if chunk.Model != "" {
+						model = chunk.Model
+					}
+					if len(chunk.Choices) > 0 && chunk.Choices[0].FinishReason != nil {
+						finished = true
+					}
+				}
 				parseSSEUsage([]byte(data), &st)
 			}
 		}
+		if _, err := io.WriteString(w, line+"\n"); err != nil {
+			return st, err
+		}
+		flusher.Flush()
 	}
-	return st, scanner.Err()
+	if err := scanner.Err(); err != nil {
+		return st, err
+	}
+	if err := writeFinish(); err != nil {
+		return st, err
+	}
+	return st, nil
 }
 
 // logRequest writes the audit/quota trail. It stays synchronous because usage_records
@@ -1948,30 +2017,148 @@ func usage(body []byte) (prompt, completion, total, cached int) {
 	var v struct {
 		Usage struct {
 			Prompt              int `json:"prompt_tokens"`
+			PromptCamel         int `json:"promptTokens"`
 			Completion          int `json:"completion_tokens"`
+			CompletionCamel     int `json:"completionTokens"`
 			Total               int `json:"total_tokens"`
+			TotalCamel          int `json:"totalTokens"`
 			Input               int `json:"input_tokens"`
+			InputCamel          int `json:"inputTokens"`
 			Output              int `json:"output_tokens"`
+			OutputCamel         int `json:"outputTokens"`
 			PromptTokensDetails struct {
-				Cached int `json:"cached_tokens"`
+				Cached      int `json:"cached_tokens"`
+				CachedCamel int `json:"cachedTokens"`
 			} `json:"prompt_tokens_details"`
-			CacheReadInputTokens     int `json:"cache_read_input_tokens"`
-			CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+			InputTokensDetails struct {
+				Cached      int `json:"cached_tokens"`
+				CachedCamel int `json:"cachedTokens"`
+			} `json:"input_tokens_details"`
+			CacheReadInputTokens      int `json:"cache_read_input_tokens"`
+			CacheReadInputTokensCamel int `json:"cacheReadInputTokens"`
+			CacheCreationInputTokens  int `json:"cache_creation_input_tokens"`
+			PromptTokenCount          int `json:"promptTokenCount"`
+			CandidatesTokenCount      int `json:"candidatesTokenCount"`
+			TotalTokenCount           int `json:"totalTokenCount"`
+			CachedContentTokenCount   int `json:"cachedContentTokenCount"`
 		} `json:"usage"`
+		UsageMetadata struct {
+			PromptTokenCount        int `json:"promptTokenCount"`
+			CandidatesTokenCount    int `json:"candidatesTokenCount"`
+			TotalTokenCount         int `json:"totalTokenCount"`
+			CachedContentTokenCount int `json:"cachedContentTokenCount"`
+		} `json:"usageMetadata"`
+		Response struct {
+			Usage json.RawMessage `json:"usage"`
+		} `json:"response"`
 	}
 	if json.Unmarshal(body, &v) != nil {
 		return 0, 0, 0, 0
 	}
+	if len(v.Response.Usage) > 0 && string(v.Response.Usage) != "null" {
+		var nested struct {
+			Prompt             int `json:"prompt_tokens"`
+			Completion         int `json:"completion_tokens"`
+			Total              int `json:"total_tokens"`
+			Input              int `json:"input_tokens"`
+			Output             int `json:"output_tokens"`
+			Cached             int `json:"cache_read_input_tokens"`
+			InputTokensDetails struct {
+				Cached int `json:"cached_tokens"`
+			} `json:"input_tokens_details"`
+		}
+		if json.Unmarshal(v.Response.Usage, &nested) == nil {
+			if nested.Prompt > 0 {
+				v.Usage.Prompt = nested.Prompt
+			}
+			if nested.Completion > 0 {
+				v.Usage.Completion = nested.Completion
+			}
+			if nested.Total > 0 {
+				v.Usage.Total = nested.Total
+			}
+			if nested.Input > 0 {
+				v.Usage.Input = nested.Input
+			}
+			if nested.Output > 0 {
+				v.Usage.Output = nested.Output
+			}
+			if nested.Cached > 0 {
+				v.Usage.CacheReadInputTokens = nested.Cached
+			} else if nested.InputTokensDetails.Cached > 0 {
+				v.Usage.InputTokensDetails.Cached = nested.InputTokensDetails.Cached
+			}
+		}
+	}
 	prompt, completion, total = v.Usage.Prompt, v.Usage.Completion, v.Usage.Total
-	if prompt == 0 && completion == 0 {
-		prompt, completion = v.Usage.Input, v.Usage.Output
+	if prompt == 0 {
+		prompt = v.Usage.PromptCamel
+	}
+	if completion == 0 {
+		completion = v.Usage.CompletionCamel
+	}
+	if total == 0 {
+		total = v.Usage.TotalCamel
+	}
+	if prompt == 0 {
+		prompt = v.Usage.Input
+		if prompt == 0 {
+			prompt = v.Usage.InputCamel
+		}
+	}
+	if completion == 0 {
+		completion = v.Usage.Output
+		if completion == 0 {
+			completion = v.Usage.OutputCamel
+		}
+	}
+	if completion == 0 && total > prompt {
+		completion = total - prompt
+	}
+	if prompt == 0 {
+		prompt = v.Usage.PromptTokenCount
+		if prompt == 0 {
+			prompt = v.UsageMetadata.PromptTokenCount
+		}
+	}
+	if completion == 0 {
+		completion = v.Usage.CandidatesTokenCount
+		if completion == 0 {
+			completion = v.UsageMetadata.CandidatesTokenCount
+		}
+	}
+	if total == 0 {
+		total = v.Usage.TotalTokenCount
+		if total == 0 {
+			total = v.UsageMetadata.TotalTokenCount
+		}
+	}
+	if cached == 0 {
+		cached = v.Usage.CachedContentTokenCount
+		if cached == 0 {
+			cached = v.UsageMetadata.CachedContentTokenCount
+		}
 	}
 	if total == 0 {
 		total = prompt + completion
 	}
-	cached = v.Usage.PromptTokensDetails.Cached
-	if cached == 0 && v.Usage.CacheReadInputTokens > 0 {
+	if v.Usage.PromptTokensDetails.Cached > cached {
+		cached = v.Usage.PromptTokensDetails.Cached
+	}
+	if cached == 0 {
+		cached = v.Usage.PromptTokensDetails.CachedCamel
+	}
+	if cached == 0 {
+		cached = v.Usage.InputTokensDetails.Cached
+	}
+	if cached == 0 {
+		cached = v.Usage.InputTokensDetails.CachedCamel
+	}
+	if cached == 0 {
 		cached = v.Usage.CacheReadInputTokens
+		if cached == 0 {
+			cached = v.Usage.CacheReadInputTokensCamel
+		}
 	}
 	return prompt, completion, total, cached
 }

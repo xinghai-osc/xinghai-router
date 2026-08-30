@@ -176,6 +176,26 @@ func TestUsage(t *testing.T) {
 	if prompt != 2 || completion != 3 || total != 5 || cached != 2 {
 		t.Fatalf("anthropic cached got %d, %d, %d, %d", prompt, completion, total, cached)
 	}
+	prompt, completion, total, cached = usage([]byte(`{"usage":{"input_tokens":8,"output_tokens":3,"total_tokens":11,"input_tokens_details":{"cached_tokens":6}}}`))
+	if prompt != 8 || completion != 3 || total != 11 || cached != 6 {
+		t.Fatalf("responses cached got %d, %d, %d, %d", prompt, completion, total, cached)
+	}
+	prompt, completion, total, cached = usage([]byte(`{"usage":{"input_tokens":8,"total_tokens":11,"cacheReadInputTokens":6}}`))
+	if prompt != 8 || completion != 3 || total != 11 || cached != 6 {
+		t.Fatalf("camel/derived usage got %d, %d, %d, %d", prompt, completion, total, cached)
+	}
+	prompt, completion, total, cached = usage([]byte(`{"response":{"usage":{"input_tokens":8,"output_tokens":3,"total_tokens":11,"cache_read_input_tokens":6}}}`))
+	if prompt != 8 || completion != 3 || total != 11 || cached != 6 {
+		t.Fatalf("nested usage got %d, %d, %d, %d", prompt, completion, total, cached)
+	}
+	prompt, completion, total, cached = usage([]byte(`{"response":{"usage":{"input_tokens":8,"output_tokens":3,"total_tokens":11,"input_tokens_details":{"cached_tokens":6}}}}`))
+	if prompt != 8 || completion != 3 || total != 11 || cached != 6 {
+		t.Fatalf("nested Responses details got %d, %d, %d, %d", prompt, completion, total, cached)
+	}
+	prompt, completion, total, cached = usage([]byte(`{"usage":{"promptTokenCount":8,"candidatesTokenCount":3,"totalTokenCount":11,"cachedContentTokenCount":6}}`))
+	if prompt != 8 || completion != 3 || total != 11 || cached != 6 {
+		t.Fatalf("provider metadata usage got %d, %d, %d, %d", prompt, completion, total, cached)
+	}
 	prompt, completion, total, cached = usage([]byte(`{"usage":{}}`))
 	if prompt != 0 || completion != 0 || total != 0 || cached != 0 {
 		t.Fatalf("empty usage got %d, %d, %d, %d", prompt, completion, total, cached)

@@ -393,8 +393,8 @@ type commandCodeEvent struct {
 }
 
 type commandCodeUsage struct {
-	InputTokens  int `json:"inputTokens"`
-	OutputTokens int `json:"outputTokens"`
+	InputTokens       int `json:"inputTokens"`
+	OutputTokens      int `json:"outputTokens"`
 	InputTokenDetails struct {
 		NoCacheTokens    int `json:"noCacheTokens"`
 		CacheReadTokens  int `json:"cacheReadTokens"`
@@ -545,6 +545,14 @@ func streamCommandCodeToOpenAI(w http.ResponseWriter, resp *http.Response) (stre
 	toolIndexes := map[string]int{}
 	nextToolIndex := 0
 	sawText := false
+	finished := false
+	writeFinish := func() {
+		if finished {
+			return
+		}
+		commandCodeOpenAIChunk(w, flusher, id, model, []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": "stop"}}, nil)
+		finished = true
+	}
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64*1024), 4<<20)
 	for scanner.Scan() {
@@ -585,11 +593,12 @@ func streamCommandCodeToOpenAI(w http.ResponseWriter, resp *http.Response) (stre
 		case "finish":
 			usage := commandCodeUsageFromEvent(event.TotalUsage, &st)
 			commandCodeOpenAIChunk(w, flusher, id, model, []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": commandCodeFinishReason(event.FinishReason)}}, usage)
+			finished = true
 			fmt.Fprint(w, "data: [DONE]\n\n")
 			flusher.Flush()
 			return st, nil
 		case "error":
-			commandCodeOpenAIChunk(w, flusher, id, model, []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": "stop"}}, nil)
+			writeFinish()
 			fmt.Fprint(w, "data: [DONE]\n\n")
 			flusher.Flush()
 			return st, fmt.Errorf("Command Code stream error: %s", commandCodeErrorMessage(event))
@@ -598,6 +607,7 @@ func streamCommandCodeToOpenAI(w http.ResponseWriter, resp *http.Response) (stre
 	if err := scanner.Err(); err != nil && err != io.EOF {
 		return st, err
 	}
+	writeFinish()
 	fmt.Fprint(w, "data: [DONE]\n\n")
 	flusher.Flush()
 	return st, nil

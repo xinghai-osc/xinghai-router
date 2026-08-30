@@ -15,6 +15,7 @@ const EMPTY: AdminSiteSettings = {
   name: '',
   icon_url: '',
   announcement: '',
+  contact_email: '',
   auto_disable_failed_channels: false,
   captcha_provider: '',
   geetest_captcha_id: '',
@@ -47,6 +48,7 @@ const form = reactive({
   name: '',
   icon_url: '',
   announcement: '',
+  contact_email: '',
   auto_disable_failed_channels: false,
   captcha_provider: '',
   geetest_captcha_id: '',
@@ -84,6 +86,7 @@ watch(data, (next) => {
   form.name = next.name
   form.icon_url = next.icon_url
   form.announcement = next.announcement
+  form.contact_email = next.contact_email
   form.auto_disable_failed_channels = next.auto_disable_failed_channels
   form.captcha_provider = next.captcha_provider
   form.geetest_captcha_id = next.geetest_captcha_id
@@ -120,6 +123,7 @@ async function save() {
     name: form.name.trim(),
     icon_url: form.icon_url.trim(),
     announcement: form.announcement.trim(),
+    contact_email: form.contact_email.trim(),
     auto_disable_failed_channels: form.auto_disable_failed_channels,
     captcha_provider: form.captcha_provider,
     geetest_captcha_id: form.geetest_captcha_id.trim(),
@@ -189,6 +193,10 @@ async function save() {
 
               <UiField :label="t('system.announcement')" :hint="t('system.announcementHint')" for="site-announcement" class="sm:col-span-2">
                 <UiTextarea id="site-announcement" v-model="form.announcement" :maxlength="2000" :rows="3" />
+              </UiField>
+
+              <UiField :label="t('system.contactEmail')" :hint="t('system.contactEmailHint')" for="contact-email">
+                <UiInput id="contact-email" v-model="form.contact_email" type="email" />
               </UiField>
             </div>
 

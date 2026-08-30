@@ -270,6 +270,8 @@ export default {
   basicSection: '基本信息',
   siteNameHint: '显示在导航栏、浏览器标题与邮件中的名称。',
   siteIconHint: '图标的图片地址，建议使用正方形 PNG 或 SVG。',
+  contactEmail: '协议联系方式',
+  contactEmailHint: '显示在服务条款与隐私政策中的联系邮箱；留空则使用默认联系方式。',
   iconPreview: '图标预览',
   iconPreviewEmpty: '填写图标地址后显示预览',
   geetestId: '极验 Captcha ID',

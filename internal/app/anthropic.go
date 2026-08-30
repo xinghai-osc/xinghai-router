@@ -256,8 +256,9 @@ func openAIToAnthropic(body []byte) ([]byte, error) {
 			Finish string `json:"finish_reason"`
 		} `json:"choices"`
 		Usage struct {
-			Input  int `json:"prompt_tokens"`
-			Output int `json:"completion_tokens"`
+			Input                int `json:"prompt_tokens"`
+			Output               int `json:"completion_tokens"`
+			CacheReadInputTokens int `json:"cache_read_input_tokens"`
 		} `json:"usage"`
 	}
 	if json.Unmarshal(body, &response) != nil || len(response.Choices) == 0 {
@@ -276,7 +277,11 @@ func openAIToAnthropic(body []byte) ([]byte, error) {
 	if stop == "" {
 		stop = "end_turn"
 	}
-	return json.Marshal(map[string]any{"id": response.ID, "type": "message", "role": "assistant", "model": response.Model, "content": content, "stop_reason": stop, "stop_sequence": nil, "usage": map[string]int{"input_tokens": response.Usage.Input, "output_tokens": response.Usage.Output}})
+	usage := map[string]any{"input_tokens": response.Usage.Input, "output_tokens": response.Usage.Output}
+	if response.Usage.CacheReadInputTokens > 0 {
+		usage["cache_read_input_tokens"] = response.Usage.CacheReadInputTokens
+	}
+	return json.Marshal(map[string]any{"id": response.ID, "type": "message", "role": "assistant", "model": response.Model, "content": content, "stop_reason": stop, "stop_sequence": nil, "usage": usage})
 }
 
 func streamOpenAIToAnthropic(w http.ResponseWriter, resp *http.Response) (streamStats, error) {
@@ -585,8 +590,9 @@ func anthropicResponseToOpenAI(body []byte, prefill string) ([]byte, error) {
 		StopReason string           `json:"stop_reason"`
 		Content    []map[string]any `json:"content"`
 		Usage      struct {
-			Input  int `json:"input_tokens"`
-			Output int `json:"output_tokens"`
+			Input                int `json:"input_tokens"`
+			Output               int `json:"output_tokens"`
+			CacheReadInputTokens int `json:"cache_read_input_tokens"`
 		} `json:"usage"`
 	}
 	if json.Unmarshal(body, &in) != nil || in.ID == "" {
@@ -612,7 +618,15 @@ func anthropicResponseToOpenAI(body []byte, prefill string) ([]byte, error) {
 	if finish == "" {
 		finish = "stop"
 	}
-	return json.Marshal(map[string]any{"id": in.ID, "object": "chat.completion", "created": 0, "model": in.Model, "choices": []any{map[string]any{"index": 0, "message": message, "finish_reason": finish}}, "usage": map[string]int{"prompt_tokens": in.Usage.Input, "completion_tokens": in.Usage.Output, "total_tokens": in.Usage.Input + in.Usage.Output}})
+	usage := map[string]any{
+		"prompt_tokens":     in.Usage.Input,
+		"completion_tokens": in.Usage.Output,
+		"total_tokens":      in.Usage.Input + in.Usage.Output,
+	}
+	if in.Usage.CacheReadInputTokens > 0 {
+		usage["prompt_tokens_details"] = map[string]int{"cached_tokens": in.Usage.CacheReadInputTokens}
+	}
+	return json.Marshal(map[string]any{"id": in.ID, "object": "chat.completion", "created": 0, "model": in.Model, "choices": []any{map[string]any{"index": 0, "message": message, "finish_reason": finish}}, "usage": usage})
 }
 
 func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response, prefill string) (streamStats, error) {
@@ -632,6 +646,14 @@ func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response, prefill
 	id, model := "", ""
 	toolIndexes := map[int]int{}
 	decided, passthrough := false, false
+	finished := false
+	writeFinish := func() {
+		if finished || id == "" && model == "" {
+			return
+		}
+		writeChunk(map[string]any{"id": id, "object": "chat.completion.chunk", "model": model, "choices": []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": "stop"}}})
+		finished = true
+	}
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64*1024), 2<<20)
 	for scanner.Scan() {
@@ -705,9 +727,11 @@ func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response, prefill
 				finish = "stop"
 			}
 			writeChunk(map[string]any{"id": id, "object": "chat.completion.chunk", "model": model, "choices": []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": finish}}})
+			finished = true
 			parseSSEUsage([]byte(data), &st)
 		}
 	}
+	writeFinish()
 	if !passthrough {
 		fmt.Fprint(w, "data: [DONE]\n\n")
 		flusher.Flush()
