@@ -147,7 +147,9 @@ function syncQuery() {
   router.replace({ query })
 }
 
-watch([search, vendor, group, inputModalities, outputModalities, contextBuckets, sortBy], () => { page.value = 1 })
+watch([search, vendor, group, inputModalities, outputModalities, contextBuckets, sortBy], () => {
+  if (!applyingQuery.value) page.value = 1
+})
 watch(totalPages, (next) => { if (page.value > next) page.value = next })
 watch([search, vendor, group, inputModalities, outputModalities, contextBuckets, sortBy, view, unit, page], syncQuery)
 watch(() => route.query, () => {
