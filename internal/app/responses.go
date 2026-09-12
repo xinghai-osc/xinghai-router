@@ -13,13 +13,13 @@ import (
 // /alpha/generate SSE stream. They are distinct from Anthropic and OpenAI
 // event types, so they can be used to detect a Command Code upstream.
 var commandCodeStreamTypes = map[string]bool{
-	"text-delta":       true,
-	"reasoning-delta":  true,
-	"reasoning-start":  true,
-	"reasoning-end":    true,
-	"tool-call":        true,
-	"finish":           true,
-	"error":            true,
+	"text-delta":      true,
+	"reasoning-delta": true,
+	"reasoning-start": true,
+	"reasoning-end":   true,
+	"tool-call":       true,
+	"finish":          true,
+	"error":           true,
 }
 
 func isCommandCodeStreamType(t string) bool {
@@ -50,6 +50,7 @@ func (s *Service) responsesCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	request.Model = strings.TrimSpace(request.Model)
 	lite := isResponsesLiteHeader(r.Header.Get(responsesLiteHeader)) || isResponsesLiteBody(body)
+	responsesBody := body
 	if lite {
 		normalized, _, normalizeErr := normalizeResponsesLite(body)
 		if normalizeErr != nil {
@@ -69,7 +70,12 @@ func (s *Service) responsesCompletions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_request", "max_output_tokens must be at most 200000")
 		return
 	}
-	key := r.Context().Value(contextKey{}).(keyContext)
+	key, ok := r.Context().Value(contextKey{}).(keyContext)
+	if !ok {
+		s.logReject(r.Context(), request.Model, http.StatusUnauthorized, "invalid_request", started)
+		writeError(w, http.StatusUnauthorized, "invalid_request", "API key required")
+		return
+	}
 	allowed, policyCtx := s.enforceContentPolicy(r.Context(), key, request.Model, "/v1/responses", body)
 	if !allowed {
 		s.logReject(policyCtx, request.Model, http.StatusBadRequest, "content_policy_violation", started)
@@ -77,6 +83,12 @@ func (s *Service) responsesCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r = r.WithContext(policyCtx)
+	key, ok = r.Context().Value(contextKey{}).(keyContext)
+	if !ok {
+		s.logReject(r.Context(), request.Model, http.StatusUnauthorized, "invalid_request", started)
+		writeError(w, http.StatusUnauthorized, "invalid_request", "API key required")
+		return
+	}
 	converted, echo, err := responsesRequestToChatCompletions(body)
 	if err != nil {
 		converted = body
@@ -96,7 +108,7 @@ func (s *Service) responsesCompletions(w http.ResponseWriter, r *http.Request) {
 		},
 		func(w http.ResponseWriter, resp *http.Response, provider string) (streamStats, error) {
 			return streamChatCompletionsToResponses(w, resp, responseID, echo, reasoningProvider(provider))
-		}, body)
+		}, responsesBody)
 }
 
 // responsesEcho carries the request fields a Responses response object echoes
@@ -169,15 +181,16 @@ func responsesRequestToChatCompletions(body []byte) ([]byte, responsesEcho, erro
 			echo.reasoning["summary"] = summary
 		}
 	}
-	if tools, ok := in["tools"].([]any); ok {
-		converted := []any{}
-		echoTools := []any{}
+	convertedTools := []any{}
+	echoTools := []any{}
+	appendTools := func(tools []any) {
 		for _, item := range tools {
-			tool, _ := item.(map[string]any)
-			if tool == nil {
+			tool, isObject := item.(map[string]any)
+			if !isObject {
 				continue
 			}
-			if tool["type"] == "function" {
+			toolType := strings.TrimSpace(firstString(tool["type"]))
+			if toolType == "function" {
 				function := map[string]any{
 					"name":        tool["name"],
 					"description": tool["description"],
@@ -186,7 +199,7 @@ func responsesRequestToChatCompletions(body []byte) ([]byte, responsesEcho, erro
 				if strict, ok := tool["strict"].(bool); ok {
 					function["strict"] = strict
 				}
-				converted = append(converted, map[string]any{"type": "function", "function": function})
+				convertedTools = append(convertedTools, map[string]any{"type": "function", "function": function})
 				echoTool := map[string]any{}
 				for key, value := range tool {
 					echoTool[key] = value
@@ -199,10 +212,9 @@ func responsesRequestToChatCompletions(body []byte) ([]byte, responsesEcho, erro
 				echoTools = append(echoTools, tool)
 			}
 		}
-		if len(converted) > 0 {
-			out["tools"] = converted
-		}
-		echo.tools = echoTools
+	}
+	if tools, ok := in["tools"].([]any); ok {
+		appendTools(tools)
 	}
 	if raw, ok := in["tool_choice"]; ok {
 		echo.toolChoice = raw
@@ -273,12 +285,41 @@ func responsesRequestToChatCompletions(body []byte) ([]byte, responsesEcho, erro
 			return nil, responsesEcho{}, fmt.Errorf("input must not be empty")
 		}
 		messages = mergeToolCallMessages(messages)
+		additionalTools, err := responsesAdditionalToolsFromInput(value)
+		if err != nil {
+			return nil, responsesEcho{}, err
+		}
+		appendTools(additionalTools)
 	default:
 		return nil, responsesEcho{}, fmt.Errorf("input must be a string or an array of items")
 	}
+	if len(convertedTools) > 0 {
+		out["tools"] = convertedTools
+	}
+	echo.tools = echoTools
 	out["messages"] = messages
 	converted, err := json.Marshal(out)
 	return converted, echo, err
+}
+
+func responsesAdditionalToolsFromInput(input []any) ([]any, error) {
+	var tools []any
+	for _, rawItem := range input {
+		item, ok := rawItem.(map[string]any)
+		if !ok || strings.TrimSpace(firstString(item["type"])) != "additional_tools" {
+			continue
+		}
+		rawTools, exists := item["tools"]
+		if !exists || rawTools == nil {
+			continue
+		}
+		itemTools, ok := rawTools.([]any)
+		if !ok {
+			return nil, fmt.Errorf("responses additional_tools.tools must be an array")
+		}
+		tools = append(tools, itemTools...)
+	}
+	return tools, nil
 }
 
 // responsesInputItem maps one element of a Responses input array to a chat
@@ -291,6 +332,9 @@ func responsesInputItem(item any) map[string]any {
 		}
 		return map[string]any{"role": "user", "content": value}
 	case map[string]any:
+		if strings.TrimSpace(firstString(value["type"])) == "additional_tools" {
+			return nil
+		}
 		if role, ok := value["role"].(string); ok {
 			return chatMessageFromResponses(role, value)
 		}
@@ -1028,7 +1072,8 @@ func streamChatCompletionsToResponses(w http.ResponseWriter, resp *http.Response
 		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", name, data)
 		flusher.Flush()
 	}
-	stream := &responsesStream{responseID: responseID, echo: echo, status: "completed", tools: map[int]*responsesTool{}, keepReasoning: len(keepReasoning) > 0 && keepReasoning[0]}
+	keep := len(keepReasoning) > 0 && keepReasoning[0]
+	stream := &responsesStream{responseID: responseID, echo: echo, status: "completed", tools: map[int]*responsesTool{}, keepReasoning: keep}
 	decided, chatMode := false, true
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64*1024), 2<<20)

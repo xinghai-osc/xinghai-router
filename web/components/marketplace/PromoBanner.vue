@@ -72,7 +72,7 @@ function onCardKeydown(event: KeyboardEvent) {
       type="button"
       class="mt-6 inline-flex w-fit items-center gap-1.5 rounded-control bg-clay px-3.5 py-2 text-[13px] font-medium text-clay-ink transition-colors duration-150 hover:bg-clay-hover disabled:pointer-events-none disabled:opacity-45"
       :disabled="!model"
-      @click="openModel"
+      @click.stop="openModel"
     >
       {{ copy.cta }}
       <ArrowRight class="size-3.5" />

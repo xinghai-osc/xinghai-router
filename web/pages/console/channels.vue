@@ -14,7 +14,7 @@ const { busy, run } = useAction()
 const allowed = computed(() => can('channels.read'))
 const canManage = computed(() => can('channels.manage'))
 
-const PROVIDERS = ['openai', 'ollama', 'kimi', 'opencode_go', 'anthropic', 'deepseek', 'commandcode', 'custom']
+const PROVIDERS = ['openai', 'openai_chat', 'ollama', 'kimi', 'opencode_go', 'anthropic', 'deepseek', 'commandcode', 'custom']
 const KEY_TYPES = [
   { value: 'single', label: t('admin.singleKey') },
   { value: 'multi', label: t('admin.multiKey') },
@@ -74,13 +74,6 @@ const typeOptions = computed(() => [
   ...PROVIDERS.map(value => ({ value, label: t(`admin.provider_${value}`) })),
 ])
 const providerOptions = computed(() => PROVIDERS.map(value => ({ value, label: t(`admin.provider_${value}`) })))
-const formatOptions = computed(() => [
-  { value: '', label: t('admin.formatAuto') },
-  { value: 'openai', label: t('admin.formatOpenAI') },
-  { value: 'openai_chat', label: t('admin.formatOpenAIChat') },
-  { value: 'anthropic', label: t('admin.formatAnthropic') },
-])
-
 function formatRelativeTime(value: string | null): string {
   if (!value) return t('admin.neverTested')
   const time = new Date(value).getTime()
@@ -596,10 +589,6 @@ async function save() {
     payload.user_email = form.user_email.trim()
   } else {
     payload.user_email = ''
-  }
-  if (form.provider !== 'anthropic' && form.provider !== 'commandcode') {
-    payload.upstream_path = form.upstream_path.trim()
-    payload.upstream_format = form.upstream_format
   }
   if (!apiKeys.length) {
     delete (payload as Partial<ChannelForm>).api_keys
@@ -1146,15 +1135,6 @@ function quotaUsageForWindow(window: string) {
         <UiField :label="t('admin.baseUrl')" :hint="t('admin.baseUrlHint')" required>
           <UiInput v-model="form.base_url" mono :placeholder="t('admin.baseUrlPlaceholder')" />
         </UiField>
-
-        <div v-if="form.provider !== 'anthropic' && form.provider !== 'commandcode'" class="grid gap-4 sm:grid-cols-2">
-          <UiField :label="t('admin.upstreamFormat')" :hint="t('admin.upstreamFormatHint')">
-            <UiSelect v-model="form.upstream_format" :options="formatOptions" />
-          </UiField>
-          <UiField :label="t('admin.upstreamPath')" :hint="t('admin.upstreamPathHint')">
-            <UiInput v-model="form.upstream_path" mono :placeholder="t('admin.upstreamPathPlaceholder')" />
-          </UiField>
-        </div>
 
         <div class="grid gap-4 sm:grid-cols-2">
           <UiField :label="t('admin.keyType')" required>

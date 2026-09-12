@@ -117,12 +117,13 @@ export function groupPrice(model: CatalogModel, kind: PriceKind, group: CatalogG
 }
 
 /** Format a per-1M price for the chosen token unit, trimming trailing zeros. */
-export function formatSquarePrice(value: number | null, unit: TokenUnit): string {
+export function formatSquarePrice(value: number | null, unit: TokenUnit, currency = 'CNY'): string {
   if (value == null) return '—'
   const scaled = unit === 'K' ? value / 1000 : value
-  if (scaled === 0) return '¥0'
+  const code = currency?.trim().toUpperCase() || 'CNY'
+  if (scaled === 0) return `${code} 0`
   const digits = scaled >= 100 ? 2 : scaled >= 1 ? 4 : 6
-  return `¥${String(Number.parseFloat(scaled.toFixed(digits)))}`
+  return `${code} ${String(Number.parseFloat(scaled.toFixed(digits)))}`
 }
 
 /** Format a group multiplier like x1 / x0.5 / x1.25. */

@@ -3,10 +3,18 @@ const { settings } = useSiteSettings()
 const { t } = useI18n()
 const { models, loading: catalogLoading, loadCatalog } = useCatalog()
 const { plans, loading: plansLoading, loadPlans } = usePlans()
+const siteOrigin = useSiteOrigin()
 
-useHead({
+usePageSeo({
   title: () => `${settings.value.name} · ${t('common.tagline')}`,
-  meta: [{ name: 'description', content: () => t('site.metaDescription') }],
+  description: () => t('site.metaDescription'),
+  structuredData: () => ({
+    '@context': 'https://schema.org',
+    '@type': 'WebSite',
+    name: settings.value.name,
+    url: siteOrigin.value,
+    description: t('site.metaDescription'),
+  }),
 })
 
 onMounted(() => {

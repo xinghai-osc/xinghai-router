@@ -123,6 +123,47 @@ func TestResponsesRequestToChatCompletions(t *testing.T) {
 	}
 }
 
+func TestResponsesAdditionalToolsAreReturned(t *testing.T) {
+	body := []byte(`{
+		"model":"m",
+		"input":[
+			{"type":"message","role":"user","content":"hello"},
+			{"type":"additional_tools","role":"developer","tools":[
+				{"type":"namespace","name":"shell","tools":[{"type":"function","name":"exec"}]},
+				{"type":"function","name":"lookup","parameters":{"type":"object"}}
+			]}
+		]
+	}`)
+	_, echo, err := responsesRequestToChatCompletions(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(echo.tools) != 2 {
+		t.Fatalf("echo tools = %#v, want 2", echo.tools)
+	}
+	if got := echo.tools[0].(map[string]any)["type"]; got != "namespace" {
+		t.Fatalf("first echo tool type = %v, want namespace", got)
+	}
+	if got := echo.tools[1].(map[string]any)["name"]; got != "lookup" {
+		t.Fatalf("second echo tool name = %v, want lookup", got)
+	}
+	response, err := chatCompletionsToResponses([]byte(`{"model":"m","choices":[{"message":{"role":"assistant","content":"ok"}}]}`), "resp_test", echo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(response, &payload); err != nil {
+		t.Fatal(err)
+	}
+	tools, ok := payload["tools"].([]any)
+	if !ok || len(tools) != 2 {
+		t.Fatalf("response tools = %#v, want 2", payload["tools"])
+	}
+	if tools[0].(map[string]any)["type"] != "namespace" {
+		t.Fatalf("response namespace tool = %#v", tools[0])
+	}
+}
+
 func TestResponsesReasoningEffortIsForwarded(t *testing.T) {
 	out, _, err := responsesRequestToChatCompletions([]byte(`{"model":"m","input":"hi","reasoning":{"effort":"high"}}`))
 	if err != nil {
@@ -296,6 +337,7 @@ func TestStreamChatCompletionsToResponses(t *testing.T) {
 	rec := httptest.NewRecorder()
 	st, err := streamChatCompletionsToResponses(rec, streamBody(t, sse), "resp_test", responsesEcho{
 		instructions: "Be brief", temperature: 1.0, topP: 1.0, truncation: "disabled",
+		tools: []any{map[string]any{"type": "namespace", "name": "shell"}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -303,6 +345,8 @@ func TestStreamChatCompletionsToResponses(t *testing.T) {
 	out := rec.Body.String()
 	if !strings.Contains(out, "event: response.created") ||
 		!strings.Contains(out, "event: response.in_progress") ||
+		!strings.Contains(out, `"type":"namespace"`) ||
+		!strings.Contains(out, `"tools"`) ||
 		!strings.Contains(out, `"usage":null`) ||
 		!strings.Contains(out, `"instructions":"Be brief"`) ||
 		!strings.Contains(out, `"truncation":"disabled"`) ||
@@ -321,6 +365,28 @@ func TestStreamChatCompletionsToResponses(t *testing.T) {
 	}
 	if strings.Contains(out, "[DONE]") {
 		t.Fatalf("responses streams must not relay [DONE]:\n%s", out)
+	}
+}
+
+func TestWSResponsesAdapterPreservesResponseEcho(t *testing.T) {
+	adapter := &wsResponsesAdapter{
+		model: "gpt-5.1",
+		echo: responsesEcho{
+			instructions: "Be brief",
+			toolChoice:   "auto",
+			tools:        []any{map[string]any{"type": "namespace", "name": "shell"}},
+		},
+	}
+	rec := httptest.NewRecorder()
+	_, err := adapter.stream(rec, streamBody(t, "data: {\"model\":\"gpt-5.1\",\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"ok\"}}]}\n\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := rec.Body.String()
+	if !strings.Contains(out, `"instructions":"Be brief"`) ||
+		!strings.Contains(out, `"tool_choice":"auto"`) ||
+		!strings.Contains(out, `"type":"namespace"`) {
+		t.Fatalf("response echo missing from WebSocket adapter stream:\\n%s", out)
 	}
 }
 

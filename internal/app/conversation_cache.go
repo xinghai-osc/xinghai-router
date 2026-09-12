@@ -151,14 +151,7 @@ func writeConversationFile(dir string, entry conversationFile) error {
 
 func (s *Service) listConversationCache(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	page := atoiOrDefault(q.Get("page"), 1)
-	pageSize := atoiOrDefault(q.Get("page_size"), 50)
-	if page < 1 {
-		page = 1
-	}
-	if pageSize < 1 || pageSize > 200 {
-		pageSize = 50
-	}
+	page, pageSize, offset := listPage(r)
 	userFilter := strings.TrimSpace(q.Get("user_id"))
 	modelFilter := strings.TrimSpace(q.Get("model"))
 	var start, end time.Time
@@ -189,28 +182,43 @@ func (s *Service) listConversationCache(w http.ResponseWriter, r *http.Request) 
 		}
 		filtered = append(filtered, e)
 	}
-	sort.Slice(filtered, func(i, j int) bool { return filtered[i].CreatedAt.After(filtered[j].CreatedAt) })
+	sort.Slice(filtered, func(i, j int) bool {
+		if filtered[i].CreatedAt.Equal(filtered[j].CreatedAt) {
+			return filtered[i].ID > filtered[j].ID
+		}
+		return filtered[i].CreatedAt.After(filtered[j].CreatedAt)
+	})
 	total := len(filtered)
-	offset := (page - 1) * pageSize
-	limit := pageSize
 	if offset >= total {
 		filtered = nil
-	} else if offset+limit > total {
+	} else if total-offset <= pageSize {
 		filtered = filtered[offset:]
 	} else {
-		filtered = filtered[offset : offset+limit]
+		filtered = filtered[offset : offset+pageSize]
 	}
 	data := make([]map[string]any, 0, len(filtered))
 	for _, e := range filtered {
 		data = append(data, conversationSummary(e))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": data, "total": total, "page": page, "page_size": pageSize})
+	writePaged(w, data, total, page, pageSize)
+}
+
+func validConversationCacheID(id string) bool {
+	if id == "" || id == "." || id == ".." || filepath.Base(id) != id || strings.ContainsAny(id, `/\\`) {
+		return false
+	}
+	for _, char := range id {
+		if (char < 'a' || char > 'z') && (char < 'A' || char > 'Z') && (char < '0' || char > '9') && char != '-' && char != '_' && char != '.' {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Service) getConversationCacheDetail(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if id == "" {
-		writeError(w, http.StatusBadRequest, "invalid_request", "id is required")
+	if !validConversationCacheID(id) {
+		writeError(w, http.StatusBadRequest, "invalid_request", "invalid conversation id")
 		return
 	}
 	entry, err := findConversationFile(s.conversationCacheDir(), id)

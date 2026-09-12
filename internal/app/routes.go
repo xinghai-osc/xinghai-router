@@ -132,6 +132,8 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("GET /admin/usage-stats", s.permission("logs.read", s.usageStats))
 	mux.Handle("GET /admin/pricing", s.permission("pricing.read", s.listPricing))
 	mux.Handle("POST /admin/pricing", s.permission("pricing.manage", s.upsertPricing))
+	mux.Handle("GET /admin/exchange-rates", s.permission("pricing.read", s.listExchangeRates))
+	mux.Handle("POST /admin/exchange-rates", s.permission("pricing.manage", s.upsertExchangeRate))
 	mux.Handle("GET /admin/pricing/tiers", s.permission("pricing.read", s.listPricingTiers))
 	mux.Handle("POST /admin/pricing/tiers", s.permission("pricing.manage", s.savePricingTier))
 	mux.Handle("DELETE /admin/pricing/tiers/{id}", s.permission("pricing.manage", s.deletePricingTier))
@@ -350,21 +352,10 @@ func (s *Service) myUsage(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Service) myLedger(w http.ResponseWriter, r *http.Request) {
 	key := r.Context().Value(contextKey{}).(keyContext)
-	rows, err := s.db.Query(r.Context(), `select wl.id,wl.amount::text,wl.balance_after::text,wl.kind,wl.request_id,wl.note,wl.created_at,wl.settlement_status,wl.settlement_date,wl.settled_at,coalesce(ws.error,'') from wallet_ledger wl left join wallet_settlements ws on ws.ledger_id=wl.id where wl.user_id=$1 order by wl.created_at desc limit 100`, key.userID)
+	data, err := s.walletLedger(r.Context(), key.userID)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
-	}
-	defer rows.Close()
-	data := []map[string]any{}
-	for rows.Next() {
-		var id, kind string
-		var requestID, note any
-		var amount, after, created, settlementDate, settledAt, settlementError any
-		var settlementStatus string
-		if rows.Scan(&id, &amount, &after, &kind, &requestID, &note, &created, &settlementStatus, &settlementDate, &settledAt, &settlementError) == nil {
-			data = append(data, map[string]any{"id": id, "amount": amount, "balance_after": after, "kind": kind, "request_id": requestID, "note": note, "created_at": created, "settlement_status": settlementStatus, "settlement_date": settlementDate, "settled_at": settledAt, "settlement_error": settlementError})
-		}
 	}
 	writeJSON(w, 200, map[string]any{"data": data})
 }

@@ -19,7 +19,6 @@ const filters = reactive({
 
 const page = ref(1)
 const pageSize = ref('50')
-const pageSizeOptions = ['20', '50', '100', '200'].map(value => ({ value, label: value }))
 
 function toRfc3339(value: string): string {
   if (!value) return ''
@@ -49,11 +48,9 @@ const conversations = useResource(() => endpoints.getConversationLogs(logsQuery(
   data: [] as ConversationLog[], total: 0, page: 1, page_size: 50,
 })
 
-const totalPages = computed(() => Math.max(1, Math.ceil(conversations.data.value.total / Math.max(1, conversations.data.value.page_size))))
-
 async function applyFilters() {
-  page.value = 1
-  await conversations.refresh()
+  if (page.value !== 1) page.value = 1
+  else await conversations.refresh()
 }
 
 async function resetFilters() {
@@ -64,12 +61,7 @@ async function resetFilters() {
   await applyFilters()
 }
 
-async function goToPage(next: number) {
-  if (next < 1 || next > totalPages.value) return
-  page.value = next
-  await conversations.refresh()
-}
-
+watch(page, () => { void conversations.refresh() })
 watch(pageSize, applyFilters)
 
 const statusTone = (code: number): 'danger' | 'warn' | 'success' =>
@@ -181,31 +173,11 @@ function prettyJson(value: unknown): string {
         </tbody>
       </UiTable>
 
-      <div class="flex flex-wrap items-center justify-between gap-3 pt-3">
-        <p class="text-[13px] text-muted">{{ t('common.totalItems', { total: conversations.data.value.total }) }}</p>
-        <div class="flex items-center gap-2">
-          <UiSelect v-model="pageSize" :options="pageSizeOptions" :placeholder="t('common.selectPlaceholder')" class="w-20" />
-          <UiButton
-            variant="secondary"
-            size="sm"
-            :disabled="conversations.data.value.page <= 1"
-            @click="goToPage(conversations.data.value.page - 1)"
-          >
-            {{ t('common.prev') }}
-          </UiButton>
-          <span class="numeric text-[13px] text-muted">
-            {{ t('admin.pageOf', { page: conversations.data.value.page, pages: totalPages }) }}
-          </span>
-          <UiButton
-            variant="secondary"
-            size="sm"
-            :disabled="conversations.data.value.page >= totalPages"
-            @click="goToPage(conversations.data.value.page + 1)"
-          >
-            {{ t('common.next') }}
-          </UiButton>
-        </div>
-      </div>
+      <ConsoleOpsPagination
+        v-model:page="page"
+        v-model:page-size="pageSize"
+        :total="conversations.data.value.total"
+      />
     </ConsoleOpsListState>
 
     <UiSlidePanel v-model:open="detailOpen" :title="t('admin.conversationDetailTitle')" size="lg">

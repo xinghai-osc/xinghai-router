@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	maxResetCardBatchSize = 1000
+	maxResetCardBatchSize  = 1000
 	maxResetCardNoteLength = 500
 )
 

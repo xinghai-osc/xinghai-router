@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { RefreshCw, WalletCards } from 'lucide-vue-next'
 import { endpoints, type LedgerEntry } from '~/src/api'
-import { formatDateTime, formatMoney, shortId } from '~/src/format'
+import { formatDate, formatDateTime, formatMoney, formatNumber, shortId } from '~/src/format'
 
 definePageMeta({ layout: 'console', middleware: 'console-auth' })
 
@@ -15,10 +15,11 @@ const { data: ledger, pending, error, refresh } = useResource(
   { data: [] as LedgerEntry[] },
 )
 
-function kindLabel(kind: string): string {
-  const key = `console.kind${kind.charAt(0).toUpperCase()}${kind.slice(1)}`
+function kindLabel(entry: LedgerEntry): string {
+  if (entry.daily) return t('console.kindDailyCharge')
+  const key = `console.kind${entry.kind.charAt(0).toUpperCase()}${entry.kind.slice(1)}`
   const translated = t(key)
-  return translated === key ? kind : translated
+  return translated === key ? entry.kind : translated
 }
 
 function statusTone(status: LedgerEntry['settlement_status']): 'neutral' | 'success' | 'warn' | 'danger' {
@@ -59,7 +60,7 @@ function statusLabel(status: LedgerEntry['settlement_status']): string {
           <UiTable>
             <thead>
               <tr>
-                <th>{{ t('common.createdAt') }}</th>
+                <th>{{ t('console.businessDate') }}</th>
                 <th>{{ t('console.kind') }}</th>
                 <th class="num">{{ t('console.amount') }}</th>
                 <th class="num">{{ t('console.balanceAfter') }}</th>
@@ -70,16 +71,17 @@ function statusLabel(status: LedgerEntry['settlement_status']): string {
             </thead>
             <tbody>
               <tr v-for="entry in ledger.data" :key="entry.id">
-                <td class="text-muted whitespace-nowrap">{{ formatDateTime(entry.created_at) }}</td>
-                <td><UiBadge :tone="entry.amount.startsWith('-') ? 'danger' : 'success'">{{ kindLabel(entry.kind) }}</UiBadge></td>
+                <td class="text-muted whitespace-nowrap">{{ entry.daily ? formatDate(entry.business_date) : formatDateTime(entry.created_at) }}</td>
+                <td><UiBadge :tone="entry.amount.startsWith('-') ? 'danger' : 'success'">{{ kindLabel(entry) }}</UiBadge></td>
                 <td class="num font-medium" :class="entry.amount.startsWith('-') ? 'text-danger' : 'text-success'">{{ formatMoney(entry.amount) }}</td>
                 <td class="num">{{ formatMoney(entry.balance_after) }}</td>
                 <td><UiBadge :tone="statusTone(entry.settlement_status)" dot>{{ statusLabel(entry.settlement_status) }}</UiBadge></td>
                 <td>
-                  <code v-if="entry.request_id" class="font-mono text-[12px] text-muted">{{ shortId(entry.request_id) }}</code>
+                  <span v-if="entry.daily" class="numeric text-muted">{{ t('console.dailyCallCount', { count: formatNumber(entry.call_count) }) }}</span>
+                  <code v-else-if="entry.request_id" class="font-mono text-[12px] text-muted">{{ shortId(entry.request_id) }}</code>
                   <span v-else class="text-faint">{{ t('common.none') }}</span>
                 </td>
-                <td class="max-w-56 text-muted">{{ entry.note || t('common.none') }}</td>
+                <td class="max-w-56 text-muted">{{ entry.daily ? t('console.dailyChargeNote') : (entry.note || t('common.none')) }}</td>
               </tr>
             </tbody>
           </UiTable>

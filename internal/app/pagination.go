@@ -1,6 +1,7 @@
 package app
 
 import (
+	"math"
 	"net/http"
 	"strconv"
 )
@@ -20,7 +21,11 @@ func listPage(r *http.Request) (page, pageSize, offset int) {
 	if pageSize < 1 || pageSize > maxListPageSize {
 		pageSize = 50
 	}
-	offset = (page - 1) * pageSize
+	if page-1 > math.MaxInt/pageSize {
+		offset = math.MaxInt
+	} else {
+		offset = (page - 1) * pageSize
+	}
 	return page, pageSize, offset
 }
 

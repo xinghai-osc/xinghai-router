@@ -89,8 +89,72 @@ func (s *Service) fetchChannelModels(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"models": models})
 }
 
+type exchangeRateResponse struct {
+	Currency   string  `json:"currency"`
+	RateToBase float64 `json:"rate_to_base"`
+	Enabled    bool    `json:"enabled"`
+	UpdatedAt  any     `json:"updated_at"`
+}
+
+func (s *Service) listExchangeRates(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.db.Query(r.Context(), `select currency,rate_to_base::float8,enabled,updated_at from exchange_rates order by currency`)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
+		return
+	}
+	defer rows.Close()
+	data := []exchangeRateResponse{}
+	for rows.Next() {
+		var item exchangeRateResponse
+		if rows.Scan(&item.Currency, &item.RateToBase, &item.Enabled, &item.UpdatedAt) == nil {
+			data = append(data, item)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": data})
+}
+
+func (s *Service) upsertExchangeRate(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Currency   string  `json:"currency"`
+		RateToBase float64 `json:"rate_to_base"`
+		Enabled    *bool   `json:"enabled"`
+	}
+	if decode(r, &in) != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "invalid exchange rate")
+		return
+	}
+	in.Currency = normalizeCurrency(in.Currency)
+	if in.Currency == "" {
+		in.Currency = "CNY"
+	}
+	enabled := true
+	if in.Enabled != nil {
+		enabled = *in.Enabled
+	}
+	if !validCurrencyCode(in.Currency) || !validPositiveFinite(in.RateToBase) || in.RateToBase > maxExchangeRate {
+		writeError(w, http.StatusBadRequest, "invalid_request", "currency and rate_to_base are invalid")
+		return
+	}
+	if in.Currency == "CNY" && (in.RateToBase != 1 || !enabled) {
+		writeError(w, http.StatusBadRequest, "invalid_request", "CNY must have rate_to_base 1 and remain enabled")
+		return
+	}
+	_, err := s.db.Exec(r.Context(), `insert into exchange_rates(currency,rate_to_base,enabled,updated_at) values($1,$2,$3,now()) on conflict(currency) do update set rate_to_base=excluded.rate_to_base,enabled=excluded.enabled,updated_at=now()`, in.Currency, in.RateToBase, enabled)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "could not save exchange rate")
+		return
+	}
+	s.pricingCache.clear()
+	s.audit(r, "exchange_rate.updated", "exchange_rate", in.Currency, map[string]any{"rate_to_base": in.RateToBase, "enabled": enabled})
+	writeJSON(w, http.StatusOK, exchangeRateResponse{Currency: in.Currency, RateToBase: in.RateToBase, Enabled: enabled})
+}
+
 func (s *Service) listPricing(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query(r.Context(), `select id,model,input_per_million,cached_input_per_million,output_per_million,multiplier,enabled,updated_at from pricing_rules order by model`)
+	rows, err := s.db.Query(r.Context(), `select id,model,input_per_million,cached_input_per_million,output_per_million,multiplier,currency,enabled,updated_at from pricing_rules order by model`)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
@@ -98,14 +162,14 @@ func (s *Service) listPricing(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	data := []map[string]any{}
 	for rows.Next() {
-		var id, model string
+		var id, model, currency string
 		var input, cached, output, multiplier any
 		var enabled bool
 		var updated any
-		if rows.Scan(&id, &model, &input, &cached, &output, &multiplier, &enabled, &updated) != nil {
+		if rows.Scan(&id, &model, &input, &cached, &output, &multiplier, &currency, &enabled, &updated) != nil {
 			continue
 		}
-		data = append(data, map[string]any{"id": id, "model": model, "input_per_million": input, "cached_input_per_million": cached, "output_per_million": output, "multiplier": multiplier, "enabled": enabled, "updated_at": updated})
+		data = append(data, map[string]any{"id": id, "model": model, "input_per_million": input, "cached_input_per_million": cached, "output_per_million": output, "multiplier": multiplier, "currency": currency, "enabled": enabled, "updated_at": updated})
 	}
 	writeJSON(w, 200, map[string]any{"data": data})
 }
@@ -117,13 +181,18 @@ func (s *Service) upsertPricing(w http.ResponseWriter, r *http.Request) {
 		Cached     float64 `json:"cached_input_per_million"`
 		Output     float64 `json:"output_per_million"`
 		Multiplier float64 `json:"multiplier"`
+		Currency   string  `json:"currency"`
 	}
 	if decode(r, &in) != nil {
 		writeError(w, 400, "invalid_request", "invalid pricing rule")
 		return
 	}
 	in.Model = strings.TrimSpace(in.Model)
-	if !validPricingModel(in.Model) || !validPricingRate(in.Input) || !validPricingRate(in.Cached) || !validPricingRate(in.Output) {
+	in.Currency = normalizeCurrency(in.Currency)
+	if in.Currency == "" {
+		in.Currency = "CNY"
+	}
+	if !validPricingModel(in.Model) || !validCurrencyCode(in.Currency) || !validPricingRate(in.Input) || !validPricingRate(in.Cached) || !validPricingRate(in.Output) {
 		writeError(w, 400, "invalid_request", "invalid pricing rule")
 		return
 	}
@@ -134,15 +203,25 @@ func (s *Service) upsertPricing(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_request", "multiplier must be between 0 exclusive and 1000")
 		return
 	}
+	var rateEnabled bool
+	if s.db == nil {
+		if in.Currency != "CNY" {
+			writeError(w, http.StatusBadRequest, "invalid_request", "currency exchange rate is not configured")
+			return
+		}
+	} else if err := s.db.QueryRow(r.Context(), `select enabled from exchange_rates where currency=$1`, in.Currency).Scan(&rateEnabled); err != nil || !rateEnabled {
+		writeError(w, http.StatusBadRequest, "invalid_request", "currency exchange rate is not configured")
+		return
+	}
 	id, _ := randomID()
-	_, err := s.db.Exec(r.Context(), `insert into pricing_rules(id,model,input_per_million,cached_input_per_million,output_per_million,multiplier) values($1,$2,$3,$4,$5,$6) on conflict(model) do update set input_per_million=excluded.input_per_million,cached_input_per_million=excluded.cached_input_per_million,output_per_million=excluded.output_per_million,multiplier=excluded.multiplier,updated_at=now()`, id, in.Model, in.Input, in.Cached, in.Output, in.Multiplier)
+	_, err := s.db.Exec(r.Context(), `insert into pricing_rules(id,model,input_per_million,cached_input_per_million,output_per_million,multiplier,currency) values($1,$2,$3,$4,$5,$6,$7) on conflict(model) do update set input_per_million=excluded.input_per_million,cached_input_per_million=excluded.cached_input_per_million,output_per_million=excluded.output_per_million,multiplier=excluded.multiplier,currency=excluded.currency,updated_at=now()`, id, in.Model, in.Input, in.Cached, in.Output, in.Multiplier, in.Currency)
 	if err != nil {
 		writeError(w, 400, "invalid_request", "could not save pricing rule")
 		return
 	}
 	s.pricingCache.invalidate(in.Model)
-	s.audit(r, "pricing.updated", "pricing", in.Model, map[string]any{"input": in.Input, "cached": in.Cached, "output": in.Output})
-	writeJSON(w, 200, map[string]any{"model": in.Model})
+	s.audit(r, "pricing.updated", "pricing", in.Model, map[string]any{"input": in.Input, "cached": in.Cached, "output": in.Output, "currency": in.Currency})
+	writeJSON(w, 200, map[string]any{"model": in.Model, "currency": in.Currency})
 }
 
 type newAPIPricing struct {
@@ -162,6 +241,7 @@ func (s *Service) syncNewAPIPricing(w http.ResponseWriter, r *http.Request) {
 		BaseURL           string  `json:"base_url"`
 		APIKey            string  `json:"api_key"`
 		PricePerQuotaUnit float64 `json:"price_per_quota_unit"`
+		Currency          string  `json:"currency"`
 	}
 	if decode(r, &in) != nil || !validPricePerQuotaUnit(in.PricePerQuotaUnit) {
 		writeError(w, 400, "invalid_request", "invalid NewAPI pricing source")
@@ -169,9 +249,24 @@ func (s *Service) syncNewAPIPricing(w http.ResponseWriter, r *http.Request) {
 	}
 	in.BaseURL = strings.TrimSpace(in.BaseURL)
 	in.APIKey = strings.TrimSpace(in.APIKey)
+	in.Currency = normalizeCurrency(in.Currency)
+	if in.Currency == "" {
+		in.Currency = "CNY"
+	}
+	if !validCurrencyCode(in.Currency) {
+		writeError(w, 400, "invalid_request", "currency must be 1-8 ASCII letters")
+		return
+	}
 	if !validChannelBaseURL(in.BaseURL) {
 		writeError(w, 400, "invalid_request", "base_url must be 1-2048 characters and use HTTP or HTTPS")
 		return
+	}
+	if in.Currency != "CNY" {
+		var rateEnabled bool
+		if err := s.db.QueryRow(r.Context(), `select enabled from exchange_rates where currency=$1`, in.Currency).Scan(&rateEnabled); err != nil || !rateEnabled {
+			writeError(w, http.StatusBadRequest, "invalid_request", "currency exchange rate is not configured")
+			return
+		}
 	}
 	if in.APIKey != "" && !validChannelAPIKey(in.APIKey) {
 		writeError(w, 400, "invalid_request", "api_key must be 1-4096 characters")
@@ -250,7 +345,7 @@ func (s *Service) syncNewAPIPricing(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		id, _ := randomID()
-		if _, err = tx.Exec(r.Context(), `insert into pricing_rules(id,model,input_per_million,cached_input_per_million,output_per_million,multiplier) values($1,$2,$3,$4,$5,1) on conflict(model) do update set input_per_million=excluded.input_per_million,cached_input_per_million=excluded.cached_input_per_million,output_per_million=excluded.output_per_million,updated_at=now()`, id, model, input, cached, output); err != nil {
+		if _, err = tx.Exec(r.Context(), `insert into pricing_rules(id,model,input_per_million,cached_input_per_million,output_per_million,multiplier,currency) values($1,$2,$3,$4,$5,1,$6) on conflict(model) do update set input_per_million=excluded.input_per_million,cached_input_per_million=excluded.cached_input_per_million,output_per_million=excluded.output_per_million,currency=excluded.currency,updated_at=now()`, id, model, input, cached, output, in.Currency); err != nil {
 			writeError(w, 500, "internal_error", "could not save pricing rules")
 			return
 		}
@@ -261,7 +356,7 @@ func (s *Service) syncNewAPIPricing(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.pricingCache.clear()
-	s.audit(r, "pricing.newapi_synced", "pricing", "newapi", map[string]any{"count": synced, "quota_per_unit": status.Data.QuotaPerUnit})
+	s.audit(r, "pricing.newapi_synced", "pricing", "newapi", map[string]any{"count": synced, "quota_per_unit": status.Data.QuotaPerUnit, "currency": in.Currency})
 	writeJSON(w, 200, map[string]any{"synced": synced, "skipped": len(pricing.Data) - synced})
 }
 
@@ -1333,6 +1428,15 @@ func (s *Service) modelCatalog(w http.ResponseWriter, r *http.Request) {
 				select c.id
 				from channels c
 				where c.enabled and not c.auto_disabled and c.user_id is null
+					and (
+						not exists(select 1 from channel_groups cg where cg.channel_id=c.id)
+						or exists(
+							select 1
+							from channel_groups cg
+							join groups g on g.id=cg.group_id
+							where cg.channel_id=c.id and g."public"
+						)
+					)
 			), performance as (
 				select trim(rl.model) as model,
 					count(*)::bigint as requests,
@@ -1349,7 +1453,7 @@ func (s *Service) modelCatalog(w http.ResponseWriter, r *http.Request) {
 
 			)
 			select c.model,c.group_id,c.group_name,c.group_multiplier,c.group_public,
-				p.input_per_million,p.cached_input_per_million,p.output_per_million,p.multiplier,
+				p.input_per_million,p.cached_input_per_million,p.output_per_million,p.multiplier,coalesce(p.currency,'CNY'),
 				coalesce(m.description,''),coalesce(m.input_modalities,'{}'),coalesce(m.output_modalities,'{}'),m.context_window,
 				perf.requests,perf.success_rate,perf.avg_latency_ms,perf.avg_first_token_ms
 			from catalog c
@@ -1363,7 +1467,7 @@ func (s *Service) modelCatalog(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 	type catalogModel struct {
-		ID, Model                         string
+		ID, Model, Currency               string
 		Input, Cached, Output, Multiplier any
 		Description                       string
 		InputModalities, OutputModalities []string
@@ -1379,12 +1483,13 @@ func (s *Service) modelCatalog(w http.ResponseWriter, r *http.Request) {
 		var groupMultiplier any
 		var groupPublic bool
 		var input, cached, output, modelMultiplier any
-		var description *string
+		var currency string
+		var description string
 		var inputModalities, outputModalities []string
 		var contextWindow *int64
 		var requests *int64
 		var successRate, avgLatency, avgFirstToken *float64
-		if err := rows.Scan(&model, &groupID, &groupName, &groupMultiplier, &groupPublic, &input, &cached, &output, &modelMultiplier, &description, &inputModalities, &outputModalities, &contextWindow, &requests, &successRate, &avgLatency, &avgFirstToken); err != nil {
+		if err := rows.Scan(&model, &groupID, &groupName, &groupMultiplier, &groupPublic, &input, &cached, &output, &modelMultiplier, &currency, &description, &inputModalities, &outputModalities, &contextWindow, &requests, &successRate, &avgLatency, &avgFirstToken); err != nil {
 			writeError(w, http.StatusInternalServerError, "internal_error", "could not read model catalog")
 			return
 		}
@@ -1398,10 +1503,8 @@ func (s *Service) modelCatalog(w http.ResponseWriter, r *http.Request) {
 			if outputModalities == nil {
 				outputModalities = []string{}
 			}
-			item = &catalogModel{Model: model, Input: input, Cached: cached, Output: output, Multiplier: modelMultiplier, InputModalities: inputModalities, OutputModalities: outputModalities, ContextWindow: contextWindow, Groups: []map[string]any{}}
-			if description != nil {
-				item.Description = *description
-			}
+			item = &catalogModel{Model: model, Currency: currency, Input: input, Cached: cached, Output: output, Multiplier: modelMultiplier, InputModalities: inputModalities, OutputModalities: outputModalities, ContextWindow: contextWindow, Groups: []map[string]any{}}
+			item.Description = description
 			if requests != nil {
 				item.Performance = map[string]any{"requests": *requests, "success_rate": successRate, "avg_latency_ms": avgLatency, "avg_first_token_ms": avgFirstToken}
 			}
@@ -1419,7 +1522,7 @@ func (s *Service) modelCatalog(w http.ResponseWriter, r *http.Request) {
 	for _, model := range order {
 		item := models[model]
 		provider := providerForModel(item.Model, providers)
-		data = append(data, map[string]any{"id": item.ID, "model": item.Model, "provider": provider.Name, "provider_slug": provider.Slug, "description": item.Description, "input_modalities": item.InputModalities, "output_modalities": item.OutputModalities, "context_window": item.ContextWindow, "input_per_million": item.Input, "cached_input_per_million": item.Cached, "output_per_million": item.Output, "multiplier": item.Multiplier, "performance": item.Performance, "groups": item.Groups})
+		data = append(data, map[string]any{"id": item.ID, "model": item.Model, "provider": provider.Name, "provider_slug": provider.Slug, "currency": item.Currency, "description": item.Description, "input_modalities": item.InputModalities, "output_modalities": item.OutputModalities, "context_window": item.ContextWindow, "input_per_million": item.Input, "cached_input_per_million": item.Cached, "output_per_million": item.Output, "multiplier": item.Multiplier, "performance": item.Performance, "groups": item.Groups})
 	}
 	groupList := make([]map[string]any, 0, len(groups))
 	for _, group := range groups {
@@ -1527,6 +1630,7 @@ const maxPricingMultiplier = 1000.0
 const maxPricingRate = 1_000_000.0
 const maxPricePerQuotaUnit = 1_000_000.0
 const maxNewAPIPricingModels = 5000
+const maxExchangeRate = 1_000_000_000.0
 const maxWalletAdjustAmount = 1_000_000_000.0
 const maxUserBalance = 999_999_999_999.0
 const maxWalletNoteLength = 500
@@ -1577,6 +1681,22 @@ func validPricingModel(model string) bool {
 	return validModelName(model)
 }
 
+func normalizeCurrency(value string) string {
+	return strings.ToUpper(strings.TrimSpace(value))
+}
+
+func validCurrencyCode(value string) bool {
+	if len(value) < 3 || len(value) > 8 {
+		return false
+	}
+	for _, r := range value {
+		if r < 'A' || r > 'Z' {
+			return false
+		}
+	}
+	return true
+}
+
 const maxPricingTiers = 20
 const maxPricingTimeRules = 20
 const maxTimeRuleNameLength = 100
@@ -1602,7 +1722,7 @@ func validModelName(model string) bool {
 }
 
 func validChannelProvider(provider string) bool {
-	return map[string]bool{"openai": true, "ollama": true, "kimi": true, "opencode_go": true, "anthropic": true, "deepseek": true, "commandcode": true, "custom": true}[provider]
+	return map[string]bool{"openai": true, "openai_chat": true, "ollama": true, "kimi": true, "opencode_go": true, "anthropic": true, "deepseek": true, "commandcode": true, "custom": true}[provider]
 }
 
 func validChannelKeyType(keyType string) bool {

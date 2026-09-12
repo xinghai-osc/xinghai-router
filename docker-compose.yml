@@ -40,9 +40,12 @@ services:
       context: .
       dockerfile: Dockerfile
       target: web
+      args:
+        NUXT_PUBLIC_SITE_URL: ${NUXT_PUBLIC_SITE_URL:-}
     restart: unless-stopped
     environment:
       API_INTERNAL_URL: http://router:8080
+      NUXT_PUBLIC_SITE_URL: ${NUXT_PUBLIC_SITE_URL:-}
       HOST: 0.0.0.0
       PORT: 3000
     depends_on:

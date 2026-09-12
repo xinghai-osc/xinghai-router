@@ -12,9 +12,9 @@ function getRankings(period: Period) {
 const { t } = useI18n()
 const { settings } = useSiteSettings()
 
-useHead({
+usePageSeo({
   title: () => `${t('site.rkMetaTitle')} · ${settings.value.name}`,
-  meta: [{ name: 'description', content: () => t('site.rkMetaDescription') }],
+  description: () => t('site.rkMetaDescription'),
 })
 
 const PERIODS: { value: Period; labelKey: string }[] = [

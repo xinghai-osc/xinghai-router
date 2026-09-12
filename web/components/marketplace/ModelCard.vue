@@ -24,9 +24,9 @@ const { copy, copied } = useClipboard({ copiedDuring: 1400 })
 const performance = computed(() => modelPerformance(props.model))
 const displayGroup = computed(() => getDisplayGroup(props.model, props.group))
 const prices = computed(() => [
-  { key: 'site.sqColInput', value: formatSquarePrice(effectivePrice(props.model, 'input', props.group), props.unit) },
-  { key: 'site.sqColOutput', value: formatSquarePrice(effectivePrice(props.model, 'output', props.group), props.unit) },
-  { key: 'site.sqColCache', value: formatSquarePrice(effectivePrice(props.model, 'cache', props.group), props.unit) },
+  { key: 'site.sqColInput', value: formatSquarePrice(effectivePrice(props.model, 'input', props.group), props.unit, props.model.currency) },
+  { key: 'site.sqColOutput', value: formatSquarePrice(effectivePrice(props.model, 'output', props.group), props.unit, props.model.currency) },
+  { key: 'site.sqColCache', value: formatSquarePrice(effectivePrice(props.model, 'cache', props.group), props.unit, props.model.currency) },
 ])
 
 function selectModel() {

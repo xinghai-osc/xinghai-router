@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -204,17 +205,13 @@ func (s *Service) updateModelMetadata(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var model string
-	result, err := s.db.Exec(r.Context(), `update model_catalog_metadata set description=$1,input_modalities=$2,output_modalities=$3,context_window=$4,updated_at=now() where id=$5::uuid and model=$6`, in.Description, in.InputModalities, in.OutputModalities, in.ContextWindow, id, in.Model)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "could not update model metadata")
-		return
-	}
-	if result.RowsAffected() != 1 {
+	err := s.db.QueryRow(r.Context(), `update model_catalog_metadata set description=$1,input_modalities=$2,output_modalities=$3,context_window=$4,updated_at=now() where id=$5::uuid and model=$6 returning model`, in.Description, in.InputModalities, in.OutputModalities, in.ContextWindow, id, in.Model).Scan(&model)
+	if err == pgx.ErrNoRows {
 		writeError(w, http.StatusNotFound, "not_found", "model metadata not found")
 		return
 	}
-	if err := s.db.QueryRow(r.Context(), `select model from model_catalog_metadata where id=$1::uuid`, id).Scan(&model); err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "could not load model metadata")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not update model metadata")
 		return
 	}
 	s.audit(r, "model_metadata.updated", "model_catalog_metadata", id, map[string]any{"model": model, "description": in.Description, "input_modalities": in.InputModalities, "output_modalities": in.OutputModalities, "context_window": in.ContextWindow})

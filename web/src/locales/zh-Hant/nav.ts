@@ -24,6 +24,7 @@ export default {
   providers: '供應商',
   modelRoutes: '模型路由',
   pricing: '模型定價',
+  exchangeRates: '匯率設定',
   modelMetadata: '模型元數據',
   logs: '請求日誌',
   audit: '審計日誌',

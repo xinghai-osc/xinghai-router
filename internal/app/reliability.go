@@ -424,6 +424,8 @@ func (s *Service) testChannel(ctx context.Context, baseURL, apiKey, provider, te
 			if ccBody, ccErr := commandCodeBodyFromOpenAI(requestBody, commandCodeWorkingDir); ccErr == nil {
 				requestBody = ccBody
 			}
+		case "openai":
+			path, method = "/v1/responses", http.MethodPost
 		default:
 			path, method = "/v1/chat/completions", http.MethodPost
 		}
@@ -440,6 +442,9 @@ func (s *Service) testChannel(ctx context.Context, baseURL, apiKey, provider, te
 		request.Header.Set("Anthropic-Version", "2023-06-01")
 	} else {
 		request.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	if provider == "opencode_go" {
+		request.Header.Set("x-opencode-session", randomIDString())
 	}
 	if provider == "commandcode" && testModel != "" {
 		request.Header.Set("x-command-code-version", commandCodeCLIVersion)

@@ -319,12 +319,12 @@ async function confirmReset() {
                   >{{ t('console.cancelSubscription') }}</UiButton>
                   <p v-else class="text-[13px] text-faint">{{ statusLabel(subscription.status) }}</p>
                 </div>
-                <div v-if="subscription.status === 'active' || subscription.status === 'pending'" class="flex items-center gap-2">
-                  <UiBadge :tone="subscription.reset_card_count > 0 ? 'success' : 'neutral'">
+                <div v-if="subscription.reset_card_count > 0" class="flex items-center gap-2">
+                  <UiBadge tone="success">
                     {{ t('console.resetCardCount', { count: subscription.reset_card_count }) }}
                   </UiBadge>
                   <UiButton
-                    v-if="subscription.reset_card_count > 0"
+                    v-if="subscription.status === 'active'"
                     variant="secondary"
                     size="sm"
                     @click="openReset(subscription)"

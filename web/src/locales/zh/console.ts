@@ -172,10 +172,14 @@ export default {
   viewAdmin: '管理员视图',
 
   // ---- 账单流水 ----
-  ledgerDescription: '最近 100 条钱包变动，含每笔扣费对应的请求。',
+  ledgerDescription: '调用按 UTC 每日汇总为一条订单，其他钱包变动逐条展示。',
   amount: '金额',
   balanceAfter: '变动后余额',
   kind: '类型',
+  kindDailyCharge: '每日调用',
+  businessDate: '业务日期',
+  dailyCallCount: '{count} 次调用',
+  dailyChargeNote: '当日调用费用汇总',
   relatedRequest: '关联请求',
   note: '备注',
   ledgerEmptyTitle: '还没有账单流水',

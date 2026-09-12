@@ -662,21 +662,10 @@ func (s *Service) accountUsage(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) accountLedger(w http.ResponseWriter, r *http.Request) {
 	account := accountFromContext(r)
-	rows, err := s.db.Query(r.Context(), `select wl.id,wl.amount::text,wl.balance_after::text,wl.kind,wl.request_id,wl.note,wl.created_at,wl.settlement_status,wl.settlement_date,wl.settled_at,coalesce(ws.error,'') from wallet_ledger wl left join wallet_settlements ws on ws.ledger_id=wl.id where wl.user_id=$1 order by wl.created_at desc limit 100`, account.userID)
+	data, err := s.walletLedger(r.Context(), account.userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
 		return
-	}
-	defer rows.Close()
-	data := []map[string]any{}
-	for rows.Next() {
-		var id, kind string
-		var requestID, note any
-		var amount, after, created, settlementDate, settledAt, settlementError any
-		var settlementStatus string
-		if rows.Scan(&id, &amount, &after, &kind, &requestID, &note, &created, &settlementStatus, &settlementDate, &settledAt, &settlementError) == nil {
-			data = append(data, map[string]any{"id": id, "amount": amount, "balance_after": after, "kind": kind, "request_id": requestID, "note": note, "created_at": created, "settlement_status": settlementStatus, "settlement_date": settlementDate, "settled_at": settledAt, "settlement_error": settlementError})
-		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": data})
 }

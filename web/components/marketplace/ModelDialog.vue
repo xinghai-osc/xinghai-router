@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { endpoints, type ModelPerformance, type ModelPerformanceGroup } from '~/src/api'
+import { ApiError, endpoints, type ModelPerformance, type ModelPerformanceGroup } from '~/src/api'
 import { formatContextWindow, formatLatency, formatRatio, formatRequestRate, formatSquarePrice, formatSuccessRate, groupPrice, type SquareModel, type TokenUnit } from '~/src/marketplace'
 
 const open = defineModel<boolean>('open', { required: true })
@@ -17,9 +17,9 @@ const rows = computed(() => {
       id: group.id,
       name: group.display_name || group.name,
       ratio: formatRatio(group.multiplier),
-      input: formatSquarePrice(groupPrice(model, 'input', group), props.unit),
-      output: formatSquarePrice(groupPrice(model, 'output', group), props.unit),
-      cache: formatSquarePrice(groupPrice(model, 'cache', group), props.unit),
+      input: formatSquarePrice(groupPrice(model, 'input', group), props.unit, model.currency),
+      output: formatSquarePrice(groupPrice(model, 'output', group), props.unit, model.currency),
+      cache: formatSquarePrice(groupPrice(model, 'cache', group), props.unit, model.currency),
     }))
 })
 
@@ -51,7 +51,9 @@ async function loadPerformance() {
     if (request === performanceRequest && props.model?.model === model.model) performance.value = result
   } catch (cause) {
     if (request === performanceRequest && props.model?.model === model.model) {
-      performanceError.value = cause instanceof Error ? cause.message : t('common.loadFailed')
+      if (!(cause instanceof ApiError && cause.status === 404)) {
+        performanceError.value = cause instanceof Error ? cause.message : t('common.loadFailed')
+      }
     }
   } finally {
     if (request === performanceRequest && props.model?.model === model.model) performancePending.value = false

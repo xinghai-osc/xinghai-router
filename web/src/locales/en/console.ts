@@ -172,10 +172,14 @@ export default {
   viewAdmin: 'Admin view',
 
   // ---- Ledger ----
-  ledgerDescription: 'The latest 100 wallet movements, linked to the request that caused them.',
+  ledgerDescription: 'Calls are grouped into one UTC daily order; other wallet movements remain itemized.',
   amount: 'Amount',
   balanceAfter: 'Balance after',
   kind: 'Kind',
+  kindDailyCharge: 'Daily calls',
+  businessDate: 'Business date',
+  dailyCallCount: '{count} calls',
+  dailyChargeNote: 'Daily call charges summarized',
   relatedRequest: 'Request',
   note: 'Note',
   ledgerEmptyTitle: 'No ledger entries yet',

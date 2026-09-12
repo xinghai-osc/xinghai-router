@@ -182,22 +182,29 @@ type pricingTimeRule struct {
 // whose total token count falls in a tier band. timeRules, when non-empty, are
 // evaluated at request time; the last matching rule overrides the base prices.
 type pricingRule struct {
-	input, cachedInput, output, multiplier float64
-	tiers                                  []pricingTier
-	timeRules                              []pricingTimeRule
-	found                                  bool
+	input, cachedInput, output, multiplier, exchangeRate float64
+	currency                                             string
+	tiers                                                []pricingTier
+	timeRules                                            []pricingTimeRule
+	found                                                bool
 }
 
 func (s *Service) pricingFor(ctx context.Context, model string) pricingRule {
 	rule, err := s.pricingCache.get(ctx, model, func(ctx context.Context) (pricingRule, error) {
 		var rule pricingRule
-		err := s.db.QueryRow(ctx, `select input_per_million,cached_input_per_million,output_per_million,multiplier from pricing_rules where model=$1 and enabled`, model).Scan(&rule.input, &rule.cachedInput, &rule.output, &rule.multiplier)
+		err := s.db.QueryRow(ctx, `select p.input_per_million,p.cached_input_per_million,p.output_per_million,p.multiplier,p.currency,coalesce(e.rate_to_base,0) from pricing_rules p left join exchange_rates e on e.currency=p.currency and e.enabled where p.model=$1 and p.enabled`, model).Scan(&rule.input, &rule.cachedInput, &rule.output, &rule.multiplier, &rule.currency, &rule.exchangeRate)
 		if err != nil {
 			// A missing row is a valid, cacheable answer; anything else is not cached.
 			if isNoRows(err) {
 				return pricingRule{}, nil
 			}
 			return pricingRule{}, err
+		}
+		if rule.currency == "" {
+			rule.currency = "CNY"
+		}
+		if rule.exchangeRate <= 0 {
+			return pricingRule{}, nil
 		}
 		rule.found = true
 		// Load tiered pricing bands (ordered by from_tokens ascending).

@@ -6,9 +6,10 @@ import { formatDateTime, formatNumber } from '~/src/format'
 const { t } = useI18n()
 const { settings } = useSiteSettings()
 
-useHead({
+usePageSeo({
   title: () => `${t('site.activityMetaTitle')} · ${settings.value.name}`,
-  meta: [{ name: 'description', content: () => t('site.activityMetaDescription') }],
+  description: () => t('site.activityMetaDescription'),
+  noindex: true,
 })
 
 const data = ref<PublicActivityItem[]>([])

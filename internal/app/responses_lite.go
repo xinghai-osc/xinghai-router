@@ -62,18 +62,18 @@ func normalizeResponsesLite(body []byte) ([]byte, bool, error) {
 		payload["parallel_tool_calls"] = false
 		changed = true
 	}
-	tools, ok := payload["tools"].([]any)
-	if ok {
+	rawTools, hasTools := payload["tools"]
+	if hasTools && rawTools != nil {
+		tools, ok := rawTools.([]any)
+		if !ok {
+			return body, false, fmt.Errorf("responses Lite requires tools to be an array")
+		}
 		top := make([]any, 0, len(tools))
 		namespaces := make([]any, 0)
 		for i, raw := range tools {
 			tool, isObject := raw.(map[string]any)
 			if !isObject {
-				if strings.TrimSpace(firstString(raw)) == "" {
-					return body, false, fmt.Errorf("responses Lite tool at index %d is invalid", i)
-				}
-				top = append(top, raw)
-				continue
+				return body, false, fmt.Errorf("responses Lite tool at index %d is invalid", i)
 			}
 			switch strings.TrimSpace(firstString(tool["type"])) {
 			case "function", "custom", "tool_search":
@@ -91,7 +91,10 @@ func normalizeResponsesLite(body []byte) ([]byte, bool, error) {
 			if err != nil {
 				return body, false, err
 			}
-			input = appendLiteAdditionalTools(input, namespaces)
+			input, err = appendLiteAdditionalToolsChecked(input, namespaces)
+			if err != nil {
+				return body, false, err
+			}
 			payload["input"] = input
 			changed = true
 		}
@@ -116,6 +119,9 @@ func liteInputItems(input any) ([]any, error) {
 	case nil:
 		return []any{}, nil
 	case string:
+		if value == "" {
+			return []any{}, nil
+		}
 		return []any{map[string]any{"type": "message", "role": "user", "content": value}}, nil
 	case []any:
 		return value, nil
@@ -135,4 +141,25 @@ func appendLiteAdditionalTools(items, namespaces []any) []any {
 		return items
 	}
 	return append(items, map[string]any{"type": "additional_tools", "role": "developer", "tools": namespaces})
+}
+
+func appendLiteAdditionalToolsChecked(items, namespaces []any) ([]any, error) {
+	for _, item := range items {
+		obj, ok := item.(map[string]any)
+		if !ok || strings.TrimSpace(firstString(obj["type"])) != "additional_tools" {
+			continue
+		}
+		rawTools, exists := obj["tools"]
+		if !exists || rawTools == nil {
+			obj["tools"] = append([]any(nil), namespaces...)
+			return items, nil
+		}
+		current, ok := rawTools.([]any)
+		if !ok {
+			return nil, fmt.Errorf("responses Lite input.additional_tools tools must be an array")
+		}
+		obj["tools"] = append(current, namespaces...)
+		return items, nil
+	}
+	return append(items, map[string]any{"type": "additional_tools", "role": "developer", "tools": namespaces}), nil
 }

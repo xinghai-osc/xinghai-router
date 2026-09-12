@@ -61,7 +61,11 @@ const tabs = computed(() => [
 const title = computed(() => (isRegister.value ? t('auth.signUpTitle') : isReset.value ? t('auth.resetTitle') : t('auth.signInTitle')))
 const lead = computed(() => (isRegister.value ? t('auth.signUpLead') : isReset.value ? t('auth.resetLead') : t('auth.signInLead')))
 
-useHead({ title: () => `${title.value} · ${settings.value.name}` })
+usePageSeo({
+  title: () => `${title.value} · ${settings.value.name}`,
+  description: () => lead.value,
+  noindex: true,
+})
 
 watch(mode, (next) => {
   formError.value = ''
@@ -212,7 +216,8 @@ async function submit() {
 </script>
 
 <template>
-  <div class="shell flex min-h-[calc(100dvh-9rem)] items-center justify-center py-16 md:py-20">
+  <NuxtPage v-if="route.path !== '/auth'" />
+  <div v-else class="shell flex min-h-[calc(100dvh-9rem)] items-center justify-center py-16 md:py-20">
     <div class="w-full max-w-[26rem]">
       <div class="flex flex-col items-center gap-5 text-center">
         <SiteLogo :name="settings.name" :icon-url="settings.icon_url" />

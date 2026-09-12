@@ -425,13 +425,20 @@ func responsesPassthroughEnabled(upstreamFormat string) bool {
 	return upstreamFormat == "openai"
 }
 
+// openAIResponsePreferred reports whether the adapter should try Responses first.
+// The adapter, not an administrator-selected channel format, owns this policy.
+func openAIResponsePreferred(provider, upstreamFormat string) bool {
+	return provider == "openai" && upstreamFormat != "openai_chat"
+}
+
 // resolveUpstreamFormat keeps the legacy empty channel setting compatible with
 // chat-completions while allowing explicitly configured Responses channels.
 func resolveUpstreamFormat(provider, configured string) string {
-	if configured != "" {
-		return configured
-	}
 	switch provider {
+	case "openai":
+		return "openai"
+	case "openai_chat":
+		return "openai_chat"
 	case "anthropic":
 		return "anthropic"
 	case "commandcode":
@@ -725,6 +732,9 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 	var lastUpstreamContentType string
 	var ch channel
 	var selectedDirectResponses bool
+	// OpenAI's native Responses adapter is preferred; a failed response request
+	// is retried through the dedicated Chat adapter before another channel.
+	responseFallbackAttempted := false
 	prefill := ""
 	failCode := "upstream_unreachable"
 	failDetail := failCode
@@ -762,10 +772,17 @@ tryChannels:
 				continue
 			}
 			upstreamFormat := resolveUpstreamFormat(ch.provider, ch.upstreamFormat)
+			if ch.provider == "openai" && responseFallbackAttempted {
+				upstreamFormat = "openai_chat"
+			}
 			if imageOptions.image {
 				upstreamFormat = "openai"
 			}
 			directResponses := responsesBody != nil && responsesPassthroughEnabled(upstreamFormat)
+			if responsesBody != nil && ch.provider == "openai" && !responseFallbackAttempted && openAIResponsePreferred(ch.provider, ch.upstreamFormat) {
+				directResponses = true
+				upstreamFormat = "openai"
+			}
 			selectedDirectResponses = directResponses
 			upstreamPath := ch.upstreamPath
 			if imageOptions.image {
@@ -844,6 +861,9 @@ tryChannels:
 			} else {
 				upstreamReq.Header.Set("Authorization", "Bearer "+ch.apiKey)
 			}
+			if ch.provider == "opencode_go" {
+				upstreamReq.Header.Set("x-opencode-session", opencodeSessionID(requestContext, r.Header.Get("x-opencode-session")))
+			}
 			upstreamReq.Header.Set("Content-Type", upstreamContentType)
 			upstreamReq.Header.Set("Accept", accept)
 			if ua := ch.pickUA(uaSeed(requestContext, ch.id)); ua != "" {
@@ -866,6 +886,14 @@ tryChannels:
 				break tryChannels
 			}
 			nonRetryable := false
+			if err == nil && ch.provider == "openai" && responsesBody != nil && !responseFallbackAttempted && openAIResponsePreferred(ch.provider, ch.upstreamFormat) && resp.StatusCode >= 400 {
+				// Native Responses is preferred, but unsupported/error responses are
+				// retried once through the dedicated OpenAI Chat adapter.
+				responseFallbackAttempted = true
+				resp.Body.Close()
+				i--
+				continue
+			}
 			if err == nil && !reliability.retryable(resp.StatusCode) {
 				// The upstream status is not configured as retryable, so retrying
 				// other channels cannot help. The failure is still counted and the
@@ -1169,7 +1197,7 @@ func (s *Service) reserveUsage(ctx context.Context, key keyContext, model string
 	estimatedPrompt := bodyLen / 3
 	input, cachedInput, output = pricing.resolveTier(int64(estimatedPrompt+resolved), input, cachedInput, output)
 	// Reserve the configured maximum output plus a conservative request-body estimate.
-	amount := (float64(estimatedPrompt)*input + float64(resolved)*output) / 1000000 * pricing.multiplier * groupMultiplier
+	amount := (float64(estimatedPrompt)*input + float64(resolved)*output) / 1000000 * pricing.multiplier * groupMultiplier * pricingExchangeRate(pricing)
 	if amount == 0 {
 		// Zero list prices are allowed only when an explicit enabled rule exists.
 		return reservation{}, nil
@@ -1189,6 +1217,13 @@ func (s *Service) reserveUsage(ctx context.Context, key keyContext, model string
 		return reservation{}, errInvalid
 	}
 	return reservation{amount: amount}, nil
+}
+
+func pricingExchangeRate(pricing pricingRule) float64 {
+	if pricing.exchangeRate > 0 {
+		return pricing.exchangeRate
+	}
+	return 1
 }
 
 func usageCost(prompt, cached, completion int, input, cachedInput, output, multiplier, groupMultiplier float64) float64 {
@@ -1280,6 +1315,9 @@ func (s *Service) settleUsage(ctx context.Context, key keyContext, held reservat
 // computeUsageCost returns the cost of a request under the active pricing rule,
 // shared by the wallet settlement and the subscription-covered accounting path.
 func computeUsageCost(prompt, cached, completion int, pricing pricingRule, groupMultiplier float64) float64 {
+	if !pricing.found {
+		return 0
+	}
 	// Apply time-based pricing, then tiered pricing for the actual token count.
 	input, cachedInput, output := pricing.resolvePricing(time.Now())
 	var cost float64
@@ -1291,7 +1329,7 @@ func computeUsageCost(prompt, cached, completion int, pricing pricingRule, group
 	} else {
 		cost = usageCost(prompt, cached, completion, input, cachedInput, output, pricing.multiplier, groupMultiplier)
 	}
-	return cost
+	return cost * pricingExchangeRate(pricing)
 }
 
 // settleSubscriptionUsage records the cost of a successful subscription-covered request

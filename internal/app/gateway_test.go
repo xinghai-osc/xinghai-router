@@ -42,12 +42,10 @@ func TestResolveUpstreamFormatDefaultsToChat(t *testing.T) {
 	tests := []struct {
 		provider, configured, want string
 	}{
-		{"openai", "", "openai_chat"},
+		{"openai", "", "openai"},
 		{"custom", "", "openai_chat"},
 		{"anthropic", "", "anthropic"},
 		{"commandcode", "", "commandcode"},
-		{"openai", "openai", "openai"},
-		{"openai", "openai_chat", "openai_chat"},
 	}
 	for _, tt := range tests {
 		if got := resolveUpstreamFormat(tt.provider, tt.configured); got != tt.want {

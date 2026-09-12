@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { BadgeDollarSign } from 'lucide-vue-next'
 import { endpoints, type Pricing, type PricingForm, type PricingTier, type PricingTierForm, type PricingTimeRule, type PricingTimeRuleForm } from '~/src/api'
-import { formatDateTime, formatMoney } from '~/src/format'
+import { formatDateTime } from '~/src/format'
 
 definePageMeta({ layout: 'console', middleware: 'console-auth' })
 
@@ -32,6 +32,7 @@ const form = reactive({
   cached_input_per_million: '0',
   output_per_million: '0',
   multiplier: '1',
+  currency: 'CNY',
 })
 
 function openCreate() {
@@ -42,6 +43,7 @@ function openCreate() {
   form.cached_input_per_million = '0'
   form.output_per_million = '0'
   form.multiplier = '1'
+  form.currency = 'CNY'
   dialogOpen.value = true
 }
 
@@ -53,6 +55,7 @@ function openEdit(rule: Pricing) {
   form.cached_input_per_million = String(rule.cached_input_per_million)
   form.output_per_million = String(rule.output_per_million)
   form.multiplier = String(rule.multiplier)
+  form.currency = rule.currency || 'CNY'
   dialogOpen.value = true
 }
 
@@ -72,6 +75,10 @@ async function save() {
   if (input === null || cached === null || output === null) { formError.value = t('admin.rateInvalid'); return }
 
   const multiplier = Number(form.multiplier)
+  if (!/^[A-Za-z]{3,8}$/.test(form.currency.trim())) {
+    formError.value = t('admin.currencyInvalid')
+    return
+  }
   if (!Number.isFinite(multiplier) || multiplier <= 0 || multiplier > 1000) {
     formError.value = t('admin.multiplierInvalid')
     return
@@ -83,6 +90,7 @@ async function save() {
     cached_input_per_million: cached,
     output_per_million: output,
     multiplier,
+    currency: form.currency.trim().toUpperCase(),
   }
 
   const ok = await run(() => endpoints.savePricing(payload))
@@ -94,13 +102,14 @@ async function save() {
 
 const syncOpen = ref(false)
 const syncError = ref('')
-const syncForm = reactive({ base_url: '', api_key: '', price_per_quota_unit: '0.002' })
+const syncForm = reactive({ base_url: '', api_key: '', price_per_quota_unit: '0.002', currency: 'CNY' })
 
 function openSync() {
   syncError.value = ''
   syncForm.base_url = ''
   syncForm.api_key = ''
   syncForm.price_per_quota_unit = '0.002'
+  syncForm.currency = 'CNY'
   syncOpen.value = true
 }
 
@@ -122,6 +131,7 @@ async function sync() {
       base_url: baseUrl,
       api_key: apiKey,
       price_per_quota_unit: unitPrice,
+      currency: syncForm.currency.trim().toUpperCase() || 'CNY',
     })
     synced = result.synced
   })
@@ -146,9 +156,17 @@ const tierForm = reactive({
   output_per_million: '0',
 })
 const editingTier = ref(false)
+const tierModelCurrency = ref('CNY')
+
+function formatPricingRate(value: number | string | null, currency: string): string {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) return '—'
+  return `${currency || 'CNY'} ${numeric.toFixed(4)}`
+}
 
 async function openTiers(rule: Pricing) {
   tierModel.value = rule.model
+  tierModelCurrency.value = rule.currency || 'CNY'
   tierError.value = ''
   tierForm.id = ''
   tierForm.from_tokens = '0'
@@ -406,6 +424,7 @@ async function deleteTimeRule(rule: PricingTimeRule) {
         <thead>
           <tr>
             <th>{{ t('admin.model') }}</th>
+            <th>{{ t('admin.currency') }}</th>
             <th class="num">{{ t('admin.inputPerMillion') }}</th>
             <th class="num">{{ t('admin.cachedInputPerMillion') }}</th>
             <th class="num">{{ t('admin.outputPerMillion') }}</th>
@@ -418,9 +437,10 @@ async function deleteTimeRule(rule: PricingTimeRule) {
         <tbody>
           <tr v-for="rule in filtered" :key="rule.id">
             <td class="font-medium text-ink">{{ rule.model }}</td>
-            <td class="num">{{ formatMoney(rule.input_per_million, 4) }}</td>
-            <td class="num">{{ formatMoney(rule.cached_input_per_million, 4) }}</td>
-            <td class="num">{{ formatMoney(rule.output_per_million, 4) }}</td>
+            <td class="font-mono text-muted">{{ rule.currency || 'CNY' }}</td>
+            <td class="num">{{ (rule.currency || 'CNY') }} {{ Number(rule.input_per_million).toFixed(4) }}</td>
+            <td class="num">{{ (rule.currency || 'CNY') }} {{ Number(rule.cached_input_per_million).toFixed(4) }}</td>
+            <td class="num">{{ (rule.currency || 'CNY') }} {{ Number(rule.output_per_million).toFixed(4) }}</td>
             <td class="num">{{ rule.multiplier }}</td>
             <td>
               <UiBadge :tone="rule.enabled ? 'success' : 'neutral'" dot>
@@ -444,9 +464,14 @@ async function deleteTimeRule(rule: PricingTimeRule) {
       <div class="space-y-4">
         <UiAlert v-if="formError" tone="danger">{{ formError }}</UiAlert>
 
-        <UiField :label="t('admin.model')" required>
-          <UiInput v-model="form.model" mono :disabled="editing" />
-        </UiField>
+        <div class="grid gap-4 sm:grid-cols-2">
+          <UiField :label="t('admin.model')" required>
+            <UiInput v-model="form.model" mono :disabled="editing" />
+          </UiField>
+          <UiField :label="t('admin.currency')" :hint="t('admin.currencyHint')" required>
+            <UiInput v-model="form.currency" mono maxlength="8" />
+          </UiField>
+        </div>
 
         <div class="grid gap-4 sm:grid-cols-2">
           <UiField :label="t('admin.inputPerMillion')" required>
@@ -483,6 +508,9 @@ async function deleteTimeRule(rule: PricingTimeRule) {
         <UiField :label="t('admin.pricePerQuotaUnit')" :hint="t('admin.pricePerQuotaUnitHint')" required>
           <UiInput v-model="syncForm.price_per_quota_unit" type="number" mono />
         </UiField>
+        <UiField :label="t('admin.currency')" :hint="t('admin.currencyHint')" required>
+          <UiInput v-model="syncForm.currency" mono maxlength="8" />
+        </UiField>
       </div>
 
       <template #footer>
@@ -513,9 +541,9 @@ async function deleteTimeRule(rule: PricingTimeRule) {
           <tbody>
             <tr v-for="tier in tiers" :key="tier.id">
               <td class="num">{{ tier.from_tokens.toLocaleString() }}</td>
-              <td class="num">{{ formatMoney(tier.input_per_million, 4) }}</td>
-              <td class="num">{{ formatMoney(tier.cached_input_per_million, 4) }}</td>
-              <td class="num">{{ formatMoney(tier.output_per_million, 4) }}</td>
+              <td class="num">{{ `${tierModelCurrency} ${Number(tier.input_per_million).toFixed(4)}` }}</td>
+              <td class="num">{{ formatPricingRate(tier.cached_input_per_million, tierModelCurrency) }}</td>
+              <td class="num">{{ formatPricingRate(tier.output_per_million, tierModelCurrency) }}</td>
               <td v-if="canManage">
                 <div class="flex gap-1">
                   <UiButton variant="ghost" size="sm" @click="startEditTier(tier)">{{ t('common.edit') }}</UiButton>
@@ -580,8 +608,8 @@ async function deleteTimeRule(rule: PricingTimeRule) {
               <td class="font-medium text-ink">{{ rule.name || '—' }}</td>
               <td class="whitespace-nowrap">{{ formatMinute(rule.start_minute) }}–{{ formatMinute(rule.end_minute) }}</td>
               <td class="text-muted text-sm">{{ formatWeekdays(rule.weekdays) }}</td>
-              <td class="num">{{ formatMoney(rule.input_per_million, 4) }}</td>
-              <td class="num">{{ formatMoney(rule.output_per_million, 4) }}</td>
+              <td class="num">{{ formatPricingRate(rule.input_per_million, pricing.data.value.data.find(item => item.model === timeModel)?.currency || 'CNY') }}</td>
+              <td class="num">{{ formatPricingRate(rule.output_per_million, pricing.data.value.data.find(item => item.model === timeModel)?.currency || 'CNY') }}</td>
               <td>
                 <UiBadge :tone="rule.enabled ? 'success' : 'neutral'" dot>
                   {{ rule.enabled ? t('common.enabled') : t('common.disabled') }}

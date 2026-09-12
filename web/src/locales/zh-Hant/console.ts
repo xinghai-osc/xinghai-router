@@ -150,10 +150,14 @@ export default {
   viewAdmin: '管理員視圖',
 
   // ---- 帳單流水 ----
-  ledgerDescription: '最近 100 條錢包變動，含每筆扣費對應的請求。',
+  ledgerDescription: '調用按 UTC 每日匯總為一條訂單，其他錢包變動逐條展示。',
   amount: '金額',
   balanceAfter: '變動後餘額',
   kind: '類型',
+  kindDailyCharge: '每日調用',
+  businessDate: '業務日期',
+  dailyCallCount: '{count} 次調用',
+  dailyChargeNote: '當日調用費用匯總',
   relatedRequest: '關聯請求',
   note: '備註',
   ledgerEmptyTitle: '還沒有帳單流水',

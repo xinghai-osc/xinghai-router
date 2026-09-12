@@ -20,7 +20,11 @@ const done = ref(false)
 const title = computed(() => t('auth.resetTitle'))
 const lead = computed(() => t('auth.resetLead'))
 
-useHead({ title: () => `${title.value} · ${settings.value.name}` })
+usePageSeo({
+  title: () => `${title.value} · ${settings.value.name}`,
+  description: () => lead.value,
+  noindex: true,
+})
 
 function validate(): string {
   if (form.password.length < 8) return t('auth.passwordTooShort')

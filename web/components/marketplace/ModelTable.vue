@@ -13,9 +13,9 @@ const rows = computed(() => props.models.map((model) => {
     model,
     groupName: display?.name ?? t('common.none'),
     ratio: display ? formatRatio(display.multiplier) : '',
-    input: formatSquarePrice(effectivePrice(model, 'input', props.group), props.unit),
-    output: formatSquarePrice(effectivePrice(model, 'output', props.group), props.unit),
-    cache: formatSquarePrice(effectivePrice(model, 'cache', props.group), props.unit),
+    input: formatSquarePrice(effectivePrice(model, 'input', props.group), props.unit, model.currency),
+    output: formatSquarePrice(effectivePrice(model, 'output', props.group), props.unit, model.currency),
+    cache: formatSquarePrice(effectivePrice(model, 'cache', props.group), props.unit, model.currency),
   }
 }))
 </script>

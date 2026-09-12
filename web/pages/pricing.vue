@@ -7,9 +7,9 @@ const { settings } = useSiteSettings()
 const { plans, loading: plansLoading, error: plansError, loadPlans } = usePlans()
 const { models, groups, loading: catalogLoading, loaded: catalogLoaded, error: catalogError, loadCatalog } = useCatalog()
 
-useHead({
+usePageSeo({
   title: () => `${t('site.pgMetaTitle')} · ${settings.value.name}`,
-  meta: [{ name: 'description', content: () => t('site.pgMetaDescription') }],
+  description: () => t('site.pgMetaDescription'),
 })
 
 const search = ref('')

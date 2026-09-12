@@ -1,15 +1,21 @@
 import tailwindcss from '@tailwindcss/vite'
 
-const publicRoutes = ['/', '/auth', '/auth/reset', '/redeem', '/models', '/rankings', '/pricing', '/terms', '/privacy']
+const publicRoutes = ['/', '/auth', '/auth/reset', '/redeem', '/activity', '/models', '/rankings', '/pricing', '/terms', '/privacy']
+const seoRoutes = [...publicRoutes, '/robots.txt', '/sitemap.xml']
+const noindexHeaders = { headers: { 'X-Robots-Tag': 'noindex, nofollow' } }
 
 export default defineNuxtConfig({
   modules: ['@nuxt/eslint'],
+  runtimeConfig: {
+    public: {
+      siteUrl: '',
+    },
+  },
   css: ['~/assets/css/main.css'],
   components: [{ path: '~/components', pathPrefix: true }],
   app: {
     pageTransition: { name: 'page' },
     head: {
-      htmlAttrs: { lang: 'zh-CN' },
       link: [
         { rel: 'preconnect', href: 'https://fonts.googleapis.com' },
         { rel: 'preconnect', href: 'https://fonts.gstatic.com', crossorigin: '' },
@@ -43,13 +49,22 @@ export default defineNuxtConfig({
   },
   nitro: {
     prerender: {
-      routes: publicRoutes,
-      // Default concurrency is 1 (sequential) — 8 independent routes each take
-      // ~365 ms, totalling 4.4 s. Parallelising saves ~3 s per build.
+      routes: seoRoutes,
+      crawlLinks: false,
+      // Default concurrency is 1 (sequential) — these independent routes benefit
+      // from parallel rendering during static generation.
       concurrency: 8,
     },
   },
-  routeRules: Object.fromEntries(publicRoutes.map(route => [route, { prerender: true }])),
+  routeRules: {
+    ...Object.fromEntries(seoRoutes.map(route => [route, { prerender: true }])),
+    '/auth': { prerender: true, ...noindexHeaders },
+    '/auth/**': { prerender: true, ...noindexHeaders },
+    '/redeem': { prerender: true, ...noindexHeaders },
+    '/activity': { prerender: true, ...noindexHeaders },
+    '/console': noindexHeaders,
+    '/console/**': noindexHeaders,
+  },
   devServer: { port: 5173, host: '127.0.0.1' },
   compatibilityDate: '2026-07-16',
 })

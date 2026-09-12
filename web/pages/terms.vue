@@ -5,9 +5,10 @@ const { t } = useI18n()
 const { settings } = useSiteSettings()
 const contactEmail = computed(() => settings.value.contact_email?.trim() || t('site.legalEmail'))
 
-useHead({
+usePageSeo({
   title: () => `${t('site.termsMetaTitle')} · ${settings.value.name}`,
-  meta: [{ name: 'description', content: () => t('site.termsMetaDescription') }],
+  description: () => t('site.termsMetaDescription'),
+  type: 'article',
 })
 
 const SECTIONS: Section[] = [

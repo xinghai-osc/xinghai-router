@@ -11,9 +11,9 @@ const { models, groups, loaded, error, loadCatalog } = useCatalog()
 const route = useRoute()
 const router = useRouter()
 
-useHead({
+usePageSeo({
   title: () => `${t('site.sqMetaTitle')} · ${settings.value.name}`,
-  meta: [{ name: 'description', content: () => t('site.sqMetaDescription') }],
+  description: () => t('site.sqMetaDescription'),
 })
 
 const search = ref('')

@@ -8,7 +8,7 @@ export interface KeyQuotaForm { window: 'day' | 'month' | 'total'; max_requests?
 /** `groups` holds group ids, not names — resolve them through /admin/groups. */
 export interface RequestOverrides { delete: string[]; set: Record<string, unknown> }
 export interface ChannelUsageWindow { window: string; used: number | null; limit: number | null; remaining: number | null; percent: number | null; reset_at?: string; unit?: string }
-export interface Channel { id: string; name: string; base_url: string; avg_first_token_ms: number | null; upstream_balance: number | null; upstream_used: number | null; upstream_total: number | null; upstream_currency: string; upstream_usage_windows: ChannelUsageWindow[]; upstream_balance_supported: boolean; upstream_balance_error: string; upstream_balance_fetched_at: string | null; provider: 'openai' | 'ollama' | 'kimi' | 'opencode_go' | 'anthropic' | 'deepseek' | 'commandcode' | 'custom'; models: string[]; test_model: string; enabled: boolean; auto_disabled: boolean; auto_disable: boolean; disabled_reason: string; priority: number; weight: number; last_test_time: string | null; last_error: string | null; response_time_ms: number; used_requests: number; used_tokens: number; groups: string[]; key_type: 'single' | 'multi'; key_count: number; upstream_path: string; upstream_format: string; request_overrides: RequestOverrides; ua_pool: string[]; created_at: string; updated_at: string; model_routes: ModelRoute[]; user_id: string | null; user_email: string; user_name: string }
+export interface Channel { id: string; name: string; base_url: string; avg_first_token_ms: number | null; upstream_balance: number | null; upstream_used: number | null; upstream_total: number | null; upstream_currency: string; upstream_usage_windows: ChannelUsageWindow[]; upstream_balance_supported: boolean; upstream_balance_error: string; upstream_balance_fetched_at: string | null; provider: 'openai' | 'openai_chat' | 'ollama' | 'kimi' | 'opencode_go' | 'anthropic' | 'deepseek' | 'commandcode' | 'custom'; models: string[]; test_model: string; enabled: boolean; auto_disabled: boolean; auto_disable: boolean; disabled_reason: string; priority: number; weight: number; last_test_time: string | null; last_error: string | null; response_time_ms: number; used_requests: number; used_tokens: number; groups: string[]; key_type: 'single' | 'multi'; key_count: number; upstream_path: string; upstream_format: string; request_overrides: RequestOverrides; ua_pool: string[]; created_at: string; updated_at: string; model_routes: ModelRoute[]; user_id: string | null; user_email: string; user_name: string }
 
 export interface ChannelKey { id: string; name: string; enabled: boolean; priority: number; last_checked_at: string | null; last_error: string | null; created_at: string; upstream_balance: number | null; upstream_used: number | null; upstream_total: number | null; upstream_currency: string; upstream_usage_windows: ChannelUsageWindow[]; upstream_balance_supported: boolean; upstream_balance_error: string; upstream_balance_fetched_at: string | null }
 export interface ChannelKeyForm { name?: string; api_key?: string; priority?: number }
@@ -39,11 +39,13 @@ export interface Group { id: string; name: string; display_name: string | null; 
 export interface GroupUpdate { id: string; multiplier: number; max_concurrency: number | null; public: boolean; display_name?: string; description?: string }
 export interface RequestLog { request_id: string; user_id: string | null; user_name: string; api_key_id: string | null; key_name: string; channel_id: string | null; channel_name: string; channel_key_id: string | null; channel_key_name: string; group_id: string | null; group_name: string; model: string; status_code: number; prompt_tokens: number | null; completion_tokens: number | null; total_tokens: number | null; duration_ms: number; first_token_ms: number | null; error_code: string | null; error_detail: string; client_ip: string; user_agent: string; created_at: string }
 export interface Account { id: string; email: string; name: string; role: string; avatar_url: string; permissions: string[]; balance: number; reserved: number; pending_settlement: number; leaderboard_opt_in: boolean; leaderboard_mask_name: boolean; data_usage_enabled: boolean; must_change_password?: boolean }
-export interface Pricing { id: string; model: string; input_per_million: number; cached_input_per_million: number; output_per_million: number; multiplier: number; enabled: boolean; updated_at: string }
+export interface Pricing { id: string; model: string; input_per_million: number; cached_input_per_million: number; output_per_million: number; multiplier: number; currency: string; enabled: boolean; updated_at: string }
 export interface PricingTier { id: string; model: string; from_tokens: number; input_per_million: number; cached_input_per_million: number; output_per_million: number; created_at: string }
 export interface PricingTierForm { id?: string; model: string; from_tokens: number; input_per_million: number; cached_input_per_million: number; output_per_million: number }
 export interface PricingTimeRule { id: string; model: string; name: string; start_minute: number; end_minute: number; weekdays: string; input_per_million: number; cached_input_per_million: number; output_per_million: number; enabled: boolean; created_at: string }
 export interface PricingTimeRuleForm { id?: string; model: string; name: string; start_minute: number; end_minute: number; weekdays: string; input_per_million: number; cached_input_per_million: number; output_per_million: number; enabled?: boolean }
+export interface ExchangeRate { currency: string; rate_to_base: number; enabled: boolean; updated_at: string }
+export interface ExchangeRateForm { currency: string; rate_to_base: number; enabled: boolean }
 export interface CatalogGroup { id: string; name: string; multiplier: number; public: boolean; display_name?: string | null }
 export interface ModelCatalogMetadata {
   description: string | null
@@ -62,6 +64,7 @@ export interface CatalogModel {
   model: string
   provider: string
   provider_slug: string
+  currency: string
   input_per_million: number | null
   cached_input_per_million: number | null
   output_per_million: number | null
@@ -92,7 +95,7 @@ export interface UsageRecord { request_id: string; model: string; prompt_tokens:
 export interface AccountUsageSummary { requests: number; tokens: number; cost: string }
 export interface DailyUsageRecord { day: string; requests: number; prompt_tokens: number; completion_tokens: number }
 export interface ActivityLog { id: string; type: 'request' | 'login' | 'register' | 'logout' | 'topup' | 'operation'; action: string; user_id: string; user_name: string; model: string; group_id: string; group_name: string; status_code: number | null; duration_ms: number | null; first_token_ms: number | null; prompt_tokens: number; completion_tokens: number; total_tokens: number; cost: number; details: Record<string, unknown>; created_at: string }
-export interface LedgerEntry { id: string; amount: string; balance_after: string; kind: string; request_id: string | null; note: string | null; created_at: string; settlement_status: 'not_applicable' | 'pending' | 'processing' | 'settled' | 'failed'; settlement_date: string | null; settled_at: string | null; settlement_error?: string }
+export interface LedgerEntry { id: string; amount: string; balance_after: string; kind: string; request_id: string | null; note: string | null; created_at: string; settlement_status: 'not_applicable' | 'pending' | 'processing' | 'settled' | 'failed'; settlement_date: string | null; settled_at: string | null; settlement_error?: string; daily?: boolean; business_date?: string | null; call_count?: number }
 export interface AdminLedgerEntry extends LedgerEntry { user_id: string; user_email: string; user_name: string }
 
 export interface CheckinEntry { checkin_date: string; streak: number; reward: string; created_at: string }
@@ -692,8 +695,8 @@ export interface ChannelForm { name: string; provider: string; base_url: string;
 export interface ProviderForm { name: string; slug: string; prefixes: string[]; priority: number; id?: string }
 export interface PaymentSettingsForm { enabled: boolean; base_url: string; merchant_id: string; merchant_key: string; public_base_url: string }
 export interface PaymentMethodForm { code: string; name: string; enabled: boolean }
-export interface PricingForm { model: string; input_per_million: number; cached_input_per_million: number; output_per_million: number; multiplier: number }
-export interface NewApiPricingForm { base_url: string; api_key: string; price_per_quota_unit: number }
+export interface PricingForm { model: string; input_per_million: number; cached_input_per_million: number; output_per_million: number; multiplier: number; currency: string }
+export interface NewApiPricingForm { base_url: string; api_key: string; price_per_quota_unit: number; currency?: string }
 export interface SubscriptionPlanForm { name: string; description: string; price: string; currency: string; billing_period: string; credit_amount: string; group_id: string; model_whitelist: string[]; max_requests_per_period: number | null; max_credit_per_period: number | null; overage_policy: OveragePolicy; model_quotas: SubscriptionPlanModelQuota[]; sort_order: number; enabled: boolean }
 export interface UserUpdate { id?: number; name?: string; email?: string; role?: string; enabled?: boolean; password?: string; balance?: number | null; note?: string; permissions?: string[]; groups?: string[]; leaderboard_opt_in?: boolean; leaderboard_mask_name?: boolean; data_usage_enabled?: boolean; max_concurrency?: number | null; inviter_id?: number | null }
 export interface UserCreate { name: string; email: string; password: string; role: string; enabled: boolean; permissions: string[]; groups: string[] }
@@ -825,6 +828,8 @@ export const endpoints = {
   removeProvider: (id: string) => send(`/admin/providers/${encodeURIComponent(id)}`, 'DELETE'),
   getAdminPricing: () => get<{ data: Pricing[] }>('/admin/pricing'),
   savePricing: (form: PricingForm) => send('/admin/pricing', 'POST', form),
+  getAdminExchangeRates: () => get<{ data: ExchangeRate[] }>('/admin/exchange-rates'),
+  saveExchangeRate: (form: ExchangeRateForm) => send('/admin/exchange-rates', 'POST', form),
   syncNewApiPricing: (form: NewApiPricingForm) => post<{ synced: number; skipped: number }>('/admin/pricing/newapi/sync', form),
   getAdminPricingTiers: (model: string) => get<{ data: PricingTier[] }>(`/admin/pricing/tiers?model=${encodeURIComponent(model)}`),
   savePricingTier: (form: PricingTierForm) => send('/admin/pricing/tiers', 'POST', form),
@@ -844,7 +849,7 @@ export const endpoints = {
 
   getConversationCacheSettings: () => get<ConversationCacheSettings>('/admin/conversation-cache/settings'),
   updateConversationCacheSettings: (form: ConversationCacheSettings) => put<ConversationCacheSettings>('/admin/conversation-cache/settings', form),
-  getConversationLogs: (query = '') => get<{ data: ConversationLog[]; total: number; page: number; page_size: number }>(`/admin/conversation-cache${query}`),
+  getConversationLogs: (query = '') => get<Page<ConversationLog>>(`/admin/conversation-cache${query}`),
   getConversationLogDetail: (id: string) => get<ConversationLogDetail>(`/admin/conversation-cache/${encodeURIComponent(id)}`),
   getAdminSiteSettings: () => get<AdminSiteSettings>('/admin/site-settings'),
   updateAdminSiteSettings: (form: SiteSettingsForm) => put<AdminSiteSettings>('/admin/site-settings', form),

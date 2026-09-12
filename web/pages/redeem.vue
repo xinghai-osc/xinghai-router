@@ -7,9 +7,10 @@ const { t } = useI18n()
 const { settings } = useSiteSettings()
 const { toast } = useToast()
 
-useHead({
+usePageSeo({
   title: () => `${t('site.redeemMetaTitle')} · ${settings.value.name}`,
-  meta: [{ name: 'description', content: () => t('site.redeemMetaDescription') }],
+  description: () => t('site.redeemMetaDescription'),
+  noindex: true,
 })
 
 const route = useRoute()

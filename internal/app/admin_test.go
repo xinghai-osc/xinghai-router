@@ -66,11 +66,11 @@ func TestFetchChannelModelsRejectsInvalidRequestBeforeNetworkAccess(t *testing.T
 
 func TestValidateModelMetadataInput(t *testing.T) {
 	valid := modelMetadataInput{
-		Model:           "vendor/model",
-		Description:     "A useful model",
-		InputModalities: []string{" text ", "image"},
+		Model:            "vendor/model",
+		Description:      "A useful model",
+		InputModalities:  []string{" text ", "image"},
 		OutputModalities: []string{"text"},
-		ContextWindow:   ptrInt64(128000),
+		ContextWindow:    ptrInt64(128000),
 	}
 	if !validateModelMetadataInput(&valid) {
 		t.Fatal("valid model metadata was rejected")

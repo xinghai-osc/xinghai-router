@@ -38,6 +38,7 @@ func (s *Service) responsesWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	first := true
 	model := ""
+	sessionLite := isResponsesLiteHeader(r.Header.Get(responsesLiteHeader))
 	for {
 		readCtx := ctx
 		var stop context.CancelFunc
@@ -59,14 +60,15 @@ func (s *Service) responsesWebSocket(w http.ResponseWriter, r *http.Request) {
 			_ = conn.Close(websocket.StatusMessageTooBig, "request body is too large")
 			return
 		}
-		normalized, requestModel, err := normalizeResponsesWSRequest(payload, model, first)
+		sessionLite = sessionLite || isResponsesLiteBody(payload)
+		normalized, requestModel, err := normalizeResponsesWSRequest(payload, model, first, sessionLite)
 		if err != nil {
 			_ = conn.Close(websocket.StatusPolicyViolation, err.Error())
 			return
 		}
 		model = requestModel
 		first = false
-		converted, _, err := responsesRequestToChatCompletions(normalized)
+		converted, echo, err := responsesRequestToChatCompletions(normalized)
 		if err != nil {
 			_ = conn.Close(websocket.StatusPolicyViolation, err.Error())
 			return
@@ -85,14 +87,15 @@ func (s *Service) responsesWebSocket(w http.ResponseWriter, r *http.Request) {
 		}
 		// The WS bridge always consumes an upstream stream and emits Responses
 		// event JSON frames, matching Sub2Api's HTTP-bridge behavior.
-		adapter := &wsResponsesAdapter{conn: conn, ctx: policyCtx, model: model}
+		echo.model = model
+		adapter := &wsResponsesAdapter{conn: conn, ctx: policyCtx, model: model, echo: echo}
 		request := r.Clone(policyCtx)
 		request.Body = io.NopCloser(bytes.NewReader(converted))
 		s.proxyChatCompletions(adapter, request, converted, model, true, 0, nil, adapter.stream, nil, nil, nil, nil)
 	}
 }
 
-func normalizeResponsesWSRequest(body []byte, sessionModel string, first bool) ([]byte, string, error) {
+func normalizeResponsesWSRequest(body []byte, sessionModel string, first bool, liteHeader ...bool) ([]byte, string, error) {
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil || payload == nil {
 		return nil, "", fmt.Errorf("invalid websocket request payload")
@@ -123,7 +126,8 @@ func normalizeResponsesWSRequest(body []byte, sessionModel string, first bool) (
 	if previous, _ := payload["previous_response_id"].(string); strings.TrimSpace(previous) != "" && !strings.HasPrefix(strings.TrimSpace(previous), "resp_") {
 		return nil, "", fmt.Errorf("previous_response_id must be a response.id (resp_*), not a message id")
 	}
-	if isResponsesLiteBody(body) {
+	lite := isResponsesLiteBody(body) || (len(liteHeader) > 0 && liteHeader[0])
+	if lite {
 		normalized, _, err := normalizeResponsesLite(body)
 		if err != nil {
 			return nil, "", err
@@ -148,10 +152,13 @@ type wsResponsesAdapter struct {
 	mu    sync.Mutex
 	buf   bytes.Buffer
 	model string
+	echo  responsesEcho
 }
 
 func (a *wsResponsesAdapter) stream(w http.ResponseWriter, resp *http.Response) (streamStats, error) {
-	return streamChatCompletionsToResponses(w, resp, "resp_"+randomIDString(), responsesEcho{model: a.model})
+	echo := a.echo
+	echo.model = a.model
+	return streamChatCompletionsToResponses(w, resp, "resp_"+randomIDString(), echo)
 }
 
 func (a *wsResponsesAdapter) Header() http.Header { return http.Header{} }

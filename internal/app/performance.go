@@ -89,6 +89,15 @@ func (s *Service) computeModelPerformance(ctx context.Context, model string) (mo
 			select c.id
 			from channels c
 			where c.enabled and not c.auto_disabled and c.user_id is null
+				and (
+					not exists(select 1 from channel_groups cg where cg.channel_id=c.id)
+					or exists(
+						select 1
+						from channel_groups cg
+						join groups g on g.id=cg.group_id
+						where cg.channel_id=c.id and g."public"
+					)
+				)
 		), visible_groups as (
 			select g.id
 			from groups g

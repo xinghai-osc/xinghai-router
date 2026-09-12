@@ -185,6 +185,72 @@ func TestIntegrationWalletReservationReleaseAndChargeConcurrent(t *testing.T) {
 	}
 }
 
+func TestIntegrationWalletLedgerAggregatesDailyCharges(t *testing.T) {
+	db, _ := integrationPool(t)
+	defer db.Close()
+	resetIntegrationDatabase(t, db)
+	userID, _ := integrationUser(t, db, "ledger-integration@example.com", 10)
+	s := integrationService(t, db)
+	insert := func(amount, kind, requestID, createdAt, status, settlementDate string, balanceAfter float64) {
+		t.Helper()
+		if _, err := db.Exec(context.Background(), `insert into wallet_ledger(id,user_id,amount,balance_after,kind,request_id,note,created_at,settlement_status,settlement_date)
+			values(gen_random_uuid(),$1,$2::numeric,$3,$4,$5,'integration',$6::timestamptz,$7,nullif($8,'')::date)`, userID, amount, balanceAfter, kind, requestID, createdAt, status, settlementDate); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insert("-0.12500000", "charge", "ledger-old", "2026-08-25T23:59:00Z", "settled", "", 10)
+	insert("-0.25000000", "charge", "ledger-pending", "2026-08-26T00:01:00Z", "pending", "2026-08-26", 10)
+	insert("-0.12500000", "charge", "ledger-offset", "2026-08-26T08:02:00+08:00", "settled", "2026-08-26", 9.5)
+	insert("5.00000000", "topup", "topup-1", "2026-08-26T08:05:00Z", "not_applicable", "", 15)
+	insert("-1.00000000", "reservation", "hold-1", "2026-08-26T08:06:00Z", "not_applicable", "", 15)
+	insert("1.00000000", "release", "release-1", "2026-08-26T08:07:00Z", "not_applicable", "", 15)
+
+	rows, err := s.walletLedger(context.Background(), userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("ledger rows = %d, want two daily charges and one top-up", len(rows))
+	}
+	daily := make(map[string]map[string]any)
+	for _, row := range rows {
+		if isDaily, ok := row["daily"].(bool); ok && isDaily {
+			date, ok := row["business_date"].(string)
+			if !ok {
+				t.Fatalf("business_date type = %T", row["business_date"])
+			}
+			daily[date] = row
+		}
+	}
+	if len(daily) != 2 {
+		t.Fatalf("daily groups = %d, want 2", len(daily))
+	}
+	normalize := func(value string) string {
+		return strings.TrimRight(strings.TrimRight(value, "0"), ".")
+	}
+	for date, want := range map[string]struct {
+		amount string
+		calls  int64
+	}{"2026-08-25": {amount: "-0.125", calls: 1}, "2026-08-26": {amount: "-0.375", calls: 2}} {
+		row, ok := daily[date]
+		if !ok {
+			t.Fatalf("missing daily group %s", date)
+		}
+		if amount, ok := row["amount"].(string); !ok || normalize(amount) != want.amount {
+			t.Fatalf("%s amount = %#v, want %s", date, row["amount"], want.amount)
+		}
+		if calls, ok := row["call_count"].(int64); !ok || calls != want.calls {
+			t.Fatalf("%s call_count = %#v, want %d", date, row["call_count"], want.calls)
+		}
+	}
+	if status := daily["2026-08-26"]["settlement_status"]; status != "pending" {
+		t.Fatalf("mixed status = %#v, want pending", status)
+	}
+	if balance := daily["2026-08-26"]["balance_after"]; balance != "9.5" {
+		t.Fatalf("latest balance_after = %#v, want 9.5", balance)
+	}
+}
+
 func TestIntegrationPaymentNotifyIsIdempotentConcurrently(t *testing.T) {
 	db, _ := integrationPool(t)
 	defer db.Close()

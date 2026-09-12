@@ -98,7 +98,7 @@ type contentPolicySettingsInput struct {
 }
 
 type contentPolicyBatchInput struct {
-	Terms         string `json:"terms"`
+	Terms         string  `json:"terms"`
 	Action        *string `json:"action"`
 	CaseSensitive *bool   `json:"case_sensitive"`
 	Enabled       *bool   `json:"enabled"`

@@ -6,6 +6,10 @@ const { t } = useI18n()
 const route = useRoute()
 const navOpen = ref(false)
 
+useHead({
+  meta: [{ name: 'robots', content: 'noindex, nofollow' }],
+})
+
 onMounted(async () => {
   loadSiteSettings()
   await loadAccount()

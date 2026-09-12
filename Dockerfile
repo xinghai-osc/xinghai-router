@@ -73,6 +73,9 @@ RUN --mount=type=cache,id=xinghai-pnpm-store,target=/pnpm/store \
 
 FROM web-dependencies AS web-build
 
+ARG NUXT_PUBLIC_SITE_URL
+ENV NUXT_PUBLIC_SITE_URL=${NUXT_PUBLIC_SITE_URL}
+
 COPY web ./
 
 RUN pnpm run build
