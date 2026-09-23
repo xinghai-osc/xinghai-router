@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { endpoints, ApiError, getToken } from '~/src/api'
+import { endpoints, ApiError } from '~/src/api'
 import { GEETEST_CANCELLED } from '~/composables/useGeetest'
 import { CORPTCHA_CANCELLED, CORPTCHA_UNAVAILABLE } from '~/composables/useCorptcha'
 
@@ -23,7 +23,7 @@ const route = useRoute()
 const router = useRouter()
 const { t } = useI18n()
 const { settings } = useSiteSettings()
-const { signIn } = useAccount()
+const { authenticated, loadAccount, signIn } = useAccount()
 const { toast } = useToast()
 const { challenge: geetestChallenge } = useGeetest()
 const { challenge: corptchaChallenge } = useCorptcha()
@@ -90,17 +90,16 @@ function startCooldown() {
 
 onBeforeUnmount(stopCooldown)
 
-// A live session reaching this page (SameSite=strict keeps the cookie off the
-// SSR request, so the console middleware can bounce a signed-in visitor here).
-onMounted(() => {
-  if (getToken()) navigateTo(consoleTarget())
+onMounted(async () => {
+  await loadAccount()
+  if (authenticated.value && route.path === '/auth' && !busy.value) await navigateTo(consoleTarget())
 })
 
 /** Post-sign-in destination. `redirect` (e.g. a shared redeem link) wins over
  * the console; only same-origin relative paths are accepted. */
 function consoleTarget() {
   const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : ''
-  if (redirect && redirect.startsWith('/') && !redirect.startsWith('//')) return redirect
+  if (redirect && redirect.startsWith('/') && !redirect.startsWith('//') && !redirect.includes('\\') && !Array.from(redirect).some(char => char.charCodeAt(0) < 32) && !/^\/auth(?:[/?#]|$)/.test(redirect)) return redirect
   return { path: '/console', query: plan.value ? { plan: plan.value } : {} }
 }
 
@@ -201,10 +200,13 @@ async function submit() {
       if (!captcha) return
     }
     const email = form.email.trim()
-    const { token } = isRegister.value
-      ? await endpoints.register({ name: form.name.trim(), email, password: form.password, code: form.code.trim(), invitation_code: form.invitationCode.trim(), ...captcha })
-      : await endpoints.login({ email, password: form.password, ...captcha })
-    await signIn(token)
+    if (isRegister.value) {
+      await endpoints.register({ name: form.name.trim(), email, password: form.password, code: form.code.trim(), invitation_code: form.invitationCode.trim(), ...captcha })
+    } else {
+      await endpoints.login({ email, password: form.password, ...captcha })
+    }
+    form.password = ''
+    await signIn()
     toast.success(isRegister.value ? t('auth.signUpSuccess') : t('auth.signInSuccess'))
     await navigateTo(consoleTarget())
   } catch (cause) {

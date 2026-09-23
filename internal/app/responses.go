@@ -2,6 +2,7 @@ package app
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -26,16 +27,17 @@ func isCommandCodeStreamType(t string) bool {
 	return commandCodeStreamTypes[t]
 }
 
+type responsesNativeOnlyKey struct{}
+
 // responsesCompletions accepts OpenAI Responses API requests (POST /v1/responses).
-// OpenAI-format channels receive the original request body and their response is
-// relayed unchanged. Other channel formats keep using the compatibility
+// OpenAI-format channels receive the normalized request body and their response
+// is relayed unchanged. Other channel formats keep using the compatibility
 // conversion through chat completions.
 func (s *Service) responsesCompletions(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
-	body, err := readGatewayBody(r)
+	body, err := s.readGatewayBody(w, r)
 	if err != nil {
-		s.logReject(r.Context(), "", 400, "invalid_request", started)
-		writeError(w, 400, "invalid_request", "request body is too large or could not be read")
+		s.rejectRequestBody(w, r, err, started)
 		return
 	}
 	var request struct {
@@ -50,7 +52,6 @@ func (s *Service) responsesCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	request.Model = strings.TrimSpace(request.Model)
 	lite := isResponsesLiteHeader(r.Header.Get(responsesLiteHeader)) || isResponsesLiteBody(body)
-	responsesBody := body
 	if lite {
 		normalized, _, normalizeErr := normalizeResponsesLite(body)
 		if normalizeErr != nil {
@@ -60,6 +61,7 @@ func (s *Service) responsesCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 		body = normalized
 	}
+	responsesBody := body
 	if !validModelName(request.Model) {
 		s.logReject(r.Context(), request.Model, 400, "invalid_request", started)
 		writeError(w, 400, "invalid_request", "model must be 1-200 characters")
@@ -93,6 +95,7 @@ func (s *Service) responsesCompletions(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		converted = body
 		echo = responsesEcho{model: request.Model}
+		r = r.WithContext(context.WithValue(r.Context(), responsesNativeOnlyKey{}, true))
 	}
 	responseID := "resp_" + randomIDString()
 	s.proxyChatCompletions(w, r, converted, request.Model, request.Stream, request.MaxOutputTokens,

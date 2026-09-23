@@ -74,19 +74,19 @@ var channelTypeToProvider = map[int]string{
 }
 
 type xUser struct {
-	ID           int
-	Username     string
-	Password     string
-	DisplayName  string
-	Role         int
-	Status       int
-	Email        string
-	Quota        int
-	UsedQuota    int
-	Group        string
-	CreatedAt    int64
-	Setting      string
-	Remark       string
+	ID          int
+	Username    string
+	Password    string
+	DisplayName string
+	Role        int
+	Status      int
+	Email       string
+	Quota       int
+	UsedQuota   int
+	Group       string
+	CreatedAt   int64
+	Setting     string
+	Remark      string
 }
 
 type xToken struct {
@@ -135,24 +135,24 @@ type xAbility struct {
 }
 
 type xSubscriptionPlan struct {
-	ID                    int
-	Title                 string
-	Description           string
-	PriceAmount           float64
-	Currency              string
-	DurationUnit          string
-	DurationValue         int
-	CustomSeconds         int64
-	Enabled               bool
-	SortOrder             int
-	MaxPurchasePerUser    int
-	UpgradeGroup          string
-	DowngradeGroup        string
-	TotalAmount           int64
-	QuotaResetPeriod      string
+	ID                      int
+	Title                   string
+	Description             string
+	PriceAmount             float64
+	Currency                string
+	DurationUnit            string
+	DurationValue           int
+	CustomSeconds           int64
+	Enabled                 bool
+	SortOrder               int
+	MaxPurchasePerUser      int
+	UpgradeGroup            string
+	DowngradeGroup          string
+	TotalAmount             int64
+	QuotaResetPeriod        string
 	QuotaResetCustomSeconds int64
-	CreatedAt             int64
-	UpdatedAt             int64
+	CreatedAt               int64
+	UpdatedAt               int64
 }
 
 type xUserSubscription struct {
@@ -226,6 +226,13 @@ type step struct {
 }
 
 func Run(ctx context.Context, sourceDSN, sourceDriver, targetDSN, encryptionKey string, progress ProgressFunc) error {
+	mode, err := channelCredentialStorage()
+	if err != nil {
+		return err
+	}
+	if mode == "encrypted" && len(encryptionKey) < 24 {
+		return fmt.Errorf("ENCRYPTION_KEY must contain at least 24 characters")
+	}
 	if progress != nil {
 		progress(Progress{Step: "connect", Detail: "Connecting to source and target databases"})
 	}
@@ -285,7 +292,7 @@ func Run(ctx context.Context, sourceDSN, sourceDriver, targetDSN, encryptionKey 
 		}},
 		{"channels", func() (string, error) {
 			var err error
-			channelMap, err = migrateChannels(ctx, src, target, groupMap, encryptionKey)
+			channelMap, err = migrateChannels(ctx, src, target, groupMap, encryptionKey, mode)
 			return fmt.Sprintf("%d channels", len(channelMap)), err
 		}},
 		{"model_routes", func() (string, error) {
@@ -339,8 +346,8 @@ func Run(ctx context.Context, sourceDSN, sourceDriver, targetDSN, encryptionKey 
 }
 
 func migrateUsers(ctx context.Context, src *sql.DB, target *pgxpool.Pool) (map[int]int64, error) {
-	rows, err := src.QueryContext(ctx, `select id,username,password,display_name,role,status,email,quota,used_quota,` +
-		"`group`" + `,created_at,COALESCE(setting,''),COALESCE(remark,'') from users`)
+	rows, err := src.QueryContext(ctx, `select id,username,password,display_name,role,status,email,quota,used_quota,`+
+		"`group`"+`,created_at,COALESCE(setting,''),COALESCE(remark,'') from users`)
 	if err != nil {
 		return nil, fmt.Errorf("query users: %w", err)
 	}
@@ -563,7 +570,7 @@ func migrateGroups(ctx context.Context, src *sql.DB, target *pgxpool.Pool, userM
 	return groupMap, nil
 }
 
-func migrateChannels(ctx context.Context, src *sql.DB, target *pgxpool.Pool, groupMap map[string]string, encryptionKey string) (map[int]string, error) {
+func migrateChannels(ctx context.Context, src *sql.DB, target *pgxpool.Pool, groupMap map[string]string, encryptionKey, mode string) (map[int]string, error) {
 	rows, err := src.QueryContext(ctx, `select id,type,`+"`key`"+`,name,status,base_url,models,
 		`+"`group`"+`,priority,weight,created_time,model_mapping from channels`)
 	if err != nil {
@@ -571,6 +578,14 @@ func migrateChannels(ctx context.Context, src *sql.DB, target *pgxpool.Pool, gro
 	}
 	defer rows.Close()
 
+	tx, err := target.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `lock table channels,channel_api_keys in share row exclusive mode`); err != nil {
+		return nil, err
+	}
 	channelMap := make(map[int]string)
 	var count int
 
@@ -581,10 +596,7 @@ func migrateChannels(ctx context.Context, src *sql.DB, target *pgxpool.Pool, gro
 			return nil, fmt.Errorf("scan channel: %w", err)
 		}
 
-		id, err := newUUID()
-		if err != nil {
-			return nil, fmt.Errorf("generate uuid: %w", err)
-		}
+		var id string
 
 		provider, ok := channelTypeToProvider[c.Type]
 		if !ok {
@@ -638,40 +650,72 @@ func migrateChannels(ctx context.Context, src *sql.DB, target *pgxpool.Pool, gro
 			keyType = "multi"
 		}
 		if firstKey != "" {
-			firstKey, err = encryptIfNeeded(encryptionKey, firstKey)
+			firstKey, err = importChannelCredential(encryptionKey, firstKey, mode)
 			if err != nil {
 				return nil, fmt.Errorf("encrypt channel key for %d: %w", c.ID, err)
 			}
 		}
 
-		err = target.QueryRow(ctx, `insert into channels(id,name,base_url,api_key,models,enabled,priority,weight,provider,key_type,created_at,updated_at)
-			values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11) on conflict (name) do update set
+		err = tx.QueryRow(ctx, `insert into channels(name,base_url,api_key,models,enabled,priority,weight,provider,key_type,created_at,updated_at)
+			values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10) on conflict (name) do update set
 			base_url=excluded.base_url,models=excluded.models,enabled=excluded.enabled,
 			priority=excluded.priority,weight=excluded.weight,key_type=excluded.key_type returning id`,
-			id, c.Name, baseURL, firstKey, modelsJSON, enabled, priority, weight, provider, keyType, createdAt).Scan(&id)
+			c.Name, baseURL, firstKey, modelsJSON, enabled, priority, weight, provider, keyType, createdAt).Scan(&id)
 		if err != nil {
 			return nil, fmt.Errorf("insert channel %d: %w", c.ID, err)
 		}
 
+		existing := map[string]bool{}
+		krows, err := tx.Query(ctx, `select key_encrypted from channel_api_keys where channel_id=$1`, id)
+		if err != nil {
+			return nil, err
+		}
+		for krows.Next() {
+			var stored string
+			if err := krows.Scan(&stored); err != nil {
+				krows.Close()
+				return nil, err
+			}
+			plain, err := channelCredentialValue(encryptionKey, stored)
+			if err != nil {
+				krows.Close()
+				return nil, err
+			}
+			existing[plain] = true
+		}
+		krows.Close()
+		if err := krows.Err(); err != nil {
+			return nil, err
+		}
 		if keyStr != "" {
 			for ki, k := range strings.Split(keyStr, "\n") {
 				k = strings.TrimSpace(k)
 				if k == "" {
 					continue
 				}
-				k, err = encryptIfNeeded(encryptionKey, k)
+				plain, err := channelCredentialValue(encryptionKey, k)
+				if err != nil {
+					return nil, err
+				}
+				if existing[plain] {
+					continue
+				}
+				k, err = importChannelCredential(encryptionKey, k, mode)
 				if err != nil {
 					return nil, fmt.Errorf("encrypt channel api key for %d: %w", c.ID, err)
 				}
 				kid, kerr := newUUID()
 				if kerr != nil {
-					continue
+					return nil, kerr
 				}
 				name := "default"
 				if ki > 0 {
 					name = fmt.Sprintf("key-%d", ki+1)
 				}
-				target.Exec(ctx, `insert into channel_api_keys(id,channel_id,name,key_encrypted,enabled) select $1,$2,$3,$4,true where not exists(select 1 from channel_api_keys where channel_id=$2 and key_encrypted=$4)`, kid, id, name, k)
+				if _, err := tx.Exec(ctx, `insert into channel_api_keys(id,channel_id,name,key_encrypted,enabled) values($1,$2,$3,$4,true)`, kid, id, name, k); err != nil {
+					return nil, fmt.Errorf("insert channel api key for %d: %w", c.ID, err)
+				}
+				existing[plain] = true
 			}
 		}
 
@@ -686,7 +730,9 @@ func migrateChannels(ctx context.Context, src *sql.DB, target *pgxpool.Pool, gro
 			if !ok {
 				continue
 			}
-			target.Exec(ctx, `insert into channel_groups(channel_id,group_id) values($1,$2) on conflict do nothing`, id, gid)
+			if _, err := tx.Exec(ctx, `insert into channel_groups(channel_id,group_id) values($1,$2) on conflict do nothing`, id, gid); err != nil {
+				return nil, err
+			}
 		}
 
 		if c.ModelMapping != nil && *c.ModelMapping != "" {
@@ -697,9 +743,11 @@ func migrateChannels(ctx context.Context, src *sql.DB, target *pgxpool.Pool, gro
 					if rerr != nil {
 						continue
 					}
-					target.Exec(ctx, `insert into model_routes(id,public_model,upstream_model,channel_id,priority,weight,enabled,created_at)
+					if _, err := tx.Exec(ctx, `insert into model_routes(id,public_model,upstream_model,channel_id,priority,weight,enabled,created_at)
 						values($1,$2,$3,$4,100,100,true,now()) on conflict (public_model,channel_id) do nothing`,
-						rid, publicModel, upstreamModel, id)
+						rid, publicModel, upstreamModel, id); err != nil {
+						return nil, err
+					}
 				}
 			}
 		}
@@ -711,6 +759,9 @@ func migrateChannels(ctx context.Context, src *sql.DB, target *pgxpool.Pool, gro
 		return nil, fmt.Errorf("rows iteration: %w", err)
 	}
 
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
 	log.Printf("  channels: %d rows processed", count)
 	return channelMap, nil
 }

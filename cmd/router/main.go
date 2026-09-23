@@ -27,11 +27,9 @@ func main() {
 	server := &http.Server{
 		Addr:              cfg.ListenAddr,
 		Handler:           svc.Handler(),
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      0,
-		IdleTimeout:       120 * time.Second,
-		MaxHeaderBytes:    1 << 20,
+		ReadHeaderTimeout: cfg.HTTPReadHeaderTimeout,
+		IdleTimeout:       cfg.HTTPIdleTimeout,
+		MaxHeaderBytes:    cfg.HTTPMaxHeaderBytes,
 	}
 	go func() {
 		log.Printf("xinghai-router listening on %s", cfg.ListenAddr)

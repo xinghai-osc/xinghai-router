@@ -8,7 +8,7 @@ export interface KeyQuotaForm { window: 'day' | 'month' | 'total'; max_requests?
 /** `groups` holds group ids, not names — resolve them through /admin/groups. */
 export interface RequestOverrides { delete: string[]; set: Record<string, unknown> }
 export interface ChannelUsageWindow { window: string; used: number | null; limit: number | null; remaining: number | null; percent: number | null; reset_at?: string; unit?: string }
-export interface Channel { id: string; name: string; base_url: string; avg_first_token_ms: number | null; upstream_balance: number | null; upstream_used: number | null; upstream_total: number | null; upstream_currency: string; upstream_usage_windows: ChannelUsageWindow[]; upstream_balance_supported: boolean; upstream_balance_error: string; upstream_balance_fetched_at: string | null; provider: 'openai' | 'openai_chat' | 'ollama' | 'kimi' | 'opencode_go' | 'anthropic' | 'deepseek' | 'commandcode' | 'custom'; models: string[]; test_model: string; enabled: boolean; auto_disabled: boolean; auto_disable: boolean; disabled_reason: string; priority: number; weight: number; last_test_time: string | null; last_error: string | null; response_time_ms: number; used_requests: number; used_tokens: number; groups: string[]; key_type: 'single' | 'multi'; key_count: number; upstream_path: string; upstream_format: string; request_overrides: RequestOverrides; ua_pool: string[]; created_at: string; updated_at: string; model_routes: ModelRoute[]; user_id: string | null; user_email: string; user_name: string }
+export interface Channel { id: string; name: string; base_url: string; avg_first_token_ms: number | null; upstream_balance: number | null; upstream_used: number | null; upstream_total: number | null; upstream_currency: string; upstream_usage_windows: ChannelUsageWindow[]; upstream_balance_supported: boolean; upstream_balance_error: string; upstream_balance_fetched_at: string | null; provider: 'openai' | 'openai_chat' | 'ollama' | 'kimi' | 'opencode_go' | 'anthropic' | 'deepseek' | 'commandcode' | 'jev' | 'custom'; models: string[]; test_model: string; enabled: boolean; auto_disabled: boolean; auto_disable: boolean; disabled_reason: string; priority: number; weight: number; last_test_time: string | null; last_error: string | null; response_time_ms: number; used_requests: number; used_tokens: number; groups: string[]; key_type: 'single' | 'multi'; key_count: number; upstream_path: string; upstream_format: string; request_overrides: RequestOverrides; ua_pool: string[]; created_at: string; updated_at: string; model_routes: ModelRoute[]; user_id: string | null; user_email: string; user_name: string }
 
 export interface ChannelKey { id: string; name: string; enabled: boolean; priority: number; last_checked_at: string | null; last_error: string | null; created_at: string; upstream_balance: number | null; upstream_used: number | null; upstream_total: number | null; upstream_currency: string; upstream_usage_windows: ChannelUsageWindow[]; upstream_balance_supported: boolean; upstream_balance_error: string; upstream_balance_fetched_at: string | null }
 export interface ChannelKeyForm { name?: string; api_key?: string; priority?: number }
@@ -39,7 +39,63 @@ export interface Group { id: string; name: string; display_name: string | null; 
 export interface GroupUpdate { id: string; multiplier: number; max_concurrency: number | null; public: boolean; display_name?: string; description?: string }
 export interface RequestLog { request_id: string; user_id: string | null; user_name: string; api_key_id: string | null; key_name: string; channel_id: string | null; channel_name: string; channel_key_id: string | null; channel_key_name: string; group_id: string | null; group_name: string; model: string; status_code: number; prompt_tokens: number | null; completion_tokens: number | null; total_tokens: number | null; duration_ms: number; first_token_ms: number | null; error_code: string | null; error_detail: string; client_ip: string; user_agent: string; created_at: string }
 export interface Account { id: string; email: string; name: string; role: string; avatar_url: string; permissions: string[]; balance: number; reserved: number; pending_settlement: number; leaderboard_opt_in: boolean; leaderboard_mask_name: boolean; data_usage_enabled: boolean; must_change_password?: boolean }
-export interface Pricing { id: string; model: string; input_per_million: number; cached_input_per_million: number; output_per_million: number; multiplier: number; currency: string; enabled: boolean; updated_at: string }
+export interface ImagePrice { size: string; quality: string; price: number }
+export interface DimensionPrices {
+  cache_write_per_million?: number | null
+  cache_write_5m_per_million?: number | null
+  cache_write_1h_per_million?: number | null
+  audio_input_per_million?: number | null
+  audio_output_per_million?: number | null
+  image_input_per_million?: number | null
+  image_output_per_million?: number | null
+  audio_per_second?: number | null
+  video_per_second?: number | null
+  tool_per_call?: number | null
+  images?: ImagePrice[]
+}
+export interface UsageFacts {
+  input_tokens?: number
+  output_tokens?: number
+  cache_read_tokens?: number
+  cache_write_tokens?: number
+  cache_write_5m_tokens?: number
+  cache_write_1h_tokens?: number
+  image_count?: number
+  audio_input_tokens?: number
+  audio_output_tokens?: number
+  image_input_tokens?: number
+  image_output_tokens?: number
+  tool_calls?: number
+  audio_seconds?: number
+  video_seconds?: number
+  usage_source?: string
+  pricing_version?: string
+  image_size?: string
+  image_quality?: string
+}
+export interface BillingSnapshot {
+  usage: UsageFacts
+  cost: number
+  amount: string
+  computed_amount: string
+  status: string
+  error?: string
+  pricing: {
+    version: string
+    priced_at: string
+    billing_mode: string
+    currency: string
+    input_per_million: number
+    cached_input_per_million: number
+    output_per_million: number
+    dimension_prices: DimensionPrices
+  }
+  exchange: { currency: string; base_currency: string; rate_to_base: number }
+  multipliers: { model: number; group: number }
+  rounding: { mode: 'HALF_UP'; scale: number }
+  adjustment?: { reason: string; limit: string; amount: string }
+}
+export interface Pricing { id: string; model: string; input_per_million: number; cached_input_per_million: number; output_per_million: number; multiplier: number; currency: string; dimension_prices: DimensionPrices; enabled: boolean; updated_at: string }
 export interface PricingTier { id: string; model: string; from_tokens: number; input_per_million: number; cached_input_per_million: number; output_per_million: number; created_at: string }
 export interface PricingTierForm { id?: string; model: string; from_tokens: number; input_per_million: number; cached_input_per_million: number; output_per_million: number }
 export interface PricingTimeRule { id: string; model: string; name: string; start_minute: number; end_minute: number; weekdays: string; input_per_million: number; cached_input_per_million: number; output_per_million: number; enabled: boolean; created_at: string }
@@ -90,7 +146,7 @@ export type ModelMetadataForm = Omit<ModelMetadata, 'id' | 'created_at' | 'updat
 export interface ModelPerformanceGroup { group_id: string; group_name: string; requests: number; tps: number; avg_latency_ms: number; avg_first_token_ms: number | null; success_rate: number }
 export interface ModelPerformance { model: string; window_hours: number; groups: ModelPerformanceGroup[]; updated_at: string }
 export interface ModelProvider { id: string; name: string; slug: string; prefixes: string[]; priority: number }
-export interface UsageRecord { request_id: string; model: string; prompt_tokens: number; cached_prompt_tokens: number; completion_tokens: number; cost: string; status: string; created_at: string; client_ip: string; user_agent: string; error: string; key_name: string; subscription: boolean; duration_ms: number; first_token_ms: number | null; group_name: string }
+export interface UsageRecord { request_id: string; model: string; prompt_tokens: number; cached_prompt_tokens: number; completion_tokens: number; cost: string; status: string; created_at: string; client_ip: string; user_agent: string; error: string; key_name: string; subscription: boolean; duration_ms: number; first_token_ms: number | null; group_name: string; usage_facts: UsageFacts | null; billing_snapshot: Partial<BillingSnapshot> | null }
 
 export interface AccountUsageSummary { requests: number; tokens: number; cost: string }
 export interface DailyUsageRecord { day: string; requests: number; prompt_tokens: number; completion_tokens: number }
@@ -108,6 +164,7 @@ export interface ModelRanking { rank: number; previous_rank?: number; model_name
 export interface VendorRanking { rank: number; vendor: string; total_tokens: number; share: number; growth_pct: number; models_count: number; top_model: string }
 export interface RankingMover { model_name: string; vendor: string; rank_delta: number; current_rank: number; growth_pct: number }
 export interface UserRanking { rank: number; name: string; total_tokens: number; total_cost: number; share: number; growth_pct: number; requests: number; top_model: string }
+export type RankingPeriod = 'today' | 'week' | 'month' | 'year'
 export interface Rankings { period: string; models: ModelRanking[]; vendors: VendorRanking[]; top_movers: RankingMover[]; top_droppers: RankingMover[]; users: UserRanking[]; total_tokens: number; updated_at: string }
 export type FeaturedLocale = 'zh' | 'zh-Hant' | 'en'
 export type FeaturedCopyField = 'badge' | 'title' | 'body' | 'cta'
@@ -118,7 +175,7 @@ export interface Notification { id: string; title: string; content: string; enab
 export interface NotificationForm { title: string; content: string; enabled: boolean; sort_order: number }
 export interface Invitation { id: string; name: string; email: string; reward: string; created_at: string }
 export interface InvitationSummary { enabled: boolean; code: string; inviter_reward: string; invitee_reward: string; data: Invitation[] }
-export interface ReliabilitySettings { request_timeout_seconds: number; retry_count: number; retry_status_codes: string; health_check_mode: 'off' | 'scheduled_all' | 'passive_recovery'; health_check_interval_minutes: number; health_check_auto_recover: boolean; health_check_channel_ids: string; auto_disable_on_test_failure: boolean; auto_disable_slow_seconds: number; auto_disable_status_codes: string; auto_disable_keywords: string }
+export interface ReliabilitySettings { retry_count: number; retry_status_codes: string; health_check_mode: 'off' | 'scheduled_all' | 'passive_recovery'; health_check_interval_minutes: number; health_check_auto_recover: boolean; health_check_channel_ids: string; auto_disable_on_test_failure: boolean; auto_disable_slow_seconds: number; auto_disable_status_codes: string; auto_disable_keywords: string }
 export interface ContentPolicySettings { request_audit_enabled: boolean; request_audit_store_mode: 'none' | 'hash' | 'excerpt'; request_audit_retention_days: number; content_policy_mode: 'off' | 'audit' | 'block' }
 export interface ContentPolicyRule { id: string; name: string; term: string; action: 'block' | 'audit'; case_sensitive: boolean; enabled: boolean; priority: number; created_at: string; updated_at: string }
 export interface ContentPolicyBatchResult { created: number; skipped: number }
@@ -176,6 +233,8 @@ export interface UsageLog {
   cost: string
   subscription: boolean
   created_at: string
+  usage_facts: UsageFacts | null
+  billing_snapshot: Partial<BillingSnapshot> | null
 }
 
 export interface UsageStats {
@@ -602,31 +661,99 @@ export interface MigrationRequest {
   created_at: string
 }
 
-const TOKEN_COOKIE = 'xinghai.admin-token'
-const TOKEN_MAX_AGE = 60 * 60 * 24 * 7
-
-function readCookie(name: string): string {
-  if (typeof document === 'undefined') return ''
-  const prefix = `${name}=`
-  const match = document.cookie.split('; ').find((entry) => entry.startsWith(prefix))
-  return match ? decodeURIComponent(match.slice(prefix.length)) : ''
+export function clearLegacySession(): void {
+  if (!import.meta.client) return
+  document.cookie = 'xinghai.admin-token=; Path=/; Max-Age=0; SameSite=Strict'
+  try {
+    localStorage.removeItem('xinghai.admin-token')
+    sessionStorage.removeItem('xinghai.admin-token')
+  } catch {
+    return
+  }
 }
 
-function writeCookie(name: string, value: string, maxAge: number): void {
-  if (typeof document === 'undefined') return
-  const encoded = encodeURIComponent(value.trim())
-  document.cookie = `${name}=${encoded}; path=/; max-age=${maxAge}; samesite=strict`
+type ReauthenticationHandler = () => Promise<boolean>
+let reauthenticationHandler: ReauthenticationHandler | null = null
+let sessionExpiredHandler: (() => void) | null = null
+let sessionGeneration = 0
+let verificationGeneration = 0
+let verificationRequest: Promise<SessionResult> | null = null
+
+export function setReauthenticationHandler(handler: ReauthenticationHandler | null): void {
+  if (import.meta.client) reauthenticationHandler = handler
 }
 
-function deleteCookie(name: string): void {
-  if (typeof document === 'undefined') return
-  document.cookie = `${name}=; path=/; max-age=0; samesite=strict`
+export function setSessionExpiredHandler(handler: (() => void) | null): void {
+  if (import.meta.client) sessionExpiredHandler = handler
 }
 
-let token = import.meta.client ? readCookie(TOKEN_COOKIE) : ''
-export const getToken = () => token
-export const setToken = (value: string) => { token = value.trim(); writeCookie(TOKEN_COOKIE, token, TOKEN_MAX_AGE) }
-export const clearToken = () => { token = ''; deleteCookie(TOKEN_COOKIE) }
+export function invalidateSessionRequests(): void {
+  if (import.meta.client) sessionGeneration += 1
+}
+
+interface CachedResponse<T> {
+  expiresAt: number
+  value: T
+}
+
+const publicCachePrefix = 'xinghai-api-cache:'
+const publicCache = new Map<string, Promise<unknown>>()
+const maxPublicCacheBytes = 1_000_000
+
+function readPublicCache<T>(key: string): T | undefined {
+  if (!import.meta.client) return undefined
+  try {
+    const raw = sessionStorage.getItem(`${publicCachePrefix}${key}`)
+    if (!raw) return undefined
+    const cached = JSON.parse(raw) as CachedResponse<T>
+    if (!cached || cached.expiresAt <= Date.now()) {
+      sessionStorage.removeItem(`${publicCachePrefix}${key}`)
+      return undefined
+    }
+    return cached.value
+  } catch {
+    return undefined
+  }
+}
+
+function writePublicCache<T>(key: string, value: T, ttl: number): void {
+  if (!import.meta.client) return
+  try {
+    const cached: CachedResponse<T> = { expiresAt: Date.now() + ttl, value }
+    const serialized = JSON.stringify(cached)
+    if (serialized.length > maxPublicCacheBytes) return
+    sessionStorage.setItem(`${publicCachePrefix}${key}`, serialized)
+  } catch {
+    // Storage can be unavailable or full; the network response remains usable.
+  }
+}
+
+export function cachedPublic<T>(key: string, loader: () => Promise<T>, ttl: number): Promise<T> {
+  if (!import.meta.client) return loader()
+  const cached = readPublicCache<T>(key)
+  if (cached !== undefined) return Promise.resolve(cached)
+
+  const running = publicCache.get(key)
+  if (running) return running as Promise<T>
+
+  const request = loader()
+    .then((value) => {
+      writePublicCache(key, value, ttl)
+      return value
+    })
+    .finally(() => publicCache.delete(key))
+  publicCache.set(key, request)
+  return request
+}
+
+export function clearPublicCache(key: string): void {
+  if (!import.meta.client) return
+  try {
+    sessionStorage.removeItem(`${publicCachePrefix}${key}`)
+  } catch {
+    // Storage can be unavailable; the short cache lifetime remains the fallback.
+  }
+}
 
 /**
  * API error carrying the backend's stable `code` (e.g. "email_not_allowed",
@@ -644,22 +771,42 @@ export class ApiError extends Error {
   }
 }
 
-export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(`/api${path}`, { ...init, headers: { Authorization: `Bearer ${token}`, ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...init.headers } })
-  // A 401 from the console means the session is gone. Drop the stale token and
-  // send the user back to sign-in instead of leaving them staring at dead UI.
-  if (response.status === 401 && path !== '/auth/login') {
-    clearToken()
-    if (import.meta.client && !window.location.pathname.startsWith('/auth')) {
+async function request(path: string, init: RequestInit = {}, retried = false): Promise<Response> {
+  const generation = sessionGeneration
+  const verification = verificationGeneration
+  const headers = new Headers(init.headers)
+  headers.delete('Authorization')
+  headers.set('X-Xinghai-Request', '1')
+  if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
+  const response = await fetch(`/api${path}`, { ...init, headers, credentials: 'same-origin' })
+  if (response.ok) return response
+
+  const body = await response.json().catch(() => null)
+  const code = typeof body?.error?.code === 'string' ? body.error.code : ''
+  const failure = new ApiError(body?.error?.message ?? response.statusText, response.status, code)
+  if (response.status === 403 && code === 'reauthentication_required' && !retried && !path.startsWith('/auth/') && import.meta.client && reauthenticationHandler && generation === sessionGeneration) {
+    const verified = verification !== verificationGeneration || await reauthenticationHandler()
+    if (verified && generation === sessionGeneration && !init.signal?.aborted) return request(path, init, true)
+  }
+  if (response.status === 401 && !path.startsWith('/auth/') && generation === sessionGeneration && import.meta.client) {
+    if (verificationRequest) await verificationRequest.catch(() => undefined)
+    if (verification !== verificationGeneration) {
+      if (!retried && generation === sessionGeneration && ['GET', 'HEAD'].includes((init.method ?? 'GET').toUpperCase()) && !init.signal?.aborted) return request(path, init, true)
+      throw failure
+    }
+  }
+  if (response.status === 401 && path !== '/account/me' && !path.startsWith('/auth/') && generation === sessionGeneration && import.meta.client) {
+    sessionExpiredHandler?.()
+    if (/^\/console(?:\/|$)/.test(window.location.pathname)) {
       const current = window.location.pathname + window.location.search
       window.location.assign(`/auth?redirect=${encodeURIComponent(current)}`)
     }
   }
-  if (!response.ok) {
-    const body = await response.json().catch(() => null)
-    const code = typeof body?.error?.code === 'string' ? body.error.code : ''
-    throw new ApiError(body?.error?.message ?? `请求失败 (${response.status})`, response.status, code)
-  }
+  throw failure
+}
+
+export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const response = await request(path, init)
   if (response.status === 204) return undefined as T
   return response.json() as Promise<T>
 }
@@ -669,23 +816,12 @@ async function post<T>(path: string, body?: unknown): Promise<T> { return api<T>
 async function put<T>(path: string, body?: unknown): Promise<T> { return api<T>(path, { method: 'PUT', body: body === undefined ? undefined : JSON.stringify(body) }) }
 async function send(path: string, method: 'POST' | 'PUT' | 'DELETE', body?: unknown): Promise<void> { await api<unknown>(path, { method, body: body === undefined ? undefined : JSON.stringify(body) }) }
 
-/** Downloads a binary response (invoice PDF) as a Blob, keeping the auth header. */
 async function download(path: string): Promise<Blob> {
-  const response = await fetch(`/api${path}`, { headers: { Authorization: `Bearer ${token}` } })
-  if (response.status === 401) {
-    clearToken()
-    if (import.meta.client && !window.location.pathname.startsWith('/auth')) {
-      const current = window.location.pathname + window.location.search
-      window.location.assign(`/auth?redirect=${encodeURIComponent(current)}`)
-    }
-  }
-  if (!response.ok) {
-    const body = await response.json().catch(() => null)
-    const code = typeof body?.error?.code === 'string' ? body.error.code : ''
-    throw new ApiError(body?.error?.message ?? `请求失败 (${response.status})`, response.status, code)
-  }
+  const response = await request(path)
   return response.blob()
 }
+
+export interface SessionResult { expires_at: string }
 
 export interface LoginBody { email: string; password: string; code?: string; captcha_id?: string; lot_number?: string; captcha_output?: string; pass_token?: string; gen_time?: string; captcha_token?: string; captcha_purpose?: string }
 export interface RegisterBody { name: string; email: string; password: string; code?: string; invitation_code?: string; captcha_id?: string; lot_number?: string; captcha_output?: string; pass_token?: string; gen_time?: string; captcha_token?: string; captcha_purpose?: string }
@@ -695,7 +831,7 @@ export interface ChannelForm { name: string; provider: string; base_url: string;
 export interface ProviderForm { name: string; slug: string; prefixes: string[]; priority: number; id?: string }
 export interface PaymentSettingsForm { enabled: boolean; base_url: string; merchant_id: string; merchant_key: string; public_base_url: string }
 export interface PaymentMethodForm { code: string; name: string; enabled: boolean }
-export interface PricingForm { model: string; input_per_million: number; cached_input_per_million: number; output_per_million: number; multiplier: number; currency: string }
+export interface PricingForm { model: string; input_per_million: number; cached_input_per_million: number; output_per_million: number; multiplier: number; currency: string; dimension_prices?: DimensionPrices }
 export interface NewApiPricingForm { base_url: string; api_key: string; price_per_quota_unit: number; currency?: string }
 export interface SubscriptionPlanForm { name: string; description: string; price: string; currency: string; billing_period: string; credit_amount: string; group_id: string; model_whitelist: string[]; max_requests_per_period: number | null; max_credit_per_period: number | null; overage_policy: OveragePolicy; model_quotas: SubscriptionPlanModelQuota[]; sort_order: number; enabled: boolean }
 export interface UserUpdate { id?: number; name?: string; email?: string; role?: string; enabled?: boolean; password?: string; balance?: number | null; note?: string; permissions?: string[]; groups?: string[]; leaderboard_opt_in?: boolean; leaderboard_mask_name?: boolean; data_usage_enabled?: boolean; max_concurrency?: number | null; inviter_id?: number | null }
@@ -728,7 +864,7 @@ export type SiteSettingsForm =
   & { geetest_captcha_key: string; corptcha_secret: string; smtp_password: string }
 
 export const endpoints = {
-  getSiteSettings: () => get<SiteSettings>('/site-settings'),
+  getSiteSettings: () => cachedPublic('site-settings', () => get<SiteSettings>('/site-settings'), 5 * 60 * 1000),
   getAccount: () => get<Account>('/account/me'),
   getAccountKeys: () => get<{ data: ApiKey[] }>('/account/keys'),
   getAccountUsage: (query = '') => get<{ data: UsageRecord[] }>(`/account/usage${query}`),
@@ -775,16 +911,29 @@ export const endpoints = {
   deleteKeyQuota: (id: string, window: string) => send(`/account/keys/${encodeURIComponent(id)}/quota?window=${encodeURIComponent(window)}`, 'DELETE'),
 
   getActivityLogs: (query = '') => get<{ data: ActivityLog[] }>(`/activity-logs${query}`),
+  getPublicActivity: () => get<{ data: PublicActivityItem[] }>('/public/activity'),
+  getPublicRankings: (period: RankingPeriod) => cachedPublic(`rankings:${period}`, () => get<Rankings>(`/rankings?period=${encodeURIComponent(period)}`), 30 * 1000),
   getModelCatalog: () => get<{ data: CatalogModel[]; groups: CatalogGroup[] }>('/model-catalog'),
   getModelPerformance: (model: string) => get<ModelPerformance>(`/model-performance?model=${encodeURIComponent(model)}`),
   getAdminModelMetadata: () => get<{ data: ModelMetadata[] }>('/admin/model-metadata'),
   createAdminModelMetadata: (form: ModelMetadataForm) => post<{ id: string; model: string }>('/admin/model-metadata', form),
   updateAdminModelMetadata: (id: string, form: ModelMetadataForm) => put<{ id: string; model: string }>(`/admin/model-metadata/${encodeURIComponent(id)}`, form),
   deleteAdminModelMetadata: (id: string) => send(`/admin/model-metadata/${encodeURIComponent(id)}`, 'DELETE'),
-  getPublicSubscriptionPlans: () => get<{ data: PublicSubscriptionPlan[] }>('/subscription-plans'),
+  getPublicSubscriptionPlans: () => cachedPublic('subscription-plans', () => get<{ data: PublicSubscriptionPlan[] }>('/subscription-plans'), 5 * 60 * 1000),
 
-  login: (body: LoginBody) => post<{ token: string }>('/auth/login', body),
-  register: (body: RegisterBody) => post<{ token: string }>('/auth/register', body),
+  login: (body: LoginBody) => post<SessionResult>('/auth/login', body),
+  register: (body: RegisterBody) => post<SessionResult>('/auth/register', body),
+  reauthenticate: (password: string, signal?: AbortSignal) => {
+    const generation = sessionGeneration
+    const request = api<SessionResult>('/auth/reauthenticate', { method: 'POST', body: JSON.stringify({ password }), signal })
+      .then((result) => {
+        if (generation === sessionGeneration) verificationGeneration += 1
+        return result
+      })
+      .finally(() => { if (verificationRequest === request) verificationRequest = null })
+    verificationRequest = request
+    return request
+  },
   logout: () => send('/auth/logout', 'POST'),
   sendEmailCode: (email: string, captcha?: Record<string, string>) => send('/auth/email-code', 'POST', { email, ...captcha }),
   requestPasswordReset: (email: string, captcha?: Record<string, string>) => send('/auth/password-reset/request', 'POST', { email, ...captcha }),
@@ -809,7 +958,7 @@ export const endpoints = {
   batchToggleChannels: (ids: string[], enabled: boolean) => post<{ affected: number }>('/admin/channels/batch-status', { ids, enabled }),
   createChannel: (form: ChannelForm) => send('/admin/channels', 'POST', form),
   copyChannel: (id: string, form?: { name?: string }) => post<{ id: string; name: string; enabled: boolean }>(`/admin/channels/${encodeURIComponent(id)}/copy`, form),
-  fetchChannelModels: (baseUrl: string, apiKey: string) => post<{ models: string[] }>('/admin/channels/models', { base_url: baseUrl, api_key: apiKey }),
+  fetchChannelModels: (baseUrl: string, apiKey: string, upstreamFormat?: string, provider?: string) => post<{ models: string[] }>('/admin/channels/models', { base_url: baseUrl, api_key: apiKey, upstream_format: upstreamFormat, provider }),
   updateChannel: (id: string, form: ChannelForm) => send(`/admin/channels/${encodeURIComponent(id)}`, 'PUT', form),
   updateChannelGroups: (id: string, groups: string[]) => send(`/admin/channels/${encodeURIComponent(id)}/groups`, 'PUT', { groups }),
   toggleChannel: (id: string, enabled: boolean) => send(`/admin/channels/${encodeURIComponent(id)}/status`, 'POST', { enabled }),

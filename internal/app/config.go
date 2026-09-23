@@ -3,36 +3,49 @@ package app
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
 
 type Config struct {
-	DatabaseURL          string
-	RedisURL             string
-	EncryptionKey        string
-	ListenAddr           string
-	RequestTimeout       time.Duration
-	RateLimitPerMinute   int
-	IPRateLimitPerMinute int
-	DBMaxConns           int
-	TrustedProxies       string
-	GeetestCaptchaID     string
-	GeetestCaptchaKey    string
-	CaptchaProvider      string
-	CorptchaSiteID       string
-	CorptchaSecret       string
-	SMTPHost             string
-	SMTPPort             string
-	SMTPUsername         string
-	SMTPPassword         string
-	SMTPFrom             string
-	ConversationCacheDir string
-	LocalPromptCache     bool
-	LocalPromptCacheSize int
-	BootstrapAdminEmail  string
-	BootstrapAdminName   string
-	BootstrapAdminPass   string
+	DatabaseURL              string
+	RedisURL                 string
+	DeploymentMode           string
+	RedisFailurePolicy       string
+	ConcurrencyLeaseTTL      time.Duration
+	EncryptionKey            string
+	ListenAddr               string
+	RateLimitPerMinute       int
+	IPRateLimitPerMinute     int
+	DBMaxConns               int
+	TrustedProxies           string
+	GeetestCaptchaID         string
+	GeetestCaptchaKey        string
+	CaptchaProvider          string
+	CorptchaSiteID           string
+	CorptchaSecret           string
+	SMTPHost                 string
+	SMTPPort                 string
+	SMTPUsername             string
+	SMTPPassword             string
+	SMTPFrom                 string
+	ConversationCacheDir     string
+	LocalPromptCache         bool
+	LocalPromptCacheSize     int
+	BootstrapAdminEmail      string
+	BootstrapAdminName       string
+	BootstrapAdminPass       string
+	GatewayMaxBodyBytes      int64
+	ImageMaxBodyBytes        int64
+	WSMaxMessageBytes        int64
+	RequestBodyTimeout       time.Duration
+	WSIdleTimeout            time.Duration
+	HTTPReadHeaderTimeout    time.Duration
+	HTTPIdleTimeout          time.Duration
+	HTTPMaxHeaderBytes       int
+	ChannelCredentialStorage string
+	SessionCookieSecure      bool
 }
 
 // GeetestEnabled reports whether Geetest CAPTCHA verification is configured.
@@ -66,7 +79,34 @@ func isInsecureEncryptionKey(key string) bool {
 }
 
 func LoadConfig() (Config, error) {
-	c := Config{DatabaseURL: os.Getenv("DATABASE_URL"), RedisURL: os.Getenv("REDIS_URL"), EncryptionKey: os.Getenv("ENCRYPTION_KEY"), ListenAddr: env("LISTEN_ADDR", ":8080"), RequestTimeout: 90 * time.Second, RateLimitPerMinute: 60, IPRateLimitPerMinute: envInt("IP_RATE_LIMIT_PER_MINUTE", 10), DBMaxConns: envInt("DB_MAX_CONNS", 0), TrustedProxies: strings.TrimSpace(os.Getenv("TRUSTED_PROXIES")), GeetestCaptchaID: os.Getenv("GEETEST_CAPTCHA_ID"), GeetestCaptchaKey: os.Getenv("GEETEST_CAPTCHA_KEY"), CaptchaProvider: strings.ToLower(strings.TrimSpace(os.Getenv("CAPTCHA_PROVIDER"))), CorptchaSiteID: os.Getenv("CORPTCHA_SITE_ID"), CorptchaSecret: os.Getenv("CORPTCHA_SECRET"), SMTPHost: os.Getenv("SMTP_HOST"), SMTPPort: env("SMTP_PORT", "465"), SMTPUsername: os.Getenv("SMTP_USERNAME"), SMTPPassword: os.Getenv("SMTP_PASSWORD"), SMTPFrom: os.Getenv("SMTP_FROM"), ConversationCacheDir: env("CONVERSATION_CACHE_DIR", "data/conversations"), LocalPromptCache: envBool("LOCAL_PROMPT_CACHE", true), LocalPromptCacheSize: envInt("LOCAL_PROMPT_CACHE_SIZE", 4096), BootstrapAdminEmail: strings.ToLower(strings.TrimSpace(os.Getenv("BOOTSTRAP_ADMIN_EMAIL"))), BootstrapAdminName: strings.TrimSpace(os.Getenv("BOOTSTRAP_ADMIN_NAME")), BootstrapAdminPass: os.Getenv("BOOTSTRAP_ADMIN_PASSWORD")}
+	c := Config{DatabaseURL: os.Getenv("DATABASE_URL"), RedisURL: os.Getenv("REDIS_URL"), EncryptionKey: os.Getenv("ENCRYPTION_KEY"), ListenAddr: env("LISTEN_ADDR", ":8080"), RateLimitPerMinute: 60, IPRateLimitPerMinute: envInt("IP_RATE_LIMIT_PER_MINUTE", 10), DBMaxConns: envInt("DB_MAX_CONNS", 0), TrustedProxies: strings.TrimSpace(os.Getenv("TRUSTED_PROXIES")), GeetestCaptchaID: os.Getenv("GEETEST_CAPTCHA_ID"), GeetestCaptchaKey: os.Getenv("GEETEST_CAPTCHA_KEY"), CaptchaProvider: strings.ToLower(strings.TrimSpace(os.Getenv("CAPTCHA_PROVIDER"))), CorptchaSiteID: os.Getenv("CORPTCHA_SITE_ID"), CorptchaSecret: os.Getenv("CORPTCHA_SECRET"), SMTPHost: os.Getenv("SMTP_HOST"), SMTPPort: env("SMTP_PORT", "465"), SMTPUsername: os.Getenv("SMTP_USERNAME"), SMTPPassword: os.Getenv("SMTP_PASSWORD"), SMTPFrom: os.Getenv("SMTP_FROM"), ConversationCacheDir: env("CONVERSATION_CACHE_DIR", "data/conversations"), LocalPromptCache: envBool("LOCAL_PROMPT_CACHE", true), LocalPromptCacheSize: envInt("LOCAL_PROMPT_CACHE_SIZE", 4096), BootstrapAdminEmail: strings.ToLower(strings.TrimSpace(os.Getenv("BOOTSTRAP_ADMIN_EMAIL"))), BootstrapAdminName: strings.TrimSpace(os.Getenv("BOOTSTRAP_ADMIN_NAME")), BootstrapAdminPass: os.Getenv("BOOTSTRAP_ADMIN_PASSWORD")}
+	c.DeploymentMode = os.Getenv("DEPLOYMENT_MODE")
+	c.RedisFailurePolicy = os.Getenv("REDIS_FAILURE_POLICY")
+	if raw := os.Getenv("CONCURRENCY_LEASE_TTL"); raw != "" {
+		var err error
+		c.ConcurrencyLeaseTTL, err = time.ParseDuration(raw)
+		if err != nil || c.ConcurrencyLeaseTTL <= 0 {
+			return c, fmt.Errorf("CONCURRENCY_LEASE_TTL must be a positive duration")
+		}
+	}
+	if err := c.normalizeDeployment(); err != nil {
+		return c, err
+	}
+	if err := loadRequestLimits(&c); err != nil {
+		return c, err
+	}
+	c.ChannelCredentialStorage = strings.ToLower(strings.TrimSpace(env("CHANNEL_CREDENTIAL_STORAGE", "plaintext")))
+	if c.ChannelCredentialStorage != "plaintext" && c.ChannelCredentialStorage != "encrypted" {
+		return c, fmt.Errorf("CHANNEL_CREDENTIAL_STORAGE must be plaintext or encrypted")
+	}
+	c.SessionCookieSecure = true
+	if raw, exists := os.LookupEnv("SESSION_COOKIE_SECURE"); exists {
+		var err error
+		c.SessionCookieSecure, err = strconv.ParseBool(strings.TrimSpace(raw))
+		if err != nil {
+			return c, fmt.Errorf("SESSION_COOKIE_SECURE must be a boolean")
+		}
+	}
 	if c.DatabaseURL == "" {
 		return c, fmt.Errorf("DATABASE_URL is required")
 	}

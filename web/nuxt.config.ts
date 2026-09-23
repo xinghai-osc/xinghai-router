@@ -16,14 +16,7 @@ export default defineNuxtConfig({
   app: {
     pageTransition: { name: 'page' },
     head: {
-      link: [
-        { rel: 'preconnect', href: 'https://fonts.googleapis.com' },
-        { rel: 'preconnect', href: 'https://fonts.gstatic.com', crossorigin: '' },
-        {
-          rel: 'stylesheet',
-          href: 'https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Montserrat:wght@400;500;600&display=swap',
-        },
-      ],
+      link: [],
     },
   },
   hooks: {
@@ -64,6 +57,10 @@ export default defineNuxtConfig({
     '/activity': { prerender: true, ...noindexHeaders },
     '/console': noindexHeaders,
     '/console/**': noindexHeaders,
+    '/card.png': { headers: { 'Cache-Control': 'public, max-age=86400, stale-while-revalidate=604800' } },
+    '/card.webp': { headers: { 'Cache-Control': 'public, max-age=86400, stale-while-revalidate=604800' } },
+    '/og-image.png': { headers: { 'Cache-Control': 'public, max-age=86400, stale-while-revalidate=604800' } },
+    '/favicon.svg': { headers: { 'Cache-Control': 'public, max-age=86400, stale-while-revalidate=604800' } },
   },
   devServer: { port: 5173, host: '127.0.0.1' },
   compatibilityDate: '2026-07-16',

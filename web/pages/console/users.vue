@@ -2,23 +2,26 @@
 import { Users } from 'lucide-vue-next'
 import { endpoints, type AdminUserSubscription, type Group, type SubscriptionPlan, type User, type UserCreate, type UserUpdate } from '~/src/api'
 import { formatDateTime, formatMoney, formatNumber } from '~/src/format'
+import { canAuthorizeUser, canManageUser } from '~/src/user-permissions'
 
 definePageMeta({ layout: 'console', middleware: 'console-auth' })
 
 const { t } = useI18n()
-const { can } = useAccount()
+const { account, can, isAdmin } = useAccount()
 const { toast } = useToast()
 const { busy, run } = useAction()
 
 const allowed = computed(() => can('users.read'))
 const canManage = computed(() => can('users.manage'))
 const canAdjustWallet = computed(() => can('wallets.manage'))
+const canManageGroups = computed(() => can('system.manage'))
 
 // Must stay in sync with availablePermissions in internal/app/admin.go —
 // a permission missing here would be stripped from the user on save.
 const PERMISSIONS = [
   { value: 'users.read', labelKey: 'admin.permUsersRead' },
   { value: 'users.manage', labelKey: 'admin.permUsersManage' },
+  { value: 'users.authorize', labelKey: 'admin.permUsersAuthorize' },
   { value: 'keys.manage', labelKey: 'admin.permKeysManage' },
   { value: 'channels.read', labelKey: 'admin.permChannelsRead' },
   { value: 'channels.manage', labelKey: 'admin.permChannelsManage' },
@@ -73,6 +76,8 @@ const roleLabel = (role: string) => roleOptions.value.find(option => option.valu
 const dialogOpen = ref(false)
 const editing = ref<User | null>(null)
 const creating = ref(false)
+const canAuthorize = computed(() => can('users.authorize') && canAuthorizeUser(account.value, editing.value))
+const editingSelf = computed(() => editing.value?.id === account.value?.id)
 const formError = ref('')
 const form = reactive({
   id: '',
@@ -93,6 +98,7 @@ const form = reactive({
 })
 
 function openCreate() {
+  if (!canManage.value) return
   creating.value = true
   editing.value = null
   formError.value = ''
@@ -115,6 +121,7 @@ function openCreate() {
 }
 
 function openManage(user: User) {
+  if (!canManageUser(account.value, user)) return
   creating.value = false
   editing.value = user
   formError.value = ''
@@ -137,6 +144,7 @@ function openManage(user: User) {
 }
 
 function togglePermission(permission: string, checked: boolean) {
+  if (!canAuthorize.value) return
   const next = new Set(form.permissions)
   if (checked) next.add(permission)
   else next.delete(permission)
@@ -166,34 +174,36 @@ function buildUpdate(): UserUpdate | null {
 
   const update: UserUpdate = {
     name,
-    email,
-    role: form.role,
     enabled: form.enabled,
-    permissions: form.permissions,
-    groups: form.groups,
     leaderboard_opt_in: form.leaderboardOptIn,
     leaderboard_mask_name: form.leaderboardMaskName,
     data_usage_enabled: form.dataUsageEnabled,
     max_concurrency: maxConcurrency,
     inviter_id: inviterId,
   }
+  if (creating.value || email !== editing.value?.email) update.email = email
+  if (canAuthorize.value) {
+    if (creating.value || form.role !== editing.value?.role) update.role = form.role
+    if (creating.value || JSON.stringify([...form.permissions].sort()) !== JSON.stringify([...(editing.value?.permissions ?? [])].sort())) update.permissions = form.permissions
+  }
+  if (canManageGroups.value) update.groups = form.groups
   if (form.password) update.password = form.password
 
   const id = String(form.id ?? '').trim()
-  if (id) {
+  if (id && isAdmin.value) {
     const value = Number(id)
     if (!Number.isSafeInteger(value) || value <= 0) { formError.value = t('admin.idInvalid'); return null }
     update.id = value
   }
 
   const balance = String(form.balance ?? '').trim()
-  if (balance) {
+  if (balance && canAdjustWallet.value) {
     const amount = Number(balance)
     if (!Number.isFinite(amount) || amount < 0) { formError.value = t('admin.balanceInvalid'); return null }
     update.balance = amount
     const note = form.note.trim()
     if (note) update.note = note
-  } else if (form.note.trim()) {
+  } else if (form.note.trim() && canAdjustWallet.value) {
     formError.value = t('admin.noteNeedsBalance')
     return null
   }
@@ -202,11 +212,12 @@ function buildUpdate(): UserUpdate | null {
 }
 
 async function save() {
+  if (!canManage.value || (!creating.value && (!editing.value || !canManageUser(account.value, editing.value)))) return
   formError.value = ''
   if (creating.value) {
     const update = buildUpdate()
     if (!update || !update.password) { if (!update?.password) formError.value = t('admin.passwordRequired'); return }
-    const create: UserCreate = { name: update.name!, email: update.email!, password: update.password, role: update.role!, enabled: update.enabled!, permissions: update.permissions ?? [], groups: update.groups ?? [] }
+    const create: UserCreate = { name: update.name!, email: update.email!, password: update.password, role: update.role ?? 'user', enabled: update.enabled!, permissions: update.permissions ?? [], groups: update.groups ?? [] }
     const ok = await run(() => endpoints.createUser(create))
     if (!ok) { toast.error(t('common.actionFailed')); return }
     toast.success(t('admin.userCreated'))
@@ -564,9 +575,9 @@ async function issueResetCards() {
             <td class="text-muted whitespace-nowrap">{{ formatDateTime(user.created_at) }}</td>
             <td v-if="canManage || canAdjustWallet">
               <div class="flex gap-1">
-                <UiButton v-if="canManage" variant="ghost" size="sm" @click="openManage(user)">{{ t('admin.manage') }}</UiButton>
+                <UiButton v-if="canManageUser(account, user)" variant="ghost" size="sm" @click="openManage(user)">{{ t('admin.manage') }}</UiButton>
                 <UiButton v-if="canAdjustWallet" variant="ghost" size="sm" @click="openAdjustBalance(user)">{{ t('admin.adjustBalance') }}</UiButton>
-                <UiButton v-if="canManage" variant="ghost" size="sm" @click="openSubscriptions(user)">{{ t('admin.subscriptions') }}</UiButton>
+                <UiButton v-if="canManageGroups" variant="ghost" size="sm" @click="openSubscriptions(user)">{{ t('admin.subscriptions') }}</UiButton>
               </div>
             </td>
           </tr>
@@ -584,6 +595,7 @@ async function issueResetCards() {
     <UiSlidePanel v-model:open="dialogOpen" size="lg" :title="creating ? t('admin.createUser') : t('admin.manageUser')" :description="creating ? t('admin.createUserLead') : t('admin.manageUserLead')">
       <div class="space-y-4">
         <UiAlert v-if="formError" tone="danger">{{ formError }}</UiAlert>
+        <UiAlert v-if="!canAuthorize" tone="info">{{ t('admin.userAuthorizationRestricted') }}</UiAlert>
 
         <div class="grid gap-4 sm:grid-cols-2">
           <UiField :label="t('common.name')" required>
@@ -592,16 +604,16 @@ async function issueResetCards() {
           <UiField :label="t('admin.email')" required>
             <UiInput v-model="form.email" type="email" autocomplete="off" />
           </UiField>
-          <UiField v-if="!creating" :label="t('admin.id')" :hint="t('admin.idHint')">
+          <UiField v-if="!creating && isAdmin" :label="t('admin.id')" :hint="t('admin.idHint')">
             <UiInput v-model="form.id" type="number" mono :placeholder="editing?.id" />
           </UiField>
-          <UiField :label="t('admin.role')">
+          <UiField v-if="canAuthorize" :label="t('admin.role')">
             <UiSelect v-model="form.role" :options="roleOptions" :placeholder="t('common.selectPlaceholder')" />
           </UiField>
           <UiField :label="t('admin.newPassword')" :hint="creating ? t('admin.passwordRequired') : t('admin.newPasswordHint')" :required="creating">
             <UiInput v-model="form.password" type="password" autocomplete="new-password" />
           </UiField>
-          <UiField :label="t('admin.balance')" :hint="t('admin.balanceHint')">
+          <UiField v-if="canAdjustWallet && !creating" :label="t('admin.balance')" :hint="t('admin.balanceHint')">
             <UiInput v-model="form.balance" type="number" mono />
           </UiField>
           <UiField :label="t('admin.userConcurrency')" :hint="t('admin.userConcurrencyHint')">
@@ -610,12 +622,12 @@ async function issueResetCards() {
           <UiField :label="t('admin.inviter')" :hint="t('admin.inviterHint')">
             <UiInput v-model="form.inviterId" type="number" min="1" step="1" mono :placeholder="t('admin.inviterPlaceholder')" />
           </UiField>
-          <UiField :label="t('admin.note')" :hint="t('admin.noteHint')">
+          <UiField v-if="canAdjustWallet && !creating" :label="t('admin.note')" :hint="t('admin.noteHint')">
             <UiInput v-model="form.note" />
           </UiField>
         </div>
 
-        <UiCheckbox v-model="form.enabled">{{ t('admin.accountEnabled') }}</UiCheckbox>
+        <UiCheckbox v-model="form.enabled" :disabled="editingSelf">{{ t('admin.accountEnabled') }}</UiCheckbox>
 
         <UiField :label="t('admin.preferences')">
           <div class="space-y-3 rounded-control border border-line bg-sunken px-3 py-2.5">
@@ -643,7 +655,7 @@ async function issueResetCards() {
           </div>
         </UiField>
 
-        <UiField :label="t('admin.permissions')">
+        <UiField v-if="canAuthorize" :label="t('admin.permissions')">
           <div class="grid gap-x-4 gap-y-2 rounded-control border border-line bg-sunken px-3 py-2.5 sm:grid-cols-2">
             <UiCheckbox
               v-for="permission in PERMISSIONS"
@@ -656,7 +668,7 @@ async function issueResetCards() {
           </div>
         </UiField>
 
-        <UiField :label="t('admin.groups')">
+        <UiField v-if="canManageGroups" :label="t('admin.groups')">
           <ConsoleOpsGroupPicker v-model="form.groups" :options="groupOptions" />
         </UiField>
       </div>

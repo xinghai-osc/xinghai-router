@@ -12,6 +12,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -103,9 +104,10 @@ func rotateTarget(ctx context.Context, tx pgx.Tx, oldKey, newKey string, t targe
 	defer rows.Close()
 
 	type row struct {
-		id    string
-		value string
-		plain string
+		id     string
+		value  string
+		plain  string
+		prefix string
 	}
 	var pending []row
 	skipped := 0
@@ -114,12 +116,16 @@ func rotateTarget(ctx context.Context, tx pgx.Tx, oldKey, newKey string, t targe
 		if err := rows.Scan(&r.id, &r.value); err != nil {
 			return 0, 0, err
 		}
-		plain, err := crypt(oldKey, r.value, true)
+		plain, prefix, skip, err := decryptRotationValue(oldKey, r.value, t)
 		if err != nil {
+			return 0, 0, err
+		}
+		if skip {
 			skipped++
 			continue
 		}
 		r.plain = plain
+		r.prefix = prefix
 		pending = append(pending, r)
 	}
 	if err := rows.Err(); err != nil {
@@ -135,11 +141,32 @@ func rotateTarget(ctx context.Context, tx pgx.Tx, oldKey, newKey string, t targe
 		if err != nil {
 			return 0, 0, err
 		}
-		if _, err := tx.Exec(ctx, update, encrypted, r.id); err != nil {
+		if _, err := tx.Exec(ctx, update, r.prefix+encrypted, r.id); err != nil {
 			return 0, 0, err
 		}
 	}
 	return len(pending), skipped, nil
+}
+
+func decryptRotationValue(key, stored string, t target) (string, string, bool, error) {
+	const format = "xh-credential:"
+	const prefix = format + "v1:"
+	channel := t.Table == "channels" && t.Column == "api_key" || t.Table == "channel_api_keys" && t.Column == "key_encrypted"
+	if channel && strings.HasPrefix(stored, format) {
+		if !strings.HasPrefix(stored, prefix) {
+			return "", "", false, fmt.Errorf("unsupported channel credential format")
+		}
+		plain, err := crypt(key, strings.TrimPrefix(stored, prefix), true)
+		if err != nil || plain == "" {
+			return "", "", false, fmt.Errorf("could not decrypt tagged channel credential")
+		}
+		return plain, prefix, false, nil
+	}
+	plain, err := crypt(key, stored, true)
+	if err != nil {
+		return "", "", true, nil
+	}
+	return plain, "", false, nil
 }
 
 func crypt(key, value string, decrypt bool) (string, error) {

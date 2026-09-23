@@ -11,7 +11,6 @@ const { busy, run } = useAction()
 useHead({ title: () => `${t('system.reliabilityTitle')} · ${site.value.name}` })
 
 const DEFAULTS: ReliabilitySettings = {
-  request_timeout_seconds: 90,
   retry_count: 3,
   retry_status_codes: '100-199,300-407,409-503,505-523,525-599',
   health_check_mode: 'off',
@@ -31,7 +30,6 @@ const { data, pending, error, refresh } = useResource(
 
 const form = reactive<ReliabilitySettings>({ ...DEFAULTS })
 const mode = ref<string>(DEFAULTS.health_check_mode)
-const requestTimeout = ref(String(DEFAULTS.request_timeout_seconds))
 const retryCount = ref(String(DEFAULTS.retry_count))
 const interval = ref(String(DEFAULTS.health_check_interval_minutes))
 const slowSeconds = ref(String(DEFAULTS.auto_disable_slow_seconds))
@@ -39,7 +37,6 @@ const slowSeconds = ref(String(DEFAULTS.auto_disable_slow_seconds))
 watch(data, (next) => {
   Object.assign(form, next)
   mode.value = next.health_check_mode || 'off'
-  requestTimeout.value = String(next.request_timeout_seconds ?? DEFAULTS.request_timeout_seconds)
   retryCount.value = String(next.retry_count ?? DEFAULTS.retry_count)
   interval.value = String(next.health_check_interval_minutes ?? DEFAULTS.health_check_interval_minutes)
   slowSeconds.value = String(next.auto_disable_slow_seconds ?? 0)
@@ -59,14 +56,8 @@ function toInt(value: string, fallback: number, min = 0, max = Number.MAX_SAFE_I
 }
 
 async function save() {
-  const timeout = toInt(requestTimeout.value, 0, 1, 3600)
-  if (timeout === 0) {
-    toast.error(t('system.requestTimeoutInvalid'))
-    return
-  }
   const payload: ReliabilitySettings = {
     ...form,
-    request_timeout_seconds: toInt(requestTimeout.value, DEFAULTS.request_timeout_seconds, 1, 3600),
     health_check_mode: mode.value as ReliabilitySettings['health_check_mode'],
     retry_count: toInt(retryCount.value, DEFAULTS.retry_count, 0, 10),
     health_check_interval_minutes: toInt(interval.value, DEFAULTS.health_check_interval_minutes, 1, 1440),
@@ -104,10 +95,6 @@ async function save() {
       <form v-else class="space-y-4" @submit.prevent="save">
         <UiCard :title="t('system.retrySection')">
           <div class="grid gap-4 sm:grid-cols-2">
-            <UiField :label="t('system.requestTimeout')" :hint="t('system.requestTimeoutHint')" for="request-timeout">
-              <UiInput id="request-timeout" v-model="requestTimeout" type="number" min="1" max="3600" step="1" />
-            </UiField>
-
             <UiField :label="t('system.retryCount')" :hint="t('system.retryCountHint')" for="retry-count">
               <UiInput id="retry-count" v-model="retryCount" />
             </UiField>

@@ -30,10 +30,10 @@
 
   --radius-card-token: 20px;
   --radius-button-token: 999px;
-  --app-font-sans: 'DM Sans', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB',
-    'Noto Sans SC', 'Microsoft YaHei', sans-serif;
-  --app-font-display: 'Montserrat', 'DM Sans', -apple-system, BlinkMacSystemFont, 'PingFang SC',
-    'Noto Sans SC', 'Microsoft YaHei', sans-serif;
+  --app-font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Noto Sans SC', 'Microsoft YaHei', sans-serif;
+  --app-font-display: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Noto Sans SC', 'Microsoft YaHei', sans-serif;
   --app-display-weight: 500;
   --app-display-tracking: -0.02em;
   --app-display-leading: 1.2;

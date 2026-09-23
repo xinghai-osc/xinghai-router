@@ -10,15 +10,15 @@ defineProps<{
 </script>
 
 <template>
-  <div class="flex flex-col items-center justify-center gap-3 px-6 py-14 text-center">
-    <div class="flex size-12 items-center justify-center rounded-full bg-clay-soft text-clay">
+  <div class="flex min-w-0 flex-col items-center justify-center gap-4 px-4 py-12 text-center sm:px-6 sm:py-16">
+    <div class="flex size-12 shrink-0 items-center justify-center rounded-card border border-line bg-sunken text-muted" aria-hidden="true">
       <component :is="icon ?? Inbox" class="size-5" />
     </div>
-    <div class="space-y-1">
-      <p class="text-sm font-medium text-ink">{{ title }}</p>
-      <p v-if="description" class="max-w-sm text-[13px] text-muted">{{ description }}</p>
+    <div class="w-full max-w-sm space-y-1.5 break-words">
+      <p class="text-sm leading-6 font-semibold text-ink">{{ title }}</p>
+      <p v-if="description" class="text-[13px] leading-6 text-muted">{{ description }}</p>
     </div>
-    <div v-if="$slots.default" class="pt-1">
+    <div v-if="$slots.default" class="flex max-w-full flex-wrap items-center justify-center gap-2 pt-1">
       <slot />
     </div>
   </div>

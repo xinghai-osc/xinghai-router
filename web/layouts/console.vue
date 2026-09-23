@@ -1,7 +1,7 @@
 <script setup lang="ts">
 const { settings, loadSiteSettings } = useSiteSettings()
-const { account, loading, error, can, loadAccount } = useAccount()
-const { loadNotifications } = useNotifications()
+const { account, loading, loaded, error, can, loadAccount } = useAccount()
+const { open: notificationsOpen, loadNotifications } = useNotifications()
 const { t } = useI18n()
 const route = useRoute()
 const navOpen = ref(false)
@@ -19,9 +19,6 @@ onMounted(async () => {
 
 watch(() => route.fullPath, () => { navOpen.value = false })
 
-// A failed load means the session expired; useAccount already dropped the token.
-watch(error, (message) => { if (message) navigateTo('/auth') })
-
 const booting = computed(() => loading.value || (!account.value && !error.value))
 
 // The backend answers 403 password_change_required on every route except
@@ -30,6 +27,9 @@ const booting = computed(() => loading.value || (!account.value && !error.value)
 const mustChangePassword = computed(() => Boolean(account.value?.must_change_password))
 
 watchEffect(() => {
+  if (import.meta.client && loaded.value && !account.value && !loading.value && !error.value) {
+    navigateTo({ path: '/auth', query: { redirect: route.fullPath } })
+  }
   if (mustChangePassword.value && route.path !== '/console/account') navigateTo('/console/account')
 })
 </script>
@@ -71,11 +71,15 @@ watchEffect(() => {
             <UiSkeleton :rows="6" />
           </UiCard>
         </div>
-        <slot v-else />
+        <UiAlert v-else-if="error" tone="danger">
+          {{ error }}
+          <UiButton variant="link" size="sm" @click="loadAccount(true)">{{ t('common.retry') }}</UiButton>
+        </UiAlert>
+        <slot v-else-if="account" />
       </main>
     </div>
 
     <UiToaster />
-    <ConsoleNotificationsDialog />
+    <LazyConsoleNotificationsDialog v-if="notificationsOpen" />
   </div>
 </template>

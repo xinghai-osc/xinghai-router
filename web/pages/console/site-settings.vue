@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ImageOff } from 'lucide-vue-next'
-import { endpoints, type AdminSiteSettings, type CatalogModel, type FeaturedCopy, type FeaturedLocale } from '~/src/api'
+import { clearPublicCache, endpoints, type AdminSiteSettings, type CatalogModel, type FeaturedCopy, type FeaturedLocale } from '~/src/api'
 
 definePageMeta({ layout: 'console', middleware: 'console-auth' })
 
@@ -178,6 +178,7 @@ async function save() {
   geetestKey.value = ''
   corptchaSecret.value = ''
   smtpPassword.value = ''
+  clearPublicCache('site-settings')
   toast.success(t('system.siteSettingsSaved'))
   await refresh()
 }

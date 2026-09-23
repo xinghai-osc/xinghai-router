@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"strings"
 
 	"golang.org/x/crypto/bcrypt"
 )
@@ -68,12 +69,19 @@ var dummyPasswordHash = func() string {
 	return string(hash)
 }()
 
-// channelKeyValue resolves a stored channel API key to its usable form. Channel
-// keys are stored plaintext; rows written before that change hold ciphertext and
-// are decrypted transparently when ENCRYPTION_KEY still matches.
 func channelKeyValue(encryptionKey, stored string) (string, error) {
 	if stored == "" {
 		return "", errInvalid
+	}
+	if strings.HasPrefix(stored, channelCredentialFormat) {
+		if !strings.HasPrefix(stored, channelCredentialPrefix) {
+			return "", fmt.Errorf("unsupported channel credential format")
+		}
+		plain, err := crypt(encryptionKey, strings.TrimPrefix(stored, channelCredentialPrefix), true)
+		if err != nil || plain == "" {
+			return "", fmt.Errorf("could not decrypt channel credential")
+		}
+		return plain, nil
 	}
 	if plain, err := crypt(encryptionKey, stored, true); err == nil {
 		return plain, nil

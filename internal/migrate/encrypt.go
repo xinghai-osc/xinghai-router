@@ -7,82 +7,75 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// EncryptExistingChannelKeys encrypts any plaintext channel keys stored in the
-// target database. It is idempotent: already-encrypted values are skipped.
 func EncryptExistingChannelKeys(ctx context.Context, targetDSN, encryptionKey string, progress ProgressFunc) error {
+	mode, err := channelCredentialStorage()
+	if err != nil {
+		return err
+	}
+	if mode != "encrypted" {
+		return fmt.Errorf("CHANNEL_CREDENTIAL_STORAGE=encrypted is required for channel credential migration")
+	}
+	if len(encryptionKey) < 24 {
+		return fmt.Errorf("ENCRYPTION_KEY must contain at least 24 characters")
+	}
 	if progress != nil {
 		progress(Progress{Step: "connect", Detail: "Connecting to target database"})
 	}
-	if encryptionKey == "" {
-		return fmt.Errorf("encryption key is required")
-	}
-
 	target, err := pgxpool.New(ctx, targetDSN)
 	if err != nil {
 		return fmt.Errorf("connect target database: %w", err)
 	}
 	defer target.Close()
-
-	if err := target.Ping(ctx); err != nil {
-		return fmt.Errorf("ping target database: %w", err)
-	}
-
-	if progress != nil {
-		progress(Progress{Step: "channels", Detail: "Encrypting channel primary keys"})
-	}
-	rows, err := target.Query(ctx, `select id, api_key from channels where api_key <> ''`)
+	tx, err := target.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("query channels: %w", err)
+		return err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var id, key string
-		if err := rows.Scan(&id, &key); err != nil {
-			continue
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `lock table channels,channel_api_keys in share row exclusive mode`); err != nil {
+		return err
+	}
+	for _, table := range []struct{ step, query, update string }{
+		{"channels", `select id::text,api_key from channels where api_key<>''`, `update channels set api_key=$1 where id=$2`},
+		{"channel_api_keys", `select id::text,key_encrypted from channel_api_keys where key_encrypted<>''`, `update channel_api_keys set key_encrypted=$1 where id=$2`},
+	} {
+		if progress != nil {
+			progress(Progress{Step: table.step, Detail: "Encrypting channel credentials"})
 		}
-		enc, err := encryptIfNeeded(encryptionKey, key)
+		rows, err := tx.Query(ctx, table.query)
 		if err != nil {
-			return fmt.Errorf("encrypt channel %s key: %w", id, err)
+			return err
 		}
-		if enc == key {
-			continue
+		type credential struct{ id, stored string }
+		var pending []credential
+		for rows.Next() {
+			var row credential
+			if err := rows.Scan(&row.id, &row.stored); err != nil {
+				rows.Close()
+				return err
+			}
+			converted, err := encryptIfNeeded(encryptionKey, row.stored)
+			if err != nil {
+				rows.Close()
+				return err
+			}
+			if converted != row.stored {
+				row.stored = converted
+				pending = append(pending, row)
+			}
 		}
-		if _, err := target.Exec(ctx, `update channels set api_key=$1 where id=$2`, enc, id); err != nil {
-			return fmt.Errorf("update channel %s: %w", id, err)
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
 		}
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("channel rows: %w", err)
-	}
-
-	if progress != nil {
-		progress(Progress{Step: "channel_api_keys", Detail: "Encrypting channel alternate keys"})
-	}
-	krows, err := target.Query(ctx, `select id, key_encrypted from channel_api_keys where key_encrypted <> ''`)
-	if err != nil {
-		return fmt.Errorf("query channel api keys: %w", err)
-	}
-	defer krows.Close()
-	for krows.Next() {
-		var id, key string
-		if err := krows.Scan(&id, &key); err != nil {
-			continue
-		}
-		enc, err := encryptIfNeeded(encryptionKey, key)
-		if err != nil {
-			return fmt.Errorf("encrypt channel api key %s: %w", id, err)
-		}
-		if enc == key {
-			continue
-		}
-		if _, err := target.Exec(ctx, `update channel_api_keys set key_encrypted=$1 where id=$2`, enc, id); err != nil {
-			return fmt.Errorf("update channel api key %s: %w", id, err)
+		for _, row := range pending {
+			if _, err := tx.Exec(ctx, table.update, row.stored, row.id); err != nil {
+				return err
+			}
 		}
 	}
-	if err := krows.Err(); err != nil {
-		return fmt.Errorf("channel api key rows: %w", err)
+	if err := tx.Commit(ctx); err != nil {
+		return err
 	}
-
 	if progress != nil {
 		progress(Progress{Step: "done", Detail: "Finished encrypting channel keys"})
 	}

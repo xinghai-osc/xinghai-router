@@ -31,9 +31,9 @@ const groups = [
 </script>
 
 <template>
-  <footer class="border-t border-line">
-    <div class="shell grid gap-10 py-14 md:grid-cols-[1.5fr_repeat(3,1fr)]">
-      <div class="space-y-3">
+  <footer class="border-t border-line bg-sunken/30">
+    <div class="shell grid grid-cols-2 gap-x-6 gap-y-10 py-14 sm:grid-cols-3 md:grid-cols-[1.5fr_repeat(3,1fr)] md:gap-10">
+      <div class="col-span-2 space-y-4 sm:col-span-3 md:col-span-1">
         <SiteLogo :name="settings.name" :icon-url="settings.icon_url" />
         <p class="max-w-xs text-[13px] leading-relaxed text-muted">{{ t('site.footerBlurb') }}</p>
       </div>
@@ -42,7 +42,7 @@ const groups = [
         <p class="text-2xs font-medium tracking-wide text-faint uppercase">{{ t(group.titleKey) }}</p>
         <ul class="space-y-2">
           <li v-for="link in group.links" :key="link.to">
-            <NuxtLink :to="link.to" class="text-[13px] text-muted transition-colors hover:text-ink">
+            <NuxtLink :to="link.to" class="inline-flex py-1 text-[13px] text-muted transition-colors duration-150 ease-out hover:text-clay">
               {{ t(link.key) }}
             </NuxtLink>
           </li>

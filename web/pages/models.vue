@@ -351,6 +351,6 @@ onMounted(() => {
       </div>
     </section>
 
-    <MarketplaceModelDialog v-model:open="detailOpen" :model="selected" :unit="unit" />
+    <LazyMarketplaceModelDialog v-if="detailOpen" v-model:open="detailOpen" :model="selected" :unit="unit" />
   </div>
 </template>

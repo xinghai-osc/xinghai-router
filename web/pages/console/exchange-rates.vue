@@ -14,10 +14,13 @@ const allowed = computed(() => can('pricing.read'))
 const canManage = computed(() => can('pricing.manage'))
 const rates = useResource(() => endpoints.getAdminExchangeRates(), { data: [] as ExchangeRate[] })
 const panelOpen = ref(false)
+const editing = ref(false)
 const formError = ref('')
 const form = reactive({ currency: '', rate_to_base: '1', enabled: true })
+const isBaseCurrency = computed(() => form.currency.trim().toUpperCase() === 'CNY')
 
 function openCreate() {
+  editing.value = false
   formError.value = ''
   form.currency = ''
   form.rate_to_base = '1'
@@ -26,6 +29,7 @@ function openCreate() {
 }
 
 function openEdit(rate: ExchangeRate) {
+  editing.value = true
   formError.value = ''
   form.currency = rate.currency
   form.rate_to_base = String(rate.rate_to_base)
@@ -45,7 +49,8 @@ async function save() {
     formError.value = t('admin.exchangeRateInvalid')
     return
   }
-  const payload: ExchangeRateForm = { currency, rate_to_base: rate, enabled: form.enabled }
+  const enabled = currency === 'CNY' ? true : form.enabled
+  const payload: ExchangeRateForm = { currency, rate_to_base: currency === 'CNY' ? 1 : rate, enabled }
   const ok = await run(() => endpoints.saveExchangeRate(payload))
   if (!ok) {
     toast.error(t('common.actionFailed'))
@@ -103,12 +108,12 @@ async function save() {
       <div class="space-y-4">
         <UiAlert v-if="formError" tone="danger">{{ formError }}</UiAlert>
         <UiField :label="t('admin.currency')" :hint="t('admin.currencyHint')" required>
-          <UiInput v-model="form.currency" mono maxlength="8" />
+          <UiInput v-model="form.currency" mono maxlength="8" :disabled="editing" />
         </UiField>
         <UiField :label="t('admin.rateToBase')" :hint="t('admin.rateToBaseHint')" required>
-          <UiInput v-model="form.rate_to_base" type="number" min="0" step="any" mono />
+          <UiInput v-model="form.rate_to_base" type="number" min="0" step="any" mono :disabled="isBaseCurrency" />
         </UiField>
-        <UiField :label="t('common.status')"><UiSwitch v-model="form.enabled" /></UiField>
+        <UiField :label="t('common.status')"><UiSwitch v-model="form.enabled" :disabled="isBaseCurrency" /></UiField>
       </div>
       <template #footer>
         <UiButton variant="secondary" @click="panelOpen = false">{{ t('common.cancel') }}</UiButton>

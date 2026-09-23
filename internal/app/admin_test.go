@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"math"
 	"net/http"
@@ -232,8 +233,34 @@ func TestUpdateChannelRejectsInvalidPriorityBeforeDatabaseAccess(t *testing.T) {
 	}
 }
 
+func TestValidUpstreamFormat(t *testing.T) {
+	for _, format := range []string{"", "openai", "openai_chat", "anthropic", "jev"} {
+		if !validUpstreamFormat(format) {
+			t.Fatalf("validUpstreamFormat(%q) = false", format)
+		}
+	}
+	for _, format := range []string{"openai_responses", "jpeg", "custom", "JEV"} {
+		if validUpstreamFormat(format) {
+			t.Fatalf("validUpstreamFormat(%q) = true", format)
+		}
+	}
+}
+
+func TestValidUpstreamPath(t *testing.T) {
+	for _, path := range []string{"/v1/responses", "/provider/generate", "/"} {
+		if !validUpstreamPath(path) {
+			t.Fatalf("validUpstreamPath(%q) = false", path)
+		}
+	}
+	for _, path := range []string{"", "v1/responses", "//host/path", "/v1/responses?x=1", "/v1/responses#fragment", "/v1\\responses", "/v1/\nresponses", strings.Repeat("/x", 1025)} {
+		if validUpstreamPath(path) {
+			t.Fatalf("validUpstreamPath(%q) = true", path)
+		}
+	}
+}
+
 func TestValidChannelProviderAndPriority(t *testing.T) {
-	for _, p := range []string{"openai", "ollama", "kimi", "opencode_go", "anthropic", "deepseek", "custom"} {
+	for _, p := range []string{"openai", "openai_chat", "ollama", "kimi", "opencode_go", "anthropic", "deepseek", "commandcode", "jev", "custom"} {
 		if !validChannelProvider(p) {
 			t.Fatalf("expected provider %q valid", p)
 		}
@@ -527,6 +554,7 @@ func TestRunMigrationRejectsEmptyDSN(t *testing.T) {
 	for _, body := range []string{`{}`, `{"source_dsn":""}`, `{"source_driver":"mysql"}`} {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, "/admin/migrate", strings.NewReader(body))
+		req = req.WithContext(context.WithValue(req.Context(), accountContextKey{}, accountContext{role: "admin", userID: "test-admin"}))
 		(&Service{}).runMigration(rec, req)
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("body %s status = %d", body, rec.Code)

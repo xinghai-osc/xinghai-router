@@ -43,13 +43,41 @@ func TestResolveUpstreamFormatDefaultsToChat(t *testing.T) {
 		provider, configured, want string
 	}{
 		{"openai", "", "openai"},
+		{"openai_chat", "", "openai_chat"},
 		{"custom", "", "openai_chat"},
+		{"custom", "openai", "openai"},
+		{"custom", "openai_chat", "openai_chat"},
+		{"custom", "anthropic", "anthropic"},
+		{"custom", "jev", "jev"},
+		{"jev", "", "jev"},
+		{"jev", " ", "jev"},
+		{"jev", "jev", "jev"},
+		{"jev", "openai_chat", "openai_chat"},
+		{"ollama", " anthropic ", "anthropic"},
 		{"anthropic", "", "anthropic"},
 		{"commandcode", "", "commandcode"},
 	}
 	for _, tt := range tests {
 		if got := resolveUpstreamFormat(tt.provider, tt.configured); got != tt.want {
 			t.Fatalf("resolveUpstreamFormat(%q, %q) = %q, want %q", tt.provider, tt.configured, got, tt.want)
+		}
+	}
+}
+
+func TestChannelMatchesUpstreamFormat(t *testing.T) {
+	tests := []struct {
+		required string
+		actual   string
+		want     bool
+	}{
+		{required: "jev", actual: "jev", want: true},
+		{required: "jev", actual: "openai_chat", want: false},
+		{required: "", actual: "openai_chat", want: true},
+		{required: "", actual: "jev", want: false},
+	}
+	for _, tt := range tests {
+		if got := channelMatchesUpstreamFormat(tt.required, tt.actual); got != tt.want {
+			t.Fatalf("channelMatchesUpstreamFormat(%q, %q) = %v, want %v", tt.required, tt.actual, got, tt.want)
 		}
 	}
 }
@@ -168,6 +196,18 @@ func TestStreamResponseDirectPreservesBytes(t *testing.T) {
 	}
 	if stats.prompt != 2 || stats.completion != 1 {
 		t.Fatalf("usage = %+v", stats)
+	}
+}
+
+func TestReadGatewayBodyAcceptsConfiguredLargerLimit(t *testing.T) {
+	body := strings.Repeat("x", 2<<20+1)
+	s := &Service{cfg: Config{GatewayMaxBodyBytes: 3 << 20}}
+	got, err := s.readGatewayBody(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body)))
+	if err != nil {
+		t.Fatalf("readGatewayBody returned error: %v", err)
+	}
+	if len(got) != len(body) {
+		t.Fatalf("body length = %d, want %d", len(got), len(body))
 	}
 }
 
@@ -337,6 +377,38 @@ func TestRewriteJSONModel(t *testing.T) {
 	invalid := []byte(`not-json`)
 	if got := string(rewriteJSONModel(invalid, "real-model")); got != string(invalid) {
 		t.Fatalf("invalid JSON must pass through unchanged: %s", got)
+	}
+}
+
+func TestResponsesFallbackStatus(t *testing.T) {
+	for _, status := range []int{http.StatusNotFound, http.StatusMethodNotAllowed, http.StatusUnsupportedMediaType, http.StatusNotImplemented} {
+		if !responsesFallbackStatus(status) {
+			t.Fatalf("status %d should permit endpoint fallback", status)
+		}
+	}
+	for _, status := range []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests, http.StatusInternalServerError} {
+		if responsesFallbackStatus(status) {
+			t.Fatalf("status %d must not permit endpoint fallback", status)
+		}
+	}
+}
+
+func TestRewriteResponsesBody(t *testing.T) {
+	body := []byte(`{"model":"m","input":"hello","promptCacheKey":"k"}`)
+	got := rewriteResponsesBody(body, "real-model", "m")
+	var payload map[string]any
+	if err := json.Unmarshal(got, &payload); err != nil {
+		t.Fatalf("rewritten body is invalid JSON: %v", err)
+	}
+	if payload["model"] != "real-model" || payload["input"] != "hello" {
+		t.Fatalf("Responses fields were not preserved: %#v", payload)
+	}
+	if _, ok := payload["promptCacheKey"]; ok {
+		t.Fatalf("promptCacheKey not stripped: %#v", payload)
+	}
+	clean := []byte(`{"model":"m","input":"hello"}`)
+	if got := string(rewriteResponsesBody(clean, "", "m")); got != string(clean) {
+		t.Fatalf("clean body must pass through unchanged: %s", got)
 	}
 }
 
@@ -569,6 +641,18 @@ func TestUsageCostAndClamp(t *testing.T) {
 	}
 }
 
+func TestComputeUsageCostAppliesExchangeRate(t *testing.T) {
+	rule := pricingRule{input: 2, cachedInput: 1, output: 4, multiplier: 1, exchangeRate: 7, found: true}
+	if got := computeUsageCost(1_000_000, 0, 0, rule, 1); got != 14 {
+		t.Fatalf("CNY cost = %v, want 14", got)
+	}
+	legacy := rule
+	legacy.exchangeRate = 0
+	if got := computeUsageCost(1_000_000, 0, 0, legacy, 1); got != 2 {
+		t.Fatalf("legacy cost = %v, want 2", got)
+	}
+}
+
 func TestTieredUsageCost(t *testing.T) {
 	// Base prices are $1/$0.5/$2 per million. Two tiers:
 	//   from_tokens=0      -> $1/$0.5/$2 (same as base)
@@ -763,8 +847,8 @@ func TestParseSSEUsageRequiresUsageObject(t *testing.T) {
 	}
 	var zero streamStats
 	parseSSEUsage([]byte(`{"usage":{"prompt_tokens":0,"completion_tokens":0}}`), &zero)
-	if zero.usageComplete {
-		t.Fatal("zero-token usage must use the conservative billing fallback")
+	if !zero.usageComplete {
+		t.Fatal("explicit zero-token usage must not be replaced by an estimate")
 	}
 }
 

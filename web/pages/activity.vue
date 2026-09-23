@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Lock, ScrollText } from 'lucide-vue-next'
-import { api, getToken, type PublicActivityItem } from '~/src/api'
+import { ApiError, endpoints, type PublicActivityItem } from '~/src/api'
 import { formatDateTime, formatNumber } from '~/src/format'
 
 const { t } = useI18n()
@@ -13,21 +13,24 @@ usePageSeo({
 })
 
 const data = ref<PublicActivityItem[]>([])
-const pending = ref(false)
+const pending = ref(true)
 const failure = ref('')
-const signedIn = ref(!!getToken())
+const { authenticated: signedIn, error: accountError, loadAccount } = useAccount()
 
 async function load() {
-  if (!signedIn.value) return
   pending.value = true
   failure.value = ''
   try {
-    const res = await api<{ data: PublicActivityItem[] }>('/public/activity')
-    data.value = res.data
+    await loadAccount()
+    if (accountError.value) {
+      failure.value = accountError.value
+      return
+    }
+    if (!signedIn.value) return
+    const res = await endpoints.getPublicActivity()
+    if (signedIn.value) data.value = res.data
   } catch (cause) {
-    if (cause instanceof Error && cause.message === 'invalid or expired session') {
-      signedIn.value = false
-    } else {
+    if (!(cause instanceof ApiError && cause.status === 401)) {
       failure.value = cause instanceof Error ? cause.message : t('common.loadFailed')
     }
   } finally {
@@ -57,6 +60,10 @@ onMounted(load)
         <UiButton variant="link" size="sm" class="ml-1 h-auto p-0" @click="load">{{ t('common.retry') }}</UiButton>
       </UiAlert>
 
+      <div v-else-if="pending && !data.length" class="rounded-card border border-line bg-surface p-5">
+        <UiSkeleton :rows="8" />
+      </div>
+
       <UiEmptyState
         v-else-if="!signedIn"
         class="rounded-card border border-line bg-surface"
@@ -66,10 +73,6 @@ onMounted(load)
       >
         <UiButton to="/auth" size="sm">{{ t('common.signIn') }}</UiButton>
       </UiEmptyState>
-
-      <div v-else-if="pending && !data.length" class="rounded-card border border-line bg-surface p-5">
-        <UiSkeleton :rows="8" />
-      </div>
 
       <UiEmptyState
         v-else-if="!data.length"

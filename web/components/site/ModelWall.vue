@@ -6,9 +6,12 @@ import { extractVendors, squareModelKey } from '~/src/marketplace'
 const props = withDefaults(defineProps<{
   models: SquareModel[]
   loading?: boolean
+  error?: string
   maxVendors?: number
   perVendor?: number
 }>(), { maxVendors: 6, perVendor: 5 })
+
+defineEmits<{ retry: [] }>()
 
 const { t } = useI18n()
 
@@ -42,6 +45,13 @@ const vendors = computed(() => {
         </div>
       </div>
 
+      <UiAlert v-else-if="error" class="mt-12" tone="danger" :title="t('site.sqErrorTitle')">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <p>{{ error }}</p>
+          <UiButton variant="secondary" size="sm" @click="$emit('retry')">{{ t('common.retry') }}</UiButton>
+        </div>
+      </UiAlert>
+
       <UiEmptyState
         v-else-if="!vendors.length"
         class="mt-12"
@@ -53,7 +63,7 @@ const vendors = computed(() => {
         <article
           v-for="vendor in vendors"
           :key="vendor.name"
-          class="group space-y-4 rounded-card border border-line bg-surface p-5 transition-[border-color,transform,background-color] duration-150 ease-out hover:-translate-y-0.5 hover:border-line-strong hover:bg-surface"
+          class="group min-w-0 rounded-card border border-line bg-surface p-6 transition-colors duration-150 ease-out hover:border-clay/35"
         >
           <header class="flex items-center gap-3">
             <span class="transition-transform duration-150 ease-out group-hover:scale-105">
@@ -65,7 +75,7 @@ const vendors = computed(() => {
             </div>
           </header>
 
-          <ul class="space-y-1.5">
+          <ul class="mt-5 space-y-2 border-t border-line pt-4">
             <li
               v-for="model in vendor.models"
               :key="squareModelKey(model)"

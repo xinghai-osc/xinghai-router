@@ -6,9 +6,12 @@ import { formatMoney, formatNumber } from '~/src/format'
 const props = withDefaults(defineProps<{
   plans: PublicSubscriptionPlan[]
   loading?: boolean
+  error?: string
   /** Index of the plan rendered as the recommended one. */
   featured?: number
 }>(), { featured: 1 })
+
+defineEmits<{ retry: [] }>()
 
 const { t } = useI18n()
 
@@ -58,6 +61,13 @@ function benefits(plan: PublicSubscriptionPlan): string[] {
     </div>
   </div>
 
+  <UiAlert v-else-if="error" tone="danger" :title="t('common.loadFailed')">
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <p>{{ error }}</p>
+      <UiButton variant="secondary" size="sm" @click="$emit('retry')">{{ t('common.retry') }}</UiButton>
+    </div>
+  </UiAlert>
+
   <UiEmptyState
     v-else-if="!sorted.length"
     :title="t('site.planEmptyTitle')"
@@ -71,8 +81,8 @@ function benefits(plan: PublicSubscriptionPlan): string[] {
       v-for="(plan, index) in sorted"
       :key="plan.id"
       :class="[
-        'relative flex flex-col gap-5 rounded-card border bg-surface p-6 transition-[border-color,transform,background-color] duration-150 ease-out hover:-translate-y-0.5 hover:bg-surface',
-        index === featured ? 'border-clay shadow-pop' : 'border-line hover:border-line-strong',
+        'relative flex min-w-0 flex-col gap-6 rounded-card border p-6 transition-colors duration-150 ease-out lg:p-8',
+        index === featured ? 'border-clay/60 bg-clay-soft/30' : 'border-line bg-surface hover:border-line-strong',
       ]"
     >
       <UiBadge v-if="index === featured" tone="clay" class="absolute -top-2.5 left-6">
@@ -89,7 +99,7 @@ function benefits(plan: PublicSubscriptionPlan): string[] {
         <span class="text-[13px] text-muted">/ {{ periodLabel(plan) }}</span>
       </p>
 
-      <ul class="flex-1 space-y-2">
+      <ul class="flex-1 space-y-3 border-t border-line pt-5">
         <li v-for="item in benefits(plan)" :key="item" class="flex items-start gap-2 text-[13px] text-muted">
           <Check class="mt-0.5 size-3.5 shrink-0 text-clay" />
           {{ item }}

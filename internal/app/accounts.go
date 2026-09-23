@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
@@ -21,6 +22,8 @@ type accountContext struct {
 	role               string
 	permissions        map[string]bool
 	mustChangePassword bool
+	reauthenticatedAt  *time.Time
+	sessionHash        string
 }
 type accountContextKey struct{}
 
@@ -201,12 +204,16 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 	}
 	s.auditActor(r, userID, "account.logged_in", "user", userID, nil)
 	s.notifyLogin(r.Context(), email, requestMetadata(r))
-	s.createSession(w, r, userID, http.StatusOK)
+	s.createSession(w, r, userID, http.StatusOK, passwordHash)
 }
 
 func (s *Service) logout(w http.ResponseWriter, r *http.Request) {
 	account := accountFromContext(r)
-	_, _ = s.db.Exec(r.Context(), `delete from user_sessions where token_hash=$1`, hashSecret(bearer(r)))
+	if _, err := s.db.Exec(r.Context(), `delete from user_sessions where token_hash=$1`, hashSecret(sessionToken(r))); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not revoke session")
+		return
+	}
+	s.clearSessionCookie(w)
 	s.auditActor(r, account.userID, "account.logged_out", "user", account.userID, nil)
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -300,12 +307,31 @@ func (s *Service) changeAccountPassword(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not secure password")
 		return
 	}
-	if _, err = s.db.Exec(r.Context(), `update users set password_hash=$1, must_change_password=false where id=$2`, newHash, account.userID); err != nil {
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not update password")
 		return
 	}
-	if _, err = s.db.Exec(r.Context(), `delete from user_sessions where user_id=$1 and token_hash<>$2`, account.userID, hashSecret(bearer(r))); err != nil {
+	defer tx.Rollback(r.Context())
+	result, err := tx.Exec(r.Context(), `update users set password_hash=$1,must_change_password=false where id=$2 and enabled and password_hash=$3 and exists(select 1 from user_sessions where user_id=$2 and token_hash=$4 and expires_at>now())`, newHash, account.userID, passwordHash, hashSecret(sessionToken(r)))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not update password")
+		return
+	}
+	if result.RowsAffected() != 1 {
+		writeError(w, http.StatusUnauthorized, "invalid_credentials", "account credentials changed; sign in again")
+		return
+	}
+	if _, err = tx.Exec(r.Context(), `delete from user_sessions where user_id=$1 and token_hash<>$2`, account.userID, hashSecret(sessionToken(r))); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not revoke other sessions")
+		return
+	}
+	if _, err = tx.Exec(r.Context(), `update user_sessions set reauthenticated_at=null where user_id=$1`, account.userID); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not clear password verification")
+		return
+	}
+	if err = tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not update password")
 		return
 	}
 	s.audit(r, "account.password_changed", "user", account.userID, map[string]any{"other_sessions_revoked": true, "must_change_password_cleared": true})
@@ -636,7 +662,7 @@ func (s *Service) accountUsage(w http.ResponseWriter, r *http.Request) {
 
 	// With filters the client expects the full matching set; without them keep
 	// the original recent-100 default.
-	query := `select rl.request_id,rl.model,coalesce(rl.prompt_tokens,0),coalesce(ur.cached_prompt_tokens,0),coalesce(rl.completion_tokens,0),coalesce(ur.cost,0),case when ur.status is not null then ur.status when rl.status_code>=400 or rl.error_code is not null then 'failed' else 'success' end,rl.created_at,rl.client_ip,rl.user_agent,case when rl.error_code is not null or rl.status_code>=400 then rl.error_detail else '' end,coalesce(ak.name,''),rl.subscription_covered,rl.duration_ms,rl.first_token_ms,coalesce(coalesce(g.display_name, g.name),'') from request_logs rl left join usage_records ur on ur.request_id=rl.request_id left join api_keys ak on ak.id=rl.api_key_id left join groups g on g.id=rl.group_id where ` + strings.Join(where, " and ") + ` order by rl.created_at desc`
+	query := `select rl.request_id,rl.model,coalesce(rl.prompt_tokens,0),coalesce(ur.cached_prompt_tokens,0),coalesce(rl.completion_tokens,0),coalesce(ur.cost,0),case when ur.status is not null then ur.status when rl.status_code>=400 or rl.error_code is not null then 'failed' else 'success' end,rl.created_at,rl.client_ip,rl.user_agent,case when rl.error_code is not null or rl.status_code>=400 then rl.error_detail else '' end,coalesce(ak.name,''),rl.subscription_covered,rl.duration_ms,rl.first_token_ms,coalesce(coalesce(g.display_name, g.name),''),coalesce(ur.usage_facts,'{}'::jsonb),coalesce(ur.billing_snapshot,'{}'::jsonb) from request_logs rl left join usage_records ur on ur.request_id=rl.request_id left join api_keys ak on ak.id=rl.api_key_id left join groups g on g.id=rl.group_id where ` + strings.Join(where, " and ") + ` order by rl.created_at desc`
 	if len(where) == 1 {
 		query += " limit 100"
 	}
@@ -653,8 +679,9 @@ func (s *Service) accountUsage(w http.ResponseWriter, r *http.Request) {
 		var firstTokenMs *int
 		var subscriptionCovered bool
 		var cost, created any
-		if rows.Scan(&requestID, &model, &prompt, &cached, &completion, &cost, &status, &created, &clientIP, &userAgent, &errorDetail, &keyName, &subscriptionCovered, &durationMs, &firstTokenMs, &groupName) == nil {
-			data = append(data, map[string]any{"request_id": requestID, "model": model, "prompt_tokens": prompt, "cached_prompt_tokens": cached, "completion_tokens": completion, "cost": cost, "status": status, "created_at": created, "client_ip": clientIP, "user_agent": userAgent, "error": errorDetail, "key_name": keyName, "subscription": subscriptionCovered, "duration_ms": durationMs, "first_token_ms": firstTokenMs, "group_name": groupName})
+		var facts, snapshot json.RawMessage
+		if rows.Scan(&requestID, &model, &prompt, &cached, &completion, &cost, &status, &created, &clientIP, &userAgent, &errorDetail, &keyName, &subscriptionCovered, &durationMs, &firstTokenMs, &groupName, &facts, &snapshot) == nil {
+			data = append(data, map[string]any{"request_id": requestID, "model": model, "prompt_tokens": prompt, "cached_prompt_tokens": cached, "completion_tokens": completion, "cost": cost, "status": status, "created_at": created, "client_ip": clientIP, "user_agent": userAgent, "error": errorDetail, "key_name": keyName, "subscription": subscriptionCovered, "duration_ms": durationMs, "first_token_ms": firstTokenMs, "group_name": groupName, "usage_facts": facts, "billing_snapshot": snapshot})
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": data})
@@ -677,11 +704,15 @@ func accountFromContext(r *http.Request) accountContext {
 func (s *Service) optionalAccount(next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		account := accountContext{}
-		token := bearer(r)
+		token := sessionToken(r)
+		w.Header().Add("Vary", "Cookie")
 		if token != "" {
+			w.Header().Set("Cache-Control", "no-store")
 			err := s.db.QueryRow(r.Context(), `select s.user_id,u.role,u.must_change_password from user_sessions s join users u on u.id=s.user_id where s.token_hash=$1 and s.expires_at>now() and u.enabled`, hashSecret(token)).Scan(&account.userID, &account.role, &account.mustChangePassword)
-			if err != nil {
-				writeError(w, http.StatusUnauthorized, "unauthorized", "invalid or expired session")
+			if errors.Is(err, pgx.ErrNoRows) {
+				account = accountContext{}
+			} else if err != nil {
+				writeError(w, http.StatusServiceUnavailable, "service_unavailable", "could not verify session")
 				return
 			}
 		}
@@ -700,7 +731,8 @@ func passwordChangeAllowedPath(path string) bool {
 
 func (s *Service) account(next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		token := bearer(r)
+		w.Header().Set("Cache-Control", "no-store")
+		token := sessionToken(r)
 		if token == "" {
 			writeError(w, http.StatusUnauthorized, "unauthorized", "account session required")
 			return
@@ -708,10 +740,15 @@ func (s *Service) account(next http.HandlerFunc) http.Handler {
 		// Session lookup and permission load are one query: every console request pays
 		// this cost, and the permissions are a cheap correlated aggregate.
 		var account accountContext
+		account.sessionHash = hashSecret(token)
 		var granted []string
-		err := s.db.QueryRow(r.Context(), `select s.user_id,u.role,u.must_change_password,coalesce((select array_agg(p.permission) from user_permissions p where p.user_id=u.id),'{}'::text[]) from user_sessions s join users u on u.id=s.user_id where s.token_hash=$1 and s.expires_at>now() and u.enabled`, hashSecret(token)).Scan(&account.userID, &account.role, &account.mustChangePassword, &granted)
-		if err != nil {
+		err := s.db.QueryRow(r.Context(), `select s.user_id,u.role,u.must_change_password,coalesce((select array_agg(p.permission) from user_permissions p where p.user_id=u.id),'{}'::text[]),s.reauthenticated_at from user_sessions s join users u on u.id=s.user_id where s.token_hash=$1 and s.expires_at>now() and u.enabled`, hashSecret(token)).Scan(&account.userID, &account.role, &account.mustChangePassword, &granted, &account.reauthenticatedAt)
+		if errors.Is(err, pgx.ErrNoRows) {
 			writeError(w, http.StatusUnauthorized, "unauthorized", "invalid or expired session")
+			return
+		}
+		if err != nil {
+			writeError(w, http.StatusServiceUnavailable, "service_unavailable", "could not verify session")
 			return
 		}
 		if account.mustChangePassword && !passwordChangeAllowedPath(r.URL.Path) {
@@ -745,11 +782,7 @@ func (s *Service) permission(permission string, next http.HandlerFunc) http.Hand
 	})
 }
 
-// createSessionToken mints a session row and returns the bearer token a client
-// must present. It is shared by the JSON login/register responses and the OAuth
-// callback, which instead plants the token in the same cookie the console uses
-// and redirects to the console.
-func (s *Service) createSessionToken(ctx context.Context, userID string) (token string, expiresAt time.Time, err error) {
+func (s *Service) createSessionToken(ctx context.Context, userID string, verifiedHash ...string) (token string, expiresAt time.Time, err error) {
 	token, err = randomSecret("xh_session_")
 	if err != nil {
 		return "", time.Time{}, err
@@ -759,19 +792,39 @@ func (s *Service) createSessionToken(ctx context.Context, userID string) (token 
 		return "", time.Time{}, err
 	}
 	expiresAt = time.Now().Add(7 * 24 * time.Hour)
-	if _, err = s.db.Exec(ctx, `insert into user_sessions(id,user_id,token_hash,expires_at) values($1,$2,$3,$4)`, id, userID, hashSecret(token), expiresAt); err != nil {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	defer tx.Rollback(ctx)
+	var currentHash string
+	if err = tx.QueryRow(ctx, `select coalesce(password_hash,'') from users where id=$1 and enabled for update`, userID).Scan(&currentHash); err != nil {
+		return "", time.Time{}, err
+	}
+	if len(verifiedHash) > 0 && !equalSecret(currentHash, verifiedHash[0]) {
+		return "", time.Time{}, errInvalid
+	}
+	if _, err = tx.Exec(ctx, `insert into user_sessions(id,user_id,token_hash,expires_at) values($1,$2,$3,$4)`, id, userID, hashSecret(token), expiresAt); err != nil {
+		return "", time.Time{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
 		return "", time.Time{}, err
 	}
 	return token, expiresAt, nil
 }
 
-func (s *Service) createSession(w http.ResponseWriter, r *http.Request, userID string, status int) {
-	token, expiresAt, err := s.createSessionToken(r.Context(), userID)
+func (s *Service) createSession(w http.ResponseWriter, r *http.Request, userID string, status int, verifiedHash ...string) {
+	token, expiresAt, err := s.createSessionToken(r.Context(), userID, verifiedHash...)
+	if errors.Is(err, errInvalid) || errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusUnauthorized, "invalid_credentials", "account credentials changed; sign in again")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not create session")
 		return
 	}
-	writeJSON(w, status, map[string]any{"token": token, "expires_at": expiresAt})
+	s.setSessionCookie(w, token, expiresAt)
+	writeJSON(w, status, map[string]any{"expires_at": expiresAt})
 }
 
 func validPasswordLength(password string) bool {

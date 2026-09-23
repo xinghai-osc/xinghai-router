@@ -52,6 +52,12 @@ export default {
   resetInvalidToken: '链接无效或已过期，请重新申请',
   resetSuccess: '密码已重置，请使用新密码登录',
 
+  reauthenticationTitle: '确认你的身份',
+  reauthenticationDescription: '请输入当前密码以继续敏感操作。验证成功后 5 分钟内有效。',
+  reauthenticationConfirm: '验证并继续',
+  reauthenticationPasswordRequired: '请输入当前密码。',
+  reauthenticationInvalidPassword: '密码验证失败，请重试；如果会话已过期，请取消并重新登录。',
+
   accountMenu: '账号菜单',
   balance: '账户余额',
   accountSettings: '账号设置',

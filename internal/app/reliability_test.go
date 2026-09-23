@@ -1,6 +1,8 @@
 package app
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -8,8 +10,77 @@ import (
 	"time"
 )
 
+func TestTestChannelPayloadByProvider(t *testing.T) {
+	tests := []struct {
+		name           string
+		provider       string
+		upstreamFormat string
+		path           string
+		wantInput      bool
+		wantBearer     bool
+	}{
+		{name: "openai responses", provider: "openai", path: "/v1/responses", wantInput: true, wantBearer: true},
+		{name: "openai chat", provider: "openai_chat", path: "/v1/chat/completions", wantInput: false, wantBearer: true},
+		{name: "jev system one", provider: "custom", upstreamFormat: "jev", path: "/v1/systemone", wantBearer: true},
+		{name: "jev provider auto format", provider: "jev", path: "/v1/systemone", wantBearer: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost || r.URL.Path != tt.path {
+					t.Errorf("request = %s %s, want POST %s", r.Method, r.URL.Path, tt.path)
+				}
+				if tt.wantBearer && r.Header.Get("Authorization") != "Bearer test-key" {
+					t.Errorf("authorization = %q", r.Header.Get("Authorization"))
+				}
+				var payload map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+					t.Errorf("decode request: %v", err)
+					return
+				}
+				if tt.path == "/v1/systemone" {
+					if payload["model"] != "test-model" || payload["state"] != "ping" {
+						t.Errorf("JEV payload = %#v", payload)
+					}
+					questions, ok := payload["questions"].(map[string]any)
+					if !ok {
+						t.Errorf("JEV questions = %#v", payload["questions"])
+					} else if question, ok := questions["ping"].(map[string]any); !ok || question["type"] != "noul" || question["instructions"] != "Is this a health check?" {
+						t.Errorf("JEV ping question = %#v", questions["ping"])
+					}
+					if _, ok := payload["messages"]; ok {
+						t.Error("JEV payload unexpectedly contains messages")
+					}
+				} else if tt.wantInput {
+					if payload["input"] != "ping" || payload["max_output_tokens"] != float64(16) {
+						t.Errorf("Responses payload = %#v", payload)
+					}
+					if _, ok := payload["messages"]; ok {
+						t.Error("Responses payload unexpectedly contains messages")
+					}
+					if _, ok := payload["max_tokens"]; ok {
+						t.Error("Responses payload unexpectedly contains max_tokens")
+					}
+				} else {
+					if _, ok := payload["messages"]; !ok || payload["max_tokens"] != float64(16) {
+						t.Errorf("Chat payload = %#v", payload)
+					}
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"ok":true}`))
+			}))
+			defer server.Close()
+			s := &Service{httpClient: server.Client()}
+			status, _, _, err := s.testChannelWithConfig(context.Background(), server.URL, "test-key", tt.provider, "test-model", "", tt.upstreamFormat, nil, time.Second)
+			if err != nil || status != http.StatusOK {
+				t.Fatalf("testChannel = status %d err %v", status, err)
+			}
+		})
+	}
+}
+
 func TestUpdateReliabilitySettingsRejectsInvalidValues(t *testing.T) {
-	for _, body := range []string{`{"request_timeout_seconds":0}`, `{"request_timeout_seconds":3601}`, `{"request_timeout_seconds":-1}`, `{"retry_count":-1}`, `{"retry_count":11}`, `{"health_check_mode":"always"}`, `{"health_check_interval_minutes":0}`, `{"health_check_interval_minutes":1441}`, `{"auto_disable_slow_seconds":-1}`} {
+	for _, body := range []string{`{"retry_count":-1}`, `{"retry_count":11}`, `{"health_check_mode":"always"}`, `{"health_check_interval_minutes":0}`, `{"health_check_interval_minutes":1441}`, `{"auto_disable_slow_seconds":-1}`} {
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodPut, "/admin/reliability-settings", strings.NewReader(body))
 		(&Service{}).updateReliabilitySettings(recorder, request)
@@ -124,26 +195,8 @@ func TestParseIDList(t *testing.T) {
 	}
 }
 
-func TestRequestTimeoutDuration(t *testing.T) {
-	if got := requestTimeoutDuration(1); got != time.Second {
-		t.Fatalf("minimum timeout = %s, want 1s", got)
-	}
-	if got := requestTimeoutDuration(3600); got != time.Hour {
-		t.Fatalf("maximum timeout = %s, want 1h", got)
-	}
-	if got := requestTimeoutDuration(0); got != 90*time.Second {
-		t.Fatalf("invalid timeout = %s, want 90s", got)
-	}
-	if got := requestTimeoutDuration(3601); got != 90*time.Second {
-		t.Fatalf("oversized timeout = %s, want 90s", got)
-	}
-}
-
 func TestDefaultReliabilitySettings(t *testing.T) {
 	s := defaultReliabilitySettings()
-	if s.RequestTimeoutSeconds != defaultRequestTimeoutSeconds {
-		t.Errorf("default request timeout = %d, want %d", s.RequestTimeoutSeconds, defaultRequestTimeoutSeconds)
-	}
 	if s.RetryCount != 3 {
 		t.Errorf("default retry count = %d, want 3", s.RetryCount)
 	}

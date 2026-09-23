@@ -127,7 +127,7 @@ async function confirmDeleteMethod() {
               <UiInput id="pay-base-url" v-model="baseUrl" type="url" />
             </UiField>
 
-            <UiField :label="t('system.publicBaseUrl')" :hint="t('system.publicBaseUrlHint')" for="pay-public-url">
+            <UiField :label="t('system.paymentPublicBaseUrl')" :hint="t('system.paymentPublicBaseUrlHint')" for="pay-public-url">
               <UiInput id="pay-public-url" v-model="publicBaseUrl" type="url" />
             </UiField>
           </div>

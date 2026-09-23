@@ -4,30 +4,40 @@
  * Console pages are behind auth and must not be prerendered, so they fetch on
  * mount rather than through Nuxt's useAsyncData.
  */
-export function useResource<T>(loader: () => Promise<T>, initial: T) {
+export function useResource<T>(loader: () => Promise<T>, initial: T, options: { immediate?: boolean } = {}) {
   const { t } = useI18n()
   const data = ref<T>(initial) as Ref<T>
   const pending = ref(false)
   const error = ref('')
   let requestId = 0
+  let activeRequest: Promise<void> | null = null
 
-  async function refresh() {
+  function refresh() {
+    if (activeRequest) return activeRequest
+
     const currentRequestId = ++requestId
-    pending.value = true
-    error.value = ''
-    try {
-      const next = await loader()
-      if (currentRequestId === requestId) data.value = next
-    } catch (cause) {
-      if (currentRequestId === requestId) {
-        error.value = cause instanceof Error ? cause.message : t('common.loadFailed')
+    const request = (async () => {
+      pending.value = true
+      error.value = ''
+      try {
+        const next = await loader()
+        if (currentRequestId === requestId) data.value = next
+      } catch (cause) {
+        if (currentRequestId === requestId) {
+          error.value = cause instanceof Error ? cause.message : t('common.loadFailed')
+        }
+      } finally {
+        if (currentRequestId === requestId) pending.value = false
       }
-    } finally {
-      if (currentRequestId === requestId) pending.value = false
-    }
+    })()
+    const trackedRequest = request.finally(() => {
+      if (activeRequest === trackedRequest) activeRequest = null
+    })
+    activeRequest = trackedRequest
+    return trackedRequest
   }
 
-  if (import.meta.client) onMounted(refresh)
+  if (import.meta.client && options.immediate !== false) onMounted(refresh)
 
   return { data, pending, error, refresh }
 }

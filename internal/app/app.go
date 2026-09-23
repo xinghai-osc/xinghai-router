@@ -36,6 +36,8 @@ type Service struct {
 	userConcurrencyCache  *ttlCache[string, int]
 	groupLimiter          *GroupLimiter
 	userLimiter           *GroupLimiter
+	concurrencyLeases     *concurrencyLeaseManager
+	redisReadiness        *redisLimiter
 	reliabilityData       *ttlCache[struct{}, reliabilitySettings]
 	contentPolicyData     *ttlCache[struct{}, contentPolicySnapshot]
 	conversationCacheData *ttlCache[struct{}, conversationCacheSettings]
@@ -85,6 +87,9 @@ func newPool(ctx context.Context, cfg Config) (*pgxpool.Pool, error) {
 }
 
 func New(ctx context.Context, cfg Config) (*Service, error) {
+	if err := cfg.normalizeDeployment(); err != nil {
+		return nil, err
+	}
 	db, err := newPool(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("connect database: %w", err)
@@ -104,24 +109,45 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 	if cfg.TrustedProxies != "" {
 		log.Printf("trusted proxies enabled: %s", cfg.TrustedProxies)
 	}
-	limiter, mode := newRateLimiter(cfg.RedisURL, cfg.RateLimitPerMinute)
-	ipLimiter, ipMode := newRateLimiter(cfg.RedisURL, cfg.IPRateLimitPerMinute)
-	rankingsLimiter, _ := newRateLimiter(cfg.RedisURL, rankingsPerMinute)
-	performanceLimiter, _ := newRateLimiter(cfg.RedisURL, performancePerMinute)
-	if mode == "redis" || ipMode == "redis" {
-		log.Printf("rate limiter backend: redis (memory fallback on redis errors)")
-	} else {
-		log.Printf("rate limiter backend: memory")
+	limits := make([]rateLimiter, 0, 4)
+	var redisReadiness *redisLimiter
+	initialized := false
+	defer func() {
+		if !initialized {
+			for _, limit := range limits {
+				limit.close()
+			}
+			if redisReadiness != nil {
+				redisReadiness.close()
+			}
+		}
+	}()
+	for _, n := range []int{cfg.RateLimitPerMinute, cfg.IPRateLimitPerMinute, rankingsPerMinute, performancePerMinute} {
+		limit, _, err := newConfiguredRateLimiter(cfg.RedisURL, n, cfg.RedisFailurePolicy)
+		if err != nil {
+			db.Close()
+			return nil, fmt.Errorf("initialize rate limiter: %w", err)
+		}
+		limits = append(limits, limit)
 	}
+	if cfg.RedisFailurePolicy == "deny" {
+		redisReadiness, err = newRedisLimiter(cfg.RedisURL, 1)
+		if err != nil {
+			db.Close()
+			return nil, fmt.Errorf("required Redis is unavailable")
+		}
+	}
+	log.Printf("event=deployment_config mode=%s redis_failure_policy=%s", cfg.DeploymentMode, cfg.RedisFailurePolicy)
 	s := &Service{
 		cfg:                   cfg,
 		db:                    db,
-		httpClient:            newHTTPClient(cfg.RequestTimeout),
-		streamClient:          newStreamClient(0),
-		limiter:               limiter,
-		ipLimiter:             ipLimiter,
-		rankingsLimiter:       rankingsLimiter,
-		performanceLimiter:    performanceLimiter,
+		httpClient:            newHTTPClient(0),
+		streamClient:          newStreamClient(),
+		limiter:               limits[0],
+		ipLimiter:             limits[1],
+		rankingsLimiter:       limits[2],
+		performanceLimiter:    limits[3],
+		redisReadiness:        redisReadiness,
 		background:            newBackgroundWriter(),
 		pricingCache:          newTTLCache[string, pricingRule](pricingCacheTTL),
 		groupCache:            newTTLCache[string, float64](groupCacheTTL),
@@ -143,12 +169,19 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 		keyTouchCache:         newTTLCache[string, struct{}](keyTouchInterval),
 		migration:             migrationStatus{mu: &sync.Mutex{}},
 	}
+	if cfg.DeploymentMode == "cluster" {
+		s.concurrencyLeases = &concurrencyLeaseManager{redisURL: cfg.RedisURL, ttl: cfg.ConcurrencyLeaseTTL}
+	}
 	if err := s.bootstrapAdmin(ctx); err != nil {
+		s.background.close()
 		db.Close()
 		return nil, fmt.Errorf("bootstrap admin: %w", err)
 	}
 	schedulerCtx, cancel := context.WithCancel(context.Background())
 	s.scheduler = cancel
+	if cfg.DeploymentMode == "cluster" {
+		s.startConfigInvalidation(schedulerCtx)
+	}
 	s.startHealthCheckScheduler(schedulerCtx)
 	s.startChannelBalanceScheduler(schedulerCtx)
 	s.startWalletSettlementScheduler(schedulerCtx)
@@ -158,6 +191,7 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 	}
 	s.startConversationCacheCleanup(schedulerCtx)
 	go s.limiterCleanup(schedulerCtx)
+	initialized = true
 	return s, nil
 }
 func (s *Service) limiterCleanup(ctx context.Context) {
@@ -183,6 +217,12 @@ func (s *Service) Close() {
 	if s.limiter != nil {
 		s.limiter.close()
 	}
+	if s.ipLimiter != nil {
+		s.ipLimiter.close()
+	}
+	if s.redisReadiness != nil {
+		s.redisReadiness.close()
+	}
 	if s.rankingsLimiter != nil {
 		s.rankingsLimiter.close()
 	}
@@ -205,6 +245,16 @@ func (s *Service) readyz(w http.ResponseWriter, r *http.Request) {
 	if err := s.db.Ping(r.Context()); err != nil {
 		writeError(w, http.StatusServiceUnavailable, "not_ready", "database is unavailable")
 		return
+	}
+	if s.cfg.RedisFailurePolicy == "deny" {
+		if s.redisReadiness == nil {
+			writeError(w, http.StatusServiceUnavailable, "not_ready", "Redis is not configured")
+			return
+		}
+		if _, err := s.redisReadiness.command(r.Context(), "PING"); err != nil {
+			writeError(w, http.StatusServiceUnavailable, "not_ready", "Redis is unavailable")
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 }

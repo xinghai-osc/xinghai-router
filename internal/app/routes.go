@@ -33,6 +33,7 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("GET /rankings", s.ipRateLimitBy(s.rankingsLimiter, s.rankings))
 	mux.Handle("GET /public/activity", s.account(s.publicActivity))
 	mux.Handle("POST /auth/logout", s.account(s.logout))
+	mux.Handle("POST /auth/reauthenticate", s.account(s.reauthenticate))
 	mux.Handle("GET /account/me", s.account(s.accountMe))
 	mux.Handle("PUT /account/profile", s.account(s.updateAccountProfile))
 	mux.Handle("PUT /account/password", s.account(s.changeAccountPassword))
@@ -42,7 +43,7 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("PUT /account/keys/{id}", s.account(s.updateAccountKey))
 	mux.Handle("PUT /account/keys/{id}/group", s.account(s.setAccountKeyGroup))
 	mux.Handle("POST /account/keys/{id}/revoke", s.account(s.revokeAccountKey))
-	mux.Handle("GET /account/keys/{id}/secret", s.account(s.revealAccountKey))
+	mux.Handle("GET /account/keys/{id}/secret", s.account(s.requireRecentAuth(s.revealAccountKey)))
 	mux.Handle("GET /account/keys/{id}/quota", s.account(s.keyQuotaList))
 	mux.Handle("POST /account/keys/{id}/quota", s.account(s.keyQuotaUpsert))
 	mux.Handle("DELETE /account/keys/{id}/quota", s.account(s.keyQuotaDelete))
@@ -98,10 +99,10 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("GET /admin/users", s.permission("users.read", s.listUsers))
 	mux.Handle("GET /admin/checkins", s.permission("users.read", s.listAdminCheckins))
 	mux.Handle("POST /admin/users/{user_id}/checkins/{date}/withdraw", s.permission("wallets.manage", s.withdrawAdminCheckin))
-	mux.Handle("POST /admin/users", s.permission("users.manage", s.createUser))
-	mux.Handle("PUT /admin/users/{id}", s.permission("users.manage", s.updateUser))
-	mux.Handle("POST /admin/users/{id}/role", s.permission("users.manage", s.setUserRole))
-	mux.Handle("PUT /admin/users/{id}/permissions", s.permission("users.manage", s.setUserPermissions))
+	mux.Handle("POST /admin/users", s.permission("users.manage", s.requireRecentAuth(s.createUser)))
+	mux.Handle("PUT /admin/users/{id}", s.permission("users.manage", s.requireRecentAuth(s.updateUser)))
+	mux.Handle("POST /admin/users/{id}/role", s.permission("users.authorize", s.requireRecentAuth(s.setUserRole)))
+	mux.Handle("PUT /admin/users/{id}/permissions", s.permission("users.authorize", s.requireRecentAuth(s.setUserPermissions)))
 	mux.Handle("GET /admin/groups", s.permission("users.read", s.listGroups))
 	mux.Handle("GET /group", s.permission("users.read", s.listGroupNames))
 	mux.Handle("POST /admin/groups", s.permission("system.manage", s.createGroup))
@@ -114,10 +115,11 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("GET /admin/keys", s.permission("keys.manage", s.listKeys))
 	mux.Handle("POST /admin/keys/{id}/revoke", s.permission("keys.manage", s.revokeKey))
 	mux.Handle("PUT /admin/keys/{id}/group", s.permission("keys.manage", s.setKeyGroup))
-	mux.Handle("GET /admin/keys/{id}/secret", s.permission("keys.manage", s.revealKey))
+	mux.Handle("GET /admin/keys/{id}/secret", s.permission("keys.manage", s.requireRecentAuth(s.revealKey)))
 	mux.Handle("POST /admin/channels", s.permission("channels.manage", s.createChannel))
+	mux.Handle("POST /admin/channels/credentials/migrate", s.permission("channels.manage", s.requireRecentAuth(s.migrateChannelCredentials)))
 	mux.Handle("POST /admin/channels/{id}/copy", s.permission("channels.manage", s.copyChannel))
-	mux.Handle("PUT /admin/channels/{id}", s.permission("channels.manage", s.updateChannel))
+	mux.Handle("PUT /admin/channels/{id}", s.permission("channels.manage", s.requireRecentAuth(s.updateChannel)))
 	mux.Handle("POST /admin/channels/models", s.permission("channels.manage", s.fetchChannelModels))
 	mux.Handle("GET /admin/channels", s.permission("channels.read", s.listChannels))
 	mux.Handle("GET /admin/providers", s.permission("system.manage", s.listProviders))
@@ -195,7 +197,7 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("POST /admin/channels/{id}/keys", s.permission("channels.manage", s.createChannelKey))
 	mux.Handle("DELETE /admin/channels/{id}/keys/{keyId}", s.permission("channels.manage", s.deleteChannelKey))
 	mux.Handle("PUT /admin/channels/{id}/keys/{keyId}", s.permission("channels.manage", s.updateChannelKey))
-	mux.Handle("GET /admin/channels/{id}/keys/{keyId}/secret", s.permission("channels.manage", s.revealChannelKey))
+	mux.Handle("GET /admin/channels/{id}/keys/{keyId}/secret", s.permission("channels.manage", s.requireRecentAuth(s.revealChannelKey)))
 	mux.Handle("POST /admin/channels/{id}/keys/{keyId}/test", s.permission("channels.manage", s.testChannelKey))
 	mux.Handle("POST /admin/channels/{id}/keys/{keyId}/status", s.permission("channels.manage", s.setChannelKeyStatus))
 	mux.Handle("POST /admin/channels/{id}/keys/migrate", s.permission("channels.manage", s.migrateChannelKeys))
@@ -211,7 +213,7 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("POST /admin/quota-limits", s.permission("quotas.manage", s.upsertQuota))
 	mux.Handle("GET /admin/quota-limits", s.permission("quotas.manage", s.listQuotaLimits))
 	mux.Handle("DELETE /admin/quota-limits/{id}", s.permission("quotas.manage", s.deleteQuotaLimit))
-	mux.Handle("POST /admin/migrate", s.permission("system.manage", s.runMigration))
+	mux.Handle("POST /admin/migrate", s.permission("users.authorize", s.requireRecentAuth(s.runMigration)))
 	mux.Handle("GET /admin/migrate", s.permission("system.manage", s.getMigrationStatus))
 	mux.Handle("GET /admin/migrate/requests", s.permission("system.manage", s.listMigrationRequests))
 	mux.Handle("GET /admin/oauth/providers", s.permission("system.manage", s.listOAuthProviders))
@@ -231,7 +233,8 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("GET /responses", s.api(s.responsesWebSocket))
 	mux.Handle("GET /backend-api/codex/responses", s.api(s.responsesWebSocket))
 	mux.Handle("POST /v1/messages", s.api(s.anthropicMessages))
-	return recoverPanic(securityHeaders(s.requestID(mux)))
+	mux.Handle("POST /v1/systemone", s.api(s.jevCompletions))
+	return recoverPanic(securityHeaders(s.requestID(s.consoleSecurity(mux))))
 }
 func (s *Service) requestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -280,7 +283,12 @@ func (s *Service) api(next http.HandlerFunc) http.Handler {
 			writeError(w, 401, "invalid_api_key", "invalid or expired API key")
 			return
 		}
-		if !s.limiter.allow(k.keyID) {
+		allowed, limitErr := allowRateLimit(s.limiter, k.keyID, 0)
+		if limitErr != nil {
+			writeError(w, 503, "rate_limit_unavailable", "could not enforce rate limits")
+			return
+		}
+		if !allowed {
 			writeError(w, 429, "rate_limit_exceeded", "too many requests")
 			return
 		}
@@ -333,7 +341,7 @@ func (s *Service) myKeys(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Service) myUsage(w http.ResponseWriter, r *http.Request) {
 	key := r.Context().Value(contextKey{}).(keyContext)
-	rows, err := s.db.Query(r.Context(), `select request_id,model,prompt_tokens,cached_prompt_tokens,completion_tokens,cost,status,created_at from usage_records where user_id=$1 order by created_at desc limit 100`, key.userID)
+	rows, err := s.db.Query(r.Context(), `select request_id,model,prompt_tokens,cached_prompt_tokens,completion_tokens,cost,status,created_at,usage_facts,billing_snapshot from usage_records where user_id=$1 order by created_at desc limit 100`, key.userID)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
@@ -344,8 +352,9 @@ func (s *Service) myUsage(w http.ResponseWriter, r *http.Request) {
 		var requestID, model, status string
 		var prompt, cached, completion int
 		var cost, created any
-		if rows.Scan(&requestID, &model, &prompt, &cached, &completion, &cost, &status, &created) == nil {
-			data = append(data, map[string]any{"request_id": requestID, "model": model, "prompt_tokens": prompt, "cached_prompt_tokens": cached, "completion_tokens": completion, "cost": cost, "status": status, "created_at": created})
+		var facts, snapshot json.RawMessage
+		if rows.Scan(&requestID, &model, &prompt, &cached, &completion, &cost, &status, &created, &facts, &snapshot) == nil {
+			data = append(data, map[string]any{"request_id": requestID, "model": model, "prompt_tokens": prompt, "cached_prompt_tokens": cached, "completion_tokens": completion, "cost": cost, "status": status, "created_at": created, "usage_facts": facts, "billing_snapshot": snapshot})
 		}
 	}
 	writeJSON(w, 200, map[string]any{"data": data})

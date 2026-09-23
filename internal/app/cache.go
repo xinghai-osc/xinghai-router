@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"sync"
 	"time"
 )
@@ -52,10 +53,11 @@ type cacheEntry[V any] struct {
 // When the cache reaches maxCacheEntries, the oldest entry is evicted (FIFO) rather
 // than dropping the entire map, which avoids a thundering-herd of cache misses.
 type ttlCache[K comparable, V any] struct {
-	mu      sync.Mutex
-	ttl     time.Duration
-	entries map[K]cacheEntry[V]
-	order   []K // FIFO eviction order; updated on store/invalidate
+	mu         sync.Mutex
+	ttl        time.Duration
+	entries    map[K]cacheEntry[V]
+	generation uint64
+	order      []K // FIFO eviction order; updated on store/invalidate
 }
 
 func newTTLCache[K comparable, V any](ttl time.Duration) *ttlCache[K, V] {
@@ -63,17 +65,22 @@ func newTTLCache[K comparable, V any](ttl time.Duration) *ttlCache[K, V] {
 }
 
 func (c *ttlCache[K, V]) lookup(key K) (V, bool) {
+	value, ok, _ := c.lookupGeneration(key)
+	return value, ok
+}
+
+func (c *ttlCache[K, V]) lookupGeneration(key K) (V, bool, uint64) {
 	var zero V
 	if c == nil {
-		return zero, false
+		return zero, false, 0
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	entry, ok := c.entries[key]
-	if !ok || time.Now().After(entry.expires) {
-		return zero, false
+	if !ok || !time.Now().Before(entry.expires) {
+		return zero, false, c.generation
 	}
-	return entry.value, true
+	return entry.value, true, c.generation
 }
 
 func (c *ttlCache[K, V]) store(key K, value V) {
@@ -82,6 +89,21 @@ func (c *ttlCache[K, V]) store(key K, value V) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.storeLocked(key, value)
+}
+
+func (c *ttlCache[K, V]) storeIfGeneration(key K, value V, generation uint64) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.generation == generation {
+		c.storeLocked(key, value)
+	}
+}
+
+func (c *ttlCache[K, V]) storeLocked(key K, value V) {
 	if len(c.entries) >= maxCacheEntries {
 		// FIFO eviction: drop the oldest entry.
 		if len(c.order) > 0 {
@@ -124,14 +146,15 @@ func (c *ttlCache[K, V]) storeOnce(key K, value V) bool {
 // get returns the cached value for key, loading and caching it on a miss. Failed loads
 // are not cached, so a transient database error does not stick for the whole ttl.
 func (c *ttlCache[K, V]) get(ctx context.Context, key K, load func(context.Context) (V, error)) (V, error) {
-	if value, ok := c.lookup(key); ok {
+	value, ok, generation := c.lookupGeneration(key)
+	if ok {
 		return value, nil
 	}
 	value, err := load(ctx)
 	if err != nil {
 		return value, err
 	}
-	c.store(key, value)
+	c.storeIfGeneration(key, value, generation)
 	return value, nil
 }
 
@@ -141,6 +164,7 @@ func (c *ttlCache[K, V]) invalidate(key K) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.generation++
 	if _, ok := c.entries[key]; ok {
 		delete(c.entries, key)
 		for i, k := range c.order {
@@ -158,6 +182,7 @@ func (c *ttlCache[K, V]) clear() {
 		return
 	}
 	c.mu.Lock()
+	c.generation++
 	c.entries = map[K]cacheEntry[V]{}
 	c.order = c.order[:0]
 	c.mu.Unlock()
@@ -186,18 +211,27 @@ type pricingRule struct {
 	currency                                             string
 	tiers                                                []pricingTier
 	timeRules                                            []pricingTimeRule
+	dimensions                                           DimensionPrices
+	pricedAt                                             time.Time
+	version                                              string
+	billingMode                                          string
 	found                                                bool
 }
 
 func (s *Service) pricingFor(ctx context.Context, model string) pricingRule {
 	rule, err := s.pricingCache.get(ctx, model, func(ctx context.Context) (pricingRule, error) {
 		var rule pricingRule
-		err := s.db.QueryRow(ctx, `select p.input_per_million,p.cached_input_per_million,p.output_per_million,p.multiplier,p.currency,coalesce(e.rate_to_base,0) from pricing_rules p left join exchange_rates e on e.currency=p.currency and e.enabled where p.model=$1 and p.enabled`, model).Scan(&rule.input, &rule.cachedInput, &rule.output, &rule.multiplier, &rule.currency, &rule.exchangeRate)
+		var dimensions json.RawMessage
+		err := s.db.QueryRow(ctx, `select p.input_per_million,p.cached_input_per_million,p.output_per_million,p.multiplier,p.currency,coalesce(e.rate_to_base,0),p.dimension_prices from pricing_rules p left join exchange_rates e on e.currency=p.currency and e.enabled where p.model=$1 and p.enabled`, model).Scan(&rule.input, &rule.cachedInput, &rule.output, &rule.multiplier, &rule.currency, &rule.exchangeRate, &dimensions)
 		if err != nil {
 			// A missing row is a valid, cacheable answer; anything else is not cached.
 			if isNoRows(err) {
 				return pricingRule{}, nil
 			}
+			return pricingRule{}, err
+		}
+		rule.dimensions, err = parseDimensionPrices(dimensions)
+		if err != nil {
 			return pricingRule{}, err
 		}
 		if rule.currency == "" {
@@ -209,26 +243,38 @@ func (s *Service) pricingFor(ctx context.Context, model string) pricingRule {
 		rule.found = true
 		// Load tiered pricing bands (ordered by from_tokens ascending).
 		tr, err := s.db.Query(ctx, `select from_tokens,input_per_million,cached_input_per_million,output_per_million from pricing_tiers where model=$1 order by from_tokens`, model)
-		if err == nil {
-			for tr.Next() {
-				var t pricingTier
-				if tr.Scan(&t.fromTokens, &t.input, &t.cachedInput, &t.output) == nil {
-					rule.tiers = append(rule.tiers, t)
-				}
+		if err != nil {
+			return pricingRule{}, err
+		}
+		for tr.Next() {
+			var t pricingTier
+			if err := tr.Scan(&t.fromTokens, &t.input, &t.cachedInput, &t.output); err != nil {
+				tr.Close()
+				return pricingRule{}, err
 			}
-			tr.Close()
+			rule.tiers = append(rule.tiers, t)
+		}
+		tr.Close()
+		if err := tr.Err(); err != nil {
+			return pricingRule{}, err
 		}
 		// Load time-based pricing overrides (ordered by created_at ascending so the
 		// last match wins when multiple rules overlap).
 		rr, err := s.db.Query(ctx, `select start_minute,end_minute,weekdays,input_per_million,cached_input_per_million,output_per_million from pricing_time_rules where model=$1 and enabled order by created_at`, model)
-		if err == nil {
-			for rr.Next() {
-				var tr pricingTimeRule
-				if rr.Scan(&tr.startMinute, &tr.endMinute, &tr.weekdays, &tr.input, &tr.cachedInput, &tr.output) == nil {
-					rule.timeRules = append(rule.timeRules, tr)
-				}
+		if err != nil {
+			return pricingRule{}, err
+		}
+		for rr.Next() {
+			var tr pricingTimeRule
+			if err := rr.Scan(&tr.startMinute, &tr.endMinute, &tr.weekdays, &tr.input, &tr.cachedInput, &tr.output); err != nil {
+				rr.Close()
+				return pricingRule{}, err
 			}
-			rr.Close()
+			rule.timeRules = append(rule.timeRules, tr)
+		}
+		rr.Close()
+		if err := rr.Err(); err != nil {
+			return pricingRule{}, err
 		}
 		return rule, nil
 	})

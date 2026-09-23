@@ -64,7 +64,17 @@ export default {
   ctaPrimary: 'Create an account',
   ctaSecondary: 'See pricing',
 
+  heroIntegration: 'A few lines. Every model.',
+  heroExample: 'Quick start',
+  heroIntegrationHint: 'Your SDK. Your models. One API key.',
+  heroExplore: 'Explore the gateway',
   codeCopy: 'Copy code',
+  codeTerminal: 'API request',
+  codeLanguage: 'Code example language',
+  codeCurl: 'cURL',
+  codePython: 'Python',
+  codeAnthropic: 'Anthropic',
+  codeGreeting: 'Hello',
 
   // Model square
   sqMetaTitle: 'Models',

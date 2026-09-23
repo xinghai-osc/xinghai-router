@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { LogIn, Ticket } from 'lucide-vue-next'
-import { ApiError, endpoints, getToken, type RedemptionResult } from '~/src/api'
+import { ApiError, endpoints, type RedemptionResult } from '~/src/api'
 import { formatMoney } from '~/src/format'
 
 const { t } = useI18n()
@@ -17,8 +17,10 @@ const route = useRoute()
 const code = ref(typeof route.query.code === 'string' ? route.query.code : '')
 const formError = ref('')
 const result = ref<RedemptionResult | null>(null)
-const signedIn = ref(!!getToken())
+const { authenticated: signedIn, loaded: accountLoaded, loading: accountLoading, error: accountError, loadAccount } = useAccount()
 const busy = ref(false)
+
+onMounted(() => loadAccount())
 
 const REDEEM_ERROR_KEYS: Record<string, string> = {
   not_found: 'site.redeemCodeNotFound',
@@ -80,17 +82,29 @@ async function submit() {
     <section class="shell pb-24">
       <div class="mx-auto w-full max-w-xl space-y-5">
         <div class="aspect-[4/3] overflow-hidden rounded-card border border-line bg-surface">
-          <img
-            src="/card.png"
-            width="1448"
-            height="1086"
-            :alt="t('site.redeemCardAlt')"
-            class="h-full w-full object-contain"
-          >
+          <picture>
+            <source srcset="/card.webp" type="image/webp">
+            <img
+              src="/card.png"
+              width="1448"
+              height="1086"
+              loading="lazy"
+              decoding="async"
+              :alt="t('site.redeemCardAlt')"
+              class="h-full w-full object-contain"
+            >
+          </picture>
         </div>
 
         <UiCard flush>
-          <div v-if="!signedIn" class="flex flex-col items-center gap-4 px-5 py-8 text-center">
+          <UiAlert v-if="accountError" tone="danger" class="m-5">
+            {{ accountError }}
+            <UiButton variant="link" size="sm" @click="loadAccount(true)">{{ t('common.retry') }}</UiButton>
+          </UiAlert>
+          <div v-else-if="accountLoading || !accountLoaded" class="p-5">
+            <UiSkeleton :rows="4" />
+          </div>
+          <div v-else-if="!signedIn" class="flex flex-col items-center gap-4 px-5 py-8 text-center">
             <Ticket class="size-8 text-muted" />
             <div class="space-y-1">
               <h2 class="text-base font-semibold text-ink">{{ t('site.redeemSignInTitle') }}</h2>

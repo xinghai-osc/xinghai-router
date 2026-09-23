@@ -362,15 +362,19 @@ func TestIntegrationAuthCreateKeyAndModelsE2E(t *testing.T) {
 	if login.Code != http.StatusOK {
 		t.Fatalf("login status=%d body=%s", login.Code, login.Body.String())
 	}
-	var session struct {
-		Token string `json:"token"`
+	var session *http.Cookie
+	for _, cookie := range login.Result().Cookies() {
+		if cookie.Name == sessionCookieName {
+			session = cookie
+		}
 	}
-	if err := json.Unmarshal(login.Body.Bytes(), &session); err != nil || session.Token == "" {
-		t.Fatalf("login response=%s", login.Body.String())
+	if session == nil || !session.HttpOnly || strings.Contains(login.Body.String(), "xh_session_") {
+		t.Fatalf("login did not create an HttpOnly session: %s", login.Body.String())
 	}
 	create := httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/account/keys", strings.NewReader(`{"name":"e2e"}`))
-	req.Header.Set("Authorization", "Bearer "+session.Token)
+	req.AddCookie(session)
+	req.Header.Set("X-Xinghai-Request", "1")
 	s.Handler().ServeHTTP(create, req)
 	if create.Code != http.StatusCreated {
 		t.Fatalf("create key status=%d body=%s", create.Code, create.Body.String())

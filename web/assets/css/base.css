@@ -6,6 +6,7 @@
   html {
     -webkit-text-size-adjust: 100%;
     scroll-behavior: smooth;
+    scroll-padding-top: 6rem;
   }
 
   body {
@@ -65,7 +66,7 @@
 
 .page-enter-active,
 .page-leave-active {
-  transition: opacity 180ms ease-out, transform 180ms ease-out;
+  transition: opacity 150ms ease-out, transform 150ms ease-out;
 }
 
 .page-enter-from {

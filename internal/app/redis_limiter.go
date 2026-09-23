@@ -2,6 +2,7 @@ package app
 
 import (
 	"bufio"
+	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -17,10 +18,14 @@ import (
 const redisLimitScript = "local current = redis.call('INCR', KEYS[1])\nif current == 1 then\n  redis.call('EXPIRE', KEYS[1], ARGV[1])\nend\nreturn current\n"
 
 type redisLimiter struct {
-	mu        sync.Mutex
+	initOnce  sync.Once
+	gate      chan struct{}
+	lifecycle context.Context
+	stop      context.CancelFunc
 	conn      net.Conn
 	reader    *bufio.Reader
 	addr      string
+	username  string
 	password  string
 	db        int
 	useTLS    bool
@@ -29,97 +34,180 @@ type redisLimiter struct {
 	timeout   time.Duration
 }
 
-func newRedisLimiter(redisURL string, perMinute int) (*redisLimiter, error) {
+func newRedisClient(redisURL string, perMinute int) (*redisLimiter, error) {
 	if strings.TrimSpace(redisURL) == "" {
-		return nil, fmt.Errorf("redis url is empty")
+		return nil, errors.New("redis url is empty")
 	}
 	if perMinute <= 0 {
 		perMinute = 60
 	}
 	u, err := url.Parse(redisURL)
 	if err != nil {
-		return nil, fmt.Errorf("parse redis url: %w", err)
+		return nil, errors.New("invalid redis url")
 	}
 	switch strings.ToLower(u.Scheme) {
 	case "redis", "rediss":
 	default:
-		return nil, fmt.Errorf("unsupported redis scheme %q", u.Scheme)
+		return nil, errors.New("unsupported redis scheme")
 	}
 	host := u.Hostname()
-	if host == "" {
-		return nil, fmt.Errorf("redis host is required")
+	if host == "" || u.Opaque != "" {
+		return nil, errors.New("redis host is required")
+	}
+	if u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		return nil, errors.New("redis url query and fragment are not supported")
 	}
 	port := u.Port()
 	if port == "" {
+		if strings.HasSuffix(u.Host, ":") {
+			return nil, errors.New("invalid redis port")
+		}
 		port = "6379"
+	}
+	if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+		return nil, errors.New("invalid redis port")
 	}
 	db := 0
 	if path := strings.TrimPrefix(u.Path, "/"); path != "" {
 		n, convErr := strconv.Atoi(path)
 		if convErr != nil || n < 0 {
-			return nil, fmt.Errorf("invalid redis database %q", path)
+			return nil, errors.New("invalid redis database")
 		}
 		db = n
 	}
-	password := ""
+	username, password := "", ""
 	if u.User != nil {
-		if p, ok := u.User.Password(); ok {
-			password = p
-		}
+		username = u.User.Username()
+		password, _ = u.User.Password()
 	}
-	l := &redisLimiter{
+	return &redisLimiter{
 		addr:      net.JoinHostPort(host, port),
+		username:  username,
 		password:  password,
 		db:        db,
 		useTLS:    strings.EqualFold(u.Scheme, "rediss"),
 		perMinute: perMinute,
 		keyPrefix: "xh:rl:",
 		timeout:   2 * time.Second,
+	}, nil
+}
+
+func newRedisLimiter(redisURL string, perMinute int) (*redisLimiter, error) {
+	l, err := newRedisClient(redisURL, perMinute)
+	if err != nil {
+		return nil, err
 	}
-	if err := l.connect(); err != nil {
+	if _, err := l.command(context.Background(), "PING"); err != nil {
+		l.close()
 		return nil, err
 	}
 	return l, nil
 }
 
-func (l *redisLimiter) connect() error {
-	dialer := net.Dialer{Timeout: l.timeout}
-	var conn net.Conn
-	var err error
-	if l.useTLS {
-		conn, err = tls.DialWithDialer(&dialer, "tcp", l.addr, &tls.Config{MinVersion: tls.VersionTLS12, ServerName: hostFromAddr(l.addr)})
-	} else {
-		conn, err = dialer.Dial("tcp", l.addr)
+func (l *redisLimiter) init() {
+	l.initOnce.Do(func() {
+		l.gate = make(chan struct{}, 1)
+		l.lifecycle, l.stop = context.WithCancel(context.Background())
+	})
+}
+
+func (l *redisLimiter) command(ctx context.Context, args ...string) (reply any, err error) {
+	l.init()
+	timeout := l.timeout
+	if timeout <= 0 {
+		timeout = 2 * time.Second
 	}
-	if err != nil {
-		return fmt.Errorf("dial redis: %w", err)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	stopClose := context.AfterFunc(l.lifecycle, cancel)
+	defer stopClose()
+	if l.lifecycle.Err() != nil {
+		return nil, net.ErrClosed
 	}
-	_ = conn.SetDeadline(time.Now().Add(l.timeout))
-	reader := bufio.NewReader(conn)
-	if l.password != "" {
-		if err := writeCommand(conn, "AUTH", l.password); err != nil {
-			conn.Close()
-			return err
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case l.gate <- struct{}{}:
+	}
+	defer func() { <-l.gate }()
+	if l.lifecycle.Err() != nil {
+		return nil, net.ErrClosed
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if len(args) == 0 {
+		return nil, errors.New("redis command is empty")
+	}
+	defer func() {
+		if l.lifecycle.Err() != nil {
+			err = net.ErrClosed
+		} else if ctx.Err() != nil {
+			err = ctx.Err()
+		} else if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
+			err = context.DeadlineExceeded
 		}
-		if _, err := readReply(reader); err != nil {
-			conn.Close()
-			return fmt.Errorf("redis auth: %w", err)
+		if err != nil {
+			l.resetConn()
+			reply = nil
+		}
+	}()
+	fresh := l.conn == nil
+	if fresh {
+		dialer := &net.Dialer{}
+		if l.useTLS {
+			tlsDialer := &tls.Dialer{NetDialer: dialer, Config: &tls.Config{MinVersion: tls.VersionTLS12, ServerName: hostFromAddr(l.addr)}}
+			l.conn, err = tlsDialer.DialContext(ctx, "tcp", l.addr)
+		} else {
+			l.conn, err = dialer.DialContext(ctx, "tcp", l.addr)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("dial redis: %w", err)
+		}
+		l.reader = bufio.NewReader(l.conn)
+	}
+	conn := l.conn
+	deadline, _ := ctx.Deadline()
+	if err := conn.SetDeadline(deadline); err != nil {
+		return nil, err
+	}
+	interrupted := make(chan struct{})
+	stopIO := context.AfterFunc(ctx, func() {
+		_ = conn.Close()
+		close(interrupted)
+	})
+	defer func() {
+		if !stopIO() {
+			<-interrupted
+		}
+	}()
+	if fresh {
+		if l.password != "" || l.username != "" {
+			auth := []string{"AUTH", l.password}
+			if l.username != "" {
+				auth = []string{"AUTH", l.username, l.password}
+			}
+			if _, err := l.exchange(auth...); err != nil {
+				return nil, fmt.Errorf("redis auth: %w", err)
+			}
+		}
+		if l.db != 0 {
+			if _, err := l.exchange("SELECT", strconv.Itoa(l.db)); err != nil {
+				return nil, fmt.Errorf("redis select: %w", err)
+			}
 		}
 	}
-	if l.db != 0 {
-		if err := writeCommand(conn, "SELECT", strconv.Itoa(l.db)); err != nil {
-			conn.Close()
-			return err
-		}
-		if _, err := readReply(reader); err != nil {
-			conn.Close()
-			return fmt.Errorf("redis select: %w", err)
-		}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	_ = conn.SetDeadline(time.Time{})
-	l.conn = conn
-	l.reader = reader
-	return nil
+	return l.exchange(args...)
+}
+
+func (l *redisLimiter) exchange(args ...string) (any, error) {
+	if err := writeCommand(l.conn, args...); err != nil {
+		return nil, err
+	}
+	return readReply(l.reader)
 }
 
 func hostFromAddr(addr string) string {
@@ -138,23 +226,9 @@ func (l *redisLimiter) tryAllowN(key string, n int) (bool, error) {
 	if n <= 0 {
 		n = l.perMinute
 	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.conn == nil {
-		if err := l.connect(); err != nil {
-			return false, err
-		}
-	}
-	_ = l.conn.SetDeadline(time.Now().Add(l.timeout))
-	defer l.conn.SetDeadline(time.Time{})
 	redisKey := l.keyPrefix + key
-	if err := writeCommand(l.conn, "EVAL", redisLimitScript, "1", redisKey, "60"); err != nil {
-		l.resetConn()
-		return false, err
-	}
-	reply, err := readReply(l.reader)
+	reply, err := l.command(context.Background(), "EVAL", redisLimitScript, "1", redisKey, "60")
 	if err != nil {
-		l.resetConn()
 		return false, err
 	}
 	count, ok := reply.(int64)
@@ -173,9 +247,11 @@ func (l *redisLimiter) resetConn() {
 }
 
 func (l *redisLimiter) close() {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	l.init()
+	l.stop()
+	l.gate <- struct{}{}
 	l.resetConn()
+	<-l.gate
 }
 
 // cleanup is a no-op for the Redis backend; entry expiry is handled by Redis.

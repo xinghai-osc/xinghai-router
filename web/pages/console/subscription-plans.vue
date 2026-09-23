@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Plus, Sparkles } from 'lucide-vue-next'
-import { endpoints, type Group, type SubscriptionPlan, type SubscriptionPlanForm } from '~/src/api'
+import { clearPublicCache, endpoints, type Group, type SubscriptionPlan, type SubscriptionPlanForm } from '~/src/api'
 import { formatMoney, formatNumber } from '~/src/format'
 
 definePageMeta({ layout: 'console', middleware: 'console-auth' })
@@ -52,6 +52,7 @@ async function submitPlan(form: SubscriptionPlanForm) {
     toast.error(t('common.actionFailed'))
     return
   }
+  clearPublicCache('subscription-plans')
   toast.success(target ? t('system.planUpdated') : t('system.planCreated'))
   dialogOpen.value = false
   await refresh()
@@ -65,6 +66,7 @@ async function confirmDelete() {
     toast.error(t('common.actionFailed'))
     return
   }
+  clearPublicCache('subscription-plans')
   toast.success(t('system.planDeleted'))
   removing.value = null
   await refresh()

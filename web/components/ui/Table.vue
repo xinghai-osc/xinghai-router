@@ -3,8 +3,12 @@ defineProps<{ dense?: boolean }>()
 </script>
 
 <template>
-  <div class="ui-table overflow-x-auto rounded-card border border-line bg-surface/90 shadow-[0_1px_0_rgb(255_255_255/0.03)]" :class="dense && 'is-dense'">
-    <table class="w-full border-collapse text-left text-sm">
+  <div
+    class="ui-table min-w-0 overflow-x-auto overscroll-x-contain rounded-card border border-line bg-surface focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-clay"
+    :class="dense && 'is-dense'"
+    tabindex="0"
+  >
+    <table class="w-full border-collapse text-left text-sm leading-6">
       <slot />
     </table>
   </div>
@@ -15,22 +19,27 @@ defineProps<{ dense?: boolean }>()
   position: sticky;
   top: 0;
   z-index: 1;
-  background-color: color-mix(in srgb, var(--sunken) 88%, var(--surface));
-  backdrop-filter: blur(12px);
+  background-color: var(--sunken);
 }
 
 .ui-table :deep(th) {
-  padding: 0.625rem 1rem;
+  padding: 0.75rem 1rem;
   font-size: 0.75rem;
-  font-weight: 500;
+  font-weight: 600;
+  line-height: 1.5;
+  letter-spacing: 0.01em;
   color: var(--muted);
   white-space: nowrap;
 }
 
 .ui-table :deep(td) {
-  padding: 0.75rem 1rem;
+  padding: 0.875rem 1rem;
   color: var(--ink);
   vertical-align: middle;
+}
+
+.ui-table.is-dense :deep(th) {
+  padding: 0.5rem 1rem;
 }
 
 .ui-table.is-dense :deep(td) {
@@ -42,7 +51,8 @@ defineProps<{ dense?: boolean }>()
   transition: background-color 150ms ease-out;
 }
 
-.ui-table :deep(tbody tr:hover) {
+.ui-table :deep(tbody tr:hover),
+.ui-table :deep(tbody tr:focus-within) {
   background-color: color-mix(in srgb, var(--sunken) 55%, transparent);
 }
 

@@ -1,13 +1,6 @@
 <script setup lang="ts">
-import { api, type Rankings } from '~/src/api'
+import { endpoints, type Rankings, type RankingPeriod } from '~/src/api'
 import { formatCompact, formatDateTime, formatNumber } from '~/src/format'
-
-type Period = 'today' | 'week' | 'month' | 'year'
-
-/** Public leaderboard feed. Kept local so `src/api.ts` stays untouched. */
-function getRankings(period: Period) {
-  return api<Rankings>(`/rankings?period=${encodeURIComponent(period)}`)
-}
 
 const { t } = useI18n()
 const { settings } = useSiteSettings()
@@ -17,14 +10,14 @@ usePageSeo({
   description: () => t('site.rkMetaDescription'),
 })
 
-const PERIODS: { value: Period; labelKey: string }[] = [
+const PERIODS: { value: RankingPeriod; labelKey: string }[] = [
   { value: 'today', labelKey: 'site.rkPeriodToday' },
   { value: 'week', labelKey: 'site.rkPeriodWeek' },
   { value: 'month', labelKey: 'site.rkPeriodMonth' },
   { value: 'year', labelKey: 'site.rkPeriodYear' },
 ]
 
-const period = ref<Period>('week')
+const period = ref<RankingPeriod>('week')
 const tab = ref('models')
 const rankings = ref<Rankings | null>(null)
 const pending = ref(false)
@@ -34,7 +27,7 @@ async function load() {
   pending.value = true
   failure.value = ''
   try {
-    rankings.value = await getRankings(period.value)
+    rankings.value = await endpoints.getPublicRankings(period.value)
   } catch (cause) {
     failure.value = cause instanceof Error ? cause.message : t('common.loadFailed')
   } finally {

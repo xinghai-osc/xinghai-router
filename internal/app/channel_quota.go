@@ -14,13 +14,12 @@ import (
 // enforcement is acceptable, and the cache removes the aggregation query from
 // the retry loop of every proxied request.
 func (s *Service) checkChannelQuota(ctx context.Context, channelID int64, model string) error {
-	if s.channelQuotaCache != nil {
-		if allowed, ok := s.channelQuotaCache.lookup(channelID); ok {
-			if allowed {
-				return nil
-			}
-			return errInvalid
+	cached, ok, generation := s.channelQuotaCache.lookupGeneration(channelID)
+	if ok {
+		if cached {
+			return nil
 		}
+		return errInvalid
 	}
 	rows, err := s.db.Query(ctx, `select q.max_requests,q.max_tokens,agg.requests,agg.tokens
 	from channel_quota_limits q
@@ -48,9 +47,7 @@ func (s *Service) checkChannelQuota(ctx context.Context, channelID int64, model 
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	if s.channelQuotaCache != nil {
-		s.channelQuotaCache.store(channelID, allowed)
-	}
+	s.channelQuotaCache.storeIfGeneration(channelID, allowed, generation)
 	if !allowed {
 		return errInvalid
 	}

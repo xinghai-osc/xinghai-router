@@ -1,8 +1,12 @@
 package app
 
 import (
+	"context"
+	"errors"
 	"hash/fnv"
+	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -126,7 +130,12 @@ func (s *Service) ipRateLimit(next http.HandlerFunc) http.HandlerFunc {
 // public endpoints can carry a looser budget than login-style routes.
 func (s *Service) ipRateLimitBy(limit rateLimiter, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !limit.allow(clientIP(r)) {
+		allowed, err := allowRateLimit(limit, clientIP(r), 0)
+		if err != nil {
+			writeError(w, http.StatusServiceUnavailable, "rate_limiter_unavailable", "rate limiting service is unavailable")
+			return
+		}
+		if !allowed {
 			writeError(w, http.StatusTooManyRequests, "rate_limit_exceeded", "too many requests from this IP address")
 			return
 		}
@@ -136,9 +145,40 @@ func (s *Service) ipRateLimitBy(limit rateLimiter, next http.HandlerFunc) http.H
 
 func (l *memoryLimiter) close() {}
 
+var errRedisUnavailable = errors.New("redis rate limiter unavailable")
+
+type redisDependencyAlert struct {
+	mu       sync.Mutex
+	degraded bool
+}
+
+func (a *redisDependencyAlert) setDegraded(degraded bool, component string, policy string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.degraded == degraded {
+		return
+	}
+	a.degraded = degraded
+	switch component {
+	case "rate_limiter", "concurrency", "readiness":
+	default:
+		component = "redis"
+	}
+	if policy != "deny" {
+		policy = "memory"
+	}
+	if degraded {
+		log.Printf("level=warn event=redis_degraded component=%s policy=%s", component, policy)
+	} else {
+		log.Printf("level=info event=redis_recovered component=%s policy=%s", component, policy)
+	}
+}
+
 type fallbackLimiter struct {
 	primary *redisLimiter
 	backup  *memoryLimiter
+	policy  string
+	alert   redisDependencyAlert
 }
 
 func (l *fallbackLimiter) allow(key string) bool {
@@ -146,11 +186,29 @@ func (l *fallbackLimiter) allow(key string) bool {
 }
 
 func (l *fallbackLimiter) allowN(key string, n int) bool {
+	ok, err := l.allowNResult(key, n)
+	return err == nil && ok
+}
+
+func (l *fallbackLimiter) allowNResult(key string, n int) (bool, error) {
 	ok, err := l.primary.tryAllowN(key, n)
+	l.alert.setDegraded(err != nil, "rate_limiter", l.policy)
 	if err != nil {
-		return l.backup.allowN(key, n)
+		if l.policy == "deny" {
+			return false, errRedisUnavailable
+		}
+		return l.backup.allowN(key, n), nil
 	}
-	return ok
+	return ok, nil
+}
+
+func allowRateLimit(limit rateLimiter, key string, n int) (bool, error) {
+	if result, ok := limit.(interface {
+		allowNResult(string, int) (bool, error)
+	}); ok {
+		return result.allowNResult(key, n)
+	}
+	return limit.allowN(key, n), nil
 }
 
 func (l *fallbackLimiter) cleanup() {
@@ -162,14 +220,41 @@ func (l *fallbackLimiter) close() {
 	l.backup.close()
 }
 
-func newRateLimiter(redisURL string, perMinute int) (rateLimiter, string) {
+func newConfiguredRateLimiter(redisURL string, perMinute int, policy string) (rateLimiter, string, error) {
+	policy = strings.ToLower(strings.TrimSpace(policy))
+	if policy == "" {
+		policy = "memory"
+	}
+	if policy != "memory" && policy != "deny" {
+		return nil, "", errors.New("invalid redis failure policy: expected memory or deny")
+	}
 	mem := newMemoryLimiter(perMinute)
-	if redisURL == "" {
-		return mem, "memory"
+	if strings.TrimSpace(redisURL) == "" {
+		if policy == "deny" {
+			return nil, "", errors.New("redis is required for deny failure policy")
+		}
+		return mem, "memory", nil
 	}
-	redis, err := newRedisLimiter(redisURL, perMinute)
+	redis, err := newRedisClient(redisURL, perMinute)
 	if err != nil {
-		return mem, "memory"
+		return nil, "", err
 	}
-	return &fallbackLimiter{primary: redis, backup: mem}, "redis"
+	l := &fallbackLimiter{primary: redis, backup: mem, policy: policy}
+	if _, err := redis.command(context.Background(), "PING"); err != nil {
+		l.alert.setDegraded(true, "rate_limiter", policy)
+		if policy == "deny" {
+			l.close()
+			return nil, "", errRedisUnavailable
+		}
+		return l, "memory", nil
+	}
+	return l, "redis", nil
+}
+
+func newRateLimiter(redisURL string, perMinute int) (rateLimiter, string) {
+	l, mode, err := newConfiguredRateLimiter(redisURL, perMinute, "memory")
+	if err != nil {
+		return newMemoryLimiter(perMinute), "memory"
+	}
+	return l, mode
 }

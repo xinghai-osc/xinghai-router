@@ -17,13 +17,16 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func (s *Service) fetchChannelModels(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		BaseURL string `json:"base_url"`
-		APIKey  string `json:"api_key"`
+		BaseURL        string `json:"base_url"`
+		APIKey         string `json:"api_key"`
+		Provider       string `json:"provider"`
+		UpstreamFormat string `json:"upstream_format"`
 	}
 	if decode(r, &in) != nil {
 		writeError(w, 400, "invalid_request", "base_url and api_key are required")
@@ -37,6 +40,16 @@ func (s *Service) fetchChannelModels(w http.ResponseWriter, r *http.Request) {
 	}
 	if !validChannelBaseURL(in.BaseURL) {
 		writeError(w, 400, "invalid_request", "base_url must be 1-2048 characters and use HTTP or HTTPS")
+		return
+	}
+	in.UpstreamFormat = strings.TrimSpace(in.UpstreamFormat)
+	if !validUpstreamFormat(in.UpstreamFormat) {
+		writeError(w, 400, "invalid_request", "unsupported upstream format")
+		return
+	}
+	in.Provider = strings.TrimSpace(in.Provider)
+	if in.Provider != "" && !validChannelProvider(in.Provider) {
+		writeError(w, 400, "invalid_request", "unsupported provider")
 		return
 	}
 	baseURL, err := url.Parse(strings.TrimRight(in.BaseURL, "/"))
@@ -68,22 +81,40 @@ func (s *Service) fetchChannelModels(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(body)
 		return
 	}
-	var result struct {
-		Data []struct {
-			ID string `json:"id"`
-		} `json:"data"`
-	}
-	if json.Unmarshal(body, &result) != nil {
-		writeError(w, 502, "upstream_error", "invalid models response")
-		return
-	}
-	models := make([]string, 0, len(result.Data))
+	models := []string{}
 	seen := map[string]bool{}
-	for _, item := range result.Data {
-		model := strings.TrimSpace(item.ID)
+	addModel := func(model string) {
+		model = strings.TrimSpace(model)
 		if model != "" && !seen[model] {
 			seen[model] = true
 			models = append(models, model)
+		}
+	}
+	if resolveUpstreamFormat(in.Provider, in.UpstreamFormat) == "jev" {
+		var result struct {
+			Models []struct {
+				Name string `json:"name"`
+			} `json:"models"`
+		}
+		if json.Unmarshal(body, &result) != nil {
+			writeError(w, 502, "upstream_error", "invalid models response")
+			return
+		}
+		for _, item := range result.Models {
+			addModel(item.Name)
+		}
+	} else {
+		var result struct {
+			Data []struct {
+				ID string `json:"id"`
+			} `json:"data"`
+		}
+		if json.Unmarshal(body, &result) != nil {
+			writeError(w, 502, "upstream_error", "invalid models response")
+			return
+		}
+		for _, item := range result.Data {
+			addModel(item.ID)
 		}
 	}
 	writeJSON(w, 200, map[string]any{"models": models})
@@ -97,6 +128,10 @@ type exchangeRateResponse struct {
 }
 
 func (s *Service) listExchangeRates(w http.ResponseWriter, r *http.Request) {
+	if s.db == nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "database unavailable")
+		return
+	}
 	rows, err := s.db.Query(r.Context(), `select currency,rate_to_base::float8,enabled,updated_at from exchange_rates order by currency`)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
@@ -106,9 +141,11 @@ func (s *Service) listExchangeRates(w http.ResponseWriter, r *http.Request) {
 	data := []exchangeRateResponse{}
 	for rows.Next() {
 		var item exchangeRateResponse
-		if rows.Scan(&item.Currency, &item.RateToBase, &item.Enabled, &item.UpdatedAt) == nil {
-			data = append(data, item)
+		if err := rows.Scan(&item.Currency, &item.RateToBase, &item.Enabled, &item.UpdatedAt); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "could not read exchange rates")
+			return
 		}
+		data = append(data, item)
 	}
 	if err := rows.Err(); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
@@ -143,18 +180,25 @@ func (s *Service) upsertExchangeRate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "CNY must have rate_to_base 1 and remain enabled")
 		return
 	}
-	_, err := s.db.Exec(r.Context(), `insert into exchange_rates(currency,rate_to_base,enabled,updated_at) values($1,$2,$3,now()) on conflict(currency) do update set rate_to_base=excluded.rate_to_base,enabled=excluded.enabled,updated_at=now()`, in.Currency, in.RateToBase, enabled)
+	if s.db == nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "database unavailable")
+		return
+	}
+	var updatedAt any
+	err := s.db.QueryRow(r.Context(), `insert into exchange_rates(currency,rate_to_base,enabled,updated_at) values($1,$2,$3,now()) on conflict(currency) do update set rate_to_base=excluded.rate_to_base,enabled=excluded.enabled,updated_at=now() returning updated_at`, in.Currency, in.RateToBase, enabled).Scan(&updatedAt)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", "could not save exchange rate")
 		return
 	}
-	s.pricingCache.clear()
+	if s.pricingCache != nil {
+		s.pricingCache.clear()
+	}
 	s.audit(r, "exchange_rate.updated", "exchange_rate", in.Currency, map[string]any{"rate_to_base": in.RateToBase, "enabled": enabled})
-	writeJSON(w, http.StatusOK, exchangeRateResponse{Currency: in.Currency, RateToBase: in.RateToBase, Enabled: enabled})
+	writeJSON(w, http.StatusOK, exchangeRateResponse{Currency: in.Currency, RateToBase: in.RateToBase, Enabled: enabled, UpdatedAt: updatedAt})
 }
 
 func (s *Service) listPricing(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query(r.Context(), `select id,model,input_per_million,cached_input_per_million,output_per_million,multiplier,currency,enabled,updated_at from pricing_rules order by model`)
+	rows, err := s.db.Query(r.Context(), `select id,model,input_per_million,cached_input_per_million,output_per_million,multiplier,currency,enabled,updated_at,dimension_prices from pricing_rules order by model`)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
@@ -166,22 +210,24 @@ func (s *Service) listPricing(w http.ResponseWriter, r *http.Request) {
 		var input, cached, output, multiplier any
 		var enabled bool
 		var updated any
-		if rows.Scan(&id, &model, &input, &cached, &output, &multiplier, &currency, &enabled, &updated) != nil {
+		var dimensions json.RawMessage
+		if rows.Scan(&id, &model, &input, &cached, &output, &multiplier, &currency, &enabled, &updated, &dimensions) != nil {
 			continue
 		}
-		data = append(data, map[string]any{"id": id, "model": model, "input_per_million": input, "cached_input_per_million": cached, "output_per_million": output, "multiplier": multiplier, "currency": currency, "enabled": enabled, "updated_at": updated})
+		data = append(data, map[string]any{"id": id, "model": model, "input_per_million": input, "cached_input_per_million": cached, "output_per_million": output, "multiplier": multiplier, "currency": currency, "enabled": enabled, "updated_at": updated, "dimension_prices": dimensions})
 	}
 	writeJSON(w, 200, map[string]any{"data": data})
 }
 
 func (s *Service) upsertPricing(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Model      string  `json:"model"`
-		Input      float64 `json:"input_per_million"`
-		Cached     float64 `json:"cached_input_per_million"`
-		Output     float64 `json:"output_per_million"`
-		Multiplier float64 `json:"multiplier"`
-		Currency   string  `json:"currency"`
+		Model      string          `json:"model"`
+		Input      float64         `json:"input_per_million"`
+		Cached     float64         `json:"cached_input_per_million"`
+		Output     float64         `json:"output_per_million"`
+		Multiplier float64         `json:"multiplier"`
+		Currency   string          `json:"currency"`
+		Dimensions json.RawMessage `json:"dimension_prices"`
 	}
 	if decode(r, &in) != nil {
 		writeError(w, 400, "invalid_request", "invalid pricing rule")
@@ -203,24 +249,30 @@ func (s *Service) upsertPricing(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_request", "multiplier must be between 0 exclusive and 1000")
 		return
 	}
-	var rateEnabled bool
-	if s.db == nil {
-		if in.Currency != "CNY" {
-			writeError(w, http.StatusBadRequest, "invalid_request", "currency exchange rate is not configured")
+	var dimensions any
+	if len(in.Dimensions) > 0 {
+		if _, err := parseDimensionPrices(in.Dimensions); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 			return
 		}
+		dimensions = in.Dimensions
+	}
+	var rateEnabled bool
+	if s.db == nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "database unavailable")
+		return
 	} else if err := s.db.QueryRow(r.Context(), `select enabled from exchange_rates where currency=$1`, in.Currency).Scan(&rateEnabled); err != nil || !rateEnabled {
 		writeError(w, http.StatusBadRequest, "invalid_request", "currency exchange rate is not configured")
 		return
 	}
 	id, _ := randomID()
-	_, err := s.db.Exec(r.Context(), `insert into pricing_rules(id,model,input_per_million,cached_input_per_million,output_per_million,multiplier,currency) values($1,$2,$3,$4,$5,$6,$7) on conflict(model) do update set input_per_million=excluded.input_per_million,cached_input_per_million=excluded.cached_input_per_million,output_per_million=excluded.output_per_million,multiplier=excluded.multiplier,currency=excluded.currency,updated_at=now()`, id, in.Model, in.Input, in.Cached, in.Output, in.Multiplier, in.Currency)
+	_, err := s.db.Exec(r.Context(), `insert into pricing_rules(id,model,input_per_million,cached_input_per_million,output_per_million,multiplier,currency,dimension_prices) values($1,$2,$3,$4,$5,$6,$7,coalesce($8::jsonb,'{}'::jsonb)) on conflict(model) do update set input_per_million=excluded.input_per_million,cached_input_per_million=excluded.cached_input_per_million,output_per_million=excluded.output_per_million,multiplier=excluded.multiplier,currency=excluded.currency,dimension_prices=coalesce($8::jsonb,pricing_rules.dimension_prices),updated_at=now()`, id, in.Model, in.Input, in.Cached, in.Output, in.Multiplier, in.Currency, dimensions)
 	if err != nil {
 		writeError(w, 400, "invalid_request", "could not save pricing rule")
 		return
 	}
 	s.pricingCache.invalidate(in.Model)
-	s.audit(r, "pricing.updated", "pricing", in.Model, map[string]any{"input": in.Input, "cached": in.Cached, "output": in.Output, "currency": in.Currency})
+	s.audit(r, "pricing.updated", "pricing", in.Model, map[string]any{"input": in.Input, "cached": in.Cached, "output": in.Output, "currency": in.Currency, "dimension_prices": dimensions})
 	writeJSON(w, 200, map[string]any{"model": in.Model, "currency": in.Currency})
 }
 
@@ -254,11 +306,19 @@ func (s *Service) syncNewAPIPricing(w http.ResponseWriter, r *http.Request) {
 		in.Currency = "CNY"
 	}
 	if !validCurrencyCode(in.Currency) {
-		writeError(w, 400, "invalid_request", "currency must be 1-8 ASCII letters")
+		writeError(w, 400, "invalid_request", "currency must be 3-8 ASCII letters")
 		return
 	}
 	if !validChannelBaseURL(in.BaseURL) {
 		writeError(w, 400, "invalid_request", "base_url must be 1-2048 characters and use HTTP or HTTPS")
+		return
+	}
+	if in.APIKey != "" && !validChannelAPIKey(in.APIKey) {
+		writeError(w, 400, "invalid_request", "api_key must be 1-4096 characters")
+		return
+	}
+	if s.db == nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "database unavailable")
 		return
 	}
 	if in.Currency != "CNY" {
@@ -267,10 +327,6 @@ func (s *Service) syncNewAPIPricing(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid_request", "currency exchange rate is not configured")
 			return
 		}
-	}
-	if in.APIKey != "" && !validChannelAPIKey(in.APIKey) {
-		writeError(w, 400, "invalid_request", "api_key must be 1-4096 characters")
-		return
 	}
 	baseURL, err := url.Parse(strings.TrimRight(in.BaseURL, "/"))
 	if err != nil {
@@ -620,6 +676,12 @@ func (s *Service) createUser(w http.ResponseWriter, r *http.Request) {
 		}
 		seen[permission] = true
 	}
+	actor := accountFromContext(r)
+	mutation := userMutation{authorization: in.Role != "user" || len(in.Permissions) > 0, groups: len(in.Groups) > 0}
+	if err := validateUserMutation(actor, nil, mutation, true); err != nil {
+		writeUserMutationError(w, err)
+		return
+	}
 	passwordHash, err := hashPassword(in.Password)
 	if err != nil {
 		writeError(w, 500, "internal_error", "could not secure password")
@@ -632,6 +694,10 @@ func (s *Service) createUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(ctx)
+	if _, _, err = lockUserMutation(ctx, tx, actor.userID, "", mutation, true); err != nil {
+		writeUserMutationError(w, err)
+		return
+	}
 	enabled := true
 	if in.Enabled != nil {
 		enabled = *in.Enabled
@@ -815,6 +881,13 @@ func (s *Service) updateUser(w http.ResponseWriter, r *http.Request) {
 		}
 		inviterID = &value
 	}
+	actor := accountFromContext(r)
+	userID := r.PathValue("id")
+	mutation := userMutation{authorization: in.Role != nil || in.Permissions != nil, groups: in.Groups != nil, balance: in.Balance != nil, identity: in.ID != nil}
+	if err := validateUserMutation(actor, &userAccess{accountContext: accountContext{userID: userID, role: "user"}}, mutation, true); err != nil {
+		writeUserMutationError(w, err)
+		return
+	}
 	passwordHash := ""
 	if in.Password != nil {
 		var err error
@@ -824,20 +897,19 @@ func (s *Service) updateUser(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	actor := accountFromContext(r)
-	userID := r.PathValue("id")
 	tx, err := s.db.Begin(r.Context())
 	if err != nil {
 		writeError(w, 500, "internal_error", "could not update user")
 		return
 	}
 	defer tx.Rollback(r.Context())
-	var currentRole string
-	var currentEnabled bool
-	if err = tx.QueryRow(r.Context(), `select role,enabled from users where id=$1 for update`, userID).Scan(&currentRole, &currentEnabled); err != nil {
-		writeError(w, 404, "not_found", "user not found")
+	actor, target, err := lockUserMutation(r.Context(), tx, actor.userID, userID, mutation, true)
+	if err != nil {
+		writeUserMutationError(w, err)
 		return
 	}
+	userID = target.userID
+	currentRole, currentEnabled := target.role, target.enabled
 	resultingRole := currentRole
 	if in.Role != nil {
 		resultingRole = *in.Role
@@ -846,8 +918,12 @@ func (s *Service) updateUser(w http.ResponseWriter, r *http.Request) {
 	if in.Enabled != nil {
 		resultingEnabled = *in.Enabled
 	}
-	if actor.userID == userID && (resultingRole != "admin" || !resultingEnabled) {
-		writeError(w, 400, "invalid_request", "cannot remove or disable your own administrator account")
+	if actor.userID == userID && !resultingEnabled {
+		writeError(w, 400, "invalid_request", "cannot disable your own account")
+		return
+	}
+	if err = preserveAdministrator(r.Context(), tx, *target, resultingRole, resultingEnabled); err != nil {
+		writeUserMutationError(w, err)
 		return
 	}
 	if len(in.InviterID) > 0 {
@@ -879,7 +955,12 @@ func (s *Service) updateUser(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 409, "conflict", "email already exists or user could not be updated")
 			return
 		}
+		if _, err = tx.Exec(r.Context(), `delete from user_sessions where user_id=$1`, userID); err != nil {
+			writeError(w, 500, "internal_error", "could not revoke sessions after email change")
+			return
+		}
 		changed["email"] = email
+		changed["sessions_revoked"] = true
 	}
 	if in.Name != nil {
 		name := strings.TrimSpace(*in.Name)
@@ -907,7 +988,7 @@ func (s *Service) updateUser(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 500, "internal_error", "could not update role")
 			return
 		}
-		if currentRole == "admin" && *in.Role != "admin" {
+		if currentRole != *in.Role {
 			if _, err = tx.Exec(r.Context(), `delete from user_sessions where user_id=$1`, userID); err != nil {
 				writeError(w, 500, "internal_error", "could not revoke sessions after role change")
 				return
@@ -1008,7 +1089,12 @@ func (s *Service) updateUser(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		if _, err = tx.Exec(r.Context(), `delete from user_sessions where user_id=$1`, userID); err != nil {
+			writeError(w, 500, "internal_error", "could not revoke sessions after permissions change")
+			return
+		}
 		changed["permissions"] = *in.Permissions
+		changed["sessions_revoked"] = true
 	}
 	if in.Groups != nil {
 		resolvedGroups := make([]string, 0, len(*in.Groups))
@@ -1607,7 +1693,7 @@ func (s *Service) setChannelGroups(w http.ResponseWriter, r *http.Request) {
 }
 
 var availablePermissions = map[string]bool{
-	"users.read": true, "users.manage": true, "keys.manage": true, "channels.read": true,
+	"users.read": true, "users.manage": true, "users.authorize": true, "keys.manage": true, "channels.read": true,
 	"channels.manage": true, "logs.read": true, "pricing.read": true, "pricing.manage": true,
 	"audit.read": true, "wallets.manage": true, "routes.manage": true, "quotas.manage": true,
 	"system.manage": true,
@@ -1722,7 +1808,7 @@ func validModelName(model string) bool {
 }
 
 func validChannelProvider(provider string) bool {
-	return map[string]bool{"openai": true, "openai_chat": true, "ollama": true, "kimi": true, "opencode_go": true, "anthropic": true, "deepseek": true, "commandcode": true, "custom": true}[provider]
+	return map[string]bool{"openai": true, "openai_chat": true, "ollama": true, "kimi": true, "opencode_go": true, "anthropic": true, "deepseek": true, "commandcode": true, "jev": true, "custom": true}[provider]
 }
 
 func validChannelKeyType(keyType string) bool {
@@ -1730,10 +1816,24 @@ func validChannelKeyType(keyType string) bool {
 }
 
 // validUpstreamFormat accepts the channel wire formats the gateway understands:
-// auto (from provider), plain OpenAI (Responses passthrough eligible),
-// openai_chat (OpenAI wire format, chat-completions only), and Anthropic.
+// auto (from provider), OpenAI, OpenAI Chat, Anthropic, and JEV System One.
 func validUpstreamFormat(format string) bool {
-	return map[string]bool{"": true, "openai": true, "openai_chat": true, "anthropic": true}[format]
+	return map[string]bool{"": true, "openai": true, "openai_chat": true, "anthropic": true, "jev": true}[format]
+}
+
+func validUpstreamPath(path string) bool {
+	if path == "" || len(path) > 2048 || !strings.HasPrefix(path, "/") || strings.HasPrefix(path, "//") {
+		return false
+	}
+	if strings.ContainsAny(path, "?#\\") {
+		return false
+	}
+	for _, r := range path {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 func validChannelPriority(priority int) bool {
@@ -1879,8 +1979,9 @@ func (s *Service) setUserRole(w http.ResponseWriter, r *http.Request) {
 	}
 	actor := accountFromContext(r)
 	userID := r.PathValue("id")
-	if actor.userID == userID && in.Role != "admin" {
-		writeError(w, http.StatusBadRequest, "invalid_request", "cannot remove your own administrator role")
+	mutation := userMutation{authorization: true}
+	if err := validateUserMutation(actor, &userAccess{accountContext: accountContext{userID: userID, role: "user"}}, mutation, false); err != nil {
+		writeUserMutationError(w, err)
 		return
 	}
 	tx, err := s.db.Begin(r.Context())
@@ -1889,9 +1990,14 @@ func (s *Service) setUserRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(r.Context())
-	var currentRole string
-	if err = tx.QueryRow(r.Context(), `select role from users where id=$1 for update`, userID).Scan(&currentRole); err != nil {
-		writeError(w, http.StatusNotFound, "not_found", "user not found")
+	_, target, err := lockUserMutation(r.Context(), tx, actor.userID, userID, mutation, false)
+	if err != nil {
+		writeUserMutationError(w, err)
+		return
+	}
+	userID = target.userID
+	if err = preserveAdministrator(r.Context(), tx, *target, in.Role, target.enabled); err != nil {
+		writeUserMutationError(w, err)
 		return
 	}
 	if _, err = tx.Exec(r.Context(), `update users set role=$1 where id=$2`, in.Role, userID); err != nil {
@@ -1899,7 +2005,7 @@ func (s *Service) setUserRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sessionsRevoked := false
-	if currentRole == "admin" && in.Role != "admin" {
+	if target.role != in.Role {
 		if _, err = tx.Exec(r.Context(), `delete from user_sessions where user_id=$1`, userID); err != nil {
 			writeError(w, http.StatusInternalServerError, "internal_error", "could not revoke sessions after role change")
 			return
@@ -1930,18 +2036,25 @@ func (s *Service) setUserPermissions(w http.ResponseWriter, r *http.Request) {
 		}
 		seen[permission] = true
 	}
+	actor := accountFromContext(r)
 	userID := r.PathValue("id")
+	mutation := userMutation{authorization: true}
+	if err := validateUserMutation(actor, &userAccess{accountContext: accountContext{userID: userID, role: "user"}}, mutation, false); err != nil {
+		writeUserMutationError(w, err)
+		return
+	}
 	tx, err := s.db.Begin(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not update permissions")
 		return
 	}
 	defer tx.Rollback(r.Context())
-	var exists bool
-	if err = tx.QueryRow(r.Context(), `select exists(select 1 from users where id=$1)`, userID).Scan(&exists); err != nil || !exists {
-		writeError(w, http.StatusNotFound, "not_found", "user not found")
+	_, target, err := lockUserMutation(r.Context(), tx, actor.userID, userID, mutation, false)
+	if err != nil {
+		writeUserMutationError(w, err)
 		return
 	}
+	userID = target.userID
 	if _, err = tx.Exec(r.Context(), `delete from user_permissions where user_id=$1`, userID); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not update permissions")
 		return
@@ -1952,11 +2065,15 @@ func (s *Service) setUserPermissions(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if _, err = tx.Exec(r.Context(), `delete from user_sessions where user_id=$1`, userID); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not revoke sessions after permissions change")
+		return
+	}
 	if err = tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not update permissions")
 		return
 	}
-	s.audit(r, "user.permissions_changed", "user", userID, map[string]any{"permissions": in.Permissions})
+	s.audit(r, "user.permissions_changed", "user", userID, map[string]any{"permissions": in.Permissions, "sessions_revoked": true})
 	writeJSON(w, http.StatusOK, map[string]any{"permissions": in.Permissions})
 }
 func (s *Service) createKey(w http.ResponseWriter, r *http.Request) {
@@ -2172,6 +2289,11 @@ func (s *Service) createChannel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_request", "unsupported upstream format")
 		return
 	}
+	in.UpstreamPath = strings.TrimSpace(in.UpstreamPath)
+	if in.UpstreamPath != "" && !validUpstreamPath(in.UpstreamPath) {
+		writeError(w, 400, "invalid_request", "upstream_path must be an absolute API path without a query or fragment")
+		return
+	}
 	if !validChannelPriority(in.Priority) {
 		writeError(w, 400, "invalid_request", "priority must be between -10000 and 10000")
 		return
@@ -2234,6 +2356,14 @@ func (s *Service) createChannel(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 400, "invalid_request", "priority must be between -10000 and 10000")
 			return
 		}
+	}
+	for i, key := range keys {
+		stored, err := s.storeChannelCredential(key)
+		if err != nil {
+			writeError(w, 500, "internal_error", "could not store channel credential")
+			return
+		}
+		keys[i] = stored
 	}
 	models, _ := json.Marshal(in.Models)
 	overrides, _ := json.Marshal(normalizedOverrides(in.Overrides))
@@ -2316,6 +2446,11 @@ func (s *Service) copyChannel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "not_found", "channel not found")
 		return
 	}
+	apiKey, err = s.copyChannelCredential(apiKey)
+	if err != nil {
+		writeError(w, 500, "internal_error", "could not copy channel credential")
+		return
+	}
 	newName := strings.TrimSpace(in.Name)
 	if newName == "" {
 		newName = s.nextChannelCopyName(r.Context(), sourceName)
@@ -2341,7 +2476,7 @@ func (s *Service) copyChannel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "internal_error", "could not copy channel")
 		return
 	}
-	if _, err = tx.Exec(r.Context(), `insert into channel_api_keys(channel_id,name,key_encrypted,enabled,priority) select $1,name,key_encrypted,enabled,priority from channel_api_keys where channel_id=$2 order by priority desc nulls last,created_at`, id, sourceID); err != nil {
+	if err = s.copyChannelAPIKeys(r.Context(), tx, id, sourceID); err != nil {
 		writeError(w, 500, "internal_error", "could not copy api keys")
 		return
 	}
@@ -2477,6 +2612,11 @@ func (s *Service) updateChannel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_request", "unsupported upstream format")
 		return
 	}
+	in.UpstreamPath = strings.TrimSpace(in.UpstreamPath)
+	if in.UpstreamPath != "" && !validUpstreamPath(in.UpstreamPath) {
+		writeError(w, 400, "invalid_request", "upstream_path must be an absolute API path without a query or fragment")
+		return
+	}
 	if !validChannelPriority(in.Priority) {
 		writeError(w, 400, "invalid_request", "priority must be between -10000 and 10000")
 		return
@@ -2543,6 +2683,12 @@ func (s *Service) updateChannel(w http.ResponseWriter, r *http.Request) {
 		args = append(args, string(uaPool))
 		argIdx++
 	}
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		writeError(w, 500, "internal_error", "could not update channel")
+		return
+	}
+	defer tx.Rollback(r.Context())
 	keys := parseChannelAPIKeys(in.APIKeys)
 	if len(keys) > 0 {
 		if in.KeyType == "" {
@@ -2562,17 +2708,18 @@ func (s *Service) updateChannel(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		query += `,key_type=$` + strconv.Itoa(argIdx) + `,api_key=$` + strconv.Itoa(argIdx+1)
-		args = append(args, in.KeyType, keys[0])
-		argIdx += 2
-		if err := s.replaceChannelAPIKeys(r.Context(), channelID, keys); err != nil {
-			writeError(w, 500, "internal_error", "could not update api keys")
+		stored, err := s.storeChannelCredential(keys[0])
+		if err != nil {
+			writeError(w, 500, "internal_error", "could not store channel credential")
 			return
 		}
+		query += `,key_type=$` + strconv.Itoa(argIdx) + `,api_key=$` + strconv.Itoa(argIdx+1)
+		args = append(args, in.KeyType, stored)
+		argIdx += 2
 	}
 	query += `,updated_at=now() where id=$` + strconv.Itoa(argIdx)
 	args = append(args, channelID)
-	result, err := s.db.Exec(r.Context(), query, args...)
+	result, err := tx.Exec(r.Context(), query, args...)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -2584,6 +2731,16 @@ func (s *Service) updateChannel(w http.ResponseWriter, r *http.Request) {
 	}
 	if result.RowsAffected() != 1 {
 		writeError(w, 404, "not_found", "channel not found")
+		return
+	}
+	if len(keys) > 0 {
+		if err := s.replaceChannelAPIKeys(r.Context(), tx, channelID, keys); err != nil {
+			writeError(w, 500, "internal_error", "could not update api keys")
+			return
+		}
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, 500, "internal_error", "could not update channel")
 		return
 	}
 	if in.ModelRoutes != nil {
@@ -2607,12 +2764,12 @@ func (s *Service) updateChannel(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Service) replaceChannelAPIKeys(ctx context.Context, channelID string, keys []string) error {
+func (s *Service) replaceChannelAPIKeys(ctx context.Context, tx pgx.Tx, channelID string, keys []string) error {
 	existing := map[string]struct {
 		name     string
 		priority int
 	}{}
-	krows, err := s.db.Query(ctx, `select key_encrypted,name,priority from channel_api_keys where channel_id=$1`, channelID)
+	krows, err := tx.Query(ctx, `select key_encrypted,name,priority from channel_api_keys where channel_id=$1`, channelID)
 	if err != nil {
 		return err
 	}
@@ -2632,11 +2789,9 @@ func (s *Service) replaceChannelAPIKeys(ctx context.Context, channelID string, k
 		}{name, priority}
 	}
 	krows.Close()
-	tx, err := s.db.Begin(ctx)
-	if err != nil {
+	if err := krows.Err(); err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx)
 	if _, err := tx.Exec(ctx, `delete from channel_api_keys where channel_id=$1`, channelID); err != nil {
 		return err
 	}
@@ -2648,14 +2803,14 @@ func (s *Service) replaceChannelAPIKeys(ctx context.Context, channelID string, k
 			keyName = prev.name
 			priority = prev.priority
 		}
-		if _, err := tx.Exec(ctx, `insert into channel_api_keys(id,channel_id,name,key_encrypted,enabled,priority) values($1,$2,$3,$4,true,$5)`, id, channelID, keyName, key, priority); err != nil {
+		stored, err := s.storeChannelCredential(key)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `insert into channel_api_keys(id,channel_id,name,key_encrypted,enabled,priority) values($1,$2,$3,$4,true,$5)`, id, channelID, keyName, stored, priority); err != nil {
 			return err
 		}
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return err
-	}
-	s.invalidateChannels()
 	return nil
 }
 func decodeUpstreamUsageWindows(raw []byte) []upstreamUsageWindow {
@@ -2673,7 +2828,7 @@ func (s *Service) listChannels(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "internal_error", "query failed")
 		return
 	}
-	rows, err := s.db.Query(r.Context(), `select c.id,c.name,c.base_url,c.models,c.test_model,c.enabled,c.auto_disabled,c.disabled_reason,c.priority,c.weight,c.last_checked_at,c.last_error,c.created_at,c.updated_at,coalesce((select array_agg(cg.group_id order by cg.group_id) from channel_groups cg where cg.channel_id=c.id), '{}'),c.provider,c.key_type,(select count(*) from channel_api_keys ak where ak.channel_id=c.id and ak.enabled),c.auto_disable,c.request_overrides,c.ua_pool,coalesce(u.id::text,''),coalesce(u.email,''),coalesce(u.name,''),coalesce(agg.avg_duration_ms,0),agg.avg_first_token_ms,coalesce(agg.used_requests,0),coalesce(agg.used_tokens,0),cb.balance,cb.used,cb.total,coalesce(cb.currency,'USD'),cb.usage,coalesce(cb.supported,false),coalesce(cb.error,''),cb.fetched_at from channels c left join users u on u.id=c.user_id left join lateral (select cb.balance,cb.used,cb.total,cb.currency,cb.usage,cb.supported,cb.error,cb.fetched_at from channel_balances cb join channel_api_keys k on k.id=cb.key_id and k.enabled where cb.channel_id=c.id order by k.priority desc nulls last,k.created_at limit 1) cb on true left join lateral (select avg(rl.duration_ms) as avg_duration_ms,avg(rl.first_token_ms) as avg_first_token_ms,count(*) as used_requests,coalesce(sum(rl.total_tokens),0) as used_tokens from request_logs rl where rl.channel_id=c.id) agg on true order by c.priority desc,c.id limit $1 offset $2`, pageSize, offset)
+	rows, err := s.db.Query(r.Context(), `select c.id,c.name,c.base_url,c.models,c.test_model,c.enabled,c.auto_disabled,c.disabled_reason,c.priority,c.weight,c.last_checked_at,c.last_error,c.created_at,c.updated_at,coalesce((select array_agg(cg.group_id order by cg.group_id) from channel_groups cg where cg.channel_id=c.id), '{}'),c.provider,c.key_type,(select count(*) from channel_api_keys ak where ak.channel_id=c.id and ak.enabled),c.auto_disable,c.request_overrides,c.ua_pool,c.upstream_path,c.upstream_format,coalesce(u.id::text,''),coalesce(u.email,''),coalesce(u.name,''),coalesce(agg.avg_duration_ms,0),agg.avg_first_token_ms,coalesce(agg.used_requests,0),coalesce(agg.used_tokens,0),cb.balance,cb.used,cb.total,coalesce(cb.currency,'USD'),cb.usage,coalesce(cb.supported,false),coalesce(cb.error,''),cb.fetched_at from channels c left join users u on u.id=c.user_id left join lateral (select cb.balance,cb.used,cb.total,cb.currency,cb.usage,cb.supported,cb.error,cb.fetched_at from channel_balances cb join channel_api_keys k on k.id=cb.key_id and k.enabled where cb.channel_id=c.id order by k.priority desc nulls last,k.created_at limit 1) cb on true left join lateral (select avg(rl.duration_ms) as avg_duration_ms,avg(rl.first_token_ms) as avg_first_token_ms,count(*) as used_requests,coalesce(sum(rl.total_tokens),0) as used_tokens from request_logs rl where rl.channel_id=c.id) agg on true order by c.priority desc,c.id limit $1 offset $2`, pageSize, offset)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
@@ -2694,6 +2849,7 @@ func (s *Service) listChannels(w http.ResponseWriter, r *http.Request) {
 		var keyCount int
 		var autoDisable bool
 		var overrides, uaPool []byte
+		var upstreamPath, upstreamFormat string
 		var userID, userEmail, userName string
 		var avgDuration float64
 		var avgFirstTokenMs *float64
@@ -2703,7 +2859,7 @@ func (s *Service) listChannels(w http.ResponseWriter, r *http.Request) {
 		var usageJSON []byte
 		var balanceSupported bool
 		var balanceFetched any
-		if rows.Scan(&id, &name, &base, &models, &testModel, &enabled, &autoDisabled, &disabledReason, &priority, &weight, &lastChecked, &lastError, &created, &updated, &groups, &provider, &keyType, &keyCount, &autoDisable, &overrides, &uaPool, &userID, &userEmail, &userName, &avgDuration, &avgFirstTokenMs, &usedRequests, &usedTokens, &balance, &usedBalance, &totalBalance, &balanceCurrency, &usageJSON, &balanceSupported, &balanceError, &balanceFetched) != nil {
+		if rows.Scan(&id, &name, &base, &models, &testModel, &enabled, &autoDisabled, &disabledReason, &priority, &weight, &lastChecked, &lastError, &created, &updated, &groups, &provider, &keyType, &keyCount, &autoDisable, &overrides, &uaPool, &upstreamPath, &upstreamFormat, &userID, &userEmail, &userName, &avgDuration, &avgFirstTokenMs, &usedRequests, &usedTokens, &balance, &usedBalance, &totalBalance, &balanceCurrency, &usageJSON, &balanceSupported, &balanceError, &balanceFetched) != nil {
 			continue
 		}
 		var list []string
@@ -2721,7 +2877,7 @@ func (s *Service) listChannels(w http.ResponseWriter, r *http.Request) {
 		}
 		usageWindows := decodeUpstreamUsageWindows(usageJSON)
 		routes := s.getChannelRoutes(r.Context(), id)
-		data = append(data, map[string]any{"id": id, "name": name, "base_url": base, "models": list, "test_model": testModel, "provider": provider, "key_type": keyType, "enabled": enabled, "auto_disabled": autoDisabled, "disabled_reason": disabledReason, "priority": priority, "weight": weight, "last_test_time": lastChecked, "last_error": lastError, "response_time_ms": avgDuration, "avg_first_token_ms": avgFirstTokenMs, "used_requests": usedRequests, "used_tokens": usedTokens, "upstream_balance": balance, "upstream_used": usedBalance, "upstream_total": totalBalance, "upstream_currency": balanceCurrency, "upstream_usage_windows": usageWindows, "upstream_balance_supported": balanceSupported, "upstream_balance_error": balanceError, "upstream_balance_fetched_at": balanceFetched, "groups": groups, "key_count": keyCount, "created_at": created, "updated_at": updated, "model_routes": routes, "auto_disable": autoDisable, "request_overrides": ov, "ua_pool": uaList, "user_id": userID, "user_email": userEmail, "user_name": userName})
+		data = append(data, map[string]any{"id": id, "name": name, "base_url": base, "models": list, "test_model": testModel, "provider": provider, "key_type": keyType, "enabled": enabled, "auto_disabled": autoDisabled, "disabled_reason": disabledReason, "priority": priority, "weight": weight, "last_test_time": lastChecked, "last_error": lastError, "response_time_ms": avgDuration, "avg_first_token_ms": avgFirstTokenMs, "used_requests": usedRequests, "used_tokens": usedTokens, "upstream_balance": balance, "upstream_used": usedBalance, "upstream_total": totalBalance, "upstream_currency": balanceCurrency, "upstream_usage_windows": usageWindows, "upstream_balance_supported": balanceSupported, "upstream_balance_error": balanceError, "upstream_balance_fetched_at": balanceFetched, "groups": groups, "key_count": keyCount, "created_at": created, "updated_at": updated, "model_routes": routes, "auto_disable": autoDisable, "request_overrides": ov, "ua_pool": uaList, "upstream_path": upstreamPath, "upstream_format": upstreamFormat, "user_id": userID, "user_email": userEmail, "user_name": userName})
 	}
 	writePaged(w, data, total, page, pageSize)
 }
@@ -2849,8 +3005,13 @@ func (s *Service) createChannelKey(w http.ResponseWriter, r *http.Request) {
 		}
 		priority = *in.Priority
 	}
+	stored, err := s.storeChannelCredential(in.APIKey)
+	if err != nil {
+		writeError(w, 500, "internal_error", "could not store channel credential")
+		return
+	}
 	id, _ := randomID()
-	_, err := s.db.Exec(r.Context(), `insert into channel_api_keys(id,channel_id,name,key_encrypted,enabled,priority) values($1,$2,$3,$4,true,$5)`, id, r.PathValue("id"), in.Name, in.APIKey, priority)
+	_, err = s.db.Exec(r.Context(), `insert into channel_api_keys(id,channel_id,name,key_encrypted,enabled,priority) values($1,$2,$3,$4,true,$5)`, id, r.PathValue("id"), in.Name, stored, priority)
 	if err != nil {
 		writeError(w, 400, "invalid_request", "could not create api key")
 		return
@@ -2930,8 +3091,13 @@ func (s *Service) updateChannelKey(w http.ResponseWriter, r *http.Request) {
 	query := `update channel_api_keys set name=$1,priority=$2 where id=$3 and channel_id=$4`
 	args := []any{name, priority, r.PathValue("keyId"), r.PathValue("id")}
 	if in.APIKey != nil {
+		stored, err := s.storeChannelCredential(apiKey)
+		if err != nil {
+			writeError(w, 500, "internal_error", "could not store channel credential")
+			return
+		}
 		query = `update channel_api_keys set name=$1,priority=$2,key_encrypted=$5,failure_count=0,last_error=null,last_checked_at=null where id=$3 and channel_id=$4`
-		args = append(args, apiKey)
+		args = append(args, stored)
 	}
 	result, err := s.db.Exec(r.Context(), query, args...)
 	if err != nil || result.RowsAffected() != 1 {
@@ -2962,10 +3128,10 @@ func (s *Service) testChannelKey(w http.ResponseWriter, r *http.Request) {
 	channelID := r.PathValue("id")
 	keyID := r.PathValue("keyId")
 
-	var baseURL, provider, testModel string
+	var baseURL, provider, testModel, upstreamPath, upstreamFormat string
 	var uaPool []byte
 	var autoDisable bool
-	if err := s.db.QueryRow(r.Context(), `select base_url,provider,test_model,ua_pool,auto_disable from channels where id=$1`, channelID).Scan(&baseURL, &provider, &testModel, &uaPool, &autoDisable); err != nil {
+	if err := s.db.QueryRow(r.Context(), `select base_url,provider,test_model,upstream_path,upstream_format,ua_pool,auto_disable from channels where id=$1`, channelID).Scan(&baseURL, &provider, &testModel, &upstreamPath, &upstreamFormat, &uaPool, &autoDisable); err != nil {
 		writeError(w, http.StatusNotFound, "not_found", "channel not found")
 		return
 	}
@@ -2983,7 +3149,7 @@ func (s *Service) testChannelKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	settings := s.reliabilitySettings(r.Context())
-	status, body, latency, testErr := s.testChannel(r.Context(), baseURL, apiKey, provider, testModel, parsedUAPool(uaPool), healthCheckProbeTimeout)
+	status, body, latency, testErr := s.testChannelWithConfig(r.Context(), baseURL, apiKey, provider, testModel, upstreamPath, upstreamFormat, parsedUAPool(uaPool), healthCheckProbeTimeout)
 	success := testErr == nil && status >= 200 && status < 300
 	reason := healthFailureReason(status, testErr)
 
@@ -3037,10 +3203,10 @@ func (s *Service) testChannelKey(w http.ResponseWriter, r *http.Request) {
 func (s *Service) testChannelHandler(w http.ResponseWriter, r *http.Request) {
 	channelID := r.PathValue("id")
 
-	var baseURL, provider, legacyKey, testModel string
+	var baseURL, provider, legacyKey, testModel, upstreamPath, upstreamFormat string
 	var uaPool []byte
 	var autoDisable bool
-	if err := s.db.QueryRow(r.Context(), `select base_url,provider,api_key,test_model,ua_pool,auto_disable from channels where id=$1`, channelID).Scan(&baseURL, &provider, &legacyKey, &testModel, &uaPool, &autoDisable); err != nil {
+	if err := s.db.QueryRow(r.Context(), `select base_url,provider,api_key,test_model,upstream_path,upstream_format,ua_pool,auto_disable from channels where id=$1`, channelID).Scan(&baseURL, &provider, &legacyKey, &testModel, &upstreamPath, &upstreamFormat, &uaPool, &autoDisable); err != nil {
 		writeError(w, http.StatusNotFound, "not_found", "channel not found")
 		return
 	}
@@ -3090,7 +3256,7 @@ func (s *Service) testChannelHandler(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		status, body, latency, testErr := s.testChannel(r.Context(), baseURL, apiKey, provider, testModel, parsedUAPool(uaPool), healthCheckProbeTimeout)
+		status, body, latency, testErr := s.testChannelWithConfig(r.Context(), baseURL, apiKey, provider, testModel, upstreamPath, upstreamFormat, parsedUAPool(uaPool), healthCheckProbeTimeout)
 		success := testErr == nil && status >= 200 && status < 300
 		reason := healthFailureReason(status, testErr)
 		if success && settings.AutoDisableSlowSeconds > 0 && latency > time.Duration(settings.AutoDisableSlowSeconds)*time.Second {
@@ -3161,14 +3327,38 @@ func (s *Service) testChannelHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) migrateChannelKeys(w http.ResponseWriter, r *http.Request) {
-	tag, err := s.db.Exec(r.Context(), `insert into channel_api_keys(id,channel_id,name,key_encrypted,enabled)
-	select gen_random_uuid(), c.id, 'default', c.api_key, true
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		writeError(w, 500, "internal_error", "could not migrate channel key")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	if _, err := tx.Exec(r.Context(), `lock table channels,channel_api_keys in row exclusive mode`); err != nil {
+		writeError(w, 500, "internal_error", "could not migrate channel key")
+		return
+	}
+	var stored string
+	if err := tx.QueryRow(r.Context(), `select api_key from channels where id=$1 for update`, r.PathValue("id")).Scan(&stored); err != nil || stored == "" {
+		writeError(w, 400, "invalid_request", "channel has no legacy key to migrate")
+		return
+	}
+	stored, err = s.copyChannelCredential(stored)
+	if err != nil {
+		writeError(w, 500, "internal_error", "could not read channel credential")
+		return
+	}
+	tag, err := tx.Exec(r.Context(), `insert into channel_api_keys(id,channel_id,name,key_encrypted,enabled)
+	select gen_random_uuid(), c.id, 'default', $2, true
 	from channels c
-	where c.id=$1 and c.api_key != ''
+	where c.id=$1
 	and not exists (select 1 from channel_api_keys ak where ak.channel_id=c.id)
-	on conflict do nothing`, r.PathValue("id"))
+	on conflict do nothing`, r.PathValue("id"), stored)
 	if err != nil || tag.RowsAffected() == 0 {
 		writeError(w, 400, "invalid_request", "migrate failed or channel already has keys")
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, 500, "internal_error", "could not migrate channel key")
 		return
 	}
 	s.audit(r, "channel.keys_migrated", "channel", r.PathValue("id"), nil)
@@ -3638,6 +3828,11 @@ func (s *Service) listLogs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) runMigration(w http.ResponseWriter, r *http.Request) {
+	account, ok := r.Context().Value(accountContextKey{}).(accountContext)
+	if !ok || account.role != "admin" {
+		writeError(w, http.StatusForbidden, "forbidden", "administrator role required for data import")
+		return
+	}
 	var in struct {
 		SourceDSN    string `json:"source_dsn"`
 		SourceDriver string `json:"source_driver"`

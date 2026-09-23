@@ -69,7 +69,7 @@ watch([open, () => props.model?.model], ([nextOpen]) => {
     performance.value = null
     performancePending.value = false
   }
-})
+}, { immediate: true })
 </script>
 
 <template>

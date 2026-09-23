@@ -22,7 +22,6 @@ import (
 const (
 	maxGatewayMaxTokens     = 200_000
 	defaultGatewayMaxTokens = 4096
-	maxGatewayRequestBody   = 2 << 20
 	maxUpstreamResponseBody = 16 << 20
 	// settlementTimeout bounds the detached wallet/log writes that must complete even
 	// after the client has disconnected.
@@ -55,6 +54,8 @@ type channelRequestOverrides struct {
 	Delete []string       `json:"delete"`
 	Set    map[string]any `json:"set"`
 }
+
+type upstreamFormatOnlyKey struct{}
 
 const (
 	maxRequestOverrideFields = 50
@@ -257,6 +258,35 @@ func rewriteJSONModel(body []byte, model string) []byte {
 	return rewritten
 }
 
+func rewriteResponsesBody(body []byte, upstreamModel, requestedModel string) []byte {
+	if upstreamModel == "" && !bytes.Contains(body, gatewayExtensionKeyBytes) {
+		return body
+	}
+	var payload map[string]any
+	if json.Unmarshal(body, &payload) != nil || payload == nil {
+		return body
+	}
+	changed := false
+	if bytes.Contains(body, gatewayExtensionKeyBytes) {
+		if _, ok := payload["promptCacheKey"]; ok {
+			delete(payload, "promptCacheKey")
+			changed = true
+		}
+	}
+	if upstreamModel != "" && upstreamModel != requestedModel {
+		payload["model"] = upstreamModel
+		changed = true
+	}
+	if !changed {
+		return body
+	}
+	rewritten, err := json.Marshal(payload)
+	if err != nil {
+		return body
+	}
+	return rewritten
+}
+
 // rewriteOpenAIBody applies the built-in request-body rewrites for the OpenAI
 // wire format in a single JSON pass: router-reserved extension fields are
 // stripped, stream_options.include_usage is injected when stream is true, and
@@ -350,23 +380,15 @@ func (s *Service) models(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"object": "list", "data": data})
 }
 
-func readGatewayBody(r *http.Request) ([]byte, error) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxGatewayRequestBody+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(body) > maxGatewayRequestBody {
-		return nil, fmt.Errorf("request body exceeds %d bytes", maxGatewayRequestBody)
-	}
-	return body, nil
+func (s *Service) readGatewayBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
+	return readRequestBody(w, r, positiveRequestLimit(s.cfg.GatewayMaxBodyBytes, defaultGatewayMaxBodyBytes), s.cfg.RequestBodyTimeout)
 }
 
 func (s *Service) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
-	body, err := readGatewayBody(r)
+	body, err := s.readGatewayBody(w, r)
 	if err != nil {
-		s.logReject(r.Context(), "", 400, "invalid_request", started)
-		writeError(w, 400, "invalid_request", "request body is too large or could not be read")
+		s.rejectRequestBody(w, r, err, started)
 		return
 	}
 	var request struct {
@@ -418,22 +440,21 @@ func reasoningProvider(provider string) bool {
 }
 
 // responsesPassthroughEnabled reports whether an upstream of the given format
-// receives OpenAI Responses requests verbatim at /v1/responses. Only an
-// explicitly configured plain openai format is eligible: an empty format is
-// resolved to openai_chat, and openai_chat channels speak only chat completions.
+// receives OpenAI Responses requests verbatim at /v1/responses.
 func responsesPassthroughEnabled(upstreamFormat string) bool {
 	return upstreamFormat == "openai"
 }
 
-// openAIResponsePreferred reports whether the adapter should try Responses first.
-// The adapter, not an administrator-selected channel format, owns this policy.
-func openAIResponsePreferred(provider, upstreamFormat string) bool {
-	return provider == "openai" && upstreamFormat != "openai_chat"
+func responsesFallbackStatus(status int) bool {
+	return status == http.StatusNotFound || status == http.StatusMethodNotAllowed || status == http.StatusUnsupportedMediaType || status == http.StatusNotImplemented
 }
 
-// resolveUpstreamFormat keeps the legacy empty channel setting compatible with
-// chat-completions while allowing explicitly configured Responses channels.
+// resolveUpstreamFormat uses an explicit channel format when configured; an empty
+// value keeps the provider's native default.
 func resolveUpstreamFormat(provider, configured string) string {
+	if configured = strings.TrimSpace(configured); configured != "" {
+		return configured
+	}
 	switch provider {
 	case "openai":
 		return "openai"
@@ -443,15 +464,30 @@ func resolveUpstreamFormat(provider, configured string) string {
 		return "anthropic"
 	case "commandcode":
 		return "commandcode"
+	case "jev":
+		return "jev"
 	default:
 		return "openai_chat"
 	}
+}
+
+func upstreamFormatOnly(ctx context.Context) string {
+	format, _ := ctx.Value(upstreamFormatOnlyKey{}).(string)
+	return format
+}
+
+func channelMatchesUpstreamFormat(required, actual string) bool {
+	if required != "" {
+		return actual == required
+	}
+	return actual != "jev"
 }
 
 // streamStats carries the token counts extracted from an SSE stream's usage
 // events. These are used to bill streaming requests after the stream closes.
 type streamStats struct {
 	prompt, cached, completion int
+	facts                      UsageFacts
 	usageReported              bool
 	usageComplete              bool
 	promptReported             bool
@@ -625,7 +661,7 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 	// The normalized prompt is derived once and reused by both the local prefix
 	// cache lookup and store; deriving it on each call parsed the body twice.
 	normalized := ""
-	if s.promptCache != nil && s.promptCache.enabled {
+	if s.promptCache != nil && s.promptCache.enabled && upstreamFormatOnly(ctx) != "jev" {
 		normalized = normalizedPrompt(body)
 	}
 	if maxTokens > maxGatewayMaxTokens {
@@ -640,7 +676,20 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 	}
 	// Pricing and the group multiplier are read once and reused by reservation and
 	// settlement, which previously repeated the same two lookups.
-	pricing := s.pricingFor(ctx, model)
+	pricing := freezePricing(s.pricingFor(ctx, model), started)
+	if _, err := calculateBill(UsageFacts{}, pricing, 1); err != nil {
+		s.logReject(ctx, model, 402, "pricing_unavailable", started)
+		writeError(w, 402, "pricing_unavailable", "no enabled pricing rule for this model")
+		return
+	}
+	if imageOptions.image {
+		pricing.billingMode = "image"
+		if _, err := calculateBill(imageOptions.reservationFacts(), pricing, 1); err != nil {
+			s.logReject(ctx, model, 402, "pricing_unavailable", started)
+			writeError(w, 402, "pricing_unavailable", "no matching image price for the requested size and quality")
+			return
+		}
+	}
 	groupMultiplier := s.groupMultiplierFor(ctx, key.groupID)
 	subscriptionAccess := s.subscriptionCoversModel(ctx, key, model)
 	ctx = context.WithValue(ctx, subscriptionCoveredKey{}, subscriptionAccess)
@@ -653,7 +702,15 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 		return
 	} else {
 		var err error
-		reserved, err = s.reserveUsage(ctx, key, model, len(body), maxTokens, pricing, groupMultiplier)
+		if imageOptions.image {
+			var bill BillingSnapshot
+			bill, err = calculateBill(imageOptions.reservationFacts(), pricing, groupMultiplier)
+			if err == nil {
+				reserved, err = s.reserveAmount(ctx, key, model, bill.Cost)
+			}
+		} else {
+			reserved, err = s.reserveUsage(ctx, key, model, len(body), maxTokens, pricing, groupMultiplier)
+		}
 		if err != nil {
 			if errors.Is(err, errPricingUnavailable) {
 				s.logReject(ctx, model, 402, "pricing_unavailable", started)
@@ -666,35 +723,20 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 		}
 	}
 	defer func() { s.releaseReservation(ctx, key, reserved) }()
-	maxUserConcurrency := s.userConcurrencyLimitFor(ctx, key.userID)
-	if maxUserConcurrency > 0 && !s.userLimiter.acquire(key.userID, maxUserConcurrency) {
-		s.releaseReservation(ctx, key, reserved)
-		reserved = reservation{}
-		writeError(w, 429, "user_concurrency_exceeded", "user concurrency limit exceeded")
+	leaseCtx, releaseConcurrency, blockedScope, concurrencyErr := s.acquireRequestConcurrency(ctx, key)
+	if concurrencyErr != nil {
+		s.logReject(ctx, model, 503, "concurrency_unavailable", started)
+		writeError(w, 503, "concurrency_unavailable", "could not enforce concurrency limits")
 		return
 	}
-	defer func() {
-		if maxUserConcurrency > 0 {
-			s.userLimiter.release(key.userID)
-		}
-	}()
-	// Group concurrency limit: reject when the group's limit is reached,
-	// preventing a single group from saturating all its channels.
-	maxConcurrency := 0
-	if key.groupID != "" {
-		maxConcurrency = s.groupConcurrencyLimitFor(ctx, key.groupID)
-	}
-	if maxConcurrency > 0 && !s.groupLimiter.acquire(key.groupID, maxConcurrency) {
-		s.releaseReservation(ctx, key, reserved)
-		reserved = reservation{}
-		writeError(w, 429, "group_concurrency_exceeded", "group concurrency limit exceeded")
+	if blockedScope != "" {
+		code := blockedScope + "_concurrency_exceeded"
+		s.logReject(ctx, model, 429, code, started)
+		writeError(w, 429, code, blockedScope+" concurrency limit exceeded")
 		return
 	}
-	defer func() {
-		if key.groupID != "" && maxConcurrency > 0 {
-			s.groupLimiter.release(key.groupID)
-		}
-	}()
+	defer releaseConcurrency()
+	ctx = leaseCtx
 	channels, err := s.channelsForModel(ctx, key, model)
 	if err != nil {
 		if errors.Is(err, errChannelCredentials) {
@@ -711,16 +753,13 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 		return
 	}
 	reliability := s.reliabilitySettings(ctx)
-	requestTimeout := requestTimeoutDuration(reliability.RequestTimeoutSeconds)
 	requestContext := ctx
-	if !stream {
-		var cancel context.CancelFunc
-		requestContext, cancel = context.WithTimeout(ctx, requestTimeout)
-		defer cancel()
-	}
-	client := clientWithTimeout(s.httpClient, requestTimeout)
+	client := s.httpClient
 	if stream {
-		client = streamClientWithHeaderTimeout(s.streamClient, requestTimeout)
+		client = s.streamClient
+	}
+	if client == nil {
+		client = http.DefaultClient
 	}
 	accept := "application/json"
 	if stream {
@@ -730,11 +769,14 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 	var lastUpstreamStatus int
 	var lastUpstreamBody []byte
 	var lastUpstreamContentType string
+	var lastUpstreamHeaders http.Header
+	var lastUpstreamPassthrough bool
+	var lastUpstreamDirectResponses bool
+	var lastUpstreamChannel channel
 	var ch channel
 	var selectedDirectResponses bool
-	// OpenAI's native Responses adapter is preferred; a failed response request
-	// is retried through the dedicated Chat adapter before another channel.
-	responseFallbackAttempted := false
+	var selectedPassthrough bool
+	formatMatched := false
 	prefill := ""
 	failCode := "upstream_unreachable"
 	failDetail := failCode
@@ -761,34 +803,46 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 	} else if retryCount > 10 {
 		retryCount = 10
 	}
+	nativeOnly, _ := ctx.Value(responsesNativeOnlyKey{}).(bool)
+	requiredUpstreamFormat := upstreamFormatOnly(ctx)
+	nativeAttempted := false
+	responseChatFallback := make(map[int64]bool)
 tryChannels:
 	for pass := 0; pass <= retryCount; pass++ {
-		for i := range retryChannels {
+		for i := 0; i < len(retryChannels); i++ {
 			ch = retryChannels[i]
-			if s.checkChannelQuota(ctx, ch.id, model) != nil {
-				continue
-			}
-			if imageOptions.image && (ch.provider == "anthropic" || ch.provider == "commandcode" || ch.upstreamFormat == "anthropic") {
+			forceChatFallback := responseChatFallback[ch.id]
+			if imageOptions.image && (ch.provider == "anthropic" || ch.provider == "commandcode" || ch.upstreamFormat == "anthropic" || ch.upstreamFormat == "commandcode" || imageBillingOverrides(ch.overrides)) {
 				continue
 			}
 			upstreamFormat := resolveUpstreamFormat(ch.provider, ch.upstreamFormat)
-			if ch.provider == "openai" && responseFallbackAttempted {
+			if !channelMatchesUpstreamFormat(requiredUpstreamFormat, upstreamFormat) {
+				continue
+			}
+			formatMatched = true
+			if s.checkChannelQuota(ctx, ch.id, model) != nil {
+				continue
+			}
+			if forceChatFallback {
 				upstreamFormat = "openai_chat"
 			}
 			if imageOptions.image {
 				upstreamFormat = "openai"
 			}
 			directResponses := responsesBody != nil && responsesPassthroughEnabled(upstreamFormat)
-			if responsesBody != nil && ch.provider == "openai" && !responseFallbackAttempted && openAIResponsePreferred(ch.provider, ch.upstreamFormat) {
-				directResponses = true
-				upstreamFormat = "openai"
+			passthrough := upstreamFormat == "jev"
+			if nativeOnly && !directResponses {
+				continue
 			}
 			selectedDirectResponses = directResponses
+			selectedPassthrough = passthrough
 			upstreamPath := ch.upstreamPath
 			if imageOptions.image {
 				upstreamPath = imageOptions.path
-			} else if directResponses {
+			} else if directResponses && upstreamPath == "" {
 				upstreamPath = "/v1/responses"
+			} else if passthrough && upstreamPath == "" {
+				upstreamPath = "/v1/systemone"
 			} else if upstreamPath == "" {
 				if upstreamFormat == "anthropic" {
 					upstreamPath = "/v1/messages"
@@ -802,10 +856,8 @@ tryChannels:
 			upstreamContentType := "application/json"
 			var upstreamBody []byte
 			if directResponses {
-				upstreamBody = responsesBody
-				if ch.upstreamModel != "" && ch.upstreamModel != model {
-					upstreamBody = rewriteJSONModel(upstreamBody, ch.upstreamModel)
-				}
+				upstreamBody = rewriteResponsesBody(responsesBody, ch.upstreamModel, model)
+				upstreamBody = applyRequestOverrides(upstreamBody, ch.overrides)
 			} else {
 				upstreamBody = body
 				if imageOptions.image {
@@ -817,6 +869,8 @@ tryChannels:
 							upstreamBody = rewriteJSONModel(upstreamBody, ch.upstreamModel)
 						}
 					}
+				} else if passthrough {
+					upstreamBody = rewriteJEVBody(upstreamBody, ch.upstreamModel, model)
 				} else {
 					// Apply the built-in rewrites in one JSON pass instead of
 					// unmarshalling and re-encoding the body up to three times.
@@ -842,7 +896,11 @@ tryChannels:
 				}
 				// Channel-configured deletes/overrides apply last, after every built-in
 				// rewrite, so the admin's configuration is authoritative.
-				upstreamBody = applyRequestOverrides(upstreamBody, ch.overrides)
+				if passthrough {
+					upstreamBody = applyJEVRequestOverrides(upstreamBody, ch.overrides)
+				} else {
+					upstreamBody = applyRequestOverrides(upstreamBody, ch.overrides)
+				}
 			}
 			upstreamReq, requestErr := http.NewRequestWithContext(requestContext, http.MethodPost, upstreamURL, bytes.NewReader(upstreamBody))
 			if requestErr != nil {
@@ -869,6 +927,9 @@ tryChannels:
 			if ua := ch.pickUA(uaSeed(requestContext, ch.id)); ua != "" {
 				upstreamReq.Header.Set("User-Agent", ua)
 			}
+			if directResponses {
+				nativeAttempted = true
+			}
 			resp, err = client.Do(upstreamReq)
 			if err != nil {
 				if code, detail, ok := classifyContextError(err); ok {
@@ -886,11 +947,10 @@ tryChannels:
 				break tryChannels
 			}
 			nonRetryable := false
-			if err == nil && ch.provider == "openai" && responsesBody != nil && !responseFallbackAttempted && openAIResponsePreferred(ch.provider, ch.upstreamFormat) && resp.StatusCode >= 400 {
-				// Native Responses is preferred, but unsupported/error responses are
-				// retried once through the dedicated OpenAI Chat adapter.
-				responseFallbackAttempted = true
+			if err == nil && !nativeOnly && directResponses && responsesBody != nil && !forceChatFallback && ch.upstreamPath == "" && responsesFallbackStatus(resp.StatusCode) {
 				resp.Body.Close()
+				resp = nil
+				responseChatFallback[ch.id] = true
 				i--
 				continue
 			}
@@ -923,6 +983,10 @@ tryChannels:
 				lastUpstreamStatus = resp.StatusCode
 				lastUpstreamBody = bodyPeek
 				lastUpstreamContentType = contentType
+				lastUpstreamHeaders = resp.Header.Clone()
+				lastUpstreamPassthrough = passthrough
+				lastUpstreamDirectResponses = directResponses
+				lastUpstreamChannel = ch
 				if readErr == nil {
 					failDetail = failureReason + ": " + string(bodyPeek)
 					if reliability.autoDisableStatus(resp.StatusCode) || reliability.autoDisableKeyword(string(bodyPeek)) {
@@ -947,15 +1011,29 @@ tryChannels:
 			writeError(w, 502, "upstream_error", failDetail)
 			return
 		}
+		if nativeOnly && !nativeAttempted && lastUpstreamStatus == 0 {
+			s.logRequest(ctx, key, 0, "", model, 503, prompt, 0, prompt, time.Since(started), "responses_unsupported", "no channel supports native Responses requests")
+			writeError(w, http.StatusServiceUnavailable, "responses_unsupported", "no channel supports native Responses requests")
+			return
+		}
+		if requiredUpstreamFormat != "" && !formatMatched && lastUpstreamStatus == 0 {
+			s.logRequest(ctx, key, 0, "", model, http.StatusServiceUnavailable, prompt, 0, prompt, time.Since(started), "upstream_format_unavailable", "no channel supports the requested upstream format")
+			writeError(w, http.StatusServiceUnavailable, "upstream_format_unavailable", "no channel supports the requested upstream format")
+			return
+		}
 		if lastUpstreamStatus != 0 {
 			status := lastUpstreamStatus
 			detail := string(lastUpstreamBody)
-			s.logRequest(ctx, key, ch.id, ch.keyID, model, status, prompt, 0, prompt, time.Since(started), errorCode(status), detail)
+			s.logRequest(ctx, key, lastUpstreamChannel.id, lastUpstreamChannel.keyID, model, status, prompt, 0, prompt, time.Since(started), errorCode(status), detail)
 			clientBody := lastUpstreamBody
-			if !selectedDirectResponses {
+			if !lastUpstreamDirectResponses && !lastUpstreamPassthrough {
 				clientBody = []byte(s.clientUpstreamError(ctx, detail, reliability))
 			}
-			w.Header().Set("Content-Type", contentType(lastUpstreamContentType))
+			if lastUpstreamPassthrough && lastUpstreamHeaders != nil {
+				copyResponseHeaders(w.Header(), lastUpstreamHeaders)
+			} else {
+				w.Header().Set("Content-Type", contentType(lastUpstreamContentType))
+			}
 			w.WriteHeader(status)
 			_, _ = w.Write(clientBody)
 			return
@@ -1004,17 +1082,12 @@ tryChannels:
 		status := resp.StatusCode
 
 		if !st.usageComplete && streamErr == nil {
-			// Do not let providers that omit streaming usage turn a successful request
-			// into a free request. Fall back to the same conservative token estimate
-			// used by the reservation path and charge that hold.
-			st.prompt, st.completion = estimatedStreamUsage(body, maxTokens)
-			st.cached = 0
-		} else if st.cached == 0 {
-			// The upstream did not serve this prompt from its cache. Fall back to the
-			// local prefix cache so overlapping prompts are billed at the cached rate
-			// instead of paying full input price every time.
-			st.cached = int(s.promptCache.cached(model, normalized, int64(st.prompt)))
+			completeStreamFacts(&st, body, maxTokens)
 		}
+		if !st.facts.HasUsage() && (st.prompt > 0 || st.completion > 0) {
+			st.facts = usageFactsFromLegacy(st.prompt, st.cached, st.completion, "upstream")
+		}
+		st.prompt, st.cached, st.completion = st.facts.LegacyTokens()
 		total := st.prompt + st.completion
 		code, detail := "", ""
 		contextError := false
@@ -1042,6 +1115,13 @@ tryChannels:
 				total = st.prompt + st.completion
 			}
 			s.logRequest(ctx, key, ch.id, ch.keyID, model, status, st.prompt, st.completion, total, time.Since(started), code, detail, firstToken.milliseconds())
+			if st.facts.HasUsage() && st.facts.UsageSource != "request_estimate" {
+				if subscriptionAccess.Covered {
+					s.settleSubscriptionFacts(ctx, key, model, st.facts, pricing, groupMultiplier)
+				} else {
+					reserved = s.settleUsageFacts(ctx, key, reserved, model, st.facts, pricing, groupMultiplier)
+				}
+			}
 			if !capture.wrote && !capture.headerSent {
 				writeError(w, status, "upstream_error", s.clientUpstreamError(ctx, detail, reliability))
 			}
@@ -1053,12 +1133,10 @@ tryChannels:
 			if streamErr == nil {
 				s.promptCache.store(model, normalized, int64(st.prompt))
 			}
-			if st.prompt > 0 || st.completion > 0 {
-				if subscriptionAccess.Covered {
-					s.settleSubscriptionUsage(ctx, key, model, st.prompt, st.cached, st.completion, pricing, groupMultiplier)
-				} else {
-					reserved = s.settleUsage(ctx, key, reserved, model, st.prompt, st.cached, st.completion, pricing, groupMultiplier)
-				}
+			if subscriptionAccess.Covered {
+				s.settleSubscriptionFacts(ctx, key, model, st.facts, pricing, groupMultiplier)
+			} else {
+				reserved = s.settleUsageFacts(ctx, key, reserved, model, st.facts, pricing, groupMultiplier)
 			}
 			s.channelSucceeded(ctx, ch.id, ch.keyID)
 		}
@@ -1095,6 +1173,15 @@ tryChannels:
 		s.channelFailed(ctx, ch.id, ch.keyID, "empty_upstream_response")
 		return
 	}
+	facts := parseUsageFactsForFormat(responseBody, selectedFormat)
+	if imageOptions.image && resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		facts, err = imageResponseFacts(responseBody, imageOptions, facts)
+		if err != nil {
+			s.logRequest(ctx, key, ch.id, ch.keyID, model, 502, 0, 0, 0, time.Since(started), "invalid_image_response", err.Error())
+			writeError(w, 502, "upstream_error", "upstream returned an invalid image response")
+			return
+		}
+	}
 	if selectedFormat == "anthropic" && resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		responseBody, err = anthropicResponseToOpenAI(responseBody, prefill)
 		if err != nil {
@@ -1113,12 +1200,8 @@ tryChannels:
 			return
 		}
 	}
-	prompt, completion, total, cached := usage(responseBody)
-	if cached == 0 {
-		// Same accounting assist as the streaming path: an upstream cache miss does
-		// not mean the prompt prefixes were never seen here before.
-		cached = int(s.promptCache.cached(model, normalized, int64(prompt)))
-	}
+	prompt, _, completion := facts.LegacyTokens()
+	total := prompt + completion
 	detail := ""
 	if resp.StatusCode >= 400 {
 		detail = string(responseBody)
@@ -1131,13 +1214,13 @@ tryChannels:
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		s.promptCache.store(model, normalized, int64(prompt))
 		if subscriptionAccess.Covered {
-			s.settleSubscriptionUsage(ctx, key, model, prompt, cached, completion, pricing, groupMultiplier)
+			s.settleSubscriptionFacts(ctx, key, model, facts, pricing, groupMultiplier)
 		} else {
-			reserved = s.settleUsage(ctx, key, reserved, model, prompt, cached, completion, pricing, groupMultiplier)
+			reserved = s.settleUsageFacts(ctx, key, reserved, model, facts, pricing, groupMultiplier)
 		}
 		s.channelSucceeded(ctx, ch.id, ch.keyID)
-		if selectedDirectResponses {
-			// OpenAI Responses responses are already in the client-facing format.
+		if selectedDirectResponses || selectedPassthrough {
+			// Native Responses and JEV responses are already in the client-facing format.
 		} else if providerTransform != nil {
 			responseBody, err = providerTransform(responseBody, ch.provider)
 			if err != nil {
@@ -1163,11 +1246,11 @@ tryChannels:
 			s.autoDisableChannel(ctx, ch.id, ch.keyID, failureReason)
 		}
 		s.channelFailed(ctx, ch.id, ch.keyID, failureReason)
-		if !selectedDirectResponses {
+		if !selectedDirectResponses && !selectedPassthrough {
 			responseBody = []byte(s.clientUpstreamError(ctx, detail, reliability))
 		}
 	}
-	if selectedDirectResponses {
+	if selectedDirectResponses || selectedPassthrough {
 		copyResponseHeaders(w.Header(), resp.Header)
 	} else {
 		w.Header().Set("Content-Type", contentType(resp.Header.Get("Content-Type")))
@@ -1189,15 +1272,14 @@ func (s *Service) reserveUsage(ctx context.Context, key keyContext, model string
 	if !pricing.found {
 		return reservation{}, errPricingUnavailable
 	}
-	// Apply time-based pricing override for the current moment.
-	input, cachedInput, output := pricing.resolvePricing(time.Now())
-	// Reserve against the effective tier for the worst-case token count too. Using
-	// only the flat rule can under-hold when a higher volume tier applies, causing
-	// settlement to be clamped and the request to be silently under-billed.
-	estimatedPrompt := bodyLen / 3
-	input, cachedInput, output = pricing.resolveTier(int64(estimatedPrompt+resolved), input, cachedInput, output)
-	// Reserve the configured maximum output plus a conservative request-body estimate.
-	amount := (float64(estimatedPrompt)*input + float64(resolved)*output) / 1000000 * pricing.multiplier * groupMultiplier * pricingExchangeRate(pricing)
+	amount, err := reservationAmount(bodyLen, resolved, pricing, groupMultiplier)
+	if err != nil {
+		return reservation{}, err
+	}
+	return s.reserveAmount(ctx, key, model, amount)
+}
+
+func (s *Service) reserveAmount(ctx context.Context, key keyContext, model string, amount float64) (reservation, error) {
 	if amount == 0 {
 		// Zero list prices are allowed only when an explicit enabled rule exists.
 		return reservation{}, nil
@@ -1269,14 +1351,24 @@ func clampCostToHold(cost, held float64) float64 {
 // settleUsage records the actual call cost as pending. The estimated hold is replaced
 // by the actual cost so concurrent requests remain protected until the daily debit runs.
 func (s *Service) settleUsage(ctx context.Context, key keyContext, held reservation, model string, prompt, cached, completion int, pricing pricingRule, groupMultiplier float64) reservation {
-	if held.amount == 0 && prompt == 0 && completion == 0 {
+	return s.settleUsageFacts(ctx, key, held, model, usageFactsFromLegacy(prompt, cached, completion, "upstream"), pricing, groupMultiplier)
+}
+
+func (s *Service) settleUsageFacts(ctx context.Context, key keyContext, held reservation, model string, facts UsageFacts, pricing pricingRule, groupMultiplier float64) reservation {
+	bill, err := calculateBill(facts, pricing, groupMultiplier)
+	if err != nil {
+		bill.Status, bill.Error = "unpriced", err.Error()
+		s.recordUnsettledUsage(ctx, key, model, bill)
 		return held
 	}
-	cost := computeUsageCost(prompt, cached, completion, pricing, groupMultiplier)
-	cost = clampCostToHold(cost, held.amount)
-	if cost == 0 {
+	if !facts.HasUsage() {
+		bill.Status = "missing_usage"
+		s.recordUnsettledUsage(ctx, key, model, bill)
 		return held
 	}
+	bill.Status = "settled"
+	factsJSON, _ := json.Marshal(bill.Usage)
+	prompt, cached, completion := bill.Usage.LegacyTokens()
 	ledgerID, _ := randomID()
 	settlementID, _ := randomID()
 	usageID, _ := randomID()
@@ -1284,7 +1376,9 @@ func (s *Service) settleUsage(ctx context.Context, key keyContext, held reservat
 	defer cancel()
 	createdAt := time.Now().UTC()
 	businessDate := walletBusinessDate(createdAt)
-	tag, err := s.db.Exec(settleCtx, `with existing as (
+	for attempt := 0; attempt < 2; attempt++ {
+		billJSON, _ := json.Marshal(bill)
+		tag, err := s.db.Exec(settleCtx, `with existing as (
 		select 1 from wallet_settlements where request_id=$5::text
 	), settled as (
 		update user_wallets set reserved=greatest(0,reserved-$2)+$1,updated_at=now()
@@ -1294,22 +1388,38 @@ func (s *Service) settleUsage(ctx context.Context, key keyContext, held reservat
 	), settlement as (
 		insert into wallet_settlements(id,ledger_id,user_id,request_id,business_date,amount)
 		select $8::uuid,$4::uuid,$3,$5::text,$7::date,$1 from settled
-		on conflict(request_id) do nothing
 		returning 1
 	), ledger as (
 		insert into wallet_ledger(id,user_id,amount,balance_after,kind,request_id,note,settlement_status,settlement_date)
 		select $4::uuid,$3,-$1,balance,'charge',$5::text,$6::text,'pending',$7::date from settled
 		where exists (select 1 from settlement)
 	)
-	insert into usage_records(id,request_id,user_id,api_key_id,model,prompt_tokens,cached_prompt_tokens,completion_tokens,cost)
-	select $9::uuid,$5::text,$3,$10::uuid,$6::text,$11::int,$12::int,$13::int,$1 from settled
+	insert into usage_records(id,request_id,user_id,api_key_id,model,prompt_tokens,cached_prompt_tokens,completion_tokens,cost,usage_facts,billing_snapshot,status)
+	select $9::uuid,$5::text,$3,$10::uuid,$6::text,$11::int,$12::int,$13::int,$1,$14::jsonb,$15::jsonb,$16::text from settled
 	where exists (select 1 from settlement)
-	on conflict(request_id) do update set prompt_tokens=excluded.prompt_tokens,cached_prompt_tokens=excluded.cached_prompt_tokens,completion_tokens=excluded.completion_tokens,cost=excluded.cost`,
-		cost, held.amount, key.userID, ledgerID, requestID(ctx), model, businessDate, settlementID, usageID, key.keyID, prompt, cached, completion)
-	if err != nil || tag.RowsAffected() == 0 {
+	on conflict(request_id) do update set prompt_tokens=excluded.prompt_tokens,cached_prompt_tokens=excluded.cached_prompt_tokens,
+		completion_tokens=excluded.completion_tokens,cost=excluded.cost,usage_facts=excluded.usage_facts,
+		billing_snapshot=excluded.billing_snapshot,status=excluded.status
+		where usage_records.status not in ('settled','subscription') and excluded.status in ('settled','subscription')`,
+			bill.Amount, held.amount, key.userID, ledgerID, requestID(ctx), model, businessDate, settlementID, usageID, key.keyID, prompt, cached, completion, factsJSON, billJSON, bill.Status)
+		if err == nil && tag.RowsAffected() > 0 {
+			return reservation{}
+		}
+		var alreadySettled bool
+		if lookupErr := s.db.QueryRow(settleCtx, `select exists(select 1 from wallet_settlements where request_id=$1 and user_id=$2)`, requestID(ctx), key.userID).Scan(&alreadySettled); lookupErr == nil && alreadySettled {
+			return reservation{}
+		}
+		if err == nil && attempt == 0 && held.amount > 0 && bill.Cost > held.amount {
+			if capErr := bill.ApplyCap(held.amount); capErr == nil {
+				continue
+			}
+		}
+		log.Printf("settleUsageFacts failed request=%s: %v", requestID(ctx), err)
+		bill.Status, bill.Error = "settlement_failed", "wallet settlement did not complete"
+		s.recordUnsettledUsage(ctx, key, model, bill)
 		return held
 	}
-	return reservation{}
+	return held
 }
 
 // computeUsageCost returns the cost of a request under the active pricing rule,
@@ -1337,20 +1447,36 @@ func computeUsageCost(prompt, cached, completion int, pricing pricingRule, group
 // subscriptionCoversModel, so a subscription's monthly credit cap counts what its requests
 // would have cost under normal pricing.
 func (s *Service) settleSubscriptionUsage(ctx context.Context, key keyContext, model string, prompt, cached, completion int, pricing pricingRule, groupMultiplier float64) {
-	if prompt == 0 && completion == 0 {
-		return
+	s.settleSubscriptionFacts(ctx, key, model, usageFactsFromLegacy(prompt, cached, completion, "upstream"), pricing, groupMultiplier)
+}
+
+func (s *Service) settleSubscriptionFacts(ctx context.Context, key keyContext, model string, facts UsageFacts, pricing pricingRule, groupMultiplier float64) {
+	bill, err := calculateBill(facts, pricing, groupMultiplier)
+	if err != nil {
+		bill.Status, bill.Error = "unpriced", err.Error()
+		bill.Cost, bill.Amount = 0, "0.00000000"
+	} else if !facts.HasUsage() {
+		bill.Status = "missing_usage"
+	} else {
+		bill.Status = "subscription"
 	}
-	cost := computeUsageCost(prompt, cached, completion, pricing, groupMultiplier)
+	cost := bill.Amount
+	factsJSON, _ := json.Marshal(bill.Usage)
+	billJSON, _ := json.Marshal(bill)
+	prompt, cached, completion := bill.Usage.LegacyTokens()
 	// The covering subscription is resolved during the coverage check; its
 	// per-period counters must be decremented once per settled request.
 	access, _ := ctx.Value(subscriptionCoveredKey{}).(subscriptionAccess)
 	usageID, _ := randomID()
 	settleCtx, cancel := detach(ctx, settlementTimeout)
 	defer cancel()
-	_, err := s.db.Exec(settleCtx, `with inserted as (
-		insert into usage_records(id,request_id,user_id,api_key_id,model,prompt_tokens,cached_prompt_tokens,completion_tokens,cost)
-		values($1::uuid,$2::text,$3,$4::uuid,$5::text,$6::int,$7::int,$8::int,$9)
-		on conflict(request_id) do nothing
+	_, err = s.db.Exec(settleCtx, `with inserted as (
+		insert into usage_records(id,request_id,user_id,api_key_id,model,prompt_tokens,cached_prompt_tokens,completion_tokens,cost,usage_facts,billing_snapshot,status)
+		values($1::uuid,$2::text,$3,$4::uuid,$5::text,$6::int,$7::int,$8::int,$9,$11::jsonb,$12::jsonb,$13)
+		on conflict(request_id) do update set prompt_tokens=excluded.prompt_tokens,cached_prompt_tokens=excluded.cached_prompt_tokens,
+			completion_tokens=excluded.completion_tokens,cost=excluded.cost,status=excluded.status,
+			usage_facts=excluded.usage_facts,billing_snapshot=excluded.billing_snapshot
+			where usage_records.status not in ('settled','subscription')
 		returning 1
 	), subscription as (
 		update user_subscriptions us set
@@ -1361,7 +1487,7 @@ func (s *Service) settleSubscriptionUsage(ctx context.Context, key keyContext, m
 			remaining_credit = case when us.remaining_credit is null then null
 				when exists (select 1 from subscription_plan_model_quotas q where q.plan_id=us.plan_id and q.model=$5 and q.max_credit_per_period is not null)
 					then us.remaining_credit
-				else greatest(0, us.remaining_credit-$9) end,
+				else greatest(0, us.remaining_credit-case when $13 in ('unpriced','missing_usage') then 0 else $9 end) end,
 			updated_at=now()
 		where us.id=$10 and exists (select 1 from inserted)
 		returning 1
@@ -1370,7 +1496,7 @@ func (s *Service) settleSubscriptionUsage(ctx context.Context, key keyContext, m
 		remaining_requests = case when remaining_requests is null then null else greatest(0, remaining_requests-1) end,
 		remaining_credit = case when remaining_credit is null then null else greatest(0, remaining_credit-$9) end
 	where subscription_id=$10 and model=$5 and exists (select 1 from inserted)`,
-		usageID, requestID(ctx), key.userID, key.keyID, model, prompt, cached, completion, cost, access.SubscriptionID)
+		usageID, requestID(ctx), key.userID, key.keyID, model, prompt, cached, completion, cost, access.SubscriptionID, factsJSON, billJSON, subscriptionUsageStatus(bill))
 	if err != nil {
 		log.Printf("settleSubscriptionUsage failed: %v", err)
 	}
@@ -1386,7 +1512,7 @@ func (s *Service) releaseReservation(ctx context.Context, key keyContext, held r
 	ledgerID, _ := randomID()
 	_, _ = s.db.Exec(releaseCtx, `with released as (
 		update user_wallets set reserved=greatest(0,reserved-$1),updated_at=now()
-		where user_id=$2
+		where user_id=$2 and not exists (select 1 from wallet_settlements where request_id=$4::text and user_id=$2)
 		returning balance
 	)
 	insert into wallet_ledger(id,user_id,amount,balance_after,kind,request_id,note,settlement_status)
@@ -1403,11 +1529,10 @@ func (s *Service) releaseReservation(ctx context.Context, key keyContext, held r
 // result is cached for a short TTL so the hot path skips the database round-trip
 // for the majority of keys that have no quota.
 func (s *Service) checkQuota(ctx context.Context, key keyContext, model string) error {
-	if s.quotaAbsentCache != nil {
-		qk := quotaRouteKey{userID: key.userID, keyID: key.keyID, model: model}
-		if _, ok := s.quotaAbsentCache.lookup(qk); ok {
-			return nil
-		}
+	qk := quotaRouteKey{userID: key.userID, keyID: key.keyID, model: model}
+	_, cached, generation := s.quotaAbsentCache.lookupGeneration(qk)
+	if cached {
+		return nil
 	}
 	rows, err := s.db.Query(ctx, `select q.max_requests,q.max_tokens,q.max_cost,agg.requests,agg.tokens,agg.cost
 	from quota_limits q
@@ -1441,7 +1566,7 @@ func (s *Service) checkQuota(ctx context.Context, key keyContext, model string) 
 	}
 	if !hasRows && s.quotaAbsentCache != nil {
 		qk := quotaRouteKey{userID: key.userID, keyID: key.keyID, model: model}
-		s.quotaAbsentCache.store(qk, struct{}{})
+		s.quotaAbsentCache.storeIfGeneration(qk, struct{}{}, generation)
 	}
 	return nil
 }
@@ -1664,10 +1789,10 @@ func (s *Service) channelFailed(ctx context.Context, channelID int64, keyID, rea
 func (s *Service) testFailedChannel(id int64) {
 	ctx, cancel := context.WithTimeout(context.Background(), healthCheckProbeTimeout)
 	defer cancel()
-	var baseURL, encrypted, provider, upstreamFormat string
+	var baseURL, encrypted, provider, testModel, upstreamPath, upstreamFormat string
 	var enabled, autoDisable bool
 	var uaPool []byte
-	if err := s.db.QueryRow(ctx, `select c.base_url,c.api_key,c.provider,c.upstream_format,c.enabled,c.ua_pool,ss.auto_disable_failed_channels from channels c cross join site_settings ss where c.id=$1 and ss.id=true`, id).Scan(&baseURL, &encrypted, &provider, &upstreamFormat, &enabled, &uaPool, &autoDisable); err != nil || !enabled || !autoDisable {
+	if err := s.db.QueryRow(ctx, `select c.base_url,c.api_key,c.provider,c.test_model,c.upstream_path,c.upstream_format,c.enabled,c.ua_pool,ss.auto_disable_failed_channels from channels c cross join site_settings ss where c.id=$1 and ss.id=true`, id).Scan(&baseURL, &encrypted, &provider, &testModel, &upstreamPath, &upstreamFormat, &enabled, &uaPool, &autoDisable); err != nil || !enabled || !autoDisable {
 		return
 	}
 	seed := sha256.Sum256([]byte(strconv.FormatInt(id, 10) + "test"))
@@ -1676,7 +1801,7 @@ func (s *Service) testFailedChannel(id int64) {
 		s.disableFailedChannel(ctx, id, "", "credential_decryption_failed")
 		return
 	}
-	s.testFailedCredential(ctx, id, "", baseURL, apiKey, provider, upstreamFormat, parsedUAPool(uaPool))
+	s.testFailedCredential(ctx, id, "", baseURL, apiKey, provider, testModel, upstreamPath, upstreamFormat, parsedUAPool(uaPool))
 }
 
 // testFailedChannelKey verifies a channel API key that failed repeatedly, so only
@@ -1684,10 +1809,10 @@ func (s *Service) testFailedChannel(id int64) {
 func (s *Service) testFailedChannelKey(channelID int64, keyID string) {
 	ctx, cancel := context.WithTimeout(context.Background(), healthCheckProbeTimeout)
 	defer cancel()
-	var baseURL, encrypted, provider, upstreamFormat string
+	var baseURL, encrypted, provider, testModel, upstreamPath, upstreamFormat string
 	var enabled, autoDisable bool
 	var uaPool []byte
-	if err := s.db.QueryRow(ctx, `select c.base_url,k.key_encrypted,c.provider,c.upstream_format,c.enabled,c.ua_pool,ss.auto_disable_failed_channels from channels c join channel_api_keys k on k.channel_id=c.id cross join site_settings ss where c.id=$1 and k.id=$2 and ss.id=true`, channelID, keyID).Scan(&baseURL, &encrypted, &provider, &upstreamFormat, &enabled, &uaPool, &autoDisable); err != nil || !enabled || !autoDisable {
+	if err := s.db.QueryRow(ctx, `select c.base_url,k.key_encrypted,c.provider,c.test_model,c.upstream_path,c.upstream_format,c.enabled,c.ua_pool,ss.auto_disable_failed_channels from channels c join channel_api_keys k on k.channel_id=c.id cross join site_settings ss where c.id=$1 and k.id=$2 and ss.id=true`, channelID, keyID).Scan(&baseURL, &encrypted, &provider, &testModel, &upstreamPath, &upstreamFormat, &enabled, &uaPool, &autoDisable); err != nil || !enabled || !autoDisable {
 		return
 	}
 	apiKey, err := channelKeyValue(s.cfg.EncryptionKey, encrypted)
@@ -1695,43 +1820,22 @@ func (s *Service) testFailedChannelKey(channelID int64, keyID string) {
 		s.disableFailedChannel(ctx, channelID, keyID, "credential_decryption_failed")
 		return
 	}
-	s.testFailedCredential(ctx, channelID, keyID, baseURL, apiKey, provider, upstreamFormat, parsedUAPool(uaPool))
+	s.testFailedCredential(ctx, channelID, keyID, baseURL, apiKey, provider, testModel, upstreamPath, upstreamFormat, parsedUAPool(uaPool))
 }
 
-// testFailedCredential probes a channel credential with GET /v1/models three
-// times. Success clears the failure bookkeeping for the channel or key; three
-// failed attempts auto-disable the credential.
-func (s *Service) testFailedCredential(ctx context.Context, channelID int64, keyID, baseURL, apiKey, provider, upstreamFormat string, uaPool []string) {
-	testPath := "/v1/models"
-	if provider == "commandcode" {
-		testPath = commandCodeModelsPath
-	}
+// testFailedCredential probes a channel credential three times using its configured
+// health-check request. Success clears the failure bookkeeping for the channel or key;
+// three failed attempts auto-disable the credential.
+func (s *Service) testFailedCredential(ctx context.Context, channelID int64, keyID, baseURL, apiKey, provider, testModel, upstreamPath, upstreamFormat string, uaPool []string) {
 	for attempt := 0; attempt < 3; attempt++ {
-		request, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+testPath, nil)
-		if err != nil {
-			s.disableFailedChannel(ctx, channelID, keyID, "invalid_test_request")
-			return
-		}
-		if provider == "anthropic" || (provider == "custom" && upstreamFormat == "anthropic") {
-			request.Header.Set("X-API-Key", apiKey)
-			request.Header.Set("Anthropic-Version", "2023-06-01")
-		} else {
-			request.Header.Set("Authorization", "Bearer "+apiKey)
-		}
-		if ua := randomUA(uaPool); ua != "" {
-			request.Header.Set("User-Agent", ua)
-		}
-		response, err := clientWithTimeout(s.httpClient, healthCheckProbeTimeout).Do(request)
-		if err == nil {
-			response.Body.Close()
-			if response.StatusCode >= 200 && response.StatusCode < 300 {
-				if keyID != "" {
-					_, _ = s.db.Exec(ctx, `update channel_api_keys set failure_count=0,last_error=null,last_checked_at=now() where id=$1 and channel_id=$2 and enabled`, keyID, channelID)
-				} else {
-					_, _ = s.db.Exec(ctx, `update channels set failure_count=0,cooldown_until=null,last_error=null,last_checked_at=now(),updated_at=now() where id=$1 and enabled`, channelID)
-				}
-				return
+		status, _, _, err := s.testChannelWithConfig(ctx, baseURL, apiKey, provider, testModel, upstreamPath, upstreamFormat, uaPool, healthCheckProbeTimeout)
+		if err == nil && status >= 200 && status < 300 {
+			if keyID != "" {
+				_, _ = s.db.Exec(ctx, `update channel_api_keys set failure_count=0,last_error=null,last_checked_at=now() where id=$1 and channel_id=$2 and enabled`, keyID, channelID)
+			} else {
+				_, _ = s.db.Exec(ctx, `update channels set failure_count=0,cooldown_until=null,last_error=null,last_checked_at=now() where id=$1 and enabled`, channelID)
 			}
+			return
 		}
 	}
 	s.disableFailedChannel(ctx, channelID, keyID, "system_test_failed")
@@ -1825,77 +1929,22 @@ func (c *streamCaptureWriter) bytes() []byte {
 // input/cache tokens in the message_start event and output tokens in the
 // message_delta event.
 func parseSSEUsage(data []byte, st *streamStats) {
-	var chunk struct {
-		Usage   json.RawMessage `json:"usage"`
-		Type    string          `json:"type"`
-		Message struct {
-			Usage json.RawMessage `json:"usage"`
-		} `json:"message"`
-		Response struct {
-			Usage json.RawMessage `json:"usage"`
-		} `json:"response"`
-	}
-	if json.Unmarshal(data, &chunk) != nil {
+	var chunk usageObject
+	if st == nil || json.Unmarshal(data, &chunk) != nil {
 		return
 	}
-	rawUsage := chunk.Usage
-	isMessageStart := chunk.Type == "message_start"
-	if isMessageStart {
-		rawUsage = chunk.Message.Usage
-	} else if len(chunk.Response.Usage) > 0 {
-		rawUsage = chunk.Response.Usage
-	}
-	if len(rawUsage) == 0 || string(rawUsage) == "null" {
+	facts := parseUsageFactsObject(chunk, "")
+	if !facts.HasUsage() {
 		return
 	}
-	// Pointer fields double as presence flags, so the usage object is parsed once
-	// instead of once into a struct and again into a field map.
-	var u struct {
-		Prompt              *int `json:"prompt_tokens"`
-		Completion          *int `json:"completion_tokens"`
-		Total               *int `json:"total_tokens"`
-		Input               *int `json:"input_tokens"`
-		Output              *int `json:"output_tokens"`
-		PromptTokensDetails struct {
-			Cached *int `json:"cached_tokens"`
-		} `json:"prompt_tokens_details"`
-		InputTokensDetails struct {
-			Cached *int `json:"cached_tokens"`
-		} `json:"input_tokens_details"`
-		CacheReadInputTokens *int `json:"cache_read_input_tokens"`
-	}
-	if json.Unmarshal(rawUsage, &u) != nil {
-		return
-	}
+	mergeUsageFacts(&st.facts, facts)
+	st.prompt, st.cached, st.completion = st.facts.LegacyTokens()
 	st.usageReported = true
-	if u.Prompt != nil || u.Input != nil {
-		st.promptReported = true
+	st.promptReported = st.promptReported || facts.promptPresent
+	if chunk.text("type") != "message_start" {
+		st.completionReported = st.completionReported || facts.outputPresent
 	}
-	if !isMessageStart && (u.Completion != nil || u.Output != nil) {
-		st.completionReported = true
-	}
-	if u.Prompt != nil && *u.Prompt > st.prompt {
-		st.prompt = *u.Prompt
-	}
-	if u.Input != nil && *u.Input > st.prompt {
-		st.prompt = *u.Input
-	}
-	if u.Completion != nil && *u.Completion > st.completion {
-		st.completion = *u.Completion
-	}
-	if u.Output != nil && *u.Output > st.completion {
-		st.completion = *u.Output
-	}
-	if u.PromptTokensDetails.Cached != nil && *u.PromptTokensDetails.Cached > st.cached {
-		st.cached = *u.PromptTokensDetails.Cached
-	}
-	if u.InputTokensDetails.Cached != nil && *u.InputTokensDetails.Cached > st.cached {
-		st.cached = *u.InputTokensDetails.Cached
-	}
-	if u.CacheReadInputTokens != nil && *u.CacheReadInputTokens > st.cached {
-		st.cached = *u.CacheReadInputTokens
-	}
-	st.usageComplete = st.promptReported && st.completionReported && (st.prompt > 0 || st.completion > 0)
+	st.usageComplete = st.promptReported && st.completionReported
 }
 
 func estimatedStreamUsage(body []byte, maxTokens int) (prompt, completion int) {
@@ -2046,7 +2095,7 @@ func (s *Service) logRequest(ctx context.Context, key keyContext, channelID int6
 var upstreamURLPattern = regexp.MustCompile(`https?://[^\s"'\])\}]+`)
 
 // classifyContextError maps a context-cancellation or deadline-exceeded error
-// (client hangup, RequestTimeout elapsed) to a stable error code and a clean,
+// (client hangup or an upstream deadline) to a stable error code and a clean,
 // channel-agnostic message. The boolean reports whether err is such an error.
 // These errors must not count against channel health: the channel itself is
 // fine, only the request was cut short.

@@ -8,6 +8,8 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"os"
+	"strings"
 )
 
 // crypt encrypts or decrypts value using AES-GCM with a key derived from the
@@ -42,35 +44,70 @@ func crypt(key, value string, decrypt bool) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(out), nil
 }
 
-// isEncrypted reports whether value looks like an AES-GCM ciphertext produced by
-// crypt: it is non-empty, only contains base64url characters, and has a length
-// that is a multiple of 4 (RawURLEncoding without padding).
-func isEncrypted(value string) bool {
-	if value == "" {
-		return false
+const channelCredentialFormat = "xh-credential:"
+const channelCredentialPrefix = channelCredentialFormat + "v1:"
+
+func channelCredentialStorage() (string, error) {
+	mode := strings.ToLower(strings.TrimSpace(os.Getenv("CHANNEL_CREDENTIAL_STORAGE")))
+	if mode == "" {
+		mode = "plaintext"
 	}
-	if len(value)%4 != 0 {
-		return false
+	if mode != "plaintext" && mode != "encrypted" {
+		return "", fmt.Errorf("CHANNEL_CREDENTIAL_STORAGE must be plaintext or encrypted")
 	}
-	for _, r := range value {
-		switch r {
-		case 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M',
-			'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z',
-			'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm',
-			'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z',
-			'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '-', '_':
-			continue
-		default:
-			return false
-		}
-	}
-	return true
+	return mode, nil
 }
 
-// encryptIfNeeded encrypts value with key if it is not already encrypted.
-func encryptIfNeeded(key, value string) (string, error) {
-	if value == "" || isEncrypted(value) {
-		return value, nil
+func channelCredentialValue(key, stored string) (string, error) {
+	if strings.HasPrefix(stored, channelCredentialFormat) {
+		if !strings.HasPrefix(stored, channelCredentialPrefix) {
+			return "", fmt.Errorf("unsupported channel credential format")
+		}
+		plain, err := crypt(key, strings.TrimPrefix(stored, channelCredentialPrefix), true)
+		if err != nil || plain == "" {
+			return "", fmt.Errorf("could not decrypt channel credential")
+		}
+		return plain, nil
 	}
-	return crypt(key, value, false)
+	if plain, err := crypt(key, stored, true); err == nil {
+		return plain, nil
+	}
+	return stored, nil
+}
+
+func encryptIfNeeded(key, stored string) (string, error) {
+	if stored == "" {
+		return "", nil
+	}
+	if len(key) < 24 {
+		return "", fmt.Errorf("ENCRYPTION_KEY must contain at least 24 characters")
+	}
+	plain, err := channelCredentialValue(key, stored)
+	if err != nil {
+		return "", err
+	}
+	if strings.HasPrefix(stored, channelCredentialPrefix) {
+		return stored, nil
+	}
+	encrypted, err := crypt(key, plain, false)
+	if err != nil {
+		return "", err
+	}
+	return channelCredentialPrefix + encrypted, nil
+}
+
+func importChannelCredential(key, value, mode string) (string, error) {
+	switch mode {
+	case "plaintext":
+		if strings.HasPrefix(value, channelCredentialFormat) {
+			if _, err := channelCredentialValue(key, value); err != nil {
+				return "", err
+			}
+		}
+		return value, nil
+	case "encrypted":
+		return encryptIfNeeded(key, value)
+	default:
+		return "", fmt.Errorf("invalid channel credential storage mode")
+	}
 }

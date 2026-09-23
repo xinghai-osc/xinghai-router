@@ -241,6 +241,7 @@ func TestBatchExtendSubscriptionsRejectsInvalidDaysBeforeDatabase(t *testing.T) 
 func TestAdminResetSubscriptionQuotaRouteRequiresAuth(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/admin/subscriptions/sub-1/reset-quotas", nil)
+	request.Header.Set("X-Xinghai-Request", "1")
 	(&Service{}).routes().ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusUnauthorized)

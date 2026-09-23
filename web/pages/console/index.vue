@@ -22,10 +22,12 @@ const { data: dailyUsage, pending, error } = useResource(
   { data: [] as DailyUsageRecord[] },
 )
 
-const { data: heatmapUsage, pending: heatmapPending, error: heatmapError } = useResource(
+const { data: heatmapUsage, pending: heatmapPending, error: heatmapError, refresh: refreshHeatmap } = useResource(
   () => endpoints.getAccountUsageDaily(400, -new Date().getTimezoneOffset()),
   { data: [] as DailyUsageRecord[] },
+  { immediate: false },
 )
+const { target: heatmapTarget, started: heatmapStarted } = useDeferredLoad(() => { void refreshHeatmap() }, { rootMargin: '240px 0px' })
 
 const { data: summary, pending: summaryPending } = useResource(
   () => endpoints.getAccountUsageSummary(),
@@ -165,25 +167,27 @@ const quickLinks = computed(() => [
       </ConsoleUserDataState>
     </UiCard>
 
-    <UiCard :title="t('console.callHeatmap')" :description="t('console.callHeatmapHint')">
-      <template #actions>
-        <div class="flex items-center gap-2 text-xs text-muted">
-          <span class="numeric font-semibold text-ink">{{ formatNumber(heatmapTotal) }}</span>
-          <span>{{ t('console.heatmapRequestsUnit') }}</span>
+    <div ref="heatmapTarget">
+      <UiCard :title="t('console.callHeatmap')" :description="t('console.callHeatmapHint')">
+        <template #actions>
+          <div class="flex items-center gap-2 text-xs text-muted">
+            <span class="numeric font-semibold text-ink">{{ formatNumber(heatmapTotal) }}</span>
+            <span>{{ t('console.heatmapRequestsUnit') }}</span>
+          </div>
+        </template>
+        <div v-if="!heatmapStarted || heatmapPending" class="space-y-2">
+          <UiSkeleton :rows="5" />
         </div>
-      </template>
-      <div v-if="heatmapPending" class="space-y-2">
-        <UiSkeleton :rows="5" />
-      </div>
-      <UiAlert v-else-if="heatmapError" tone="danger" :title="t('console.heatmapError')" />
-      <div v-else class="space-y-3">
-        <ConsoleUserCallHeatmap :points="heatmap" />
-        <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted">
-          <span>{{ t('console.heatmapActiveDays', { count: heatmapActiveDays }) }}</span>
-          <span>{{ t('console.heatmapTotal', { count: formatNumber(heatmapTotal) }) }}</span>
+        <UiAlert v-else-if="heatmapError" tone="danger" :title="t('console.heatmapError')" />
+        <div v-else class="space-y-3">
+          <ConsoleUserCallHeatmap :points="heatmap" />
+          <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted">
+            <span>{{ t('console.heatmapActiveDays', { count: heatmapActiveDays }) }}</span>
+            <span>{{ t('console.heatmapTotal', { count: formatNumber(heatmapTotal) }) }}</span>
+          </div>
         </div>
-      </div>
-    </UiCard>
+      </UiCard>
+    </div>
 
     <div class="grid gap-4 lg:grid-cols-2">
       <UiCard :title="t('console.apiEndpoint')" :description="t('console.apiEndpointHint')">

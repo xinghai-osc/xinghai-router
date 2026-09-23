@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-func TestStreamClientHeaderTimeoutDoesNotLimitResponseBody(t *testing.T) {
+func TestStreamClientDoesNotLimitResponseBody(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		flusher, ok := w.(http.Flusher)
@@ -29,7 +29,7 @@ func TestStreamClientHeaderTimeoutDoesNotLimitResponseBody(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	response, err := newStreamClient(10 * time.Millisecond).Do(request)
+	response, err := newStreamClient().Do(request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,23 +40,6 @@ func TestStreamClientHeaderTimeoutDoesNotLimitResponseBody(t *testing.T) {
 	}
 	if got := string(body); got != "data: first\n\ndata: second\n\n" {
 		t.Fatalf("body = %q", got)
-	}
-}
-
-func TestStreamClientHeaderTimeoutCancelsBeforeResponseHeaders(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(50 * time.Millisecond)
-		_, _ = io.WriteString(w, "late")
-	}))
-	defer server.Close()
-
-	request, err := http.NewRequestWithContext(context.Background(), http.MethodGet, server.URL, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = newStreamClient(10 * time.Millisecond).Do(request)
-	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("error = %v, want deadline exceeded", err)
 	}
 }
 

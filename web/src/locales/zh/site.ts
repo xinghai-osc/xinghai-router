@@ -64,7 +64,17 @@ export default {
   ctaPrimary: '创建账号',
   ctaSecondary: '查看定价',
 
+  heroIntegration: '几行代码，连接更多可能',
+  heroExample: '快速接入',
+  heroIntegrationHint: '沿用你的 SDK，一个密钥切换模型。',
+  heroExplore: '探索网关能力',
   codeCopy: '复制代码',
+  codeTerminal: 'API 请求示例',
+  codeLanguage: '代码示例语言',
+  codeCurl: 'cURL',
+  codePython: 'Python',
+  codeAnthropic: 'Anthropic',
+  codeGreeting: '你好',
 
   // 模型广场
   sqMetaTitle: '模型广场',

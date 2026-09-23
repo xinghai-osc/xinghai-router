@@ -194,17 +194,12 @@ func (s *Service) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	if err := s.db.QueryRow(r.Context(), `select email from users where id=$1`, userID).Scan(&email); err == nil {
 		s.notifyLogin(r.Context(), email, requestMetadata(r))
 	}
-	// The OAuth callback is a top-level browser navigation, so the console's
-	// bearer token must be delivered as a cookie and the browser sent to the
-	// console — returning JSON here would strand the user on a raw response.
-	token, _, err := s.createSessionToken(r.Context(), userID)
+	token, expiresAt, err := s.createSessionToken(r.Context(), userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not create session")
 		return
 	}
-	// Mirrors the console's JS cookie (web/src/api.ts TOKEN_COOKIE), so the SSR
-	// console-auth middleware and the client both pick the token up on redirect.
-	http.SetCookie(w, &http.Cookie{Name: "xinghai.admin-token", Value: token, Path: "/", MaxAge: 60 * 60 * 24 * 7, SameSite: http.SameSiteStrictMode, Secure: oauthCookieSecure(r)})
+	s.setSessionCookie(w, token, expiresAt)
 	http.Redirect(w, r, "/console", http.StatusFound)
 }
 

@@ -246,6 +246,7 @@ async function deleteTier(tier: PricingTier) {
 
 const timePanelOpen = ref(false)
 const timeModel = ref('')
+const timeModelCurrency = ref('CNY')
 const timeRules = ref<PricingTimeRule[]>([])
 const timeError = ref('')
 const timeForm = reactive({
@@ -300,6 +301,7 @@ function formatWeekdays(wd: string): string {
 
 async function openTimeRules(rule: Pricing) {
   timeModel.value = rule.model
+  timeModelCurrency.value = rule.currency || 'CNY'
   timeError.value = ''
   resetTimeForm()
   const ok = await run(async () => {
@@ -608,8 +610,8 @@ async function deleteTimeRule(rule: PricingTimeRule) {
               <td class="font-medium text-ink">{{ rule.name || '—' }}</td>
               <td class="whitespace-nowrap">{{ formatMinute(rule.start_minute) }}–{{ formatMinute(rule.end_minute) }}</td>
               <td class="text-muted text-sm">{{ formatWeekdays(rule.weekdays) }}</td>
-              <td class="num">{{ formatPricingRate(rule.input_per_million, pricing.data.value.data.find(item => item.model === timeModel)?.currency || 'CNY') }}</td>
-              <td class="num">{{ formatPricingRate(rule.output_per_million, pricing.data.value.data.find(item => item.model === timeModel)?.currency || 'CNY') }}</td>
+              <td class="num">{{ formatPricingRate(rule.input_per_million, timeModelCurrency) }}</td>
+              <td class="num">{{ formatPricingRate(rule.output_per_million, timeModelCurrency) }}</td>
               <td>
                 <UiBadge :tone="rule.enabled ? 'success' : 'neutral'" dot>
                   {{ rule.enabled ? t('common.enabled') : t('common.disabled') }}

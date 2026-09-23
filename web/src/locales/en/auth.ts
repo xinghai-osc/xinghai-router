@@ -52,6 +52,12 @@ export default {
   resetInvalidToken: 'This link is invalid or has expired. Request a new one.',
   resetSuccess: 'Password reset. Sign in with your new password.',
 
+  reauthenticationTitle: 'Confirm your identity',
+  reauthenticationDescription: 'Enter your password to continue this sensitive action. Verification is valid for 5 minutes.',
+  reauthenticationConfirm: 'Verify and continue',
+  reauthenticationPasswordRequired: 'Enter your current password.',
+  reauthenticationInvalidPassword: 'The password could not be verified. Try again, or cancel and sign in again if your session has expired.',
+
   accountMenu: 'Account menu',
   balance: 'Balance',
   accountSettings: 'Account settings',

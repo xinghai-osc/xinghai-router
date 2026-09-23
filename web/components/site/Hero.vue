@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowRight, Check } from 'lucide-vue-next'
+import { ArrowDown, ArrowRight, Check, Code2, KeyRound, Layers, Route } from 'lucide-vue-next'
 
 const props = defineProps<{ modelCount?: number }>()
 const { t } = useI18n()
@@ -8,59 +8,101 @@ const countCopy = computed(() =>
   props.modelCount
     ? t('site.heroBodyCount', { count: props.modelCount })
     : t('site.heroBodyNoCount'))
+
+const capabilities = [
+  { icon: KeyRound, key: 'featureMultiTitle' },
+  { icon: Code2, key: 'featureProtocolTitle' },
+  { icon: Route, key: 'featureFailoverTitle' },
+]
 </script>
 
 <template>
-  <section class="relative isolate overflow-hidden border-b border-line">
-    <div class="pointer-events-none absolute inset-0 bg-sunken/25" aria-hidden="true" />
-    <div
-      class="pointer-events-none absolute inset-0 opacity-[0.06]"
-      style="background-image: linear-gradient(var(--ink) 1px, transparent 1px), linear-gradient(90deg, var(--ink) 1px, transparent 1px); background-size: 90px 90px; mask-image: radial-gradient(ellipse at center, black 20%, transparent 78%); -webkit-mask-image: radial-gradient(ellipse at center, black 20%, transparent 78%)"
-      aria-hidden="true"
-    />
+  <section class="hero-surface relative isolate overflow-hidden border-b border-line">
+    <div class="hero-grid pointer-events-none absolute inset-0" aria-hidden="true" />
 
-    <div class="shell relative grid min-h-[calc(100svh-4rem)] items-center gap-16 py-20 md:py-24 lg:grid-cols-[minmax(0,0.94fr)_minmax(30rem,1.06fr)] lg:gap-20">
-      <div class="flex flex-col items-start">
-        <p class="animate-hero-enter inline-flex items-center gap-2 rounded-full border border-line-strong bg-surface/60 px-3 py-1.5 text-[13px] font-medium tracking-wide text-muted backdrop-blur-md">
-          <span class="size-1.5 rounded-full bg-clay" aria-hidden="true" />
-          {{ t('site.heroBadge') }}
-        </p>
+    <div class="shell relative">
+      <div class="grid items-center gap-12 py-20 md:py-24 lg:min-h-[42rem] lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:gap-14">
+        <div class="flex min-w-0 flex-col items-start">
+          <p class="animate-hero-enter inline-flex items-center gap-2.5 rounded-full border border-clay/20 bg-clay-soft px-3.5 py-1.5 text-xs font-medium text-clay">
+            <span class="size-1.5 shrink-0 rounded-full bg-clay" aria-hidden="true" />
+            {{ t('site.heroBadge') }}
+          </p>
 
-        <h1 class="display animate-hero-enter mt-5 max-w-2xl text-[2.75rem] leading-[1.08] text-ink sm:text-6xl lg:text-[4rem]" style="animation-delay: 60ms">
-          {{ t('site.heroTitleLine1') }}<br>{{ t('site.heroTitleLine2') }}
-        </h1>
+          <h1 class="display animate-hero-enter mt-7 text-[clamp(2.75rem,5.5vw,4.75rem)] leading-[1.08] tracking-[-0.045em] text-ink" style="animation-delay: 60ms">
+            {{ t('site.heroTitleLine1') }}<br>
+            <span class="text-clay">{{ t('site.heroTitleLine2') }}</span><span class="text-clay" aria-hidden="true">.</span>
+          </h1>
 
-        <p class="animate-hero-enter mt-8 max-w-xl text-base leading-7 text-muted md:text-lg" style="animation-delay: 120ms">
-          {{ t('site.heroBodyLead') }}{{ countCopy }}{{ t('site.heroBodyTail') }}
-        </p>
+          <p class="animate-hero-enter mt-7 max-w-lg text-base leading-8 text-muted" style="animation-delay: 120ms">
+            {{ t('site.heroBodyLead') }}{{ countCopy }}{{ t('site.heroBodyTail') }}
+          </p>
 
-        <div class="animate-hero-enter mt-9 flex flex-wrap items-center gap-3" style="animation-delay: 180ms">
-          <UiButton to="/auth?mode=register" size="lg" class="group">
-            {{ t('site.heroPrimary') }}
-            <ArrowRight class="size-4 transition-transform duration-150 group-hover:translate-x-0.5" />
-          </UiButton>
-          <UiButton to="/models" variant="secondary" size="lg">{{ t('site.heroSecondary') }}</UiButton>
+          <div class="animate-hero-enter mt-8 flex w-full flex-col gap-3 min-[400px]:w-auto min-[400px]:flex-row" style="animation-delay: 180ms">
+            <UiButton to="/auth?mode=register" size="lg" class="group justify-center">
+              {{ t('site.heroPrimary') }}
+              <ArrowRight class="size-4 transition-transform duration-150 ease-out group-hover:translate-x-0.5" aria-hidden="true" />
+            </UiButton>
+            <UiButton to="/models" variant="secondary" size="lg" class="justify-center">{{ t('site.heroSecondary') }}</UiButton>
+          </div>
+
+          <div class="animate-hero-enter mt-6 flex flex-wrap gap-x-5 gap-y-2 text-xs text-muted" style="animation-delay: 220ms">
+            <span class="inline-flex items-center gap-1.5"><Check class="size-3.5 text-clay" aria-hidden="true" />{{ t('site.featureProtocolTitle') }}</span>
+            <span class="inline-flex items-center gap-1.5"><Check class="size-3.5 text-clay" aria-hidden="true" />{{ t('site.featureFailoverTitle') }}</span>
+          </div>
         </div>
 
-        <div class="animate-hero-enter mt-7 flex flex-wrap gap-x-5 gap-y-2 text-[13px] text-muted" style="animation-delay: 220ms">
-          <span class="inline-flex items-center gap-1.5"><Check class="size-3.5 text-success" />{{ t('site.featureProtocolTitle') }}</span>
-          <span class="inline-flex items-center gap-1.5"><Check class="size-3.5 text-success" />{{ t('site.featureFailoverTitle') }}</span>
+        <div class="animate-hero-enter relative min-w-0" style="animation-delay: 240ms">
+          <div class="rounded-[1.5rem] border border-line-strong bg-sunken/70 p-2 sm:p-3">
+            <div class="flex items-center justify-between gap-3 px-2 pt-1 pb-4 sm:px-3">
+              <div class="flex min-w-0 items-center gap-2.5">
+                <span class="flex size-8 shrink-0 items-center justify-center rounded-control border border-clay/20 bg-clay-soft text-clay">
+                  <Code2 class="size-4" aria-hidden="true" />
+                </span>
+                <span class="text-sm font-medium text-ink">{{ t('site.heroIntegration') }}</span>
+              </div>
+              <span class="rounded-full border border-line bg-surface px-2.5 py-1 text-2xs text-muted">{{ t('site.heroExample') }}</span>
+            </div>
+            <SiteCodeSample />
+            <div class="flex items-center gap-2 px-3 pt-3 pb-1 text-2xs text-muted">
+              <KeyRound class="size-3.5 shrink-0 text-clay" aria-hidden="true" />
+              {{ t('site.heroIntegrationHint') }}
+            </div>
+          </div>
+          <NuxtLink to="/models" class="group mt-3 flex items-center justify-between gap-3 rounded-card border border-line bg-surface/80 px-5 py-4 transition-colors duration-150 ease-out hover:border-clay/40 hover:bg-surface">
+            <span class="flex items-center gap-3 text-sm text-muted">
+              <Layers class="size-4 shrink-0 text-clay" aria-hidden="true" />
+              {{ t('site.featureMultiTitle') }}
+            </span>
+            <ArrowRight class="size-4 shrink-0 text-faint transition-transform duration-150 ease-out group-hover:translate-x-0.5" aria-hidden="true" />
+          </NuxtLink>
         </div>
       </div>
 
-      <div class="animate-hero-enter relative mx-auto w-full max-w-2xl lg:mx-0 lg:translate-y-8" style="animation-delay: 240ms">
-        <div class="relative rounded-[1.5rem] border border-line-strong bg-surface/60 p-2 shadow-pop backdrop-blur-xl">
-          <div class="flex items-center gap-1 px-3 pt-1 pb-3 text-2xs text-muted">
-            <span class="rounded-full bg-surface px-3 py-1.5 font-medium text-ink shadow-sm">{{ t('site.featureMultiTitle') }}</span>
-            <span class="px-3 py-1.5">{{ t('site.featureProtocolTitle') }}</span>
-          </div>
-          <SiteCodeSample />
+      <div class="flex flex-col gap-6 border-t border-line py-6 sm:flex-row sm:items-center sm:justify-between">
+        <div class="flex flex-wrap gap-x-7 gap-y-3">
+          <span v-for="capability in capabilities" :key="capability.key" class="inline-flex items-center gap-2 text-xs text-muted">
+            <component :is="capability.icon" class="size-4 text-faint" aria-hidden="true" />
+            {{ t(`site.${capability.key}`) }}
+          </span>
         </div>
-        <div class="relative mt-4 flex items-center justify-end gap-2 pr-2 text-2xs text-muted">
-          <span class="size-2 rounded-full bg-success" />
-          {{ t('site.featureFailoverTitle') }}
-        </div>
+        <a href="#features" class="inline-flex shrink-0 items-center gap-2 text-xs text-muted transition-colors duration-150 ease-out hover:text-clay">
+          {{ t('site.heroExplore') }}
+          <ArrowDown class="size-3.5" aria-hidden="true" />
+        </a>
       </div>
     </div>
   </section>
 </template>
+
+<style scoped>
+.hero-surface {
+  background: radial-gradient(ellipse at 85% 25%, var(--clay-soft), transparent 55%);
+}
+
+.hero-grid {
+  background-image: linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px);
+  background-size: 64px 64px;
+  mask-image: linear-gradient(90deg, transparent 30%, var(--ink));
+  opacity: 0.35;
+}
+</style>

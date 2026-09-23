@@ -6,6 +6,7 @@ const { t } = useI18n()
 const { settings } = useSiteSettings()
 const { plans, loading: plansLoading, error: plansError, loadPlans } = usePlans()
 const { models, groups, loading: catalogLoading, loaded: catalogLoaded, error: catalogError, loadCatalog } = useCatalog()
+const { target: catalogTarget, started: catalogStarted } = useDeferredLoad(() => { void loadCatalog() })
 
 usePageSeo({
   title: () => `${t('site.pgMetaTitle')} · ${settings.value.name}`,
@@ -54,7 +55,6 @@ function openDetail(model: SquareModel) {
 
 onMounted(() => {
   loadPlans()
-  loadCatalog()
 })
 </script>
 
@@ -138,7 +138,7 @@ onMounted(() => {
         </div>
       </div>
 
-      <div class="mt-4 flex flex-wrap items-center justify-between gap-3">
+      <div ref="catalogTarget" class="mt-4 flex flex-wrap items-center justify-between gap-3">
         <p class="numeric text-2xs text-faint">{{ t('site.sqResultCount', { count: filtered.length }) }}</p>
         <p class="text-2xs text-faint">{{ unitHint }}</p>
       </div>
@@ -150,7 +150,7 @@ onMounted(() => {
         </UiButton>
       </UiAlert>
 
-      <div v-else-if="catalogLoading && !catalogLoaded" class="mt-6 rounded-card border border-line bg-surface p-5">
+      <div v-else-if="(!catalogStarted || catalogLoading) && !catalogLoaded" class="mt-6 rounded-card border border-line bg-surface p-5">
         <UiSkeleton :rows="10" />
       </div>
 
@@ -179,7 +179,7 @@ onMounted(() => {
       </template>
     </section>
 
-    <MarketplaceModelDialog v-model:open="detailOpen" :model="selected" :unit="unit" />
+    <LazyMarketplaceModelDialog v-if="detailOpen" v-model:open="detailOpen" :model="selected" :unit="unit" />
 
     <SiteCtaBand />
   </div>

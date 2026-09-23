@@ -17,6 +17,8 @@ function mergeFeaturedCopy(value: Partial<FeaturedCopy> | null | undefined): Fea
   return merged
 }
 
+let siteSettingsRequest: Promise<void> | null = null
+
 const FALLBACK: Omit<SiteSettings, 'name'> = {
   icon_url: '',
   announcement: '',
@@ -35,21 +37,28 @@ export function useSiteSettings() {
 
   async function loadSiteSettings() {
     if (loaded.value || !import.meta.client) return
-    loaded.value = true
-    try {
-      const remote = await endpoints.getSiteSettings()
-      const defaults = fallback()
-      settings.value = {
-        ...defaults,
-        ...remote,
-        name: remote.name || defaults.name,
-        featured_enabled: remote.featured_enabled ?? defaults.featured_enabled,
-        featured_model: remote.featured_model ?? defaults.featured_model,
-        featured_copy: mergeFeaturedCopy(remote.featured_copy),
+    if (siteSettingsRequest) return siteSettingsRequest
+
+    siteSettingsRequest = (async () => {
+      try {
+        const remote = await endpoints.getSiteSettings()
+        const defaults = fallback()
+        settings.value = {
+          ...defaults,
+          ...remote,
+          name: remote.name || defaults.name,
+          featured_enabled: remote.featured_enabled ?? defaults.featured_enabled,
+          featured_model: remote.featured_model ?? defaults.featured_model,
+          featured_copy: mergeFeaturedCopy(remote.featured_copy),
+        }
+        loaded.value = true
+      } catch {
+        loaded.value = false
+      } finally {
+        siteSettingsRequest = null
       }
-    } catch {
-      loaded.value = false
-    }
+    })()
+    return siteSettingsRequest
   }
 
   return { settings, loadSiteSettings }

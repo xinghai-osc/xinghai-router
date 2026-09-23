@@ -14,7 +14,7 @@ const { busy, run } = useAction()
 const allowed = computed(() => can('channels.read'))
 const canManage = computed(() => can('channels.manage'))
 
-const PROVIDERS = ['openai', 'openai_chat', 'ollama', 'kimi', 'opencode_go', 'anthropic', 'deepseek', 'commandcode', 'custom']
+const PROVIDERS = ['openai', 'openai_chat', 'ollama', 'kimi', 'opencode_go', 'anthropic', 'deepseek', 'commandcode', 'jev', 'custom']
 const KEY_TYPES = [
   { value: 'single', label: t('admin.singleKey') },
   { value: 'multi', label: t('admin.multiKey') },
@@ -22,12 +22,14 @@ const KEY_TYPES = [
 
 const PROVIDER_ICONS: Record<string, Component> = {
   openai: Sparkles,
+  openai_chat: Sparkles,
   ollama: Cpu,
   kimi: Moon,
   opencode_go: SquareTerminal,
   anthropic: Hexagon,
   deepseek: Brain,
   commandcode: Command,
+  jev: ListChecks,
   custom: Plug,
 }
 
@@ -74,6 +76,13 @@ const typeOptions = computed(() => [
   ...PROVIDERS.map(value => ({ value, label: t(`admin.provider_${value}`) })),
 ])
 const providerOptions = computed(() => PROVIDERS.map(value => ({ value, label: t(`admin.provider_${value}`) })))
+const formatOptions = computed(() => [
+  { value: '', label: t('admin.formatAuto') },
+  { value: 'openai', label: t('admin.formatOpenAI') },
+  { value: 'openai_chat', label: t('admin.formatOpenAIChat') },
+  { value: 'anthropic', label: t('admin.formatAnthropic') },
+  { value: 'jev', label: t('admin.formatJEV') },
+])
 function formatRelativeTime(value: string | null): string {
   if (!value) return t('admin.neverTested')
   const time = new Date(value).getTime()
@@ -384,6 +393,11 @@ const routeForm = reactive({
   hidden: false,
 })
 
+function updateProvider(provider: string) {
+  form.provider = provider
+  if (provider === 'jev' && !form.base_url.trim()) form.base_url = 'https://api.typesafe.ai'
+}
+
 function openCreate() {
   editingId.value = ''
   formError.value = ''
@@ -483,7 +497,15 @@ function parseOverrideSet(value: string): Record<string, unknown> | null {
   return parsed as Record<string, unknown>
 }
 
-/** Mirrors the server rule: HTTP or HTTPS to any host, never a trailing /v1. */
+function validateUpstreamPath(value: string): string {
+  if (!value) return ''
+  if (new TextEncoder().encode(value).length > 2048 || !value.startsWith('/') || value.startsWith('//') || value.includes('?') || value.includes('#') || value.includes('\\') || [...value].some(char => {
+    const code = char.charCodeAt(0)
+    return code < 0x20 || code === 0x7f
+  })) return t('admin.upstreamPathInvalid')
+  return ''
+}
+
 function validateBaseUrl(value: string): string {
   if (!value) return t('admin.baseUrlRequired')
   let parsed: URL
@@ -511,7 +533,7 @@ async function fetchModels() {
 
   fetching.value = true
   try {
-    const result = await endpoints.fetchChannelModels(baseUrl, apiKey)
+    const result = await endpoints.fetchChannelModels(baseUrl, apiKey, form.upstream_format, form.provider)
     form.models = result.models.join('\n')
     toast.success(t('admin.fetchModelsDone', { count: result.models.length }))
   } catch (cause) {
@@ -534,6 +556,10 @@ async function save() {
 
   const models = parseModels(form.models)
   if (!models.length) { formError.value = t('admin.modelsRequired'); return }
+
+  const upstreamPath = form.upstream_path.trim()
+  const upstreamPathError = validateUpstreamPath(upstreamPath)
+  if (upstreamPathError) { formError.value = upstreamPathError; return }
 
   const testModel = form.test_model.trim()
   if (testModel && testModel.length > 200) { formError.value = t('admin.testModelInvalid'); return }
@@ -582,6 +608,8 @@ async function save() {
     priority,
     groups: [...form.groups],
     auto_disable: form.auto_disable,
+    upstream_path: upstreamPath,
+    upstream_format: form.upstream_format,
     request_overrides: { delete: overrideFields, set: overrideSet },
     ua_pool: uaPool,
   }
@@ -1027,7 +1055,7 @@ function quotaUsageForWindow(window: string) {
               </td>
               <td>
                 <span class="inline-flex items-center gap-1.5">
-                  <component :is="PROVIDER_ICONS[channel.provider]" class="size-4 text-muted" />
+                  <component :is="PROVIDER_ICONS[channel.provider] ?? Plug" class="size-4 text-muted" />
                   <UiBadge tone="outline">{{ t(`admin.provider_${channel.provider}`) }}</UiBadge>
                 </span>
               </td>
@@ -1127,8 +1155,8 @@ function quotaUsageForWindow(window: string) {
           <UiField :label="t('admin.channelName')" required>
             <UiInput v-model="form.name" />
           </UiField>
-          <UiField :label="t('admin.provider')" required>
-            <UiSelect v-model="form.provider" :options="providerOptions" :placeholder="t('common.selectPlaceholder')" />
+          <UiField :label="t('admin.provider')" :hint="t('admin.providerHint')" required>
+            <UiSelect :model-value="form.provider" :options="providerOptions" :placeholder="t('common.selectPlaceholder')" @update:model-value="updateProvider" />
           </UiField>
         </div>
 
@@ -1137,7 +1165,16 @@ function quotaUsageForWindow(window: string) {
         </UiField>
 
         <div class="grid gap-4 sm:grid-cols-2">
-          <UiField :label="t('admin.keyType')" required>
+          <UiField :label="t('admin.upstreamFormat')" :hint="t('admin.upstreamFormatHint')">
+            <UiSelect v-model="form.upstream_format" :options="formatOptions" />
+          </UiField>
+          <UiField :label="t('admin.upstreamPath')" :hint="t('admin.upstreamPathHint')">
+            <UiInput v-model="form.upstream_path" mono :placeholder="t('admin.upstreamPathPlaceholder')" />
+          </UiField>
+        </div>
+
+        <div class="grid gap-4 sm:grid-cols-2">
+          <UiField :label="t('admin.keyType')" :hint="editingId ? t('admin.keyTypeEditHint') : undefined" required>
             <UiSelect v-model="form.key_type" :options="keyTypeOptions" />
           </UiField>
           <UiField :label="t('admin.priority')">

@@ -12,15 +12,9 @@ import (
 	"time"
 )
 
-const (
-	defaultRequestTimeoutSeconds = 90
-	minRequestTimeoutSeconds     = 1
-	maxRequestTimeoutSeconds     = 3600
-	healthCheckProbeTimeout      = 30 * time.Second
-)
+const healthCheckProbeTimeout = 30 * time.Second
 
 type reliabilitySettings struct {
-	RequestTimeoutSeconds      int    `json:"request_timeout_seconds"`
 	RetryCount                 int    `json:"retry_count"`
 	RetryStatusCodes           string `json:"retry_status_codes"`
 	HealthCheckMode            string `json:"health_check_mode"`
@@ -37,16 +31,8 @@ type reliabilitySettings struct {
 	parsedChannelIDs           map[string]bool
 }
 
-func requestTimeoutDuration(seconds int) time.Duration {
-	if seconds < minRequestTimeoutSeconds || seconds > maxRequestTimeoutSeconds {
-		seconds = defaultRequestTimeoutSeconds
-	}
-	return time.Duration(seconds) * time.Second
-}
-
 func defaultReliabilitySettings() reliabilitySettings {
 	s := reliabilitySettings{
-		RequestTimeoutSeconds:      defaultRequestTimeoutSeconds,
 		RetryCount:                 3,
 		RetryStatusCodes:           "100-199,300-407,409-503,505-523,525-599",
 		HealthCheckMode:            "off",
@@ -225,15 +211,12 @@ func (s *Service) loadReliabilitySettings(ctx context.Context) (reliabilitySetti
 	if s.db == nil {
 		return settings, errors.New("database is unavailable")
 	}
-	var requestTimeoutSeconds, retryCount, interval, slowSeconds int
+	var retryCount, interval, slowSeconds int
 	var retryCodes, mode, channelIDs, disableCodes, keywords string
 	var autoRecover, autoDisableOnFailure bool
-	err := s.db.QueryRow(ctx, `select request_timeout_seconds,retry_count,retry_status_codes,health_check_mode,health_check_interval_minutes,health_check_auto_recover,health_check_channel_ids,auto_disable_on_test_failure,auto_disable_slow_seconds,auto_disable_status_codes,auto_disable_keywords from site_settings where id=true`).Scan(&requestTimeoutSeconds, &retryCount, &retryCodes, &mode, &interval, &autoRecover, &channelIDs, &autoDisableOnFailure, &slowSeconds, &disableCodes, &keywords)
+	err := s.db.QueryRow(ctx, `select retry_count,retry_status_codes,health_check_mode,health_check_interval_minutes,health_check_auto_recover,health_check_channel_ids,auto_disable_on_test_failure,auto_disable_slow_seconds,auto_disable_status_codes,auto_disable_keywords from site_settings where id=true`).Scan(&retryCount, &retryCodes, &mode, &interval, &autoRecover, &channelIDs, &autoDisableOnFailure, &slowSeconds, &disableCodes, &keywords)
 	if err != nil {
 		return settings, err
-	}
-	if requestTimeoutSeconds >= minRequestTimeoutSeconds && requestTimeoutSeconds <= maxRequestTimeoutSeconds {
-		settings.RequestTimeoutSeconds = requestTimeoutSeconds
 	}
 	settings.RetryCount = retryCount
 	settings.RetryStatusCodes = retryCodes
@@ -261,7 +244,6 @@ func (s *Service) getReliabilitySettings(w http.ResponseWriter, r *http.Request)
 
 func (s *Service) updateReliabilitySettings(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		RequestTimeoutSeconds      *int    `json:"request_timeout_seconds"`
 		RetryCount                 *int    `json:"retry_count"`
 		RetryStatusCodes           *string `json:"retry_status_codes"`
 		HealthCheckMode            *string `json:"health_check_mode"`
@@ -275,10 +257,6 @@ func (s *Service) updateReliabilitySettings(w http.ResponseWriter, r *http.Reque
 	}
 	if decode(r, &in) != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", "invalid reliability settings")
-		return
-	}
-	if in.RequestTimeoutSeconds != nil && (*in.RequestTimeoutSeconds < 1 || *in.RequestTimeoutSeconds > 3600) {
-		writeError(w, http.StatusBadRequest, "invalid_request", "request_timeout_seconds must be between 1 and 3600")
 		return
 	}
 	if in.RetryCount != nil && (*in.RetryCount < 0 || *in.RetryCount > 10) {
@@ -310,9 +288,6 @@ func (s *Service) updateReliabilitySettings(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not load reliability settings")
 		return
 	}
-	if in.RequestTimeoutSeconds != nil {
-		current.RequestTimeoutSeconds = *in.RequestTimeoutSeconds
-	}
 	if in.RetryCount != nil {
 		current.RetryCount = *in.RetryCount
 	}
@@ -343,13 +318,13 @@ func (s *Service) updateReliabilitySettings(w http.ResponseWriter, r *http.Reque
 	if in.AutoDisableKeywords != nil {
 		current.AutoDisableKeywords = strings.TrimRight(*in.AutoDisableKeywords, "\n")
 	}
-	_, err = s.db.Exec(r.Context(), `update site_settings set request_timeout_seconds=$1,retry_count=$2,retry_status_codes=$3,health_check_mode=$4,health_check_interval_minutes=$5,health_check_auto_recover=$6,health_check_channel_ids=$7,auto_disable_on_test_failure=$8,auto_disable_slow_seconds=$9,auto_disable_status_codes=$10,auto_disable_keywords=$11,updated_at=now() where id=true`, current.RequestTimeoutSeconds, current.RetryCount, current.RetryStatusCodes, current.HealthCheckMode, current.HealthCheckIntervalMinutes, current.HealthCheckAutoRecover, current.HealthCheckChannelIDs, current.AutoDisableOnTestFailure, current.AutoDisableSlowSeconds, current.AutoDisableStatusCodes, current.AutoDisableKeywords)
+	_, err = s.db.Exec(r.Context(), `update site_settings set retry_count=$1,retry_status_codes=$2,health_check_mode=$3,health_check_interval_minutes=$4,health_check_auto_recover=$5,health_check_channel_ids=$6,auto_disable_on_test_failure=$7,auto_disable_slow_seconds=$8,auto_disable_status_codes=$9,auto_disable_keywords=$10,updated_at=now() where id=true`, current.RetryCount, current.RetryStatusCodes, current.HealthCheckMode, current.HealthCheckIntervalMinutes, current.HealthCheckAutoRecover, current.HealthCheckChannelIDs, current.AutoDisableOnTestFailure, current.AutoDisableSlowSeconds, current.AutoDisableStatusCodes, current.AutoDisableKeywords)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not save reliability settings")
 		return
 	}
 	s.reliabilityData.clear()
-	s.audit(r, "reliability.updated", "site_settings", "reliability", map[string]any{"request_timeout_seconds": current.RequestTimeoutSeconds, "retry_count": current.RetryCount, "health_check_mode": current.HealthCheckMode})
+	s.audit(r, "reliability.updated", "site_settings", "reliability", map[string]any{"retry_count": current.RetryCount, "health_check_mode": current.HealthCheckMode})
 	writeJSON(w, http.StatusOK, s.reliabilitySettings(r.Context()))
 }
 
@@ -398,46 +373,66 @@ func (s *Service) disableChannelIfKeyless(ctx context.Context, channelID int64, 
 }
 
 // testChannel probes a channel and returns the status code and latency. When
-// testModel is set it issues a real chat completion with that model; otherwise
-// it falls back to GET /v1/models.
+// testModel is set it issues a real completion with that model; otherwise it
+// falls back to GET /v1/models.
 func (s *Service) testChannel(ctx context.Context, baseURL, apiKey, provider, testModel string, uaPool []string, timeout time.Duration) (int, []byte, time.Duration, error) {
+	return s.testChannelWithConfig(ctx, baseURL, apiKey, provider, testModel, "", "", uaPool, timeout)
+}
+
+func (s *Service) testChannelWithConfig(ctx context.Context, baseURL, apiKey, provider, testModel, upstreamPath, upstreamFormat string, uaPool []string, timeout time.Duration) (int, []byte, time.Duration, error) {
 	if timeout <= 0 {
 		timeout = healthCheckProbeTimeout
 	}
+	format := resolveUpstreamFormat(provider, upstreamFormat)
 	path, method := "/v1/models", http.MethodGet
-	if provider == "commandcode" {
+	if format == "commandcode" {
 		path = commandCodeModelsPath
 	}
 	var requestBody []byte
 	if testModel != "" {
-		payload := map[string]any{
-			"model":      testModel,
-			"max_tokens": 16,
-			"messages":   []map[string]any{{"role": "user", "content": "ping"}},
-		}
-		requestBody, _ = json.Marshal(payload)
-		switch provider {
-		case "anthropic":
-			path, method = "/v1/messages", http.MethodPost
-		case "commandcode":
-			path, method = commandCodeGeneratePath, http.MethodPost
-			if ccBody, ccErr := commandCodeBodyFromOpenAI(requestBody, commandCodeWorkingDir); ccErr == nil {
-				requestBody = ccBody
-			}
+		method = http.MethodPost
+		switch format {
 		case "openai":
-			path, method = "/v1/responses", http.MethodPost
+			requestBody, _ = json.Marshal(map[string]any{"model": testModel, "input": "ping", "max_output_tokens": 16})
+		case "jev":
+			requestBody, _ = json.Marshal(map[string]any{"model": testModel, "state": "ping", "questions": map[string]any{"ping": map[string]any{"type": "noul", "instructions": "Is this a health check?"}}})
+		case "anthropic":
+			requestBody, _ = json.Marshal(map[string]any{"model": testModel, "max_tokens": 16, "messages": []map[string]any{{"role": "user", "content": "ping"}}})
+		case "commandcode":
+			chatBody, _ := json.Marshal(map[string]any{"model": testModel, "max_tokens": 16, "messages": []map[string]any{{"role": "user", "content": "ping"}}})
+			path = commandCodeGeneratePath
+			if ccBody, ccErr := commandCodeBodyFromOpenAI(chatBody, commandCodeWorkingDir); ccErr == nil {
+				requestBody = ccBody
+			} else {
+				requestBody = chatBody
+			}
 		default:
-			path, method = "/v1/chat/completions", http.MethodPost
+			requestBody, _ = json.Marshal(map[string]any{"model": testModel, "max_tokens": 16, "messages": []map[string]any{{"role": "user", "content": "ping"}}})
+		}
+		switch format {
+		case "openai":
+			path = "/v1/responses"
+		case "jev":
+			path = "/v1/systemone"
+		case "anthropic":
+			path = "/v1/messages"
+		case "commandcode":
+			path = commandCodeGeneratePath
+		default:
+			path = "/v1/chat/completions"
 		}
 	}
-	request, err := http.NewRequestWithContext(ctx, method, baseURL+path, bytes.NewReader(requestBody))
+	if upstreamPath != "" && testModel != "" {
+		path = upstreamPath
+	}
+	request, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(baseURL, "/")+path, bytes.NewReader(requestBody))
 	if err != nil {
 		return 0, nil, 0, err
 	}
 	if testModel != "" {
 		request.Header.Set("Content-Type", "application/json")
 	}
-	if provider == "anthropic" {
+	if format == "anthropic" {
 		request.Header.Set("X-API-Key", apiKey)
 		request.Header.Set("Anthropic-Version", "2023-06-01")
 	} else {
@@ -484,25 +479,25 @@ func (s *Service) runHealthChecks(ctx context.Context) {
 	if settings.HealthCheckMode == "scheduled_all" {
 		// Scheduled full tests only probe channels not manually disabled and
 		// only their enabled keys.
-		query = `select c.id,c.base_url,c.provider,c.test_model,c.ua_pool,k.id,k.key_encrypted from channels c left join channel_api_keys k on k.channel_id=c.id and k.enabled where c.enabled and not c.auto_disabled order by c.id,k.priority,k.created_at`
+		query = `select c.id,c.base_url,c.provider,c.test_model,c.upstream_path,c.upstream_format,c.ua_pool,k.id,k.key_encrypted from channels c left join channel_api_keys k on k.channel_id=c.id and k.enabled where c.enabled and not c.auto_disabled order by c.id,k.priority,k.created_at`
 		if len(settings.parsedChannelIDs) > 0 {
 			ids := make([]string, 0, len(settings.parsedChannelIDs))
 			for id := range settings.parsedChannelIDs {
 				ids = append(ids, id)
 			}
-			query = `select c.id,c.base_url,c.provider,c.test_model,c.ua_pool,k.id,k.key_encrypted from channels c left join channel_api_keys k on k.channel_id=c.id and k.enabled where c.enabled and not c.auto_disabled and c.id::text = any($1) order by c.id,k.priority,k.created_at`
+			query = `select c.id,c.base_url,c.provider,c.test_model,c.upstream_path,c.upstream_format,c.ua_pool,k.id,k.key_encrypted from channels c left join channel_api_keys k on k.channel_id=c.id and k.enabled where c.enabled and not c.auto_disabled and c.id::text = any($1) order by c.id,k.priority,k.created_at`
 			args = append(args, ids)
 		}
 	} else {
 		// Passive recovery checks channels auto-disabled by failed real requests
 		// and individual keys auto-disabled while their channel stayed enabled.
-		query = `select c.id,c.base_url,c.provider,c.test_model,c.ua_pool,k.id,k.key_encrypted from channels c left join channel_api_keys k on k.channel_id=c.id where (not c.enabled and c.auto_disabled) or (c.enabled and k.enabled=false) order by c.id,k.priority,k.created_at`
+		query = `select c.id,c.base_url,c.provider,c.test_model,c.upstream_path,c.upstream_format,c.ua_pool,k.id,k.key_encrypted from channels c left join channel_api_keys k on k.channel_id=c.id where (not c.enabled and c.auto_disabled) or (c.enabled and k.enabled=false) order by c.id,k.priority,k.created_at`
 		if len(settings.parsedChannelIDs) > 0 {
 			ids := make([]string, 0, len(settings.parsedChannelIDs))
 			for id := range settings.parsedChannelIDs {
 				ids = append(ids, id)
 			}
-			query = `select c.id,c.base_url,c.provider,c.test_model,c.ua_pool,k.id,k.key_encrypted from channels c left join channel_api_keys k on k.channel_id=c.id where ((not c.enabled and c.auto_disabled) or (c.enabled and k.enabled=false)) and c.id::text = any($1) order by c.id,k.priority,k.created_at`
+			query = `select c.id,c.base_url,c.provider,c.test_model,c.upstream_path,c.upstream_format,c.ua_pool,k.id,k.key_encrypted from channels c left join channel_api_keys k on k.channel_id=c.id where ((not c.enabled and c.auto_disabled) or (c.enabled and k.enabled=false)) and c.id::text = any($1) order by c.id,k.priority,k.created_at`
 			args = append(args, ids)
 		}
 	}
@@ -511,18 +506,19 @@ func (s *Service) runHealthChecks(ctx context.Context) {
 		return
 	}
 	type target struct {
-		id                                  int64
-		baseURL, provider, testModel, keyID string
-		uaPool                              []string
-		encrypted                           string
-		hasKey                              bool
+		id                                         int64
+		baseURL, provider, testModel, upstreamPath string
+		upstreamFormat, keyID                      string
+		uaPool                                     []string
+		encrypted                                  string
+		hasKey                                     bool
 	}
 	var targets []target
 	for rows.Next() {
 		var t target
 		var keyID, encrypted *string
 		var uaPool []byte
-		if rows.Scan(&t.id, &t.baseURL, &t.provider, &t.testModel, &uaPool, &keyID, &encrypted) == nil {
+		if rows.Scan(&t.id, &t.baseURL, &t.provider, &t.testModel, &t.upstreamPath, &t.upstreamFormat, &uaPool, &keyID, &encrypted) == nil {
 			t.uaPool = parsedUAPool(uaPool)
 			t.hasKey = keyID != nil
 			if t.hasKey {
@@ -547,8 +543,13 @@ func (s *Service) runHealthChecks(ctx context.Context) {
 		if err != nil {
 			continue
 		}
-		status, _, latency, testErr := s.testChannel(ctx, t.baseURL, apiKey, t.provider, t.testModel, t.uaPool, healthCheckProbeTimeout)
+		status, _, latency, testErr := s.testChannelWithConfig(ctx, t.baseURL, apiKey, t.provider, t.testModel, t.upstreamPath, t.upstreamFormat, t.uaPool, healthCheckProbeTimeout)
 		success := testErr == nil && status >= 200 && status < 300
+		reason := healthFailureReason(status, testErr)
+		if success && settings.AutoDisableSlowSeconds > 0 && latency > time.Duration(settings.AutoDisableSlowSeconds)*time.Second {
+			success = false
+			reason = "health_check_slow_response"
+		}
 		if success {
 			if settings.HealthCheckAutoRecover {
 				if t.hasKey {
@@ -563,16 +564,12 @@ func (s *Service) runHealthChecks(ctx context.Context) {
 			}
 			continue
 		}
-		reason := healthFailureReason(status, testErr)
 		if t.hasKey {
 			_, _ = s.db.Exec(ctx, `update channel_api_keys set last_checked_at=now(),last_error=$2 where id=$1 and channel_id=$3`, t.keyID, reason, t.id)
 		} else {
 			_, _ = s.db.Exec(ctx, `update channels set last_checked_at=now(),last_error=$2 where id=$1`, t.id, reason)
 		}
 		if settings.HealthCheckMode == "scheduled_all" && settings.AutoDisableOnTestFailure {
-			if settings.AutoDisableSlowSeconds > 0 && latency > time.Duration(settings.AutoDisableSlowSeconds)*time.Second {
-				reason = "health_check_slow_response"
-			}
 			s.autoDisableChannel(ctx, t.id, t.keyID, reason)
 		}
 	}

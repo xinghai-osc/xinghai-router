@@ -421,32 +421,15 @@ func commandCodeUsageFromEvent(raw json.RawMessage, st *streamStats) map[string]
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil
 	}
-	var u commandCodeUsage
-	if json.Unmarshal(raw, &u) != nil {
+	data, err := json.Marshal(map[string]any{"type": "finish", "totalUsage": raw})
+	if err != nil {
 		return nil
 	}
-	input := u.InputTokenDetails.NoCacheTokens
-	if input <= 0 {
-		input = u.InputTokens - u.InputTokenDetails.CacheReadTokens - u.InputTokenDetails.CacheWriteTokens
+	parseSSEUsage(data, st)
+	if !st.facts.HasUsage() {
+		return nil
 	}
-	if input < 0 {
-		input = 0
-	}
-	st.prompt = input
-	st.completion = u.OutputTokens
-	st.cached = u.InputTokenDetails.CacheReadTokens
-	st.usageReported = true
-	st.promptReported = true
-	st.completionReported = true
-	st.usageComplete = true
-	return map[string]any{
-		"prompt_tokens":     input,
-		"completion_tokens": u.OutputTokens,
-		"total_tokens":      input + u.OutputTokens,
-		"prompt_tokens_details": map[string]any{
-			"cached_tokens": u.InputTokenDetails.CacheReadTokens,
-		},
-	}
+	return usageFactsOpenAIUsage(st.facts)
 }
 
 // commandCodeOpenAIChunk writes one OpenAI chat-completion SSE chunk.
@@ -568,6 +551,7 @@ func streamCommandCodeToOpenAI(w http.ResponseWriter, resp *http.Response) (stre
 		if json.Unmarshal([]byte(data), &event) != nil {
 			continue
 		}
+		parseSSEUsage([]byte(data), &st)
 		switch event.Type {
 		case "text-delta":
 			if !sawText {
@@ -629,6 +613,7 @@ func commandCodeStreamToOpenAI(body []byte) ([]byte, error) {
 	toolIndexes := map[string]int{}
 	var finishReason string
 	var usageJSON map[string]any
+	var st streamStats
 	scanner := bufio.NewScanner(strings.NewReader(string(body)))
 	scanner.Buffer(make([]byte, 64*1024), 4<<20)
 	for scanner.Scan() {
@@ -644,6 +629,7 @@ func commandCodeStreamToOpenAI(body []byte) ([]byte, error) {
 		if json.Unmarshal([]byte(data), &event) != nil {
 			continue
 		}
+		parseSSEUsage([]byte(data), &st)
 		switch event.Type {
 		case "text-delta":
 			text.WriteString(event.Text)
@@ -663,26 +649,7 @@ func commandCodeStreamToOpenAI(body []byte) ([]byte, error) {
 			}
 		case "finish":
 			finishReason = commandCodeFinishReason(event.FinishReason)
-			if len(event.TotalUsage) > 0 && string(event.TotalUsage) != "null" {
-				var u commandCodeUsage
-				if json.Unmarshal(event.TotalUsage, &u) == nil {
-					input := u.InputTokenDetails.NoCacheTokens
-					if input <= 0 {
-						input = u.InputTokens - u.InputTokenDetails.CacheReadTokens - u.InputTokenDetails.CacheWriteTokens
-					}
-					if input < 0 {
-						input = 0
-					}
-					usageJSON = map[string]any{
-						"prompt_tokens":     input,
-						"completion_tokens": u.OutputTokens,
-						"total_tokens":      input + u.OutputTokens,
-						"prompt_tokens_details": map[string]any{
-							"cached_tokens": u.InputTokenDetails.CacheReadTokens,
-						},
-					}
-				}
-			}
+			usageJSON = usageFactsOpenAIUsage(st.facts)
 		case "error":
 			return nil, fmt.Errorf("Command Code stream error: %s", commandCodeErrorMessage(event))
 		}

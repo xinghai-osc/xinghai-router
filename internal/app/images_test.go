@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"mime"
 	"mime/multipart"
+	"net/http/httptest"
 	"net/textproto"
 	"strings"
 	"testing"
@@ -44,6 +45,18 @@ func TestImageEditFields(t *testing.T) {
 	}
 }
 
+func TestReadImageBodyAcceptsConfiguredLargerLimit(t *testing.T) {
+	body := strings.Repeat("x", 50<<20+1)
+	s := &Service{cfg: Config{ImageMaxBodyBytes: 51 << 20}}
+	got, err := s.readImageBody(httptest.NewRecorder(), httptest.NewRequest("POST", "/v1/images/edits", strings.NewReader(body)))
+	if err != nil {
+		t.Fatalf("readImageBody returned error: %v", err)
+	}
+	if len(got) != len(body) {
+		t.Fatalf("body length = %d, want %d", len(got), len(body))
+	}
+}
+
 func TestRewriteMultipartModel(t *testing.T) {
 	body, contentType := imageMultipartBody(t, "public-model")
 	rewritten, rewrittenType := rewriteMultipartModel(body, contentType, "upstream-model")
@@ -59,11 +72,5 @@ func TestRewriteMultipartModel(t *testing.T) {
 	}
 	if strings.Contains(string(rewritten), "public-model") {
 		t.Fatal("public model leaked into rewritten multipart body")
-	}
-}
-
-func TestImageRequestLimit(t *testing.T) {
-	if maxImageRequestBody != 50<<20 {
-		t.Fatalf("maxImageRequestBody = %d", maxImageRequestBody)
 	}
 }

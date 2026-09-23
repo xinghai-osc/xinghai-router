@@ -32,6 +32,13 @@ export default {
   codeSent: '驗證碼已發送，請查收郵件',
   orContinueWith: '或使用第三方登錄',
   captchaUnavailable: '人机驗證加載失敗，請稍後重試',
+  emailNotAllowed: '該郵箱不在註冊白名單內',
+  invalidCredentials: '郵箱、用戶名或密碼錯誤',
+  rateLimitExceeded: '操作太頻繁，請稍後再試',
+  invalidCode: '驗證碼錯誤或已過期',
+  invalidInvitationCode: '邀請碼無效',
+  emailOrUsernameExists: '該郵箱或用戶名已被註冊',
+  emailSendFailed: '郵件發送失敗，請稍後再試',
 
   forgotPassword: '忘記密碼？',
   resetTitle: '重置密碼',
@@ -44,6 +51,12 @@ export default {
   passwordsMismatch: '兩次輸入的密碼不一致',
   resetInvalidToken: '鏈接無效或已過期，請重新申請',
   resetSuccess: '密碼已重置，請使用新密碼登錄',
+
+  reauthenticationTitle: '確認你的身分',
+  reauthenticationDescription: '請輸入目前密碼以繼續敏感操作。驗證成功後 5 分鐘內有效。',
+  reauthenticationConfirm: '驗證並繼續',
+  reauthenticationPasswordRequired: '請輸入目前密碼。',
+  reauthenticationInvalidPassword: '密碼驗證失敗，請重試；如果工作階段已過期，請取消並重新登入。',
 
   accountMenu: '賬戶菜單',
   balance: '賬戶餘額',

@@ -10,13 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/coder/websocket"
-)
-
-const (
-	responsesWSFirstFrameTimeout = 30 * time.Second
 )
 
 func isWebSocketUpgrade(r *http.Request) bool {
@@ -39,25 +34,14 @@ func (s *Service) responsesWebSocket(w http.ResponseWriter, r *http.Request) {
 	first := true
 	model := ""
 	sessionLite := isResponsesLiteHeader(r.Header.Get(responsesLiteHeader))
+	conn.SetReadLimit(positiveRequestLimit(s.cfg.WSMaxMessageBytes, defaultWSMaxMessageBytes))
 	for {
-		readCtx := ctx
-		var stop context.CancelFunc
-		if first {
-			readCtx, stop = context.WithTimeout(ctx, responsesWSFirstFrameTimeout)
-		}
-		typ, payload, readErr := conn.Read(readCtx)
-		if stop != nil {
-			stop()
-		}
+		typ, payload, readErr := s.readResponsesWSMessage(ctx, conn)
 		if readErr != nil {
 			return
 		}
 		if typ != websocket.MessageText && typ != websocket.MessageBinary {
 			_ = conn.Close(websocket.StatusPolicyViolation, "only text or binary JSON messages are supported")
-			return
-		}
-		if len(payload) > maxGatewayRequestBody {
-			_ = conn.Close(websocket.StatusMessageTooBig, "request body is too large")
 			return
 		}
 		sessionLite = sessionLite || isResponsesLiteBody(payload)
@@ -93,6 +77,12 @@ func (s *Service) responsesWebSocket(w http.ResponseWriter, r *http.Request) {
 		request.Body = io.NopCloser(bytes.NewReader(converted))
 		s.proxyChatCompletions(adapter, request, converted, model, true, 0, nil, adapter.stream, nil, nil, nil, nil)
 	}
+}
+
+func (s *Service) readResponsesWSMessage(ctx context.Context, conn *websocket.Conn) (websocket.MessageType, []byte, error) {
+	readCtx, cancel := context.WithTimeout(ctx, positiveRequestTimeout(s.cfg.WSIdleTimeout, defaultWSIdleTimeout))
+	defer cancel()
+	return conn.Read(readCtx)
 }
 
 func normalizeResponsesWSRequest(body []byte, sessionModel string, first bool, liteHeader ...bool) ([]byte, string, error) {
