@@ -1,4 +1,8 @@
 export default {
+  accountRestricted: 'This account is restricted. Contact support for help.',
+  riskProbeNotice: 'Registering or continuing with a provider may run a network check of up to 2 seconds to prevent reward abuse. No camera or microphone access.',
+  oauthContinue: 'Continue with {provider}',
+
   signInTitle: 'Sign in',
   signInLead: 'Continue with your email and password.',
   signUpTitle: 'Create an account',

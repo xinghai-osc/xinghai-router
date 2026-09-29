@@ -17,8 +17,6 @@ type jevQuestion struct {
 	Criteria     json.RawMessage `json:"criteria"`
 }
 
-const maxJEVRequestBody = defaultGatewayMaxBodyBytes
-
 type jevRequest struct {
 	Model     string                 `json:"model"`
 	State     json.RawMessage        `json:"state"`

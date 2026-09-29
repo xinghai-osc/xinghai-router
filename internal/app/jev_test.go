@@ -122,7 +122,7 @@ func TestJEVHandlerRejectsBeforeUpstream(t *testing.T) {
 		body   string
 		status int
 	}{
-		{"oversized", strings.Repeat("x", maxJEVRequestBody+1), http.StatusRequestEntityTooLarge},
+		{"large invalid body", strings.Repeat("x", (2<<20)+1), http.StatusUnprocessableEntity},
 		{"invalid", `{}`, http.StatusUnprocessableEntity},
 		{"unauthenticated", `{"model":"jev-latest","state":"ping","questions":{"q":{"type":"noul"}}}`, http.StatusUnauthorized},
 	} {

@@ -161,6 +161,62 @@ func TestUpdateUserRejectsInvalidPartialUpdatesBeforeDatabaseAccess(t *testing.T
 	}
 }
 
+func TestBatchUpdateUsersRejectsInvalidBeforeDatabaseAccess(t *testing.T) {
+	for _, body := range []string{
+		`{}`,
+		`{"user_ids":[],"enabled":true}`,
+		`{"user_ids":["user-id"],"enabled":true}`,
+		`{"user_ids":["0"],"enabled":true}`,
+		`{"user_ids":["1","1"],"enabled":true}`,
+		`{"user_ids":["1"]}`,
+		`{"user_ids":["1"],"role":"owner"}`,
+		`{"user_ids":["1"],"max_concurrency":0}`,
+		`{"user_ids":["1"],"max_concurrency":10001}`,
+		`{"user_ids":["1"],"max_concurrency":"10"}`,
+	} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/admin/users/batch-update", strings.NewReader(body))
+		(&Service{}).batchUpdateUsers(recorder, request)
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("body %s status = %d, want %d", body, recorder.Code, http.StatusBadRequest)
+		}
+	}
+
+	var ids []string
+	for i := 0; i < 101; i++ {
+		ids = append(ids, strconv.Itoa(i+1))
+	}
+	body, _ := json.Marshal(map[string]any{"user_ids": ids, "enabled": true})
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/admin/users/batch-update", strings.NewReader(string(body)))
+	(&Service{}).batchUpdateUsers(recorder, request)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("batchUpdateUsers with 101 users status = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+}
+
+func TestNormalizeBatchUserUpdateCanonicalizesIDsAndNullableConcurrency(t *testing.T) {
+	role := "operator"
+	update, err := normalizeBatchUserUpdate(batchUserUpdateInput{
+		UserIDs:        []string{"003", "1"},
+		Role:           &role,
+		Groups:         &[]string{" vip ", "vip"},
+		MaxConcurrency: json.RawMessage("null"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(update.userIDs, ",") != "1,3" {
+		t.Fatalf("user ids = %#v, want [1 3]", update.userIDs)
+	}
+	if !update.groupsSet || len(update.groupRefs) != 1 || update.groupRefs[0] != "vip" {
+		t.Fatalf("groups = %#v, groupsSet = %v", update.groupRefs, update.groupsSet)
+	}
+	if !update.maxConcurrencySet || update.maxConcurrency != nil {
+		t.Fatalf("max concurrency = %#v, set = %v", update.maxConcurrency, update.maxConcurrencySet)
+	}
+}
+
 func TestUpdateChannelRejectsInvalidRequestBeforeDatabaseAccess(t *testing.T) {
 	for _, body := range []string{
 		`{}`,

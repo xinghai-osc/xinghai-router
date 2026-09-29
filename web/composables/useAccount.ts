@@ -12,6 +12,7 @@ export function useAccount() {
   const error = useState('account-error', () => '')
   const sessionRevision = useState('account-session-revision', () => 0)
   const { cancel: cancelReauthentication } = useReauthentication()
+  const { resetWorkspace, loadWorkspaces } = useWorkspace()
 
   const authenticated = computed(() => Boolean(account.value))
   const isAdmin = computed(() => account.value?.role === 'admin')
@@ -25,6 +26,7 @@ export function useAccount() {
 
   function clearSession() {
     invalidateSessionRequests()
+    resetWorkspace()
     cancelReauthentication()
     accountRequestId += 1
     accountRequest = null
@@ -52,6 +54,7 @@ export function useAccount() {
       try {
         const next = await endpoints.getAccount()
         if (requestId === accountRequestId) {
+          if (account.value?.id !== next.id) resetWorkspace()
           account.value = next
           loaded.value = true
         }
@@ -75,16 +78,19 @@ export function useAccount() {
     clearSession()
     await loadAccount(true)
     if (!account.value) throw new Error(error.value || t('common.sessionExpired'))
+    await loadWorkspaces()
   }
 
   async function signOut() {
     cancelReauthentication()
     invalidateSessionRequests()
+    resetWorkspace()
     try {
       await endpoints.logout()
     } catch (cause) {
       if (!(cause instanceof ApiError && cause.status === 401)) {
         toast.error(cause instanceof Error ? cause.message : t('common.actionFailed'))
+        await loadWorkspaces(true)
         return
       }
     }

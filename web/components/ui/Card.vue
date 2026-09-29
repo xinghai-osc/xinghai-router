@@ -18,7 +18,7 @@ withDefaults(defineProps<{
   >
     <header
       v-if="title || $slots.title || description || $slots.description || $slots.actions"
-      class="flex flex-wrap items-start justify-between gap-x-4 gap-y-3 border-b border-line px-4 py-4 sm:px-5"
+      class="flex flex-wrap items-start justify-between gap-x-4 gap-y-3 rounded-t-[inherit] border-b border-line/70 px-4 py-4 sm:px-5"
     >
       <div v-if="title || $slots.title || description || $slots.description" class="min-w-0 flex-1 basis-48">
         <h2 v-if="title || $slots.title" class="text-[15px] leading-6 font-semibold tracking-tight text-ink">

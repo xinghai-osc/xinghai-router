@@ -1,5 +1,10 @@
 export interface User { id: string; email: string; name: string; role: string; enabled: boolean; leaderboard_opt_in: boolean; leaderboard_mask_name: boolean; data_usage_enabled: boolean; max_concurrency: number | null; balance: number; reserved: number; permissions: string[]; groups: string[]; inviter_id: string | null; inviter_email: string | null; inviter_name: string | null; created_at: string }
 export interface Page<T> { data: T[]; total: number; page: number; page_size: number }
+export type WorkspaceRole = 'owner' | 'admin' | 'member'
+export interface Workspace { id: string; name: string; slug: string; owner_id: string; role: WorkspaceRole; is_personal: boolean; created_at: string; updated_at: string }
+export interface WorkspaceForm { name: string; slug: string }
+export interface WorkspaceMember { user_id: string; email: string; name: string; role: WorkspaceRole; created_at: string }
+export interface WorkspaceMemberForm { email: string; role: 'admin' | 'member' }
 export interface ApiKey { id: string; user_id: string; name: string; key_prefix: string; group_id: string; group_name: string; expires_at: string | null; revoked_at: string | null; last_used_at: string | null; created_at: string; revealable: boolean }
 export interface KeyQuotaLimit { id: string; window: 'day' | 'month' | 'total'; max_requests: number | null; max_tokens: number | null; max_cost: number | null; created_at: string }
 export interface KeyQuotaUsage { window: string; requests: number; tokens: number; cost: number }
@@ -154,7 +159,34 @@ export interface ActivityLog { id: string; type: 'request' | 'login' | 'register
 export interface LedgerEntry { id: string; amount: string; balance_after: string; kind: string; request_id: string | null; note: string | null; created_at: string; settlement_status: 'not_applicable' | 'pending' | 'processing' | 'settled' | 'failed'; settlement_date: string | null; settled_at: string | null; settlement_error?: string; daily?: boolean; business_date?: string | null; call_count?: number }
 export interface AdminLedgerEntry extends LedgerEntry { user_id: string; user_email: string; user_name: string }
 
-export interface CheckinEntry { checkin_date: string; streak: number; reward: string; created_at: string }
+export type RewardStatus = 'pending' | 'credited' | 'rejected' | 'withdrawn'
+export type RiskProbeStatus = 'completed' | 'timeout' | 'unsupported' | 'error' | 'disabled'
+export type RiskPurpose = 'register' | 'oauth' | 'checkin'
+export interface RiskProbeSettings { enabled: boolean; stun_urls: string[]; timeout_ms: number; notice_version: string }
+export interface RiskContextBody { purpose: RiskPurpose; status: RiskProbeStatus; addresses: string[] }
+export interface RiskContextResult { id: string; expires_at: string }
+export interface RewardRiskSettings {
+  enabled: boolean
+  auto_ban_enabled: boolean
+  webrtc_enabled: boolean
+  stun_urls: string[]
+  window_hours: number
+  username_similarity: number
+  similar_accounts: number
+  burst_minutes: number
+  burst_accounts: number
+  registrations_per_ip: number
+  checkins_per_ip: number
+  checkins_per_browser: number
+  invitations_per_inviter: number
+  version: number
+}
+export type RewardRiskSettingsForm = Omit<RewardRiskSettings, 'version'>
+export interface RewardRiskClaim { id: string; user_id: string; user_name: string; email: string; origin_user_id: string; source: 'invitation' | 'checkin'; source_id: string; amount: string; status: RewardStatus; reasons: string[]; created_at: string; updated_at: string }
+export interface RewardRiskEvent { id: string; user_id: string; user_name: string; email: string; action: string; decision: 'allow' | 'review' | 'ban'; reasons: string[]; details: Record<string, unknown>; created_at: string }
+export interface RewardRiskBan { id: string; user_id: string; user_name: string; email: string; rule_version: number; details: Record<string, unknown>; observation_id: string | null; banned_at: string; released_at: string | null; released_by: string | null; release_reason: string }
+export interface CheckinResult { checked_in: boolean; already_checked_in: boolean; checkin_date: string; streak?: number; reward?: number; reward_status: RewardStatus; scheduled_reward?: number }
+export interface CheckinEntry { checkin_date: string; streak: number; reward: string; reward_status: RewardStatus; created_at: string }
 export interface CheckinStatus { checked_in: boolean; data: CheckinEntry[] }
 export interface AdminCheckin { user_id: string; email: string; user_name: string; checkin_date: string; streak: number; reward: string; created_at: string }
 export interface PaymentOrder { order_no: string; payment_type: string; amount: string; status: 'pending' | 'paid' | 'failed' | 'expired'; provider_trade_no?: string; paid_at: string | null; created_at: string }
@@ -169,11 +201,11 @@ export interface Rankings { period: string; models: ModelRanking[]; vendors: Ven
 export type FeaturedLocale = 'zh' | 'zh-Hant' | 'en'
 export type FeaturedCopyField = 'badge' | 'title' | 'body' | 'cta'
 export type FeaturedCopy = Record<FeaturedLocale, Record<FeaturedCopyField, string>>
-export interface SiteSettings { name: string; icon_url: string; announcement: string; contact_email?: string; auto_disable_failed_channels: boolean; invitations_enabled?: boolean; registration_email_whitelist_enabled?: boolean; registration_email_alias_blocked?: boolean; featured_enabled: boolean; featured_model: string; featured_copy: FeaturedCopy; captcha_provider?: string; geetest_enabled?: boolean; geetest_captcha_id?: string; corptcha_site_id?: string; email_verification_enabled?: boolean; oauth_providers?: string[] }
+export interface SiteSettings { name: string; icon_url: string; announcement: string; contact_email?: string; auto_disable_failed_channels: boolean; invitations_enabled?: boolean; registration_email_whitelist_enabled?: boolean; registration_email_alias_blocked?: boolean; featured_enabled: boolean; featured_model: string; featured_copy: FeaturedCopy; captcha_provider?: string; geetest_enabled?: boolean; geetest_captcha_id?: string; corptcha_site_id?: string; email_verification_enabled?: boolean; oauth_providers?: string[]; risk_probe?: RiskProbeSettings }
 export interface AdminSiteSettings { name: string; icon_url: string; announcement: string; contact_email: string; auto_disable_failed_channels: boolean; featured_enabled: boolean; featured_model: string; featured_copy: FeaturedCopy; captcha_provider: string; geetest_captcha_id: string; has_geetest_captcha_key: boolean; corptcha_site_id: string; has_corptcha_secret: boolean; smtp_host: string; smtp_port: string; smtp_username: string; has_smtp_password: boolean; smtp_from: string; public_base_url: string; invitations_enabled: boolean; inviter_reward: string; invitee_reward: string; checkin_base_reward: string; checkin_streak_bonus: string; checkin_max_bonus_days: number; registration_email_whitelist_enabled: boolean; registration_email_whitelist: string[]; registration_email_alias_blocked: boolean }
 export interface Notification { id: string; title: string; content: string; enabled: boolean; sort_order: number; created_at: string; updated_at: string }
 export interface NotificationForm { title: string; content: string; enabled: boolean; sort_order: number }
-export interface Invitation { id: string; name: string; email: string; reward: string; created_at: string }
+export interface Invitation { id: string; name: string; email: string; reward: string; inviter_reward_status: string; invitee_reward_status: string; created_at: string }
 export interface InvitationSummary { enabled: boolean; code: string; inviter_reward: string; invitee_reward: string; data: Invitation[] }
 export interface ReliabilitySettings { retry_count: number; retry_status_codes: string; health_check_mode: 'off' | 'scheduled_all' | 'passive_recovery'; health_check_interval_minutes: number; health_check_auto_recover: boolean; health_check_channel_ids: string; auto_disable_on_test_failure: boolean; auto_disable_slow_seconds: number; auto_disable_status_codes: string; auto_disable_keywords: string }
 export interface ContentPolicySettings { request_audit_enabled: boolean; request_audit_store_mode: 'none' | 'hash' | 'excerpt'; request_audit_retention_days: number; content_policy_mode: 'off' | 'audit' | 'block' }
@@ -232,6 +264,7 @@ export interface UsageLog {
   user_agent: string
   cost: string
   subscription: boolean
+  usage_facts?: { reasoning_effort?: string; reasoning_tokens?: number }
   created_at: string
   usage_facts: UsageFacts | null
   billing_snapshot: Partial<BillingSnapshot> | null
@@ -647,6 +680,30 @@ export interface OAuthConnection {
   created_at: string
 }
 
+export interface Cluster {
+  id: string
+  name: string
+  description: string
+  endpoint: string
+  enabled: boolean
+  manager_id: string | number | null
+  instance_count: number
+  created_at: string
+  updated_at: string
+}
+export interface Instance {
+  id: string
+  cluster_id: string
+  name: string
+  address: string
+  endpoint: string
+  enabled: boolean
+  created_at: string
+}
+export interface ClusterResponsibility { id: string; cluster_id?: string; instance_id?: string; responsibility?: string; created_at?: string; [key: string]: unknown }
+export interface ClusterForm { name: string; endpoint?: string; description?: string; enabled?: boolean }
+export interface InstanceForm { name: string; address: string; metadata?: Record<string, unknown>; enabled?: boolean }
+
 export interface MigrationRequest {
   id: string
   status: 'idle' | 'running' | 'completed' | 'failed'
@@ -687,8 +744,26 @@ export function setSessionExpiredHandler(handler: (() => void) | null): void {
   if (import.meta.client) sessionExpiredHandler = handler
 }
 
+let workspaceScopeId: string | null = null
+let workspaceGeneration = 0
+let workspaceController: AbortController | null = null
+
+export function setWorkspaceRequestScope(id: string | null): void {
+  if (!import.meta.client) return
+  workspaceController?.abort()
+  workspaceGeneration += 1
+  workspaceScopeId = id
+  workspaceController = id ? new AbortController() : null
+}
+
+function isWorkspaceRequest(path: string): boolean {
+  return /^\/account\/(?:keys|usage)(?:\/|\?|$)/.test(path)
+}
+
 export function invalidateSessionRequests(): void {
-  if (import.meta.client) sessionGeneration += 1
+  if (!import.meta.client) return
+  sessionGeneration += 1
+  setWorkspaceRequestScope(null)
 }
 
 interface CachedResponse<T> {
@@ -778,18 +853,44 @@ async function request(path: string, init: RequestInit = {}, retried = false): P
   headers.delete('Authorization')
   headers.set('X-Xinghai-Request', '1')
   if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
-  const response = await fetch(`/api${path}`, { ...init, headers, credentials: 'same-origin' })
+  const scoped = isWorkspaceRequest(path)
+  if (scoped) {
+    if (!import.meta.client || !workspaceScopeId || !workspaceController) throw new DOMException('Workspace is not ready', 'AbortError')
+    headers.set('X-Workspace-ID', workspaceScopeId)
+  } else {
+    headers.delete('X-Workspace-ID')
+  }
+  const workspaceRevision = workspaceGeneration
+  const controller = scoped ? new AbortController() : null
+  const abort = () => controller?.abort()
+  const scopeSignal = scoped ? workspaceController?.signal : undefined
+  const signals = [init.signal, scopeSignal].filter((signal): signal is AbortSignal => Boolean(signal))
+  for (const signal of signals) {
+    if (signal.aborted) abort()
+    else signal.addEventListener('abort', abort, { once: true })
+  }
+  let response: Response
+  try {
+    response = await fetch(`/api${path}`, { ...init, headers, signal: controller?.signal ?? init.signal, credentials: 'same-origin' })
+  } finally {
+    for (const signal of signals) signal.removeEventListener('abort', abort)
+  }
+  const stale = () => scoped && (workspaceRevision !== workspaceGeneration || generation !== sessionGeneration)
+  if (stale()) throw new DOMException('Workspace changed', 'AbortError')
   if (response.ok) return response
 
   const body = await response.json().catch(() => null)
+  if (stale()) throw new DOMException('Workspace changed', 'AbortError')
   const code = typeof body?.error?.code === 'string' ? body.error.code : ''
   const failure = new ApiError(body?.error?.message ?? response.statusText, response.status, code)
   if (response.status === 403 && code === 'reauthentication_required' && !retried && !path.startsWith('/auth/') && import.meta.client && reauthenticationHandler && generation === sessionGeneration) {
     const verified = verification !== verificationGeneration || await reauthenticationHandler()
+    if (stale()) throw new DOMException('Workspace changed', 'AbortError')
     if (verified && generation === sessionGeneration && !init.signal?.aborted) return request(path, init, true)
   }
   if (response.status === 401 && !path.startsWith('/auth/') && generation === sessionGeneration && import.meta.client) {
     if (verificationRequest) await verificationRequest.catch(() => undefined)
+    if (stale()) throw new DOMException('Workspace changed', 'AbortError')
     if (verification !== verificationGeneration) {
       if (!retried && generation === sessionGeneration && ['GET', 'HEAD'].includes((init.method ?? 'GET').toUpperCase()) && !init.signal?.aborted) return request(path, init, true)
       throw failure
@@ -806,9 +907,12 @@ async function request(path: string, init: RequestInit = {}, retried = false): P
 }
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const revision = workspaceGeneration
+  const generation = sessionGeneration
   const response = await request(path, init)
-  if (response.status === 204) return undefined as T
-  return response.json() as Promise<T>
+  const result = response.status === 204 ? undefined as T : await response.json() as T
+  if (isWorkspaceRequest(path) && (revision !== workspaceGeneration || generation !== sessionGeneration)) throw new DOMException('Workspace changed', 'AbortError')
+  return result
 }
 
 async function get<T>(path: string): Promise<T> { return api<T>(path) }
@@ -824,7 +928,7 @@ async function download(path: string): Promise<Blob> {
 export interface SessionResult { expires_at: string }
 
 export interface LoginBody { email: string; password: string; code?: string; captcha_id?: string; lot_number?: string; captcha_output?: string; pass_token?: string; gen_time?: string; captcha_token?: string; captcha_purpose?: string }
-export interface RegisterBody { name: string; email: string; password: string; code?: string; invitation_code?: string; captcha_id?: string; lot_number?: string; captcha_output?: string; pass_token?: string; gen_time?: string; captcha_token?: string; captcha_purpose?: string }
+export interface RegisterBody { risk_context_id?: string; name: string; email: string; password: string; code?: string; invitation_code?: string; captcha_id?: string; lot_number?: string; captcha_output?: string; pass_token?: string; gen_time?: string; captcha_token?: string; captcha_purpose?: string }
 export interface KeyForm { user_id?: string; name: string; expires_at: string; group_id: string }
 export interface AccountKeyForm { name: string; expires_at: string; group_id: string }
 export interface ChannelForm { name: string; provider: string; base_url: string; key_type: 'single' | 'multi'; api_keys: string; models: string[]; test_model?: string; priority: number; groups: string[]; upstream_path?: string; upstream_format?: string; model_routes?: ModelRouteForm[]; auto_disable: boolean; request_overrides?: RequestOverrides; ua_pool?: string[]; user_email?: string }
@@ -835,6 +939,7 @@ export interface PricingForm { model: string; input_per_million: number; cached_
 export interface NewApiPricingForm { base_url: string; api_key: string; price_per_quota_unit: number; currency?: string }
 export interface SubscriptionPlanForm { name: string; description: string; price: string; currency: string; billing_period: string; credit_amount: string; group_id: string; model_whitelist: string[]; max_requests_per_period: number | null; max_credit_per_period: number | null; overage_policy: OveragePolicy; model_quotas: SubscriptionPlanModelQuota[]; sort_order: number; enabled: boolean }
 export interface UserUpdate { id?: number; name?: string; email?: string; role?: string; enabled?: boolean; password?: string; balance?: number | null; note?: string; permissions?: string[]; groups?: string[]; leaderboard_opt_in?: boolean; leaderboard_mask_name?: boolean; data_usage_enabled?: boolean; max_concurrency?: number | null; inviter_id?: number | null }
+export interface UserBatchUpdateForm { enabled?: boolean; role?: string; permissions?: string[]; groups?: string[]; leaderboard_opt_in?: boolean; leaderboard_mask_name?: boolean; data_usage_enabled?: boolean; max_concurrency?: number | null }
 export interface UserCreate { name: string; email: string; password: string; role: string; enabled: boolean; permissions: string[]; groups: string[] }
 export interface MigrateForm { source_dsn: string; source_driver: string }
 export interface MigrateResult { message: string }
@@ -866,13 +971,22 @@ export type SiteSettingsForm =
 export const endpoints = {
   getSiteSettings: () => cachedPublic('site-settings', () => get<SiteSettings>('/site-settings'), 5 * 60 * 1000),
   getAccount: () => get<Account>('/account/me'),
+  getWorkspaces: () => get<{ data: Workspace[]; current_id: string }>('/account/workspaces'),
+  createWorkspace: (form: WorkspaceForm) => post<Workspace>('/account/workspaces', form),
+  updateWorkspace: (id: string, form: WorkspaceForm) => put<Workspace>(`/account/workspaces/${encodeURIComponent(id)}`, form),
+  deleteWorkspace: (id: string) => send(`/account/workspaces/${encodeURIComponent(id)}`, 'DELETE'),
+  selectWorkspace: (id: string) => post<{ workspace_id: string }>(`/account/workspaces/${encodeURIComponent(id)}/select`),
+  getWorkspaceMembers: (id: string) => get<{ data: WorkspaceMember[] }>(`/account/workspaces/${encodeURIComponent(id)}/members`),
+  addWorkspaceMember: (id: string, form: WorkspaceMemberForm) => post<WorkspaceMember>(`/account/workspaces/${encodeURIComponent(id)}/members`, form),
+  updateWorkspaceMember: (id: string, userId: string, role: 'admin' | 'member') => put<WorkspaceMember>(`/account/workspaces/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`, { role }),
+  removeWorkspaceMember: (id: string, userId: string) => send(`/account/workspaces/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`, 'DELETE'),
   getAccountKeys: () => get<{ data: ApiKey[] }>('/account/keys'),
   getAccountUsage: (query = '') => get<{ data: UsageRecord[] }>(`/account/usage${query}`),
   getAccountUsageDaily: (days: number, offsetMinutes: number) => get<{ data: DailyUsageRecord[] }>(`/account/usage/daily?days=${days}&offset=${offsetMinutes}`),
   getAccountUsageSummary: () => get<AccountUsageSummary>('/account/usage/summary'),
   getAccountLedger: () => get<{ data: LedgerEntry[] }>('/account/ledger'),
   getCheckinStatus: () => get<CheckinStatus>('/account/checkin'),
-  checkin: (captcha?: Record<string, string>) => post<{ checked_in: boolean; already_checked_in: boolean; checkin_date: string; streak?: number; reward?: number }>('/account/checkin', captcha ?? {}),
+  checkin: (body?: Record<string, string>) => post<CheckinResult>('/account/checkin', body ?? {}),
   getAccountGroups: () => get<AccountGroups>('/account/groups'),
   getAccountPayments: () => get<{ enabled: boolean; payment_methods: PaymentMethod[]; data: PaymentOrder[] }>('/account/payments'),
   getAccountPayment: (orderNo: string) => get<PaymentOrder>(`/account/payments/${encodeURIComponent(orderNo)}`),
@@ -921,6 +1035,15 @@ export const endpoints = {
   deleteAdminModelMetadata: (id: string) => send(`/admin/model-metadata/${encodeURIComponent(id)}`, 'DELETE'),
   getPublicSubscriptionPlans: () => cachedPublic('subscription-plans', () => get<{ data: PublicSubscriptionPlan[] }>('/subscription-plans'), 5 * 60 * 1000),
 
+  createRiskContext: (body: RiskContextBody) => post<RiskContextResult>('/auth/risk-context', body),
+  getRewardRiskSettings: () => get<RewardRiskSettings>('/admin/reward-risk/settings'),
+  updateRewardRiskSettings: (form: RewardRiskSettingsForm) => put<RewardRiskSettings>('/admin/reward-risk/settings', form),
+  getRewardRiskClaims: (query = '') => get<Page<RewardRiskClaim>>(`/admin/reward-risk/claims${query}`),
+  getRewardRiskEvents: (query = '') => get<Page<RewardRiskEvent>>(`/admin/reward-risk/events${query}`),
+  getRewardRiskBans: (query = '') => get<Page<RewardRiskBan>>(`/admin/reward-risk/bans${query}`),
+  approveRewardRiskClaim: (id: string, reason?: string) => post<{ id: string; status: RewardStatus }>(`/admin/reward-risk/claims/${encodeURIComponent(id)}/approve`, { reason }),
+  rejectRewardRiskClaim: (id: string, reason?: string) => post<{ id: string; status: RewardStatus }>(`/admin/reward-risk/claims/${encodeURIComponent(id)}/reject`, { reason }),
+  unbanRewardRiskUser: (id: string, caseId: string, reason: string) => post<{ ok: true }>(`/admin/reward-risk/users/${encodeURIComponent(id)}/unban`, { case_id: caseId, reason }),
   login: (body: LoginBody) => post<SessionResult>('/auth/login', body),
   register: (body: RegisterBody) => post<SessionResult>('/auth/register', body),
   reauthenticate: (password: string, signal?: AbortSignal) => {
@@ -939,11 +1062,24 @@ export const endpoints = {
   requestPasswordReset: (email: string, captcha?: Record<string, string>) => send('/auth/password-reset/request', 'POST', { email, ...captcha }),
   confirmPasswordReset: (token: string, password: string) => send('/auth/password-reset/confirm', 'POST', { token, password }),
 
+  getAdminClusters: () => get<{ data: Cluster[] }>('/admin/clusters'),
+  createAdminCluster: (form: ClusterForm) => post<{ id: string }>('/admin/clusters', form),
+  updateAdminCluster: (id: string, form: ClusterForm) => put<unknown>(`/admin/clusters/${encodeURIComponent(id)}`, form),
+  deleteAdminCluster: (id: string) => send(`/admin/clusters/${encodeURIComponent(id)}`, 'DELETE'),
+  syncAdminCluster: (id: string) => post<unknown>(`/admin/clusters/${encodeURIComponent(id)}/sync`),
+  getAdminInstances: () => get<{ data: Instance[] }>('/admin/instances'),
+  createAdminInstance: (clusterId: string, form: InstanceForm) => post<{ id: string }>(`/admin/clusters/${encodeURIComponent(clusterId)}/instances`, form),
+  updateAdminInstance: (clusterId: string, id: string, form: InstanceForm) => put<unknown>(`/admin/clusters/${encodeURIComponent(clusterId)}/instances/${encodeURIComponent(id)}`, form),
+  deleteAdminInstance: (clusterId: string, id: string) => send(`/admin/clusters/${encodeURIComponent(clusterId)}/instances/${encodeURIComponent(id)}`, 'DELETE'),
+  getClusterResponsibilities: () => get<{ data: ClusterResponsibility[] }>('/admin/cluster-responsibilities'),
+  createClusterResponsibility: (form: Record<string, unknown>) => post<{ id: string }>('/admin/cluster-responsibilities', form),
+
   getAdminUsers: (query = '') => get<Page<User>>(`/admin/users${query}`),
   getAdminCheckins: (query = '') => get<Page<AdminCheckin>>(`/admin/checkins${query}`),
   withdrawAdminCheckin: (userId: string, date: string) => post<{ withdrawn: boolean; reward: number }>(`/admin/users/${encodeURIComponent(userId)}/checkins/${encodeURIComponent(date)}/withdraw`),
   createUser: (form: UserCreate) => post<{ id: string }>('/admin/users', form),
   updateUser: (id: string, update: UserUpdate) => send(`/admin/users/${encodeURIComponent(id)}`, 'PUT', update),
+  batchUpdateUsers: (userIds: string[], update: UserBatchUpdateForm) => post<{ affected: number; user_ids: string[] }>('/admin/users/batch-update', { user_ids: userIds, ...update }),
   getAdminGroups: (query = '') => get<Page<Group>>(`/admin/groups${query}`),
   createGroup: (name: string, multiplier: number, maxConcurrency: number | null, publicGroup: boolean, displayName = '', description = '') => send('/admin/groups', 'POST', { name, multiplier, max_concurrency: maxConcurrency, public: publicGroup, display_name: displayName, description }),
   updateGroup: (id: string, multiplier: number, maxConcurrency: number | null, publicGroup: boolean, displayName = '', description = '') => send(`/admin/groups/${encodeURIComponent(id)}`, 'PUT', { multiplier, max_concurrency: maxConcurrency, public: publicGroup, display_name: displayName, description }),

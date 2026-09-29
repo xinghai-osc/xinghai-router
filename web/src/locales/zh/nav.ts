@@ -1,4 +1,7 @@
 export default {
+  adminRewardRisk: '奖励风控',
+
+  workspaces: '工作空间',
   sectionOverview: '概览',
   sectionBilling: '账单',
   sectionAccount: '账户',
@@ -24,6 +27,7 @@ export default {
   walletLedger: '余额变动',
   groups: '分组',
   channels: '渠道',
+  clusters: '集群与实例',
   providers: '供应商',
   modelRoutes: '模型路由',
   pricing: '模型定价',

@@ -1,4 +1,6 @@
 export default {
+  newapiLabel: 'Clear Blue',
+  newapiHint: 'New API inspired · clean blue workspace',
   defaultLabel: 'Paper',
   defaultHint: 'Warm cream · clay accent',
   coolLabel: 'Neon',

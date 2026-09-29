@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"net"
 	"net/http"
 	"net/netip"
@@ -66,13 +67,20 @@ func parseTrustedProxies(specs string) ([]netip.Prefix, error) {
 			if err != nil {
 				return nil, err
 			}
-			out = append(out, prefix)
+			if prefix.Addr().Is4In6() {
+				if prefix.Bits() < 96 {
+					return nil, fmt.Errorf("mapped IPv4 proxy prefix must be at least /96: %s", part)
+				}
+				prefix = netip.PrefixFrom(prefix.Addr().Unmap(), prefix.Bits()-96)
+			}
+			out = append(out, prefix.Masked())
 			continue
 		}
 		addr, err := netip.ParseAddr(part)
-		if err != nil {
-			return nil, err
+		if err != nil || addr.Zone() != "" {
+			return nil, fmt.Errorf("invalid proxy address: %s", part)
 		}
+		addr = addr.Unmap()
 		bits := 32
 		if addr.Is6() {
 			bits = 128
@@ -92,14 +100,15 @@ func remoteAddrIP(remoteAddr string) (netip.Addr, bool) {
 	if err != nil {
 		return netip.Addr{}, false
 	}
-	return addr, true
+	return addr.WithZone("").Unmap(), true
 }
 
 func isTrustedProxy(remoteAddr string, nets []netip.Prefix) bool {
 	addr, ok := remoteAddrIP(remoteAddr)
-	if !ok {
-		return false
-	}
+	return ok && trustedProxyAddress(addr, nets)
+}
+
+func trustedProxyAddress(addr netip.Addr, nets []netip.Prefix) bool {
 	for _, prefix := range nets {
 		if prefix.Contains(addr) {
 			return true
@@ -108,30 +117,51 @@ func isTrustedProxy(remoteAddr string, nets []netip.Prefix) bool {
 	return false
 }
 
+func forwardedIPAddress(value string) (netip.Addr, bool) {
+	value = strings.TrimSpace(value)
+	if strings.HasPrefix(value, "[") && strings.HasSuffix(value, "]") {
+		value = value[1 : len(value)-1]
+	}
+	addr, err := netip.ParseAddr(value)
+	if err != nil || addr.Zone() != "" {
+		return netip.Addr{}, false
+	}
+	return addr.Unmap(), true
+}
+
 func clientIPFromRequest(r *http.Request, nets []netip.Prefix) string {
-	remote := r.RemoteAddr
-	if host, _, err := net.SplitHostPort(remote); err == nil {
-		remote = host
+	peer, ok := remoteAddrIP(r.RemoteAddr)
+	if !ok {
+		return r.RemoteAddr
 	}
-	if len(nets) > 0 && isTrustedProxy(r.RemoteAddr, nets) {
-		if realIP := strings.TrimSpace(r.Header.Get("X-Real-IP")); realIP != "" {
-			if addr, err := netip.ParseAddr(strings.Trim(realIP, "[]")); err == nil {
-				return addr.String()
-			}
+	if !trustedProxyAddress(peer, nets) {
+		return peer.String()
+	}
+	if values := r.Header.Values("X-Forwarded-For"); len(values) > 0 {
+		forwarded := strings.Join(values, ",")
+		hops := strings.Split(forwarded, ",")
+		if len(forwarded) > 4096 || len(hops) > 32 {
+			return peer.String()
 		}
-		if xff := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); xff != "" {
-			if comma := strings.IndexByte(xff, ','); comma >= 0 {
-				xff = strings.TrimSpace(xff[:comma])
+		current := peer
+		for i := len(hops) - 1; i >= 0; i-- {
+			if !trustedProxyAddress(current, nets) {
+				return current.String()
 			}
-			if addr, err := netip.ParseAddr(strings.Trim(xff, "[]")); err == nil {
-				return addr.String()
+			next, valid := forwardedIPAddress(hops[i])
+			if !valid {
+				return peer.String()
 			}
+			current = next
+		}
+		return current.String()
+	}
+	if values := r.Header.Values("X-Real-IP"); len(values) == 1 {
+		if addr, valid := forwardedIPAddress(values[0]); valid {
+			return addr.String()
 		}
 	}
-	if addr, ok := remoteAddrIP(r.RemoteAddr); ok {
-		return addr.String()
-	}
-	return remote
+	return peer.String()
 }
 
 func requestMetadataFromUA(ua string) (browser, version, operatingSystem, osVersion, device string, bot bool) {

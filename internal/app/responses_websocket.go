@@ -57,13 +57,14 @@ func (s *Service) responsesWebSocket(w http.ResponseWriter, r *http.Request) {
 			_ = conn.Close(websocket.StatusPolicyViolation, err.Error())
 			return
 		}
-		key, ok := ctx.Value(contextKey{}).(keyContext)
-		if !ok {
-			_ = conn.Close(websocket.StatusPolicyViolation, "API key required")
+		key, err := s.loadAPIKeyContext(ctx, bearer(r))
+		if err != nil {
+			_ = conn.Close(websocket.StatusPolicyViolation, "invalid or expired API key")
 			return
 		}
 		frameRequestID := randomIDString()
-		frameCtx := context.WithValue(ctx, requestIDKey{}, frameRequestID)
+		frameCtx := context.WithValue(ctx, contextKey{}, key)
+		frameCtx = context.WithValue(frameCtx, requestIDKey{}, frameRequestID)
 		allowed, policyCtx := s.enforceContentPolicy(frameCtx, key, model, "/v1/responses", normalized)
 		if !allowed {
 			_ = conn.Close(websocket.StatusPolicyViolation, "request content violates the content policy")

@@ -39,7 +39,7 @@ watch(() => route.fullPath, () => { open.value = false })
         <div class="flex h-[4.5rem] items-center justify-between gap-3 lg:gap-6">
           <SiteLogo :name="settings.name" :icon-url="settings.icon_url" class="min-w-0" />
 
-          <nav class="hidden items-center gap-1 rounded-full border border-line bg-sunken/60 p-1 lg:flex" :aria-label="t('common.menu')">
+          <nav class="hidden items-center gap-1 rounded-full border border-line bg-transparent p-1 lg:flex" :aria-label="t('common.menu')">
             <NuxtLink
               v-for="link in links"
               :key="link.to"

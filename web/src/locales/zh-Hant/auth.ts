@@ -1,4 +1,8 @@
 export default {
+  accountRestricted: '此帳戶已受限，請聯絡支援人員。',
+  riskProbeNotice: '註冊或透過第三方繼續時，可能進行最長 2 秒的網路檢測以防止獎勵濫用，不使用攝影機或麥克風。',
+  oauthContinue: '透過 {provider} 繼續',
+
   signInTitle: '登錄賬戶',
   signInLead: '使用郵箱和密碼繼續。',
   signUpTitle: '創建賬戶',

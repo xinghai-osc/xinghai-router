@@ -1,14 +1,20 @@
 <script setup lang="ts">
+import { ArrowUpRight, Check, ChevronsUpDown, Home, Layers, PanelLeftClose, PanelLeftOpen } from 'lucide-vue-next'
 import { NAV_SECTIONS } from '~/src/nav'
 
 const props = withDefaults(defineProps<{
   can?: (permission: string) => boolean
   siteName?: string
   iconUrl?: string
+  collapsed?: boolean
+  collapsible?: boolean
 }>(), { can: () => false })
+
+defineEmits<{ toggle: [] }>()
 
 const route = useRoute()
 const { t } = useI18n()
+const { current: workspace, workspaces, ready: workspaceReady, loading: workspaceLoading, switchWorkspace } = useWorkspace()
 
 const sections = computed(() =>
   NAV_SECTIONS
@@ -23,30 +29,89 @@ function isActive(to: string) {
 </script>
 
 <template>
-  <div class="flex h-full min-h-0 flex-col gap-6 overflow-y-auto overscroll-contain px-3 py-4">
-    <div class="flex min-h-14 shrink-0 items-center rounded-card border border-line bg-surface px-3 py-3">
-      <SiteLogo :name="siteName" :icon-url="iconUrl" class="w-full [&>span]:min-w-0" />
+  <div class="flex h-full min-h-0 flex-col">
+    <div :class="['flex h-16 shrink-0 items-center border-b border-line', collapsed ? 'justify-center px-2' : 'px-5']">
+      <SiteLogo :name="siteName" :icon-url="iconUrl" :compact="collapsed" class="max-w-full" />
     </div>
 
-    <nav class="flex flex-1 flex-col gap-6 pb-2" :aria-label="t('common.console')">
+    <div class="mx-3 mt-4 shrink-0">
+      <UiDropdownMenu align="start" :side="collapsed ? 'right' : 'bottom'">
+        <template #trigger>
+          <button
+            type="button"
+            :class="['flex w-full items-center gap-3 rounded-control border border-line bg-sunken/50 py-3 text-left transition-colors hover:bg-sunken', collapsed ? 'justify-center px-1' : 'px-3']"
+            :aria-label="t('console.workspaceSwitch')"
+            :title="t('console.workspaceSwitch')"
+            :disabled="!workspaceReady || workspaceLoading"
+          >
+            <Layers class="size-[18px] shrink-0 text-clay" aria-hidden="true" />
+            <span v-if="!collapsed" class="min-w-0 flex-1">
+              <span class="block truncate text-[13px] font-semibold text-ink">{{ workspace ? (workspace.is_personal ? t('console.workspacePersonal') : workspace.name) : t('console.workspaceLoading') }}</span>
+              <span class="block truncate text-2xs text-muted">{{ t('console.workspaceSwitch') }}</span>
+            </span>
+            <ChevronsUpDown v-if="!collapsed" class="size-3.5 shrink-0 text-faint" aria-hidden="true" />
+          </button>
+        </template>
+        <UiDropdownItem as="label">{{ t('console.workspaceSwitch') }}</UiDropdownItem>
+        <div class="max-h-64 overflow-y-auto">
+          <UiDropdownItem v-for="item in workspaces" :key="item.id" :disabled="workspaceLoading" @select="switchWorkspace(item.id)">
+            <Check class="size-4 shrink-0" :class="item.id === workspace?.id ? 'text-clay' : 'invisible'" aria-hidden="true" />
+            <span class="max-w-52 truncate">{{ item.is_personal ? t('console.workspacePersonal') : item.name }}</span>
+          </UiDropdownItem>
+        </div>
+        <UiDropdownItem as="separator" />
+        <UiDropdownItem @select="navigateTo('/console/workspaces')">{{ t('console.workspaceManage') }}</UiDropdownItem>
+      </UiDropdownMenu>
+    </div>
+
+    <nav class="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain px-3 py-5" :aria-label="t('common.console')">
       <div v-for="section in sections" :key="section.titleKey" class="space-y-1">
-        <p class="px-3 pb-1.5 text-2xs font-semibold tracking-wider text-faint uppercase">{{ t(section.titleKey) }}</p>
+        <p :class="collapsed ? 'sr-only' : 'px-3 pb-1.5 text-2xs font-medium tracking-wider text-faint'">{{ t(section.titleKey) }}</p>
+        <div v-if="collapsed" class="mx-2 mb-3 border-t border-line" aria-hidden="true" />
         <NuxtLink
           v-for="item in section.items"
           :key="item.to"
           :to="item.to"
           :class="[
-            'group relative flex min-h-10 items-center gap-2.5 rounded-control border px-3 py-2 text-[13px] leading-5 transition-colors duration-150 ease-out focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-clay',
-            isActive(item.to)
-              ? 'border-clay/20 bg-clay-soft font-semibold text-clay before:absolute before:inset-y-2.5 before:left-0 before:w-0.5 before:rounded-full before:bg-clay'
-              : 'border-line/0 text-muted hover:border-line hover:bg-surface hover:text-ink',
+            'group flex min-h-10 items-center gap-3 rounded-control text-[13px] leading-5 transition-colors duration-150 ease-out',
+            collapsed ? 'justify-center px-2 py-2.5' : 'px-3 py-2.5',
+            isActive(item.to) ? 'bg-clay-soft font-semibold text-clay' : 'text-muted hover:bg-sunken hover:text-ink',
           ]"
           :aria-current="isActive(item.to) ? 'page' : undefined"
+          :aria-label="collapsed ? t(item.labelKey) : undefined"
+          :title="collapsed ? t(item.labelKey) : undefined"
         >
-          <component :is="item.icon" class="size-4 shrink-0" aria-hidden="true" />
-          <span class="truncate">{{ t(item.labelKey) }}</span>
+          <component :is="item.icon" class="size-[18px] shrink-0" :stroke-width="1.75" aria-hidden="true" />
+          <span v-if="!collapsed" class="truncate">{{ t(item.labelKey) }}</span>
         </NuxtLink>
       </div>
     </nav>
+
+    <div class="shrink-0 space-y-1 border-t border-line p-3">
+      <NuxtLink
+        to="/"
+        :class="['flex min-h-10 items-center gap-3 rounded-control text-[13px] text-muted transition-colors duration-150 ease-out hover:bg-sunken hover:text-ink', collapsed ? 'justify-center px-2' : 'px-3']"
+        :aria-label="t('common.home')"
+        :title="collapsed ? t('common.home') : undefined"
+      >
+        <Home class="size-[18px] shrink-0" :stroke-width="1.75" aria-hidden="true" />
+        <template v-if="!collapsed">
+          <span class="flex-1">{{ t('common.home') }}</span>
+          <ArrowUpRight class="size-3.5 text-faint" aria-hidden="true" />
+        </template>
+      </NuxtLink>
+      <button
+        v-if="collapsible"
+        type="button"
+        :class="['flex min-h-10 w-full items-center gap-3 rounded-control text-[13px] text-muted transition-colors duration-150 ease-out hover:bg-sunken hover:text-ink', collapsed ? 'justify-center px-2' : 'px-3']"
+        :aria-label="collapsed ? t('common.expandNav') : t('common.collapseNav')"
+        :aria-expanded="!collapsed"
+        :title="collapsed ? t('common.expandNav') : undefined"
+        @click="$emit('toggle')"
+      >
+        <component :is="collapsed ? PanelLeftOpen : PanelLeftClose" class="size-[18px] shrink-0" :stroke-width="1.75" aria-hidden="true" />
+        <span v-if="!collapsed">{{ t('common.collapseNav') }}</span>
+      </button>
+    </div>
   </div>
 </template>

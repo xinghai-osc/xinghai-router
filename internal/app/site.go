@@ -187,7 +187,13 @@ func (s *Service) siteSettings(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"name": name, "icon_url": iconURL, "announcement": announcement, "contact_email": contactEmail, "auto_disable_failed_channels": autoDisableFailedChannels, "invitations_enabled": invitationsEnabled, "registration_email_whitelist_enabled": whitelistEnabled, "registration_email_alias_blocked": aliasBlocked, "featured_enabled": featuredEnabled, "featured_model": featuredModel, "featured_copy": copy, "captcha_provider": sys.captchaProvider(), "geetest_enabled": sys.geetestEnabled(), "geetest_captcha_id": sys.GeetestCaptchaID, "corptcha_site_id": sys.CorptchaSiteID, "email_verification_enabled": sys.emailVerificationEnabled(), "oauth_providers": oauthProviders})
+	risk, err := loadRewardRiskSettings(r.Context(), s.db)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "risk_unavailable", "could not load reward risk settings")
+		return
+	}
+	probe := map[string]any{"enabled": risk.Enabled && risk.WebRTCEnabled, "stun_urls": risk.STUNURLs, "timeout_ms": 2000, "notice_version": "1"}
+	writeJSON(w, http.StatusOK, map[string]any{"risk_probe": probe, "name": name, "icon_url": iconURL, "announcement": announcement, "contact_email": contactEmail, "auto_disable_failed_channels": autoDisableFailedChannels, "invitations_enabled": invitationsEnabled, "registration_email_whitelist_enabled": whitelistEnabled, "registration_email_alias_blocked": aliasBlocked, "featured_enabled": featuredEnabled, "featured_model": featuredModel, "featured_copy": copy, "captcha_provider": sys.captchaProvider(), "geetest_enabled": sys.geetestEnabled(), "geetest_captcha_id": sys.GeetestCaptchaID, "corptcha_site_id": sys.CorptchaSiteID, "email_verification_enabled": sys.emailVerificationEnabled(), "oauth_providers": oauthProviders})
 }
 
 func (s *Service) adminSiteSettings(w http.ResponseWriter, r *http.Request) {

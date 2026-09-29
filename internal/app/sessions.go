@@ -62,7 +62,7 @@ func (s *Service) consoleSecurity(next http.Handler) http.Handler {
 				return
 			}
 			if unsafe {
-				body, err := readRequestBody(w, r, 8<<20, s.cfg.RequestBodyTimeout)
+				body, err := readRequestBody(w, r, s.cfg.RequestBodyTimeout)
 				if err != nil {
 					status, code, message := requestBodyError(err)
 					writeError(w, status, code, message)
@@ -100,7 +100,7 @@ func (s *Service) reauthenticate(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Password string `json:"password"`
 	}
-	body, err := readRequestBody(w, r, 4096, s.cfg.RequestBodyTimeout)
+	body, err := readRequestBody(w, r, s.cfg.RequestBodyTimeout)
 	if err != nil {
 		status, code, message := requestBodyError(err)
 		writeError(w, status, code, message)

@@ -199,9 +199,9 @@ func TestStreamResponseDirectPreservesBytes(t *testing.T) {
 	}
 }
 
-func TestReadGatewayBodyAcceptsConfiguredLargerLimit(t *testing.T) {
+func TestReadGatewayBodyAcceptsLargeBody(t *testing.T) {
 	body := strings.Repeat("x", 2<<20+1)
-	s := &Service{cfg: Config{GatewayMaxBodyBytes: 3 << 20}}
+	s := &Service{}
 	got, err := s.readGatewayBody(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body)))
 	if err != nil {
 		t.Fatalf("readGatewayBody returned error: %v", err)

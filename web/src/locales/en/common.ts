@@ -64,4 +64,8 @@ export default {
   home: 'Back to home',
   menu: 'Menu',
   openNav: 'Open navigation',
+  collapseNav: 'Collapse sidebar',
+  expandNav: 'Expand sidebar',
+  workspace: 'Workspace',
+  skipToContent: 'Skip to content',
 }

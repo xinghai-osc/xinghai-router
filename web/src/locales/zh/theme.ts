@@ -1,4 +1,6 @@
 export default {
+  newapiLabel: '清新蓝',
+  newapiHint: 'New API 风 · 简洁蓝白工作台',
   defaultLabel: '默认',
   defaultHint: '暖纸底色 · 陶土强调',
   coolLabel: '酷炫',

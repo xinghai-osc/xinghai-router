@@ -50,7 +50,7 @@ func TestClientIPIgnoresSpoofedHeadersWithoutTrustedProxy(t *testing.T) {
 }
 
 func TestClientIPUsesHeadersFromTrustedProxy(t *testing.T) {
-	if err := setTrustedProxies("loopback"); err != nil {
+	if err := setTrustedProxies("loopback,10.0.0.2"); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = setTrustedProxies("") })
@@ -60,7 +60,7 @@ func TestClientIPUsesHeadersFromTrustedProxy(t *testing.T) {
 	req.Header.Set("X-Forwarded-For", "203.0.113.50, 10.0.0.2")
 	meta := requestMetadata(req)
 	if meta.clientIP != "203.0.113.50" {
-		t.Fatalf("clientIP = %q, want first X-Forwarded-For hop", meta.clientIP)
+		t.Fatalf("clientIP = %q, want client beyond trusted proxy chain", meta.clientIP)
 	}
 
 	req2 := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -69,6 +69,72 @@ func TestClientIPUsesHeadersFromTrustedProxy(t *testing.T) {
 	meta2 := requestMetadata(req2)
 	if meta2.clientIP != "198.51.100.7" {
 		t.Fatalf("clientIP = %q, want X-Real-IP", meta2.clientIP)
+	}
+}
+
+func TestClientIPTrustedChainBoundaries(t *testing.T) {
+	tests := []struct {
+		name, trusted, remote, realIP, want string
+		forwarded                           []string
+	}{
+		{name: "untrusted peer", trusted: "loopback", remote: "198.51.100.2:123", forwarded: []string{"203.0.113.1"}, realIP: "203.0.113.2", want: "198.51.100.2"},
+		{name: "spoofed left prefix", trusted: "loopback", remote: "127.0.0.1:123", forwarded: []string{"203.0.113.1, 198.51.100.2"}, want: "198.51.100.2"},
+		{name: "untrusted intermediate", trusted: "loopback", remote: "127.0.0.1:123", forwarded: []string{"203.0.113.1, 10.0.0.2"}, want: "10.0.0.2"},
+		{name: "trusted intermediates", trusted: "loopback,10.0.0.2", remote: "127.0.0.1:123", forwarded: []string{"203.0.113.1, 198.51.100.2, 10.0.0.2"}, want: "198.51.100.2"},
+		{name: "real IP cannot override chain", trusted: "loopback", remote: "127.0.0.1:123", forwarded: []string{"198.51.100.2"}, realIP: "203.0.113.1", want: "198.51.100.2"},
+		{name: "malformed rightmost", trusted: "loopback", remote: "127.0.0.1:123", forwarded: []string{"198.51.100.2, bad"}, realIP: "203.0.113.1", want: "127.0.0.1"},
+		{name: "empty XFF prevents fallback", trusted: "loopback", remote: "127.0.0.1:123", forwarded: []string{""}, realIP: "203.0.113.1", want: "127.0.0.1"},
+		{name: "malformed prefix beyond boundary", trusted: "loopback", remote: "127.0.0.1:123", forwarded: []string{"bad, 198.51.100.2"}, want: "198.51.100.2"},
+		{name: "multiple header fields", trusted: "loopback,10.0.0.2", remote: "127.0.0.1:123", forwarded: []string{"203.0.113.1, 198.51.100.2", "10.0.0.2"}, want: "198.51.100.2"},
+		{name: "real IP fallback", trusted: "loopback", remote: "127.0.0.1:123", realIP: "198.51.100.2", want: "198.51.100.2"},
+		{name: "mapped socket", trusted: "loopback", remote: "[::ffff:127.0.0.1]:123", forwarded: []string{"::ffff:198.51.100.2"}, want: "198.51.100.2"},
+		{name: "mapped trusted range", trusted: "::ffff:10.0.0.0/104", remote: "10.0.0.2:123", forwarded: []string{"198.51.100.2"}, want: "198.51.100.2"},
+		{name: "mapped trusted address", trusted: "::ffff:10.0.0.2", remote: "10.0.0.2:123", forwarded: []string{"198.51.100.2"}, want: "198.51.100.2"},
+		{name: "ipv6 chain", trusted: "::1,2001:db8:1::/48", remote: "[::1]:123", forwarded: []string{"2001:db8:2::9, [2001:db8:1::2]"}, want: "2001:db8:2::9"},
+		{name: "ipv6 canonical", remote: "[2001:0db8:0002::9]:123", want: "2001:db8:2::9"},
+		{name: "header zone rejected", trusted: "loopback", remote: "127.0.0.1:123", forwarded: []string{"fe80::1%eth0"}, want: "127.0.0.1"},
+		{name: "header port rejected", trusted: "loopback", remote: "127.0.0.1:123", forwarded: []string{"198.51.100.2:80"}, want: "127.0.0.1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			nets, err := parseTrustedProxies(tt.trusted)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req.RemoteAddr = tt.remote
+			for _, value := range tt.forwarded {
+				req.Header.Add("X-Forwarded-For", value)
+			}
+			req.Header.Set("X-Real-IP", tt.realIP)
+			if got := clientIPFromRequest(req, nets); got != tt.want {
+				t.Fatalf("clientIP = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestClientIPRejectsOversizedForwardedChain(t *testing.T) {
+	nets, err := parseTrustedProxies("loopback")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "127.0.0.1:123"
+	req.Header.Add("X-Forwarded-For", "198.51.100.2")
+	for range 32 {
+		req.Header.Add("X-Forwarded-For", "127.0.0.1")
+	}
+	if got := clientIPFromRequest(req, nets); got != "127.0.0.1" {
+		t.Fatalf("clientIP = %q, want socket peer", got)
+	}
+}
+
+func TestTrustedProxiesRejectAmbiguousAddresses(t *testing.T) {
+	for _, spec := range []string{"::ffff:10.0.0.0/80", "fe80::1%eth0", "198.51.100.2:80"} {
+		if _, err := parseTrustedProxies(spec); err == nil {
+			t.Fatalf("expected invalid proxy specification: %q", spec)
+		}
 	}
 }
 

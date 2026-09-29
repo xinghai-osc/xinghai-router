@@ -70,7 +70,7 @@ func (s *Service) accountInvitations(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "internal_error", "could not load invitation settings")
 		return
 	}
-	rows, err := tx.Query(r.Context(), `select i.id,u.name,u.email,i.inviter_reward::text,i.created_at from invitations i join users u on u.id=i.invitee_id where i.inviter_id=$1 order by i.created_at desc limit 100`, account.userID)
+	rows, err := tx.Query(r.Context(), `select i.id,u.name,u.email,i.inviter_reward::text,i.created_at,coalesce(inviter_claim.status,'credited'),coalesce(invitee_claim.status,'credited') from invitations i join users u on u.id=i.invitee_id left join reward_claims inviter_claim on inviter_claim.source='invitation' and inviter_claim.source_id=i.id::text and inviter_claim.user_id=i.inviter_id left join reward_claims invitee_claim on invitee_claim.source='invitation' and invitee_claim.source_id=i.id::text and invitee_claim.user_id=i.invitee_id where i.inviter_id=$1 order by i.created_at desc limit 100`, account.userID)
 	if err != nil {
 		writeError(w, 500, "internal_error", "could not load invitations")
 		return
@@ -78,10 +78,10 @@ func (s *Service) accountInvitations(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	data := make([]map[string]any, 0)
 	for rows.Next() {
-		var id, name, email, reward string
+		var id, name, email, reward, inviterStatus, inviteeStatus string
 		var created any
-		if rows.Scan(&id, &name, &email, &reward, &created) == nil {
-			data = append(data, map[string]any{"id": id, "name": name, "email": maskInvitationEmail(email), "reward": reward, "created_at": created})
+		if rows.Scan(&id, &name, &email, &reward, &created, &inviterStatus, &inviteeStatus) == nil {
+			data = append(data, map[string]any{"id": id, "name": name, "email": maskInvitationEmail(email), "reward": reward, "created_at": created, "inviter_reward_status": inviterStatus, "invitee_reward_status": inviteeStatus})
 		}
 	}
 	if err = rows.Err(); err != nil {

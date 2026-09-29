@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { CalendarCheck } from 'lucide-vue-next'
-import { endpoints, type CheckinEntry } from '~/src/api'
+import { endpoints, ApiError, type CheckinEntry } from '~/src/api'
 import { formatDate, formatMoney } from '~/src/format'
 import { GEETEST_CANCELLED } from '~/composables/useGeetest'
 import { CORPTCHA_CANCELLED, CORPTCHA_UNAVAILABLE } from '~/composables/useCorptcha'
@@ -10,7 +10,9 @@ definePageMeta({ layout: 'console', middleware: 'console-auth' })
 const { t } = useI18n()
 const { settings } = useSiteSettings()
 const { toast } = useToast()
-const { busy, run } = useAction()
+const { busy, run, error: actionError } = useAction()
+const { prepare: prepareRiskContext } = useRiskContext()
+const { rewardLabel, rewardTone } = useRewardStatus()
 const { challenge: geetestChallenge } = useGeetest()
 const { challenge: corptchaChallenge } = useCorptcha()
 
@@ -43,16 +45,25 @@ const { data: status, pending, error, refresh } = useResource(
 )
 
 async function submit() {
+  if (busy.value) return
   formError.value = ''
   const ok = await run(async () => {
     const captcha = captchaEnabled.value ? await runCaptcha() : null
     if (captchaEnabled.value && !captcha) return
-    const result = await endpoints.checkin(captcha ?? undefined)
-    if (result.already_checked_in) toast.success(t('console.checkinAlready'))
-    else toast.success(t('console.checkinSuccess', { reward: formatMoney(result.reward ?? 0, 4) }))
-    await refresh()
+    try {
+      const riskContextId = await prepareRiskContext('checkin')
+      const result = await endpoints.checkin({ ...captcha, ...(riskContextId ? { risk_context_id: riskContextId } : {}) })
+      if (result.reward_status === 'pending') toast.info(t('console.checkinPending'))
+      else if (result.already_checked_in) toast.info(t('console.checkinAlready'))
+      else if (result.reward_status === 'credited' || !result.reward_status) toast.success(t('console.checkinSuccess', { reward: formatMoney(result.reward ?? 0, 4) }))
+      else toast.info(t('console.checkinRecorded'))
+      await refresh()
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.code === 'account_restricted') formError.value = t('auth.accountRestricted')
+      throw cause
+    }
   })
-  if (!ok) toast.error(t('common.actionFailed'))
+  if (!ok) formError.value ||= actionError.value || t('common.actionFailed')
 }
 </script>
 
@@ -71,6 +82,11 @@ async function submit() {
           {{ status.checked_in ? t('console.checkinDone') : t('console.checkinButton') }}
         </UiButton>
       </div>
+      <p v-if="settings.risk_probe?.enabled" class="mt-4 text-xs leading-relaxed text-muted">
+        {{ t('console.checkinProbeNotice') }}
+        <NuxtLink to="/privacy#collected" class="text-clay underline-offset-4 hover:underline">{{ t('site.riskProbePrivacyLink') }}</NuxtLink>
+      </p>
+      <UiAlert v-if="status.data.some(item => item.reward_status === 'pending')" class="mt-4" tone="info">{{ t('console.rewardReviewHint') }}</UiAlert>
       <UiAlert v-if="formError" class="mt-4" tone="danger" :title="formError" />
     </UiCard>
 
@@ -86,8 +102,8 @@ async function submit() {
           :empty-description="t('console.checkinEmptyBody')"
         >
           <UiTable>
-            <thead><tr><th>{{ t('console.checkinDate') }}</th><th class="num">{{ t('console.checkinStreak') }}</th><th class="num">{{ t('console.checkinReward') }}</th></tr></thead>
-            <tbody><tr v-for="item in status.data" :key="item.checkin_date"><td>{{ formatDate(item.checkin_date) }}</td><td class="num">{{ item.streak }}</td><td class="num text-success">+{{ formatMoney(item.reward, 4) }}</td></tr></tbody>
+            <thead><tr><th>{{ t('console.checkinDate') }}</th><th class="num">{{ t('console.checkinStreak') }}</th><th class="num">{{ t('console.checkinReward') }}</th><th>{{ t('console.rewardStatus') }}</th></tr></thead>
+            <tbody><tr v-for="item in status.data" :key="item.checkin_date"><td>{{ formatDate(item.checkin_date) }}</td><td class="num">{{ item.streak }}</td><td class="num" :class="!item.reward_status || item.reward_status === 'credited' ? 'text-success' : 'text-muted'">{{ formatMoney(item.reward, 4) }}</td><td><UiBadge :tone="rewardTone(item.reward_status)">{{ rewardLabel(item.reward_status) }}</UiBadge></td></tr></tbody>
           </UiTable>
         </ConsoleUserDataState>
       </div>

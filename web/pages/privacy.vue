@@ -18,7 +18,7 @@ const SECTIONS: Section[] = [
     blocks: [
       { kind: 'p', keys: ['site.privacyS1P1'] },
       { kind: 'ul', keys: ['site.privacyS1L1', 'site.privacyS1L2', 'site.privacyS1L3', 'site.privacyS1L4', 'site.privacyS1L5'] },
-      { kind: 'p', keys: ['site.privacyS1P2'] },
+      { kind: 'p', keys: ['site.privacyS1P2', 'site.riskProbePrivacy'] },
     ],
   },
   {

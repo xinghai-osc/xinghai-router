@@ -6,6 +6,7 @@
 
 - PostgreSQL migrations for users、哈希 API Key、加密渠道凭据、不可变钱包账本、用量、路由和审计记录。
 - 基于用户会话、管理员角色和细粒度权限保护的管理 API。
+- 多工作空间：个人/团队空间切换、成员角色管理、API 密钥与用量隔离；钱包和订阅仍归个人，平台管理沿用全站权限。详见[多工作空间说明](docs/workspaces.md)。
 - OpenAI-compatible `GET /v1/models`、`POST /v1/chat/completions`、`POST /v1/responses`，Anthropic-compatible `POST /v1/messages`，以及 TypeSafe-compatible `POST /v1/systemone`。
 - 透明 SSE、每 Key 每分钟基础限流、请求 ID、安全响应头、panic 恢复、模型别名和同优先级权重路由。
 - 对可重试上游错误自动切换备用渠道；连续失败三次的渠道冷却一分钟。管理员可在站点设置中开启故障渠道自动检测：系统会重试检测三次，全部失败后自动停用渠道。

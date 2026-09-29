@@ -42,7 +42,11 @@ func TestFetchChannelModelsUpstreamFormats(t *testing.T) {
 				if r.Method != http.MethodGet || r.URL.Path != "/v1/models" {
 					t.Errorf("upstream request = %s %s, want GET /v1/models", r.Method, r.URL.Path)
 				}
-				if got := r.Header.Get("Authorization"); got != "Bearer fake-models-key" {
+				if resolveUpstreamFormat(strings.TrimSpace(test.provider), test.upstreamFormat) == "anthropic" {
+					if r.Header.Get("X-API-Key") != "fake-models-key" || r.Header.Get("Anthropic-Version") != "2023-06-01" || r.Header.Get("Authorization") != "" {
+						t.Error("missing Anthropic authentication headers")
+					}
+				} else if got := r.Header.Get("Authorization"); got != "Bearer fake-models-key" {
 					t.Errorf("Authorization = %q, want fake bearer key", got)
 				}
 				w.Header().Set("Content-Type", "application/json")

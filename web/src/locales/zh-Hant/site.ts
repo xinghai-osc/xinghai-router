@@ -1,4 +1,7 @@
 export default {
+  riskProbePrivacyLink: '網路檢測隱私說明',
+  riskProbePrivacy: '網路檢測與獎勵保護：在你主動註冊、透過 OAuth 繼續或簽到時，我們可能執行最長 2 秒的 WebRTC 資料通道檢測。設定的 STUN 服務（預設 Cloudflare）會收到你的網路位址，不會存取攝影機或麥克風。最多提交 8 個公網位址及檢測狀態，用於審核獎勵濫用；不提交私有位址、主機名稱或工作階段描述。簽署的 HttpOnly 瀏覽器 Cookie 用於識別重複獎勵操作。檢測無法使用本身不會被認定為濫用。',
+
   metaDescription: '星海 Router 把多家大模型供應商聚合到一個統一網關，兼容 OpenAI 與 Anthropic 協議，提供計費、限流、容災與用量統計。',
   footerBlurb: '統一的大模型網關，一個 API 密鑰接入多家供應商，兼容 OpenAI 與 Anthropic 協議。',
   footerCompat: 'OpenAI 兼容 · Anthropic 兼容',

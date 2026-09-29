@@ -1,4 +1,7 @@
 export default {
+  adminRewardRisk: 'Reward risk',
+
+  workspaces: 'Workspaces',
   sectionOverview: 'Overview',
   sectionBilling: 'Billing',
   sectionAccount: 'Account',
@@ -24,6 +27,7 @@ export default {
   walletLedger: 'Balance movements',
   groups: 'Groups',
   channels: 'Channels',
+  clusters: 'Clusters & instances',
   providers: 'Providers',
   modelRoutes: 'Model routes',
   pricing: 'Model pricing',

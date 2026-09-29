@@ -321,7 +321,7 @@ func (s *Service) getAccountPayment(w http.ResponseWriter, r *http.Request) {
 func (s *Service) epayNotify(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	settings, err := s.loadEpaySettings(r)
-	if err != nil || settings.MerchantKey == "" || r.ParseForm() != nil || r.Form.Get("pid") != settings.MerchantID || !equalSecret(strings.ToLower(r.Form.Get("sign")), epaySign(r.Form, settings.MerchantKey)) {
+	if err != nil || settings.MerchantKey == "" || parseRequestForm(w, r, s.cfg.RequestBodyTimeout) != nil || r.Form.Get("pid") != settings.MerchantID || !equalSecret(strings.ToLower(r.Form.Get("sign")), epaySign(r.Form, settings.MerchantKey)) {
 		http.Error(w, "fail", http.StatusBadRequest)
 		return
 	}

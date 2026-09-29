@@ -25,6 +25,7 @@ func (s *Service) startAuthCleanupScheduler(ctx context.Context) {
 				s.cleanupExpiredAuthState(ctx)
 				s.expireStalePendingOrders(ctx)
 				s.cleanupContentAudits(ctx)
+				s.cleanupRewardRisk(ctx)
 				timer.Reset(authCleanupInterval)
 			}
 		}

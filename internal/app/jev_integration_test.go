@@ -189,7 +189,7 @@ func TestIntegrationJEVAuthValidationPolicyAndPricing(t *testing.T) {
 		{"missing key", "", jevIntegrationBody, http.StatusUnauthorized},
 		{"wrong key", "not-a-valid-key", jevIntegrationBody, http.StatusUnauthorized},
 		{"invalid body", secret, `{}`, http.StatusUnprocessableEntity},
-		{"oversized body", secret, strings.Repeat("x", maxJEVRequestBody+1), http.StatusRequestEntityTooLarge},
+		{"large invalid body", secret, strings.Repeat("x", (2<<20)+1), http.StatusUnprocessableEntity},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			rec := jevIntegrationCall(s, test.key, "/v1/systemone", test.body)

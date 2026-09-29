@@ -1,27 +1,36 @@
 <script setup lang="ts">
 import type { Component } from 'vue'
 
-defineProps<{
+type Tone = 'accent' | 'success' | 'warn'
+
+withDefaults(defineProps<{
   label: string
   value: string
   hint?: string
   icon?: Component
   loading?: boolean
-}>()
+  tone?: Tone
+}>(), { tone: 'accent' })
+
+const TONES: Record<Tone, string> = {
+  accent: 'bg-clay-soft text-clay',
+  success: 'bg-success-soft text-success',
+  warn: 'bg-warn-soft text-warn',
+}
 </script>
 
 <template>
-  <div class="rounded-card border border-line bg-surface/90 px-5 py-4 shadow-[0_1px_0_rgb(255_255_255/0.03)] transition-[border-color,transform,box-shadow] duration-150 hover:-translate-y-px hover:border-line-strong hover:shadow-pop">
+  <div class="min-w-0 rounded-card border border-line bg-surface p-4 sm:p-5" :aria-busy="loading || undefined">
     <div class="flex items-start justify-between gap-2">
-      <p class="text-[13px] text-muted">{{ label }}</p>
-      <div v-if="icon" class="flex size-8 items-center justify-center rounded-control bg-clay-soft text-clay">
-        <component :is="icon" class="size-4 shrink-0" />
+      <p class="min-w-0 text-xs leading-5 font-medium text-muted sm:text-[13px]">{{ label }}</p>
+      <div v-if="icon" class="flex size-8 shrink-0 items-center justify-center rounded-control" :class="TONES[tone]">
+        <component :is="icon" class="size-4" aria-hidden="true" />
       </div>
     </div>
 
-    <UiSkeleton v-if="loading" class="mt-2.5 h-7 w-24" />
-    <p v-else class="numeric mt-1.5 text-2xl text-ink">{{ value }}</p>
+    <UiSkeleton v-if="loading" class="mt-3 h-7 w-24 max-w-full" />
+    <p v-else class="numeric mt-3 text-xl leading-tight font-semibold tracking-tight text-ink [overflow-wrap:anywhere] sm:text-2xl" :title="value">{{ value }}</p>
 
-    <p v-if="hint" class="mt-1 text-[13px] text-faint">{{ hint }}</p>
+    <p v-if="hint" class="mt-2 text-xs leading-5 text-muted">{{ hint }}</p>
   </div>
 </template>

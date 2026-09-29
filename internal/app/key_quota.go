@@ -32,7 +32,7 @@ func (s *Service) keyQuotaList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var owner string
-	if err := s.db.QueryRow(r.Context(), `select user_id from api_keys where id=$1`, keyID).Scan(&owner); err != nil {
+	if err := s.db.QueryRow(r.Context(), `select user_id from api_keys where id=$1 and workspace_id=$2`, keyID, account.workspaceID).Scan(&owner); err != nil {
 		writeError(w, http.StatusNotFound, "not_found", "API key not found")
 		return
 	}
@@ -141,7 +141,7 @@ func (s *Service) keyQuotaUpsert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var owner string
-	if err := s.db.QueryRow(r.Context(), `select user_id from api_keys where id=$1 and revoked_at is null`, keyID).Scan(&owner); err != nil {
+	if err := s.db.QueryRow(r.Context(), `select user_id from api_keys where id=$1 and workspace_id=$2 and revoked_at is null`, keyID, account.workspaceID).Scan(&owner); err != nil {
 		writeError(w, http.StatusNotFound, "not_found", "API key not found")
 		return
 	}
@@ -169,7 +169,7 @@ func (s *Service) keyQuotaDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var owner string
-	if err := s.db.QueryRow(r.Context(), `select user_id from api_keys where id=$1`, keyID).Scan(&owner); err != nil {
+	if err := s.db.QueryRow(r.Context(), `select user_id from api_keys where id=$1 and workspace_id=$2`, keyID, account.workspaceID).Scan(&owner); err != nil {
 		writeError(w, http.StatusNotFound, "not_found", "API key not found")
 		return
 	}

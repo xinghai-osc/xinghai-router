@@ -43,6 +43,7 @@ export const NAV_SECTIONS: NavSection[] = [
     titleKey: 'nav.sectionAccount',
     items: [
       { to: '/console/account', labelKey: 'nav.account', icon: UserCog },
+      { to: '/console/workspaces', labelKey: 'nav.workspaces', icon: Layers },
       { to: '/console/invitations', labelKey: 'nav.invitations', icon: UserPlus },
     ],
   },
@@ -50,11 +51,13 @@ export const NAV_SECTIONS: NavSection[] = [
     titleKey: 'nav.sectionOperations',
     items: [
       { to: '/console/users', labelKey: 'nav.users', icon: Users, permission: 'users.read' },
+      { to: '/console/admin-reward-risk', labelKey: 'nav.adminRewardRisk', icon: ShieldAlert, permission: 'users.read' },
       { to: '/console/admin-checkins', labelKey: 'nav.adminCheckins', icon: CalendarCheck, permission: 'users.read' },
       { to: '/console/admin-orders', labelKey: 'nav.adminOrders', icon: ShoppingCart, permission: 'users.read' },
       { to: '/console/admin-wallet-ledger', labelKey: 'nav.walletLedger', icon: Wallet, permission: 'users.read' },
       { to: '/console/groups', labelKey: 'nav.groups', icon: Layers, permission: 'users.read' },
       { to: '/console/channels', labelKey: 'nav.channels', icon: Server, permission: 'channels.read' },
+      { to: '/console/clusters', labelKey: 'nav.clusters', icon: Server, permission: 'system.manage' },
       { to: '/console/providers', labelKey: 'nav.providers', icon: Blocks, permission: 'system.manage' },
       { to: '/console/pricing', labelKey: 'nav.pricing', icon: BadgeDollarSign, permission: 'pricing.read' },
       { to: '/console/exchange-rates', labelKey: 'nav.exchangeRates', icon: ArrowRightLeft, permission: 'pricing.read' },

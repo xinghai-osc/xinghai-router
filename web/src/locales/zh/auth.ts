@@ -1,4 +1,8 @@
 export default {
+  accountRestricted: '此账号已受限，请联系支持人员。',
+  riskProbeNotice: '注册或通过第三方继续时，可能进行最长 2 秒的网络检测以防止奖励滥用，不使用摄像头或麦克风。',
+  oauthContinue: '通过 {provider} 继续',
+
   signInTitle: '登录账号',
   signInLead: '使用邮箱和密码继续。',
   signUpTitle: '创建账号',

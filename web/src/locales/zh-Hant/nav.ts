@@ -1,4 +1,7 @@
 export default {
+  adminRewardRisk: '獎勵風控',
+
+  workspaces: '工作空間',
   sectionOverview: '概覽',
   sectionBilling: '帳單',
   sectionAccount: '賬戶',

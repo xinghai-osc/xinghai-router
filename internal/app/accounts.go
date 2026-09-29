@@ -24,6 +24,8 @@ type accountContext struct {
 	mustChangePassword bool
 	reauthenticatedAt  *time.Time
 	sessionHash        string
+	workspaceID        string
+	workspaceRole      string
 }
 type accountContextKey struct{}
 
@@ -34,6 +36,7 @@ func (s *Service) register(w http.ResponseWriter, r *http.Request) {
 		Password       string `json:"password"`
 		Code           string `json:"code"`
 		InvitationCode string `json:"invitation_code"`
+		RiskContextID  string `json:"risk_context_id"`
 		geetestPayload
 		corptchaPayload
 	}
@@ -77,16 +80,17 @@ func (s *Service) register(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not secure password")
 		return
 	}
-	tx, err := s.db.Begin(r.Context())
+	signals, err := s.rewardSignals(w, r)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not check account risk")
+		return
+	}
+	tx, err := s.beginRewardRiskTx(r.Context(), true)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not create account")
 		return
 	}
 	defer tx.Rollback(r.Context())
-	if _, err = tx.Exec(r.Context(), `select pg_advisory_xact_lock(458110)`); err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "could not create account")
-		return
-	}
 	var id string
 	err = tx.QueryRow(r.Context(), `insert into users(email,name,role,password_hash) values($1,$2,'user',$3) returning id`, email, strings.TrimSpace(in.Name), passwordHash).Scan(&id)
 	if err != nil {
@@ -106,12 +110,27 @@ func (s *Service) register(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not create account")
 		return
 	}
+	signals, err = s.consumeRewardContextTx(r.Context(), tx, strings.TrimSpace(in.RiskContextID), "register", signals, id)
+	if err != nil {
+		if errors.Is(err, errRiskContext) {
+			writeError(w, http.StatusBadRequest, "invalid_risk_context", "invalid reward risk context")
+		} else {
+			writeError(w, http.StatusInternalServerError, "internal_error", "could not check account risk")
+		}
+		return
+	}
+	sourceID, err := randomID()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not create account")
+		return
+	}
 	invitationCode := strings.ToUpper(strings.TrimSpace(in.InvitationCode))
+	var inviterID, inviterReward, inviteeReward string
+	var rewardInviter, rewardInvitee bool
 	if invitationCode != "" {
-		var enabled bool
-		var inviterID, inviterReward, inviteeReward string
-		err = tx.QueryRow(r.Context(), `select s.invitations_enabled,c.user_id::text,s.inviter_reward::text,s.invitee_reward::text from site_settings s join invitation_codes c on c.code=$1 where s.id=true`, invitationCode).Scan(&enabled, &inviterID, &inviterReward, &inviteeReward)
-		if err == pgx.ErrNoRows || (err == nil && !enabled) {
+		var invitationsEnabled bool
+		err = tx.QueryRow(r.Context(), `select s.invitations_enabled,c.user_id::text,s.inviter_reward::text,s.invitee_reward::text,s.inviter_reward>0,s.invitee_reward>0 from site_settings s join invitation_codes c on c.code=$1 join users u on u.id=c.user_id and u.enabled where s.id=true`, invitationCode).Scan(&invitationsEnabled, &inviterID, &inviterReward, &inviteeReward, &rewardInviter, &rewardInvitee)
+		if err == pgx.ErrNoRows || (err == nil && !invitationsEnabled) {
 			writeError(w, http.StatusBadRequest, "invalid_invitation_code", "invalid invitation code")
 			return
 		}
@@ -119,25 +138,35 @@ func (s *Service) register(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "internal_error", "could not apply invitation")
 			return
 		}
-		invitationID, idErr := randomID()
-		if idErr != nil {
+		var inviterEnabled bool
+		err = tx.QueryRow(r.Context(), `select enabled from users where id=$1 for update`, inviterID).Scan(&inviterEnabled)
+		if err == pgx.ErrNoRows || (err == nil && !inviterEnabled) {
+			writeError(w, http.StatusBadRequest, "invalid_invitation_code", "invalid invitation code")
+			return
+		}
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, "internal_error", "could not apply invitation")
 			return
 		}
-		if _, err = tx.Exec(r.Context(), `insert into invitations(id,inviter_id,invitee_id,code,inviter_reward,invitee_reward) values($1,$2,$3,$4,$5,$6)`, invitationID, inviterID, id, invitationCode, inviterReward, inviteeReward); err != nil {
+	}
+	decision, err := s.evaluateRewardRiskTx(r.Context(), tx, signals, id, "register", sourceID, inviterID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not check account risk")
+		return
+	}
+	if invitationCode != "" {
+		if _, err = tx.Exec(r.Context(), `insert into invitations(id,inviter_id,invitee_id,code,inviter_reward,invitee_reward,created_at) values($1,$2,$3,$4,$5,$6,clock_timestamp())`, sourceID, inviterID, id, invitationCode, inviterReward, inviteeReward); err != nil {
 			writeError(w, http.StatusInternalServerError, "internal_error", "could not apply invitation")
 			return
 		}
-		inviterAmount, _ := strconv.ParseFloat(inviterReward, 64)
-		inviteeAmount, _ := strconv.ParseFloat(inviteeReward, 64)
-		if inviterAmount > 0 {
-			if err = s.creditWalletTx(r.Context(), tx, inviterID, inviterAmount, "invitation", invitationID, "Invitation reward"); err != nil {
+		if rewardInviter {
+			if _, err = s.createRewardClaimTx(r.Context(), tx, decision, inviterID, id, "invitation", sourceID, inviterReward); err != nil {
 				writeError(w, http.StatusInternalServerError, "internal_error", "could not apply invitation reward")
 				return
 			}
 		}
-		if inviteeAmount > 0 {
-			if err = s.creditWalletTx(r.Context(), tx, id, inviteeAmount, "invitation", invitationID, "New user invitation reward"); err != nil {
+		if rewardInvitee {
+			if _, err = s.createRewardClaimTx(r.Context(), tx, decision, id, id, "invitation", sourceID, inviteeReward); err != nil {
 				writeError(w, http.StatusInternalServerError, "internal_error", "could not apply invitation reward")
 				return
 			}
@@ -145,6 +174,10 @@ func (s *Service) register(w http.ResponseWriter, r *http.Request) {
 	}
 	if err = tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not create account")
+		return
+	}
+	if decision.Action == "ban" {
+		writeError(w, http.StatusForbidden, "account_restricted", "account is restricted")
 		return
 	}
 	s.auditActor(r, id, "account.registered", "user", id, nil)
@@ -200,6 +233,14 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 	}
 	if !passwordMatches(passwordHash, in.Password) {
 		writeError(w, http.StatusUnauthorized, "invalid_credentials", "invalid email or username or password")
+		return
+	}
+	if err = s.recordRewardLogin(w, r, userID); err != nil {
+		if errors.Is(err, errRiskAccountRestricted) {
+			writeError(w, http.StatusForbidden, "account_restricted", "account is restricted")
+		} else {
+			writeError(w, http.StatusInternalServerError, "internal_error", "could not record account login")
+		}
 		return
 	}
 	s.auditActor(r, userID, "account.logged_in", "user", userID, nil)
@@ -364,7 +405,7 @@ func (s *Service) updateAccountProfile(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) accountKeys(w http.ResponseWriter, r *http.Request) {
 	account := accountFromContext(r)
-	rows, err := s.db.Query(r.Context(), `select k.id,k.name,k.key_prefix,k.expires_at,k.revoked_at,k.last_used_at,k.created_at,coalesce(k.group_id::text,''),coalesce(coalesce(g.display_name, g.name),''),k.secret_encrypted<>'' from api_keys k left join groups g on g.id=k.group_id where k.user_id=$1 order by k.created_at desc`, account.userID)
+	rows, err := s.db.Query(r.Context(), `select k.id,k.name,k.key_prefix,k.expires_at,k.revoked_at,k.last_used_at,k.created_at,coalesce(k.group_id::text,''),coalesce(coalesce(g.display_name, g.name),''),k.secret_encrypted<>'' from api_keys k left join groups g on g.id=k.group_id where k.user_id=$1 and k.workspace_id=$2 order by k.created_at desc`, account.userID, account.workspaceID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
 		return
@@ -423,8 +464,27 @@ func (s *Service) createAccountKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not create API key")
 		return
 	}
-	_, err = s.db.Exec(r.Context(), `insert into api_keys(id,user_id,name,key_prefix,secret_hash,secret_encrypted,expires_at,group_id) values($1,$2,$3,$4,$5,$6,$7,$8)`, id, account.userID, name, secret[:12], hashSecret(secret), encryptedSecret, expires, groupID)
+	tx, err := s.db.Begin(r.Context())
 	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not create API key")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	if err = lockAPIKeyCreation(r.Context(), tx, account, account.userID, false); err != nil {
+		writeUserMutationError(w, err)
+		return
+	}
+	_, err = tx.Exec(r.Context(), `insert into api_keys(id,user_id,name,key_prefix,secret_hash,secret_encrypted,expires_at,group_id,workspace_id) values($1,$2,$3,$4,$5,$6,$7,$8,$9)`, id, account.userID, name, secret[:12], hashSecret(secret), encryptedSecret, expires, groupID, account.workspaceID)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23514" {
+			writeError(w, http.StatusForbidden, "workspace_access_denied", "workspace is unavailable or you are not a member")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not create API key")
+		return
+	}
+	if err = tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not create API key")
 		return
 	}
@@ -442,7 +502,7 @@ func (s *Service) setAccountKeyGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var exists bool
-	if s.db.QueryRow(r.Context(), `select exists(select 1 from api_keys where id=$1 and user_id=$2)`, r.PathValue("id"), account.userID).Scan(&exists) != nil || !exists {
+	if s.db.QueryRow(r.Context(), `select exists(select 1 from api_keys where id=$1 and user_id=$2 and workspace_id=$3)`, r.PathValue("id"), account.userID, account.workspaceID).Scan(&exists) != nil || !exists {
 		writeError(w, http.StatusNotFound, "not_found", "API key not found")
 		return
 	}
@@ -451,7 +511,7 @@ func (s *Service) setAccountKeyGroup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "group must belong to user")
 		return
 	}
-	if _, err = s.db.Exec(r.Context(), `update api_keys set group_id=$1 where id=$2 and user_id=$3`, groupID, r.PathValue("id"), account.userID); err != nil {
+	if _, err = s.db.Exec(r.Context(), `update api_keys set group_id=$1 where id=$2 and user_id=$3 and workspace_id=$4`, groupID, r.PathValue("id"), account.userID, account.workspaceID); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not update API key group")
 		return
 	}
@@ -485,7 +545,7 @@ func (s *Service) updateAccountKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "group must belong to user")
 		return
 	}
-	result, err := s.db.Exec(r.Context(), `update api_keys set name=$1,expires_at=$2,group_id=$3 where id=$4 and user_id=$5 and revoked_at is null`, name, expires, groupID, r.PathValue("id"), account.userID)
+	result, err := s.db.Exec(r.Context(), `update api_keys set name=$1,expires_at=$2,group_id=$3 where id=$4 and user_id=$5 and workspace_id=$6 and revoked_at is null`, name, expires, groupID, r.PathValue("id"), account.userID, account.workspaceID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not update API key")
 		return
@@ -505,7 +565,7 @@ func (s *Service) revokeAccountKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "key id is required")
 		return
 	}
-	result, err := s.db.Exec(r.Context(), `update api_keys set revoked_at=coalesce(revoked_at, now()) where id=$1 and user_id=$2 and revoked_at is null`, keyID, account.userID)
+	result, err := s.db.Exec(r.Context(), `update api_keys set revoked_at=coalesce(revoked_at, now()) where id=$1 and user_id=$2 and workspace_id=$3 and revoked_at is null`, keyID, account.userID, account.workspaceID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not revoke API key")
 		return
@@ -526,7 +586,7 @@ func (s *Service) revealAccountKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var encrypted string
-	err := s.db.QueryRow(r.Context(), `select secret_encrypted from api_keys where id=$1 and user_id=$2`, keyID, account.userID).Scan(&encrypted)
+	err := s.db.QueryRow(r.Context(), `select secret_encrypted from api_keys where id=$1 and user_id=$2 and workspace_id=$3 and revoked_at is null`, keyID, account.userID, account.workspaceID).Scan(&encrypted)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "not_found", "API key not found")
 		return
@@ -549,7 +609,7 @@ func (s *Service) accountUsageSummary(w http.ResponseWriter, r *http.Request) {
 	var requests int64
 	var prompt, completion int64
 	var cost any
-	err := s.db.QueryRow(r.Context(), `select count(*),coalesce(sum(rl.prompt_tokens),0),coalesce(sum(rl.completion_tokens),0),coalesce(sum(ur.cost),0) from request_logs rl left join usage_records ur on ur.request_id=rl.request_id where rl.user_id=$1 and rl.created_at>=date_trunc('month',now())`, account.userID).Scan(&requests, &prompt, &completion, &cost)
+	err := s.db.QueryRow(r.Context(), `select count(*),coalesce(sum(rl.prompt_tokens),0),coalesce(sum(rl.completion_tokens),0),coalesce(sum(ur.cost),0) from request_logs rl left join usage_records ur on ur.request_id=rl.request_id where rl.workspace_id=$1 and rl.created_at>=date_trunc('month',now())`, account.workspaceID).Scan(&requests, &prompt, &completion, &cost)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
 		return
@@ -578,7 +638,7 @@ func (s *Service) accountUsageDaily(w http.ResponseWriter, r *http.Request) {
 	// Shifting by the client offset and reading the result as UTC wall-clock
 	// yields the local day, independent of the session timezone. The window has
 	// one day of slack so clients ahead of UTC still see a full window.
-	rows, err := s.db.Query(r.Context(), `select (date_trunc('day', (rl.created_at + make_interval(mins => $2)) at time zone 'UTC'))::date as day,count(*),coalesce(sum(rl.prompt_tokens),0),coalesce(sum(rl.completion_tokens),0) from request_logs rl where rl.user_id=$1 and rl.created_at>=now()-make_interval(days => $3) group by day order by day`, account.userID, offset, days+1)
+	rows, err := s.db.Query(r.Context(), `select (date_trunc('day', (rl.created_at + make_interval(mins => $2)) at time zone 'UTC'))::date as day,count(*),coalesce(sum(rl.prompt_tokens),0),coalesce(sum(rl.completion_tokens),0) from request_logs rl where rl.workspace_id=$1 and rl.created_at>=now()-make_interval(days => $3) group by day order by day`, account.workspaceID, offset, days+1)
 	if err != nil {
 		log.Printf("account usage daily: %v", err)
 		writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
@@ -619,9 +679,9 @@ func (s *Service) accountUsage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	args := []any{account.userID}
+	args := []any{account.workspaceID}
 	argIdx := 2
-	where := []string{"rl.user_id=$1"}
+	where := []string{"rl.workspace_id=$1"}
 	if model != "" {
 		where = append(where, "rl.model ilike $"+strconv.Itoa(argIdx))
 		args = append(args, "%"+model+"%")

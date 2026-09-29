@@ -19,7 +19,7 @@ defineProps<{ dense?: boolean }>()
   position: sticky;
   top: 0;
   z-index: 1;
-  background-color: var(--sunken);
+  background-color: color-mix(in srgb, var(--sunken) 70%, var(--surface));
 }
 
 .ui-table :deep(th) {

@@ -109,10 +109,6 @@ func (s *Service) listUsageLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
-	// Error details matching an auto-disable keyword are replaced with the same
-	// generic no-channel notice the gateway relays, so the log view never shows
-	// the upstream's specific account/quota text either.
-	reliability := s.reliabilitySettings(r.Context())
 	data := []map[string]any{}
 	for rows.Next() {
 		var requestID, userID, userName, apiKeyID, keyName, channelID, channelName, channelKeyID, channelKeyName, groupID, groupName, model, errorCode, errorDetail, clientIP, userAgent string
@@ -125,7 +121,7 @@ func (s *Service) listUsageLogs(w http.ResponseWriter, r *http.Request) {
 			log.Printf("scan usage log row: %v", err)
 			continue
 		}
-		errorDetail = s.clientUpstreamError(r.Context(), errorDetail, reliability)
+		errorDetail = adminErrorDetail(errorDetail)
 		data = append(data, map[string]any{
 			"request_id":           requestID,
 			"user_id":              userID,
@@ -230,22 +226,16 @@ func (s *Service) usageStats(w http.ResponseWriter, r *http.Request) {
 
 	trunc := map[string]string{"hour": "date_trunc('hour',rl.created_at)", "day": "date_trunc('day',rl.created_at)", "month": "date_trunc('month',rl.created_at)"}
 
-	aggQuery := `select count(*),coalesce(sum(rl.prompt_tokens),0),coalesce(sum(ur.cached_prompt_tokens),0),coalesce(sum(rl.completion_tokens),0),coalesce(sum(rl.total_tokens),0),coalesce(avg(rl.duration_ms),0),avg(rl.first_token_ms),coalesce(sum(ur.cost),0) from request_logs rl left join usage_records ur on ur.request_id=rl.request_id` + whereClause
+	aggQuery := `select count(*),count(*) filter (where rl.status_code>=200 and rl.status_code<400),count(*) filter (where rl.status_code>=400),coalesce(sum(rl.prompt_tokens),0),coalesce(sum(ur.cached_prompt_tokens),0),coalesce(sum(rl.completion_tokens),0),coalesce(sum(rl.total_tokens),0),coalesce(avg(rl.duration_ms),0),avg(rl.first_token_ms),coalesce(sum(ur.cost),0) from request_logs rl left join usage_records ur on ur.request_id=rl.request_id` + whereClause
 
-	var totalRequests, totalPrompt, totalCached, totalCompletion, totalTokens int64
+	var totalRequests, successCount, errorCount, totalPrompt, totalCached, totalCompletion, totalTokens int64
 	var avgDuration float64
 	var avgFirstTokenMs *float64
 	var totalCost float64
-	if err := s.db.QueryRow(r.Context(), aggQuery, args...).Scan(&totalRequests, &totalPrompt, &totalCached, &totalCompletion, &totalTokens, &avgDuration, &avgFirstTokenMs, &totalCost); err != nil {
+	if err := s.db.QueryRow(r.Context(), aggQuery, args...).Scan(&totalRequests, &successCount, &errorCount, &totalPrompt, &totalCached, &totalCompletion, &totalTokens, &avgDuration, &avgFirstTokenMs, &totalCost); err != nil {
 		log.Printf("usage stats aggregate: %v", err)
 		writeError(w, 500, "internal_error", "query failed")
 		return
-	}
-
-	var successCount, errorCount int64
-	if err := s.db.QueryRow(r.Context(), `select coalesce(sum(case when status_code>=200 and status_code<400 then 1 else 0 end),0),coalesce(sum(case when status_code>=400 then 1 else 0 end),0) from request_logs rl`+whereClause, args...).Scan(&successCount, &errorCount); err != nil {
-		successCount = 0
-		errorCount = 0
 	}
 
 	result := map[string]any{

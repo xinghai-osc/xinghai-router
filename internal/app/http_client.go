@@ -22,13 +22,15 @@ var upstreamTransport = sync.OnceValue(func() *http.Transport {
 	if idlePerHost < 64 {
 		idlePerHost = 64
 	}
+	protocols := new(http.Protocols)
+	protocols.SetHTTP1(true)
 	return &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
+		Protocols: protocols,
+		Proxy:     http.ProxyFromEnvironment,
 		DialContext: (&net.Dialer{
 			Timeout:   10 * time.Second,
 			KeepAlive: 30 * time.Second,
 		}).DialContext,
-		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          8 * idlePerHost,
 		MaxIdleConnsPerHost:   idlePerHost,
 		IdleConnTimeout:       90 * time.Second,

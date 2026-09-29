@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -14,8 +16,6 @@ import (
 )
 
 const (
-	defaultGatewayMaxBodyBytes   = 2 << 20
-	defaultImageMaxBodyBytes     = 50 << 20
 	defaultWSMaxMessageBytes     = 2 << 20
 	defaultRequestBodyTimeout    = 30 * time.Second
 	defaultWSIdleTimeout         = 2 * time.Minute
@@ -30,8 +30,6 @@ func loadRequestLimits(c *Config) error {
 		target   *int64
 		fallback int64
 	}{
-		{"GATEWAY_MAX_BODY_BYTES", &c.GatewayMaxBodyBytes, defaultGatewayMaxBodyBytes},
-		{"IMAGE_MAX_BODY_BYTES", &c.ImageMaxBodyBytes, defaultImageMaxBodyBytes},
 		{"WS_MAX_MESSAGE_BYTES", &c.WSMaxMessageBytes, defaultWSMaxMessageBytes},
 	} {
 		*setting.target = setting.fallback
@@ -87,8 +85,7 @@ func positiveRequestTimeout(value, fallback time.Duration) time.Duration {
 	return fallback
 }
 
-func readRequestBody(w http.ResponseWriter, r *http.Request, limit int64, timeout time.Duration) (body []byte, err error) {
-	limit = positiveRequestLimit(limit, defaultGatewayMaxBodyBytes)
+func readRequestBody(w http.ResponseWriter, r *http.Request, timeout time.Duration) (body []byte, err error) {
 	timeout = positiveRequestTimeout(timeout, defaultRequestBodyTimeout)
 	controller := http.NewResponseController(w)
 	defer func() {
@@ -104,10 +101,6 @@ func readRequestBody(w http.ResponseWriter, r *http.Request, limit int64, timeou
 	if deadlineErr := controller.SetReadDeadline(time.Now().Add(timeout)); deadlineErr != nil && !errors.Is(deadlineErr, http.ErrNotSupported) {
 		return nil, deadlineErr
 	}
-	if r.ContentLength > limit {
-		return nil, &http.MaxBytesError{Limit: limit}
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	body, err = io.ReadAll(r.Body)
 	if err != nil {
 		return nil, err
@@ -115,11 +108,24 @@ func readRequestBody(w http.ResponseWriter, r *http.Request, limit int64, timeou
 	return body, nil
 }
 
-func requestBodyError(err error) (int, string, string) {
-	var maxBytes *http.MaxBytesError
-	if errors.As(err, &maxBytes) {
-		return http.StatusRequestEntityTooLarge, "request_too_large", fmt.Sprintf("request body exceeds %d bytes", maxBytes.Limit)
+func parseRequestForm(w http.ResponseWriter, r *http.Request, timeout time.Duration) error {
+	if r.PostForm == nil && r.Body != nil && (r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodPatch) {
+		mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+		if err == nil && mediaType == "application/x-www-form-urlencoded" {
+			body, err := readRequestBody(w, r, timeout)
+			if err != nil {
+				return err
+			}
+			r.PostForm, err = url.ParseQuery(string(body))
+			if err != nil {
+				return err
+			}
+		}
 	}
+	return r.ParseForm()
+}
+
+func requestBodyError(err error) (int, string, string) {
 	var timeout net.Error
 	if errors.Is(err, context.DeadlineExceeded) || errors.As(err, &timeout) && timeout.Timeout() {
 		return http.StatusRequestTimeout, "request_timeout", "request body read timed out"

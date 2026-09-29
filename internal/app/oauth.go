@@ -15,7 +15,15 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
+
+type oauthRewardRiskInput struct {
+	Signals    rewardRiskSignals
+	Provider   string
+	StateNonce string
+}
 
 var errOAuthEmailNotVerified = errors.New("refusing to use an unverified email for account matching or binding")
 var errOAuthEmailNotAllowed = errors.New("email is not allowed to register")
@@ -105,6 +113,19 @@ func (s *Service) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "unsupported_provider", "unsupported OAuth provider")
 		return
 	}
+	signals, err := s.rewardSignals(w, r)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not start OAuth")
+		return
+	}
+	if err = s.bindOAuthRiskContext(r.Context(), strings.TrimSpace(r.URL.Query().Get("risk_context_id")), provider, stateNonce, signals); err != nil {
+		if errors.Is(err, errRiskContext) {
+			writeError(w, http.StatusBadRequest, "invalid_risk_context", "invalid reward risk context")
+		} else {
+			writeError(w, http.StatusInternalServerError, "internal_error", "could not start OAuth")
+		}
+		return
+	}
 	http.Redirect(w, r, authURL, http.StatusFound)
 }
 
@@ -175,8 +196,21 @@ func (s *Service) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "unsupported_provider", "unsupported OAuth provider")
 		return
 	}
-	userID, err := s.findOrCreateOAuthUser(r.Context(), provider, providerUserID, userEmail, emailVerified, userName, userAvatar)
+	signals, err := s.rewardSignals(w, r)
 	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not process OAuth login")
+		return
+	}
+	userID, err := s.findOrCreateOAuthUser(r.Context(), provider, providerUserID, userEmail, emailVerified, userName, userAvatar, &oauthRewardRiskInput{Signals: signals, Provider: provider, StateNonce: stateNonce})
+	if err != nil {
+		if errors.Is(err, errRiskAccountRestricted) {
+			writeError(w, http.StatusForbidden, "account_restricted", "account is restricted")
+			return
+		}
+		if errors.Is(err, errRiskContext) {
+			writeError(w, http.StatusBadRequest, "invalid_risk_context", "invalid reward risk context")
+			return
+		}
 		if errors.Is(err, errOAuthEmailNotVerified) {
 			writeError(w, http.StatusConflict, "email_not_verified", "cannot bind an unverified provider email to an existing account")
 			return
@@ -203,57 +237,94 @@ func (s *Service) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/console", http.StatusFound)
 }
 
-func (s *Service) findOrCreateOAuthUser(ctx context.Context, provider, providerUserID, email string, emailVerified bool, name, avatar string) (string, error) {
-	var userID string
-	err := s.db.QueryRow(ctx, `select c.user_id from user_oauth_connections c join users u on u.id=c.user_id where c.provider=$1 and c.provider_user_id=$2 and u.enabled`, provider, providerUserID).Scan(&userID)
-	if err == nil {
-		return userID, nil
-	}
-	email = strings.ToLower(strings.TrimSpace(email))
-	if email != "" {
-		if !emailVerified {
-			return "", errOAuthEmailNotVerified
-		}
-		err = s.db.QueryRow(ctx, `select id from users where email=$1 and enabled`, email).Scan(&userID)
-		if err == nil {
-			_, _ = s.db.Exec(ctx, `insert into user_oauth_connections(user_id,provider,provider_user_id,provider_username,provider_avatar_url) values($1,$2,$3,$4,$5) on conflict do nothing`, userID, provider, providerUserID, name, avatar)
-			return userID, nil
-		}
-	}
-	if email == "" {
-		email = fmt.Sprintf("%s-%s@oauth.local", provider, providerUserID)
-	}
-	allowed, err := s.registrationEmailAllowed(ctx, email)
-	if err != nil {
-		return "", err
-	}
-	if !allowed {
-		return "", errOAuthEmailNotAllowed
-	}
-	displayName := strings.TrimSpace(name)
-	if displayName == "" {
-		displayName = email
-	}
-	tx, err := s.db.Begin(ctx)
+func (s *Service) findOrCreateOAuthUser(ctx context.Context, provider, providerUserID, email string, emailVerified bool, name, avatar string, riskInputs ...*oauthRewardRiskInput) (string, error) {
+	tx, err := s.beginRewardRiskTx(ctx, true)
 	if err != nil {
 		return "", err
 	}
 	defer tx.Rollback(ctx)
-	if _, err = tx.Exec(ctx, `select pg_advisory_xact_lock(458110)`); err != nil {
+	var userID string
+	var enabled bool
+	created := false
+	err = tx.QueryRow(ctx, `select c.user_id,u.enabled from user_oauth_connections c join users u on u.id=c.user_id where c.provider=$1 and c.provider_user_id=$2 for update of u`, provider, providerUserID).Scan(&userID, &enabled)
+	if err != nil && err != pgx.ErrNoRows {
 		return "", err
 	}
-	err = tx.QueryRow(ctx, `insert into users(email,name,role,avatar_url) values($1,$2,'user',$3) returning id`, email, displayName, avatar).Scan(&userID)
-	if err != nil {
-		return "", err
+	if err == nil && !enabled {
+		return "", errRiskAccountRestricted
 	}
-	if _, err = tx.Exec(ctx, `insert into user_wallets(user_id) values($1) on conflict do nothing`, userID); err != nil {
-		return "", err
+	if userID == "" {
+		email = strings.ToLower(strings.TrimSpace(email))
+		if email != "" && !emailVerified {
+			return "", errOAuthEmailNotVerified
+		}
+		if email == "" {
+			email = fmt.Sprintf("%s-%s@oauth.local", provider, providerUserID)
+		}
+		err = tx.QueryRow(ctx, `select id,enabled from users where email=$1 for update`, email).Scan(&userID, &enabled)
+		if err != nil && err != pgx.ErrNoRows {
+			return "", err
+		}
+		if err == nil {
+			if !enabled {
+				return "", errRiskAccountRestricted
+			}
+			if !emailVerified {
+				return "", errOAuthEmailNotVerified
+			}
+		} else {
+			var whitelistEnabled, aliasBlocked bool
+			var whitelist []string
+			if err = tx.QueryRow(ctx, `select registration_email_whitelist_enabled,registration_email_whitelist,registration_email_alias_blocked from site_settings where id=true`).Scan(&whitelistEnabled, &whitelist, &aliasBlocked); err != nil {
+				return "", err
+			}
+			if (aliasBlocked && isEmailAlias(email)) || (whitelistEnabled && !emailWhitelistAllowed(whitelist, email)) {
+				return "", errOAuthEmailNotAllowed
+			}
+			displayName := strings.TrimSpace(name)
+			if displayName == "" {
+				displayName = email
+			}
+			err = tx.QueryRow(ctx, `insert into users(email,name,role,avatar_url) values($1,$2,'user',$3) returning id`, email, displayName, avatar).Scan(&userID)
+			if err != nil {
+				return "", err
+			}
+			if _, err = tx.Exec(ctx, `insert into user_wallets(user_id) values($1) on conflict do nothing`, userID); err != nil {
+				return "", err
+			}
+			created = true
+		}
+		if _, err = tx.Exec(ctx, `insert into user_oauth_connections(user_id,provider,provider_user_id,provider_username,provider_avatar_url) values($1,$2,$3,$4,$5)`, userID, provider, providerUserID, name, avatar); err != nil {
+			return "", err
+		}
 	}
-	if _, err = tx.Exec(ctx, `insert into user_oauth_connections(user_id,provider,provider_user_id,provider_username,provider_avatar_url) values($1,$2,$3,$4,$5)`, userID, provider, providerUserID, name, avatar); err != nil {
+	signals := rewardRiskSignals{}
+	if len(riskInputs) > 0 && riskInputs[0] != nil {
+		input := riskInputs[0]
+		signals, err = s.consumeOAuthRiskContextTx(ctx, tx, input.Provider, input.StateNonce, input.Signals, userID)
+		if err != nil {
+			return "", err
+		}
+	}
+	restricted := false
+	if created {
+		sourceID, err := randomID()
+		if err != nil {
+			return "", err
+		}
+		decision, err := s.evaluateRewardRiskTx(ctx, tx, signals, userID, "register", sourceID, "")
+		if err != nil {
+			return "", err
+		}
+		restricted = decision.Action == "ban"
+	} else if err = s.recordRewardLoginTx(ctx, tx, signals, userID); err != nil {
 		return "", err
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return "", err
+	}
+	if restricted {
+		return "", errRiskAccountRestricted
 	}
 	return userID, nil
 }

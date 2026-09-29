@@ -7,7 +7,7 @@
 1. 备份 PostgreSQL、现用 `ENCRYPTION_KEY` 和部署配置，先在隔离副本上演练。不要把数据库备份、Cookie jar 或明文 Key 提交到 Git。
 2. 同步部署 Go 服务与 Nuxt Web 构建，不混跑旧版会话前端/后端。迁移 `097_secure_sessions.sql` **一次性删除旧 `user_sessions`**，所有控制台用户需要重新登录；API Key 不受影响。回滚不恢复已注销会话，不要恢复旧会话备份。
 3. 生产环境使用 HTTPS，并保留默认 `SESSION_COOKIE_SECURE=true`。本地 HTTP 开发需明确设为 `false`；不要在公网部署关闭 Secure。此设置不依据可伪造的 `X-Forwarded-Proto` 自动降级。
-4. 评估网关请求大小与上传速度，按下表调整限额，同时配置反向代理的请求体、请求头和连接限制。
+4. 评估网关请求大小与上传速度，按下表调整超时、WS 消息和请求头限额。HTTP 请求体不再设置应用层大小限制，反向代理配置需与上传需求一致。
 5. 渠道凭据的默认写入策略仍是 `plaintext`，**不会在启动时静默改写历史明文**。按第 4 节显式切换与迁移。既有明文 SQL 运维流程在启用加密后必须停用或改造。
 
 ## 2. 用户管理与权限授予
@@ -90,8 +90,6 @@ curl -b cookies.txt -c cookies.txt -H 'X-Xinghai-Request: 1' -H 'Content-Type: a
 
 | 环境变量 | 默认值 | 范围 |
 | --- | --- | --- |
-| `GATEWAY_MAX_BODY_BYTES` | `2097152`（2 MiB） | Chat、Responses、Anthropic、JEV 请求体 |
-| `IMAGE_MAX_BODY_BYTES` | `52428800`（50 MiB） | 图片 JSON / multipart 原始请求体 |
 | `WS_MAX_MESSAGE_BYTES` | `2097152`（2 MiB） | WS 单条消息，含解压后的大小限制 |
 | `REQUEST_BODY_TIMEOUT` | `30s` | 读取请求体，不是上游生成总时长 |
 | `WS_IDLE_TIMEOUT` | `2m` | 等待下一条完整客户端 WS 请求 |
@@ -99,8 +97,8 @@ curl -b cookies.txt -c cookies.txt -H 'X-Xinghai-Request: 1' -H 'Content-Type: a
 | `HTTP_IDLE_TIMEOUT` | `2m` | HTTP keep-alive 空闲时间 |
 | `HTTP_MAX_HEADER_BYTES` | `1048576`（1 MiB） | Go HTTP 请求头限制 |
 
-- 请求体使用有界缓冲，支持无 Content-Length / chunked 请求；多一个字节即返回 `413 request_too_large`，不静默截断。读取超时返回 `408 request_timeout`。控制台修改请求另有固定 8 MiB 上限；密码二次验证 JSON 限 4 KiB。
-- 图片使用有界原始缓冲以保留重试能力，不是完全零缓冲流式上传；multipart 解析可能产生额外内存副本。调整图片上限时结合并发数、内存预算和反向代理限额压测。
+- HTTP 请求体不设应用层大小上限，适用于网关、图片 JSON / multipart、控制台、密码二次验证、工作区及集群接口；支持无 Content-Length / chunked 请求。旧 `GATEWAY_MAX_BODY_BYTES`、`IMAGE_MAX_BODY_BYTES` 配置不再读取，可从部署环境删除。读取超时仍返回 `408 request_timeout`。
+- 请求体仍完整缓冲以保留重试能力，multipart 解析可能产生额外内存副本；大请求的内存占用随请求大小和并发数增加。
 - WS 超限关闭码为 1009；空闲计时只覆盖客户端消息读取，不包裹上游活动响应。请求体成功读取后清除读 deadline，不用全局 ReadTimeout / WriteTimeout 简单截断 SSE/WS。上游生成超时仍由既有可靠性设置控制。
 - 本次不是整个系统的全局内存/连接配额；边缘代理仍需连接数、并发、慢客户端、响应写入和 TLS 防护。不要为了兼容长流完全关闭边缘资源限制。
 

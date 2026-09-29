@@ -64,4 +64,8 @@ export default {
   home: '返回首页',
   menu: '菜单',
   openNav: '打开导航',
+  collapseNav: '收起侧边栏',
+  expandNav: '展开侧边栏',
+  workspace: '工作空间',
+  skipToContent: '跳转到主要内容',
 }

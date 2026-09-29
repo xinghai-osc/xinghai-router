@@ -10,8 +10,8 @@ import (
 )
 
 type keyContext struct {
-	userID, keyID, groupID string
-	dataUsageEnabled       bool
+	userID, keyID, groupID, workspaceID string
+	dataUsageEnabled                    bool
 }
 type contextKey struct{}
 
@@ -24,8 +24,17 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("POST /auth/email-code", s.ipRateLimit(s.sendEmailCode))
 	mux.Handle("POST /auth/password-reset/request", s.ipRateLimit(s.requestPasswordReset))
 	mux.Handle("POST /auth/password-reset/confirm", s.ipRateLimit(s.confirmPasswordReset))
-	mux.HandleFunc("GET /auth/oauth/{provider}", s.oauthAuthorize)
-	mux.HandleFunc("GET /auth/oauth/{provider}/callback", s.oauthCallback)
+	mux.Handle("POST /auth/risk-context", s.optionalAccount(s.createRewardRiskContext))
+	mux.Handle("GET /auth/oauth/{provider}", s.ipRateLimit(s.oauthAuthorize))
+	mux.Handle("GET /auth/oauth/{provider}/callback", s.ipRateLimit(s.oauthCallback))
+	mux.Handle("GET /admin/reward-risk/settings", s.permission("system.manage", s.getRewardRiskSettings))
+	mux.Handle("PUT /admin/reward-risk/settings", s.permission("system.manage", s.requireRecentAuth(s.updateRewardRiskSettings)))
+	mux.Handle("GET /admin/reward-risk/claims", s.permission("users.read", s.listRewardRiskClaims))
+	mux.Handle("GET /admin/reward-risk/events", s.permission("audit.read", s.listRewardRiskEvents))
+	mux.Handle("GET /admin/reward-risk/bans", s.permission("users.read", s.listRewardRiskBans))
+	mux.Handle("POST /admin/reward-risk/claims/{id}/approve", s.permission("wallets.manage", s.requireRecentAuth(s.approveRewardRiskClaim)))
+	mux.Handle("POST /admin/reward-risk/claims/{id}/reject", s.permission("wallets.manage", s.requireRecentAuth(s.rejectRewardRiskClaim)))
+	mux.Handle("POST /admin/reward-risk/users/{id}/unban", s.permission("users.manage", s.requireRecentAuth(s.unbanRewardUser)))
 	mux.Handle("GET /model-catalog", s.optionalAccount(s.modelCatalog))
 	mux.Handle("GET /model-performance", s.ipRateLimitBy(s.performanceLimiter, s.modelPerformance))
 	mux.HandleFunc("GET /site-settings", s.siteSettings)
@@ -38,18 +47,27 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("PUT /account/profile", s.account(s.updateAccountProfile))
 	mux.Handle("PUT /account/password", s.account(s.changeAccountPassword))
 	mux.Handle("PUT /account/preferences", s.account(s.updateAccountPreferences))
-	mux.Handle("GET /account/keys", s.account(s.accountKeys))
-	mux.Handle("POST /account/keys", s.account(s.createAccountKey))
-	mux.Handle("PUT /account/keys/{id}", s.account(s.updateAccountKey))
-	mux.Handle("PUT /account/keys/{id}/group", s.account(s.setAccountKeyGroup))
-	mux.Handle("POST /account/keys/{id}/revoke", s.account(s.revokeAccountKey))
-	mux.Handle("GET /account/keys/{id}/secret", s.account(s.requireRecentAuth(s.revealAccountKey)))
-	mux.Handle("GET /account/keys/{id}/quota", s.account(s.keyQuotaList))
-	mux.Handle("POST /account/keys/{id}/quota", s.account(s.keyQuotaUpsert))
-	mux.Handle("DELETE /account/keys/{id}/quota", s.account(s.keyQuotaDelete))
-	mux.Handle("GET /account/usage", s.account(s.accountUsage))
-	mux.Handle("GET /account/usage/daily", s.account(s.accountUsageDaily))
-	mux.Handle("GET /account/usage/summary", s.account(s.accountUsageSummary))
+	mux.Handle("GET /account/workspaces", s.account(s.listWorkspaces))
+	mux.Handle("POST /account/workspaces", s.account(s.createWorkspace))
+	mux.Handle("PUT /account/workspaces/{id}", s.account(s.updateWorkspace))
+	mux.Handle("DELETE /account/workspaces/{id}", s.account(s.deleteWorkspace))
+	mux.Handle("POST /account/workspaces/{id}/select", s.account(s.selectWorkspace))
+	mux.Handle("GET /account/workspaces/{id}/members", s.account(s.listWorkspaceMembers))
+	mux.Handle("POST /account/workspaces/{id}/members", s.account(s.addWorkspaceMember))
+	mux.Handle("PUT /account/workspaces/{id}/members/{user_id}", s.account(s.updateWorkspaceMember))
+	mux.Handle("DELETE /account/workspaces/{id}/members/{user_id}", s.account(s.removeWorkspaceMember))
+	mux.Handle("GET /account/keys", s.workspaceAccount(s.accountKeys))
+	mux.Handle("POST /account/keys", s.workspaceAccount(s.createAccountKey))
+	mux.Handle("PUT /account/keys/{id}", s.workspaceAccount(s.updateAccountKey))
+	mux.Handle("PUT /account/keys/{id}/group", s.workspaceAccount(s.setAccountKeyGroup))
+	mux.Handle("POST /account/keys/{id}/revoke", s.workspaceAccount(s.revokeAccountKey))
+	mux.Handle("GET /account/keys/{id}/secret", s.workspaceAccount(s.requireRecentAuth(s.revealAccountKey)))
+	mux.Handle("GET /account/keys/{id}/quota", s.workspaceAccount(s.keyQuotaList))
+	mux.Handle("POST /account/keys/{id}/quota", s.workspaceAccount(s.keyQuotaUpsert))
+	mux.Handle("DELETE /account/keys/{id}/quota", s.workspaceAccount(s.keyQuotaDelete))
+	mux.Handle("GET /account/usage", s.workspaceAccount(s.accountUsage))
+	mux.Handle("GET /account/usage/daily", s.workspaceAccount(s.accountUsageDaily))
+	mux.Handle("GET /account/usage/summary", s.workspaceAccount(s.accountUsageSummary))
 	mux.Handle("GET /account/ledger", s.account(s.accountLedger))
 	mux.Handle("GET /account/checkin", s.account(s.accountCheckinStatus))
 	mux.Handle("POST /account/checkin", s.account(s.accountCheckin))
@@ -97,6 +115,7 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("POST /admin/subscriptions/{id}/void", s.permission("system.manage", s.adminVoidSubscription))
 	mux.Handle("DELETE /admin/subscriptions/{id}", s.permission("system.manage", s.adminDeleteSubscription))
 	mux.Handle("GET /admin/users", s.permission("users.read", s.listUsers))
+	mux.Handle("POST /admin/users/batch-update", s.permission("users.manage", s.requireRecentAuth(s.batchUpdateUsers)))
 	mux.Handle("GET /admin/checkins", s.permission("users.read", s.listAdminCheckins))
 	mux.Handle("POST /admin/users/{user_id}/checkins/{date}/withdraw", s.permission("wallets.manage", s.withdrawAdminCheckin))
 	mux.Handle("POST /admin/users", s.permission("users.manage", s.requireRecentAuth(s.createUser)))
@@ -214,6 +233,19 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("GET /admin/quota-limits", s.permission("quotas.manage", s.listQuotaLimits))
 	mux.Handle("DELETE /admin/quota-limits/{id}", s.permission("quotas.manage", s.deleteQuotaLimit))
 	mux.Handle("POST /admin/migrate", s.permission("users.authorize", s.requireRecentAuth(s.runMigration)))
+	mux.Handle("GET /admin/clusters", s.permission("system.manage", s.listClusters))
+	mux.Handle("GET /admin/instances", s.permission("system.manage", s.listAllInstances))
+	mux.Handle("POST /admin/clusters", s.permission("system.manage", s.createCluster))
+	mux.Handle("PUT /admin/clusters/{id}", s.permission("system.manage", s.updateCluster))
+	mux.Handle("DELETE /admin/clusters/{id}", s.permission("system.manage", s.deleteCluster))
+	mux.Handle("PUT /admin/clusters/{id}/manager", s.permission("system.manage", s.assignClusterManager))
+	mux.Handle("GET /admin/clusters/{id}/instances", s.permission("system.manage", s.listInstances))
+	mux.Handle("POST /admin/clusters/{id}/instances", s.permission("system.manage", s.createInstance))
+	mux.Handle("PUT /admin/clusters/{id}/instances/{instanceId}", s.permission("system.manage", s.updateInstance))
+	mux.Handle("DELETE /admin/clusters/{id}/instances/{instanceId}", s.permission("system.manage", s.deleteInstance))
+	mux.Handle("POST /admin/clusters/{id}/sync", s.permission("system.manage", s.syncCluster))
+	mux.Handle("GET /admin/clusters/{id}/syncs", s.permission("system.manage", s.listClusterSyncs))
+	mux.Handle("GET /admin/clusters/{id}/syncs/{syncId}", s.permission("system.manage", s.getClusterSync))
 	mux.Handle("GET /admin/migrate", s.permission("system.manage", s.getMigrationStatus))
 	mux.Handle("GET /admin/migrate/requests", s.permission("system.manage", s.listMigrationRequests))
 	mux.Handle("GET /admin/oauth/providers", s.permission("system.manage", s.listOAuthProviders))
@@ -277,8 +309,7 @@ func (s *Service) api(next http.HandlerFunc) http.Handler {
 			writeError(w, 401, "invalid_api_key", "API key required")
 			return
 		}
-		var k keyContext
-		err := s.db.QueryRow(r.Context(), `select k.user_id,k.id,coalesce(k.group_id::text,''),u.data_usage_enabled from api_keys k join users u on u.id=k.user_id where k.secret_hash=$1 and k.revoked_at is null and (k.expires_at is null or k.expires_at>now()) and u.enabled and (k.group_id is null or exists(select 1 from groups g where g.id=k.group_id and g."public") or exists(select 1 from user_groups ug where ug.user_id=k.user_id and ug.group_id=k.group_id))`, hashSecret(token)).Scan(&k.userID, &k.keyID, &k.groupID, &k.dataUsageEnabled)
+		k, err := s.loadAPIKeyContext(r.Context(), token)
 		if err != nil {
 			writeError(w, 401, "invalid_api_key", "invalid or expired API key")
 			return
@@ -295,6 +326,15 @@ func (s *Service) api(next http.HandlerFunc) http.Handler {
 		s.touchAPIKey(k.keyID)
 		next(w, r.WithContext(context.WithValue(r.Context(), contextKey{}, k)))
 	})
+}
+
+func (s *Service) loadAPIKeyContext(ctx context.Context, token string) (keyContext, error) {
+	var key keyContext
+	if token == "" {
+		return key, errInvalid
+	}
+	err := s.db.QueryRow(ctx, `select k.user_id,k.id,coalesce(k.group_id::text,''),u.data_usage_enabled,k.workspace_id::text from api_keys k join users u on u.id=k.user_id join workspaces ws on ws.id=k.workspace_id and ws.archived_at is null join workspace_members wm on wm.workspace_id=k.workspace_id and wm.user_id=k.user_id where k.secret_hash=$1 and k.revoked_at is null and (k.expires_at is null or k.expires_at>now()) and u.enabled and (k.group_id is null or exists(select 1 from groups g where g.id=k.group_id and g."public") or exists(select 1 from user_groups ug where ug.user_id=k.user_id and ug.group_id=k.group_id))`, hashSecret(token)).Scan(&key.userID, &key.keyID, &key.groupID, &key.dataUsageEnabled, &key.workspaceID)
+	return key, err
 }
 
 // touchAPIKey refreshes api_keys.last_used_at at most once per keyTouchInterval per key,
@@ -318,11 +358,11 @@ func (s *Service) me(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "internal_error", "could not load account")
 		return
 	}
-	writeJSON(w, 200, map[string]any{"user_id": key.userID, "key_id": key.keyID, "email": email, "name": name, "role": role, "balance": balance, "reserved": reserved})
+	writeJSON(w, 200, map[string]any{"user_id": key.userID, "key_id": key.keyID, "workspace_id": key.workspaceID, "email": email, "name": name, "role": role, "balance": balance, "reserved": reserved})
 }
 func (s *Service) myKeys(w http.ResponseWriter, r *http.Request) {
 	key := r.Context().Value(contextKey{}).(keyContext)
-	rows, err := s.db.Query(r.Context(), `select k.id,k.name,k.key_prefix,k.expires_at,k.revoked_at,k.last_used_at,k.created_at,coalesce(k.group_id::text,''),coalesce(g.name,''),k.secret_encrypted<>'' from api_keys k left join groups g on g.id=k.group_id where k.user_id=$1 order by k.created_at desc`, key.userID)
+	rows, err := s.db.Query(r.Context(), `select k.id,k.name,k.key_prefix,k.expires_at,k.revoked_at,k.last_used_at,k.created_at,coalesce(k.group_id::text,''),coalesce(g.name,''),k.secret_encrypted<>'' from api_keys k left join groups g on g.id=k.group_id where k.user_id=$1 and k.workspace_id=$2 order by k.created_at desc`, key.userID, key.workspaceID)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
@@ -341,7 +381,7 @@ func (s *Service) myKeys(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Service) myUsage(w http.ResponseWriter, r *http.Request) {
 	key := r.Context().Value(contextKey{}).(keyContext)
-	rows, err := s.db.Query(r.Context(), `select request_id,model,prompt_tokens,cached_prompt_tokens,completion_tokens,cost,status,created_at,usage_facts,billing_snapshot from usage_records where user_id=$1 order by created_at desc limit 100`, key.userID)
+	rows, err := s.db.Query(r.Context(), `select request_id,model,prompt_tokens,cached_prompt_tokens,completion_tokens,cost,status,created_at,usage_facts,billing_snapshot from usage_records where user_id=$1 and workspace_id=$2 order by created_at desc limit 100`, key.userID, key.workspaceID)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return

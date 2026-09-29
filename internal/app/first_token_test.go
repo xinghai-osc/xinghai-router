@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-func TestHasVisibleStreamText(t *testing.T) {
+func TestHasStreamOutput(t *testing.T) {
 	tests := []struct {
 		name string
 		data string
@@ -30,7 +30,14 @@ func TestHasVisibleStreamText(t *testing.T) {
 		// OpenAI role-only chunk
 		{`openai role only`, `{"choices":[{"index":0,"delta":{"role":"assistant"}}]}`, false},
 		// OpenAI tool_calls-only chunk
-		{`openai tool calls`, `{"choices":[{"index":0,"delta":{"tool_calls":[{"function":{"arguments":"","name":"get_weather"}}]}}]}`, false},
+		{`openai tool calls`, `{"choices":[{"index":0,"delta":{"tool_calls":[{"function":{"arguments":"","name":"get_weather"}}]}}]}`, true},
+		{`openai tool arguments`, `{"choices":[{"delta":{"tool_calls":[{"function":{"arguments":"{}"}}]}}]}`, true},
+		{`openai empty tool delta`, `{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"","arguments":""}}]}}]}`, false},
+		{`openai legacy function`, `{"choices":[{"delta":{"function_call":{"name":"get_weather"}}}]}`, true},
+		{`openai reasoning`, `{"choices":[{"delta":{"reasoning_content":"Let me think"}}]}`, true},
+		{`openai reasoning alias`, `{"choices":[{"delta":{"reasoning":"Let me think"}}]}`, true},
+		{`openai empty reasoning`, `{"choices":[{"delta":{"reasoning_content":" "}}]}`, false},
+		{`openai refusal`, `{"choices":[{"delta":{"refusal":"Cannot help"}}]}`, true},
 		// OpenAI finish_reason-only
 		{`openai finish reason`, `{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`, false},
 		// OpenAI empty choices
@@ -40,7 +47,12 @@ func TestHasVisibleStreamText(t *testing.T) {
 		{`anthropic text delta whitespace`, `{"type":"content_block_delta","delta":{"type":"text_delta","text":" "}}`, false},
 		{`anthropic text delta empty`, `{"type":"content_block_delta","delta":{"type":"text_delta","text":""}}`, false},
 		// Anthropic input_json_delta (tool arguments)
-		{`anthropic input json delta`, `{"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{\"loc\":\"NYC\"}"}}`, false},
+		{`anthropic input json delta`, `{"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{\"loc\":\"NYC\"}"}}`, true},
+		{`anthropic empty input json`, `{"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":""}}`, false},
+		{`anthropic thinking`, `{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"Let me think"}}`, true},
+		{`anthropic signature`, `{"type":"content_block_delta","delta":{"type":"signature_delta","signature":"opaque"}}`, false},
+		{`anthropic tool start`, `{"type":"content_block_start","content_block":{"type":"tool_use","name":"get_weather"}}`, true},
+		{`anthropic text start`, `{"type":"content_block_start","content_block":{"type":"text","text":"Hi"}}`, true},
 		// Anthropic content_block_start
 		{`anthropic content block start`, `{"type":"content_block_start","content_block":{"type":"text","text":""}}`, false},
 		// Anthropic message_start (no delta)
@@ -54,7 +66,14 @@ func TestHasVisibleStreamText(t *testing.T) {
 		{`responses output text delta whitespace`, `{"type":"response.output_text.delta","delta":" "}`, false},
 		{`responses output text delta empty`, `{"type":"response.output_text.delta","delta":""}`, false},
 		// Responses function_call_arguments.delta
-		{`responses function call args`, `{"type":"response.function_call_arguments.delta","delta":"{\"loc\":\"NYC\"}"}`, false},
+		{`responses function call args`, `{"type":"response.function_call_arguments.delta","delta":"{\"loc\":\"NYC\"}"}`, true},
+		{`responses tool start`, `{"type":"response.output_item.added","item":{"type":"function_call","name":"get_weather","arguments":""}}`, true},
+		{`responses message start`, `{"type":"response.output_item.added","item":{"type":"message","role":"assistant","content":[]}}`, false},
+		{`responses reasoning summary`, `{"type":"response.reasoning_summary_text.delta","delta":"Let me think"}`, true},
+		{`responses reasoning`, `{"type":"response.reasoning_text.delta","delta":"Let me think"}`, true},
+		{`responses refusal`, `{"type":"response.refusal.delta","delta":"Cannot help"}`, true},
+		{`responses custom tool input`, `{"type":"response.custom_tool_call_input.delta","delta":"ls"}`, true},
+		{`unknown delta`, `{"type":"unknown.delta","delta":"metadata"}`, false},
 		// Responses created/completed
 		{`responses created`, `{"type":"response.created","response":{"id":"r_123"}}`, false},
 		{`responses completed`, `{"type":"response.completed","response":{"id":"r_123"}}`, false},
@@ -64,9 +83,9 @@ func TestHasVisibleStreamText(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := hasVisibleStreamText([]byte(tt.data))
+			got := hasStreamOutput([]byte(tt.data), "")
 			if got != tt.want {
-				t.Errorf("hasVisibleStreamText(%q) = %v, want %v", tt.data, got, tt.want)
+				t.Errorf("hasStreamOutput(%q) = %v, want %v", tt.data, got, tt.want)
 			}
 		})
 	}

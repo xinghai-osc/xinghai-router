@@ -45,9 +45,9 @@ func TestImageEditFields(t *testing.T) {
 	}
 }
 
-func TestReadImageBodyAcceptsConfiguredLargerLimit(t *testing.T) {
+func TestReadImageBodyAcceptsLargeBody(t *testing.T) {
 	body := strings.Repeat("x", 50<<20+1)
-	s := &Service{cfg: Config{ImageMaxBodyBytes: 51 << 20}}
+	s := &Service{}
 	got, err := s.readImageBody(httptest.NewRecorder(), httptest.NewRequest("POST", "/v1/images/edits", strings.NewReader(body)))
 	if err != nil {
 		t.Fatalf("readImageBody returned error: %v", err)

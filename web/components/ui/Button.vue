@@ -18,7 +18,7 @@ const props = withDefaults(defineProps<{
 
 const VARIANTS: Record<Variant, string> = {
   primary: 'bg-clay text-clay-ink hover:bg-clay-hover active:translate-y-px',
-  secondary: 'border border-line-strong bg-surface/60 text-ink backdrop-blur-md hover:bg-sunken active:translate-y-px',
+  secondary: 'border border-line-strong bg-surface text-ink hover:bg-sunken active:translate-y-px',
   ghost: 'text-muted hover:bg-sunken hover:text-ink',
   danger: 'bg-danger text-white hover:opacity-90 active:translate-y-px',
   link: 'text-clay underline-offset-4 hover:underline',
@@ -73,7 +73,7 @@ const isDisabled = computed(() => props.disabled || props.loading)
   opacity: 0;
   pointer-events: none;
   transform: translate(-50%, -50%) scale(0);
-  transition: opacity 180ms ease-out, transform 360ms ease-out;
+  transition: opacity 150ms ease-out, transform 150ms ease-out;
 }
 
 .liquid-button:hover::after {

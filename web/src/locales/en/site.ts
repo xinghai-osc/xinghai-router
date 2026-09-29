@@ -1,4 +1,7 @@
 export default {
+  riskProbePrivacyLink: 'Network check privacy',
+  riskProbePrivacy: 'Network checks and reward protection: after you choose to register, continue with OAuth or check in, we may run a WebRTC data-channel check lasting at most 2 seconds. Configured STUN services (Cloudflare by default) receive your network address; no camera or microphone is accessed. Up to eight public network addresses and the check status are submitted for reward-abuse review. Private addresses, hostnames and session descriptions are not submitted. A signed HttpOnly browser cookie helps identify repeated reward actions. Unavailable checks alone do not establish abuse.',
+
   metaDescription: 'Xinghai Router unifies multiple LLM providers behind one gateway. OpenAI and Anthropic compatible, with billing, rate limiting, failover and usage analytics built in.',
   footerBlurb: 'A unified LLM gateway. One API key reaches every provider, over both the OpenAI and Anthropic protocols.',
   footerCompat: 'OpenAI compatible · Anthropic compatible',

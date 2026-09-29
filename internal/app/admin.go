@@ -57,28 +57,51 @@ func (s *Service) fetchChannelModels(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_request", "invalid base_url")
 		return
 	}
-	baseURL.Path = strings.TrimRight(baseURL.Path, "/") + "/v1/models"
+	format := resolveUpstreamFormat(in.Provider, in.UpstreamFormat)
+	path := "/v1/models"
+	if format == "commandcode" {
+		path = commandCodeModelsPath
+	}
+	baseURL.Path = strings.TrimRight(baseURL.Path, "/") + path
 	request, err := http.NewRequestWithContext(r.Context(), http.MethodGet, baseURL.String(), nil)
 	if err != nil {
 		writeError(w, 400, "invalid_request", "invalid base_url")
 		return
 	}
-	request.Header.Set("Authorization", "Bearer "+in.APIKey)
-	response, err := s.httpClient.Do(request)
+	request.Header.Set("Accept", "application/json")
+	if format == "anthropic" {
+		request.Header.Set("X-API-Key", in.APIKey)
+		request.Header.Set("Anthropic-Version", "2023-06-01")
+	} else {
+		request.Header.Set("Authorization", "Bearer "+in.APIKey)
+	}
+	if in.Provider == "opencode_go" {
+		request.Header.Set("x-opencode-session", randomIDString())
+	}
+	response, err := clientWithTimeout(s.httpClient, healthCheckProbeTimeout).Do(request)
 	if err != nil {
-		writeError(w, 502, "upstream_error", "could not fetch models")
+		writeError(w, 502, "upstream_error", adminUpstreamFailure("", 0, nil, err, in.APIKey))
 		return
 	}
 	defer response.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(response.Body, 2<<20))
+	body, err := io.ReadAll(io.LimitReader(response.Body, (2<<20)+1))
 	if err != nil {
-		writeError(w, 502, "upstream_error", "could not read upstream models response")
+		writeError(w, 502, "upstream_error", adminUpstreamFailure("could not read upstream models response", response.StatusCode, nil, err, in.APIKey))
+		return
+	}
+	if len(body) > 2<<20 {
+		writeError(w, 502, "upstream_error", "upstream models response is too large")
 		return
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		w.Header().Set("Content-Type", contentType(response.Header.Get("Content-Type")))
-		w.WriteHeader(response.StatusCode)
-		_, _ = w.Write(body)
+		writeError(w, 502, "upstream_error", adminUpstreamFailure("", response.StatusCode, body, nil, in.APIKey))
+		return
+	}
+	var envelope struct {
+		Error json.RawMessage `json:"error"`
+	}
+	if json.Unmarshal(body, &envelope) == nil && len(envelope.Error) > 0 && string(envelope.Error) != "null" {
+		writeError(w, 502, "upstream_error", adminUpstreamFailure("", response.StatusCode, body, nil, in.APIKey))
 		return
 	}
 	models := []string{}
@@ -90,13 +113,13 @@ func (s *Service) fetchChannelModels(w http.ResponseWriter, r *http.Request) {
 			models = append(models, model)
 		}
 	}
-	if resolveUpstreamFormat(in.Provider, in.UpstreamFormat) == "jev" {
+	if format == "jev" {
 		var result struct {
 			Models []struct {
 				Name string `json:"name"`
 			} `json:"models"`
 		}
-		if json.Unmarshal(body, &result) != nil {
+		if json.Unmarshal(body, &result) != nil || result.Models == nil {
 			writeError(w, 502, "upstream_error", "invalid models response")
 			return
 		}
@@ -109,7 +132,7 @@ func (s *Service) fetchChannelModels(w http.ResponseWriter, r *http.Request) {
 				ID string `json:"id"`
 			} `json:"data"`
 		}
-		if json.Unmarshal(body, &result) != nil {
+		if json.Unmarshal(body, &result) != nil || result.Data == nil {
 			writeError(w, 502, "upstream_error", "invalid models response")
 			return
 		}
@@ -998,17 +1021,18 @@ func (s *Service) updateUser(w http.ResponseWriter, r *http.Request) {
 		changed["role"] = *in.Role
 	}
 	if in.Enabled != nil {
-		if _, err = tx.Exec(r.Context(), `update users set enabled=$1 where id=$2`, *in.Enabled, userID); err != nil {
-			writeError(w, 500, "internal_error", "could not update status")
-			return
-		}
-		if !*in.Enabled {
-			if _, err = tx.Exec(r.Context(), `delete from user_sessions where user_id=$1`, userID); err != nil {
-				writeError(w, 500, "internal_error", "could not revoke sessions after disable")
+		if *in.Enabled {
+			if err = s.releaseRewardBanTx(r.Context(), tx, userID, actor.userID, "Administrator enabled account"); err != nil {
+				writeError(w, 500, "internal_error", "could not release reward ban")
 				return
 			}
-			if _, err = tx.Exec(r.Context(), `update api_keys set revoked_at=coalesce(revoked_at, now()) where user_id=$1 and revoked_at is null`, userID); err != nil {
-				writeError(w, 500, "internal_error", "could not revoke API keys after disable")
+			if _, err = tx.Exec(r.Context(), `update users set enabled=true where id=$1`, userID); err != nil {
+				writeError(w, 500, "internal_error", "could not update status")
+				return
+			}
+		} else {
+			if err = disableUserAccessTx(r.Context(), tx, userID); err != nil {
+				writeError(w, 500, "internal_error", "could not disable user access")
 				return
 			}
 			changed["sessions_revoked"] = true
@@ -2113,9 +2137,23 @@ func (s *Service) createKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "internal_error", "could not create API key")
 		return
 	}
-	_, err = s.db.Exec(r.Context(), `insert into api_keys(id,user_id,name,key_prefix,secret_hash,secret_encrypted,expires_at,group_id) values($1,$2,$3,$4,$5,$6,$7,$8)`, id, in.UserID, name, secret[:12], hashSecret(secret), encryptedSecret, expires, groupID)
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		writeError(w, 500, "internal_error", "could not create API key")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	if err = lockAPIKeyCreation(r.Context(), tx, accountFromContext(r), in.UserID, true); err != nil {
+		writeUserMutationError(w, err)
+		return
+	}
+	_, err = tx.Exec(r.Context(), `insert into api_keys(id,user_id,name,key_prefix,secret_hash,secret_encrypted,expires_at,group_id) values($1,$2,$3,$4,$5,$6,$7,$8)`, id, in.UserID, name, secret[:12], hashSecret(secret), encryptedSecret, expires, groupID)
 	if err != nil {
 		writeError(w, 400, "invalid_request", "unknown user")
+		return
+	}
+	if err = tx.Commit(r.Context()); err != nil {
+		writeError(w, 500, "internal_error", "could not create API key")
 		return
 	}
 	s.audit(r, "api_key.created", "api_key", id, map[string]any{"user_id": in.UserID, "name": name})
@@ -3181,6 +3219,7 @@ func (s *Service) testChannelKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	reason = adminUpstreamFailure(reason, status, body, testErr, apiKey)
 	result["reason"] = reason
 	result["auto_disabled"] = false
 	_, _ = s.db.Exec(r.Context(), `update channel_api_keys set last_checked_at=now(),last_error=$1 where id=$2 and channel_id=$3`, reason, keyID, channelID)
@@ -3284,6 +3323,7 @@ func (s *Service) testChannelHandler(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
+		reason = adminUpstreamFailure(reason, status, body, testErr, apiKey)
 		kr.Reason = reason
 		if k.id != "" {
 			_, _ = s.db.Exec(r.Context(), `update channel_api_keys set last_checked_at=now(),last_error=$1 where id=$2 and channel_id=$3`, reason, k.id, channelID)
@@ -3808,9 +3848,6 @@ func (s *Service) listLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer rows.Close()
-	// Log views apply the same keyword rewrite as the gateway so an upstream's
-	// specific account/quota error text never shows up here either.
-	reliability := s.reliabilitySettings(r.Context())
 	data := []map[string]any{}
 	for rows.Next() {
 		var requestID, userID, userName, apiKeyID, keyName, channelID, channelName, channelKeyID, channelKeyName, groupID, groupName, model, errorCode, errorDetail, clientIP, userAgent string
@@ -3821,7 +3858,7 @@ func (s *Service) listLogs(w http.ResponseWriter, r *http.Request) {
 		if err := rows.Scan(&requestID, &userID, &userName, &apiKeyID, &keyName, &channelID, &channelName, &channelKeyID, &channelKeyName, &groupID, &groupName, &model, &status, &prompt, &completion, &total, &duration, &firstTokenMs, &errorCode, &errorDetail, &clientIP, &userAgent, &created); err != nil {
 			continue
 		}
-		errorDetail = s.clientUpstreamError(r.Context(), errorDetail, reliability)
+		errorDetail = adminErrorDetail(errorDetail)
 		data = append(data, map[string]any{"request_id": requestID, "user_id": userID, "user_name": userName, "api_key_id": apiKeyID, "key_name": keyName, "channel_id": channelID, "channel_name": channelName, "channel_key_id": channelKeyID, "channel_key_name": channelKeyName, "group_id": groupID, "group_name": groupName, "model": model, "status_code": status, "prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": total, "duration_ms": duration, "first_token_ms": firstTokenMs, "error_code": errorCode, "error_detail": errorDetail, "client_ip": clientIP, "user_agent": userAgent, "created_at": created})
 	}
 	writeJSON(w, 200, map[string]any{"data": data})

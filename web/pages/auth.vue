@@ -8,6 +8,7 @@ const RESEND_SECONDS = 60
 // Backend error codes that have friendlier localised text than the raw English
 // message the Go handlers emit. Anything unmapped falls back to that message.
 const AUTH_ERROR_KEYS: Record<string, string> = {
+  account_restricted: 'auth.accountRestricted',
   email_not_allowed: 'auth.emailNotAllowed',
   invalid_credentials: 'auth.invalidCredentials',
   rate_limit_exceeded: 'auth.rateLimitExceeded',
@@ -25,6 +26,7 @@ const { t } = useI18n()
 const { settings } = useSiteSettings()
 const { authenticated, loadAccount, signIn } = useAccount()
 const { toast } = useToast()
+const { prepare: prepareRiskContext } = useRiskContext()
 const { challenge: geetestChallenge } = useGeetest()
 const { challenge: corptchaChallenge } = useCorptcha()
 
@@ -184,6 +186,20 @@ async function submitReset() {
   }
 }
 
+async function startOAuth(provider: string) {
+  if (busy.value || !import.meta.client) return
+  busy.value = true
+  formError.value = ''
+  try {
+    const contextId = await prepareRiskContext('oauth')
+    const query = contextId ? `?risk_context_id=${encodeURIComponent(contextId)}` : ''
+    window.location.assign(`/api/auth/oauth/${encodeURIComponent(provider)}${query}`)
+  } catch (cause) {
+    formError.value = describe(cause)
+    busy.value = false
+  }
+}
+
 async function submit() {
   if (busy.value) return
   formError.value = ''
@@ -201,7 +217,8 @@ async function submit() {
     }
     const email = form.email.trim()
     if (isRegister.value) {
-      await endpoints.register({ name: form.name.trim(), email, password: form.password, code: form.code.trim(), invitation_code: form.invitationCode.trim(), ...captcha })
+      const risk_context_id = await prepareRiskContext('register')
+      await endpoints.register({ name: form.name.trim(), email, password: form.password, code: form.code.trim(), invitation_code: form.invitationCode.trim(), risk_context_id, ...captcha })
     } else {
       await endpoints.login({ email, password: form.password, ...captcha })
     }
@@ -309,6 +326,11 @@ async function submit() {
               {{ formError }}
             </UiAlert>
 
+            <p v-if="settings.risk_probe?.enabled && (isRegister || settings.oauth_providers?.length)" class="text-xs leading-relaxed text-muted">
+              {{ t('auth.riskProbeNotice') }}
+              <NuxtLink to="/privacy#collected" class="text-clay underline-offset-4 hover:underline">{{ t('site.riskProbePrivacyLink') }}</NuxtLink>
+            </p>
+
             <UiButton type="submit" size="lg" block :loading="busy">
               {{ isRegister ? t('common.signUp') : t('common.signIn') }}
             </UiButton>
@@ -323,15 +345,17 @@ async function submit() {
             </div>
 
             <div v-if="!isRegister" class="flex flex-col gap-2">
-              <a
+              <UiButton
                 v-for="p in settings.oauth_providers || []"
                 :key="p"
-                :href="`/api/auth/oauth/${p}`"
-                class="inline-flex items-center justify-center gap-2 rounded-control border border-line bg-surface px-4 py-2.5 text-sm font-medium text-ink transition-colors duration-150 hover:bg-sunken"
+                variant="secondary"
+                block
+                :loading="busy"
+                @click="startOAuth(p)"
               >
                 <img v-if="p === 'github'" src="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2216%22%20height%3D%2216%22%20viewBox%3D%220%200%2024%2024%22%3E%3Cpath%20fill%3D%22%23181717%22%20d%3D%22M12%200C5.37%200%200%205.37%200%2012c0%205.31%203.435%209.795%208.205%2011.385.6.105.825-.255.825-.57%200-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015%201.62.87%201.845%201.23%201.08%201.815%202.805%201.305%203.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925%200-1.305.465-2.385%201.23-3.225-.12-.3-.54-1.53.12-3.18%200%200%201.005-.315%203.3%201.23.96-.27%201.98-.405%203-.405s2.04.135%203%20.405c2.295-1.56%203.3-1.23%203.3-1.23.66%201.65.24%202.88.12%203.18.765.84%201.23%201.905%201.23%203.225%200%204.605-2.805%205.625-5.475%205.925.435.375.81%201.095.81%202.22%200%201.605-.015%202.895-.015%203.3%200%20.315.225.69.825.57A12.02%2012.02%200%200%200%2024%2012c0-6.63-5.37-12-12-12z%22%3E%3C%2Fpath%3E%3C%2Fsvg%3E" alt="GitHub" class="size-4">
-                <span>{{ p === 'github' ? 'GitHub' : p }}</span>
-              </a>
+                <span>{{ t('auth.oauthContinue', { provider: p === 'github' ? 'GitHub' : p }) }}</span>
+              </UiButton>
             </div>
           </form>
 

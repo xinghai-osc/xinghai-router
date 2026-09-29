@@ -381,7 +381,7 @@ func (s *Service) models(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) readGatewayBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
-	return readRequestBody(w, r, positiveRequestLimit(s.cfg.GatewayMaxBodyBytes, defaultGatewayMaxBodyBytes), s.cfg.RequestBodyTimeout)
+	return readRequestBody(w, r, s.cfg.RequestBodyTimeout)
 }
 
 func (s *Service) chatCompletions(w http.ResponseWriter, r *http.Request) {
@@ -494,152 +494,6 @@ type streamStats struct {
 	completionReported         bool
 }
 
-type firstTokenTracker struct {
-	started time.Time
-	at      time.Time
-}
-
-func (t *firstTokenTracker) mark() {
-	if t != nil && t.at.IsZero() {
-		t.at = time.Now()
-	}
-}
-
-func (t *firstTokenTracker) milliseconds() *int {
-	if t == nil || t.at.IsZero() {
-		return nil
-	}
-	ms := int(t.at.Sub(t.started).Milliseconds())
-	if ms < 0 {
-		ms = 0
-	}
-	return &ms
-}
-
-// hasVisibleStreamText recognizes the first client-visible text fragment in
-// the supported SSE formats. Metadata, role-only chunks, usage, tool arguments,
-// and terminal events are deliberately excluded from first-character timing.
-func hasVisibleStreamText(data []byte) bool {
-	var event struct {
-		Type    string          `json:"type"`
-		Delta   json.RawMessage `json:"delta"`
-		Choices []struct {
-			Delta struct {
-				Content json.RawMessage `json:"content"`
-			} `json:"delta"`
-		} `json:"choices"`
-	}
-	if json.Unmarshal(data, &event) != nil {
-		return false
-	}
-	for _, choice := range event.Choices {
-		if hasVisibleContent(choice.Delta.Content) {
-			return true
-		}
-	}
-	if event.Type == "content_block_delta" {
-		var delta struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		}
-		return json.Unmarshal(event.Delta, &delta) == nil && delta.Type == "text_delta" && strings.TrimSpace(delta.Text) != ""
-	}
-	if event.Type == "response.output_text.delta" {
-		var delta string
-		return json.Unmarshal(event.Delta, &delta) == nil && strings.TrimSpace(delta) != ""
-	}
-	return false
-}
-
-func hasVisibleContent(raw json.RawMessage) bool {
-	if len(raw) == 0 || string(raw) == "null" {
-		return false
-	}
-	var text string
-	if json.Unmarshal(raw, &text) == nil {
-		return strings.TrimSpace(text) != ""
-	}
-	var parts []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
-	}
-	if json.Unmarshal(raw, &parts) != nil {
-		return false
-	}
-	for _, part := range parts {
-		if (part.Type == "text" || part.Type == "output_text") && strings.TrimSpace(part.Text) != "" {
-			return true
-		}
-	}
-	return false
-}
-
-type firstTokenWriter struct {
-	http.ResponseWriter
-	tracker *firstTokenTracker
-	pending bytes.Buffer
-}
-
-func newFirstTokenWriter(w http.ResponseWriter, tracker *firstTokenTracker) *firstTokenWriter {
-	return &firstTokenWriter{ResponseWriter: w, tracker: tracker}
-}
-
-func (w *firstTokenWriter) processLine(line string) {
-	if w.tracker == nil || !w.tracker.at.IsZero() || !strings.HasPrefix(line, "data:") {
-		return
-	}
-	data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-	if data != "" && data != "[DONE]" && hasVisibleStreamText([]byte(data)) {
-		w.tracker.mark()
-	}
-}
-
-func (w *firstTokenWriter) Write(p []byte) (int, error) {
-	if len(p) > 0 && w.tracker != nil && w.tracker.at.IsZero() {
-		w.pending.Write(p)
-		for w.tracker.at.IsZero() {
-			raw := w.pending.Bytes()
-			i := bytes.IndexByte(raw, '\n')
-			if i < 0 {
-				break
-			}
-			line := strings.TrimSpace(string(raw[:i]))
-			w.pending.Next(i + 1)
-			w.processLine(line)
-		}
-	}
-	return w.ResponseWriter.Write(p)
-}
-
-// finish parses buffered SSE lines that were not followed by another write. It
-// only inspects the buffered copy and never changes the bytes sent to the client.
-func (w *firstTokenWriter) finish() {
-	if w.tracker == nil || !w.tracker.at.IsZero() || w.pending.Len() == 0 {
-		return
-	}
-	raw := w.pending.String()
-	for w.tracker.at.IsZero() {
-		i := strings.IndexByte(raw, '\n')
-		if i < 0 {
-			w.processLine(strings.TrimSpace(raw))
-			break
-		}
-		w.processLine(strings.TrimSpace(raw[:i]))
-		raw = raw[i+1:]
-	}
-	w.pending.Reset()
-}
-
-func (w *firstTokenWriter) WriteHeader(code int) {
-	w.ResponseWriter.WriteHeader(code)
-}
-
-func (w *firstTokenWriter) Flush() {
-	if f, ok := w.ResponseWriter.(http.Flusher); ok {
-		f.Flush()
-	}
-}
-
 type streamTransform func(http.ResponseWriter, *http.Response) (streamStats, error)
 
 // logReject records an authenticated gateway request that was rejected before any
@@ -747,8 +601,11 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 		}
 		if !errors.Is(err, errInvalid) {
 			log.Printf("gateway: channel lookup for model %q failed: %v", model, err)
+			s.logRequest(ctx, key, 0, "", model, 503, 0, 0, 0, time.Since(started), "channel_lookup_failed", "channel lookup failed; no upstream request was attempted")
+			writeError(w, 503, "channel_lookup_failed", "could not look up channels for this model")
+			return
 		}
-		s.logRequest(ctx, key, 0, "", model, 503, 0, 0, 0, time.Since(started), "no_channel", "no usable channel supports this model")
+		s.logRequest(ctx, key, 0, "", model, 503, 0, 0, 0, time.Since(started), "no_channel", "no usable channel supports this model; no upstream request was attempted; check model names/routes, enabled channels, and the API key group or assigned user")
 		writeError(w, 503, "model_unavailable", "no usable channel supports this model")
 		return
 	}
@@ -964,7 +821,7 @@ tryChannels:
 			failureReason := "upstream_unreachable"
 			failDetail = failureReason
 			if err != nil {
-				failDetail = err.Error()
+				failDetail = adminErrorDetail(err.Error(), ch.apiKey)
 			}
 			if err == nil {
 				failureReason = "upstream_status_" + strconv.Itoa(resp.StatusCode)
@@ -1024,7 +881,7 @@ tryChannels:
 		if lastUpstreamStatus != 0 {
 			status := lastUpstreamStatus
 			detail := string(lastUpstreamBody)
-			s.logRequest(ctx, key, lastUpstreamChannel.id, lastUpstreamChannel.keyID, model, status, prompt, 0, prompt, time.Since(started), errorCode(status), detail)
+			s.logRequest(ctx, key, lastUpstreamChannel.id, lastUpstreamChannel.keyID, model, status, prompt, 0, prompt, time.Since(started), errorCode(status), adminErrorDetail(detail, lastUpstreamChannel.apiKey))
 			clientBody := lastUpstreamBody
 			if !lastUpstreamDirectResponses && !lastUpstreamPassthrough {
 				clientBody = []byte(s.clientUpstreamError(ctx, detail, reliability))
@@ -1519,8 +1376,6 @@ func (s *Service) releaseReservation(ctx context.Context, key keyContext, held r
 	select $3::uuid,$2,$1,balance,'release',$4::text,'Reservation released','not_applicable' from released`, held.amount, key.userID, ledgerID, requestID(ctx))
 }
 
-// checkQuota evaluates every matching quota row in one query. Each row's usage
-// window is aggregated by a lateral join instead of a follow-up query per row.
 // "total" rows aggregate lifetime usage (no created_at cutoff); day/month/minute
 // rows use a rolling window. Cost is summed from usage_records via the shared
 // request_id so a key can also be capped on spend.
@@ -1534,15 +1389,41 @@ func (s *Service) checkQuota(ctx context.Context, key keyContext, model string) 
 	if cached {
 		return nil
 	}
-	rows, err := s.db.Query(ctx, `select q.max_requests,q.max_tokens,q.max_cost,agg.requests,agg.tokens,agg.cost
-	from quota_limits q
-	cross join lateral (
-		select count(rl.*) as requests, coalesce(sum(rl.total_tokens),0) as tokens, coalesce(sum(ur.cost),0) as cost
+	rows, err := s.db.Query(ctx, `with matching_limits as (
+		select max_requests,max_tokens,max_cost,"window"
+		from quota_limits
+		where (user_id=$1 or user_id is null)
+		  and (api_key_id=$2 or api_key_id is null)
+		  and (model=$3 or model is null)
+		  and (max_requests is not null or max_tokens is not null or max_cost is not null)
+	), scan_bounds as (
+		select min(case "window"
+			when 'total' then '-infinity'::timestamptz
+			else now() - ('1 '||"window")::interval
+		end) as cutoff from matching_limits
+	), usage as materialized (
+		select
+			count(*) as total_requests,
+			coalesce(sum(rl.total_tokens),0) as total_tokens,
+			coalesce(sum(ur.cost),0) as total_cost,
+			count(*) filter (where rl.created_at >= now() - interval '1 minute') as minute_requests,
+			coalesce(sum(rl.total_tokens) filter (where rl.created_at >= now() - interval '1 minute'),0) as minute_tokens,
+			coalesce(sum(ur.cost) filter (where rl.created_at >= now() - interval '1 minute'),0) as minute_cost,
+			count(*) filter (where rl.created_at >= now() - interval '1 day') as day_requests,
+			coalesce(sum(rl.total_tokens) filter (where rl.created_at >= now() - interval '1 day'),0) as day_tokens,
+			coalesce(sum(ur.cost) filter (where rl.created_at >= now() - interval '1 day'),0) as day_cost,
+			count(*) filter (where rl.created_at >= now() - interval '1 month') as month_requests,
+			coalesce(sum(rl.total_tokens) filter (where rl.created_at >= now() - interval '1 month'),0) as month_tokens,
+			coalesce(sum(ur.cost) filter (where rl.created_at >= now() - interval '1 month'),0) as month_cost
 		from request_logs rl
 		left join usage_records ur on ur.request_id=rl.request_id
-		where rl.api_key_id=$2 and (q."window"='total' or rl.created_at >= now() - ('1 '||q."window")::interval)
-	) agg
-	where (q.user_id=$1 or q.user_id is null) and (q.api_key_id=$2 or q.api_key_id is null) and (q.model=$3 or q.model is null) and (q.max_requests is not null or q.max_tokens is not null or q.max_cost is not null)`, key.userID, key.keyID, model)
+		where rl.api_key_id=$2 and rl.created_at >= (select cutoff from scan_bounds)
+	)
+	select q.max_requests,q.max_tokens,q.max_cost,
+		case q."window" when 'minute' then u.minute_requests when 'day' then u.day_requests when 'month' then u.month_requests else u.total_requests end,
+		case q."window" when 'minute' then u.minute_tokens when 'day' then u.day_tokens when 'month' then u.month_tokens else u.total_tokens end,
+		case q."window" when 'minute' then u.minute_cost when 'day' then u.day_cost when 'month' then u.month_cost else u.total_cost end
+	from matching_limits q cross join usage u`, key.userID, key.keyID, model)
 	if err != nil {
 		return err
 	}
@@ -1593,9 +1474,15 @@ func (s *Service) loadChannelsForModel(ctx context.Context, key keyContext, mode
 		return nil, err
 	}
 	defer rows.Close()
-	var result []channel
-	skipped := 0
-	seed := sha256.Sum256([]byte(requestID(ctx)))
+
+	type candidate struct {
+		channel   channel
+		encrypted string
+	}
+	candidates := make([]candidate, 0)
+	keysByChannel := make(map[int64][]channelKeyCredential)
+	missingIDs := make([]int64, 0)
+	missingGenerations := make(map[int64]uint64)
 	for rows.Next() {
 		var ch channel
 		var encrypted string
@@ -1609,17 +1496,41 @@ func (s *Service) loadChannelsForModel(ctx context.Context, key keyContext, mode
 		if len(uaPool) > 0 {
 			_ = json.Unmarshal(uaPool, &ch.uaPool)
 		}
-		keys, err := s.channelKeys(ctx, ch.id)
+		candidates = append(candidates, candidate{channel: ch, encrypted: encrypted})
+		if keys, ok, generation := s.channelKeyCache.lookupGeneration(ch.id); ok {
+			keysByChannel[ch.id] = keys
+		} else if _, seen := missingGenerations[ch.id]; !seen {
+			missingIDs = append(missingIDs, ch.id)
+			missingGenerations[ch.id] = generation
+		}
+	}
+	if rows.Err() != nil {
+		return nil, rows.Err()
+	}
+	if len(missingIDs) > 0 {
+		loaded, err := s.loadChannelKeysBatch(ctx, missingIDs)
 		if err != nil {
 			return nil, err
 		}
+		for _, id := range missingIDs {
+			keysByChannel[id] = loaded[id]
+			s.channelKeyCache.storeIfGeneration(id, loaded[id], missingGenerations[id])
+		}
+	}
+
+	var result []channel
+	skipped := 0
+	seed := sha256.Sum256([]byte(requestID(ctx)))
+	for _, item := range candidates {
+		ch := item.channel
+		keys := keysByChannel[ch.id]
 		if len(keys) > 0 {
-			ch.keys = keys
+			ch.keys = cloneChannelKeys(keys)
 			ch.keyIndex = initialKeyIndex(keys, seed[:])
 			ch.apiKey = keys[ch.keyIndex].key
 			ch.keyID = keys[ch.keyIndex].id
-		} else if encrypted != "" {
-			ch.apiKey, err = channelKeyValue(s.cfg.EncryptionKey, encrypted)
+		} else if item.encrypted != "" {
+			ch.apiKey, err = channelKeyValue(s.cfg.EncryptionKey, item.encrypted)
 			if err != nil {
 				skipped++
 				continue
@@ -1629,9 +1540,6 @@ func (s *Service) loadChannelsForModel(ctx context.Context, key keyContext, mode
 			continue
 		}
 		result = append(result, ch)
-	}
-	if rows.Err() != nil {
-		return nil, rows.Err()
 	}
 	if len(result) == 0 {
 		if skipped > 0 {
@@ -1662,6 +1570,35 @@ func (s *Service) loadChannelsForModel(ctx context.Context, key keyContext, mode
 			}
 		}
 		result[0], result[selected] = result[selected], result[0]
+	}
+	return result, nil
+}
+
+func (s *Service) loadChannelKeysBatch(ctx context.Context, channelIDs []int64) (map[int64][]channelKeyCredential, error) {
+	result := make(map[int64][]channelKeyCredential, len(channelIDs))
+	if len(channelIDs) == 0 {
+		return result, nil
+	}
+	rows, err := s.db.Query(ctx, `select channel_id,id,key_encrypted,priority from channel_api_keys where channel_id = any($1::bigint[]) and enabled order by channel_id,priority desc,created_at`, channelIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var channelID int64
+		var id, encrypted string
+		var priority int
+		if err := rows.Scan(&channelID, &id, &encrypted, &priority); err != nil {
+			return nil, err
+		}
+		key, err := channelKeyValue(s.cfg.EncryptionKey, encrypted)
+		if err != nil {
+			continue
+		}
+		result[channelID] = append(result[channelID], channelKeyCredential{id: id, key: key, priority: priority})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return result, nil
 }
@@ -2078,7 +2015,7 @@ func (s *Service) logRequest(ctx context.Context, key keyContext, channelID int6
 	}
 	id, _ := randomID()
 	info := clientInfoFromContext(ctx)
-	detail = sanitizeErrorDetail(detail)
+	detail = adminErrorDetail(detail)
 	subscriptionAccess, _ := ctx.Value(subscriptionCoveredKey{}).(subscriptionAccess)
 	var firstToken *int
 	if len(firstTokenMs) > 0 {

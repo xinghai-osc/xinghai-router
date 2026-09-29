@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Users } from 'lucide-vue-next'
-import { endpoints, type AdminUserSubscription, type Group, type SubscriptionPlan, type User, type UserCreate, type UserUpdate } from '~/src/api'
+import { endpoints, type AdminUserSubscription, type Group, type SubscriptionPlan, type User, type UserBatchUpdateForm, type UserCreate, type UserUpdate } from '~/src/api'
 import { formatDateTime, formatMoney, formatNumber } from '~/src/format'
 import { canAuthorizeUser, canManageUser } from '~/src/user-permissions'
 
@@ -49,8 +49,15 @@ function pageQuery(): string {
 
 const users = useResource(() => endpoints.getAdminUsers(pageQuery()), { data: [] as User[], total: 0, page: 1, page_size: 50 })
 
-watch(page, () => { void users.refresh() })
+const selected = ref<Set<string>>(new Set())
+
+function clearSelection() {
+  selected.value = new Set()
+}
+
+watch(page, () => { clearSelection(); void users.refresh() })
 watch(pageSize, async () => {
+  clearSelection()
   if (page.value !== 1) page.value = 1
   else await users.refresh()
 })
@@ -58,7 +65,30 @@ const groups = useResource(() => endpoints.getAdminGroups('?page_size=100'), { d
 
 const search = ref('')
 
-watch(search, () => { page.value = 1; void users.refresh() })
+watch(search, () => { clearSelection(); page.value = 1; void users.refresh() })
+
+const selectableUsers = computed(() => users.data.value.data.filter(user => canManageUser(account.value, user)))
+const selectedUsers = computed(() => users.data.value.data.filter(user => selected.value.has(user.id)))
+const selectedCount = computed(() => selectedUsers.value.length)
+const allSelected = computed(() => selectableUsers.value.length > 0 && selectableUsers.value.every(user => selected.value.has(user.id)))
+
+function toggleSelected(user: User) {
+  if (!canManageUser(account.value, user)) return
+  const next = new Set(selected.value)
+  if (next.has(user.id)) next.delete(user.id)
+  else next.add(user.id)
+  selected.value = next
+}
+
+function toggleAll() {
+  if (allSelected.value) {
+    const next = new Set(selected.value)
+    for (const user of selectableUsers.value) next.delete(user.id)
+    selected.value = next
+  } else {
+    selected.value = new Set([...selected.value, ...selectableUsers.value.map(user => user.id)])
+  }
+}
 
 const groupOptions = computed(() => groups.data.value.data)
 const groupNames = computed(() => new Map(groupOptions.value.map(group => [group.id, group.display_name || group.name])))
@@ -231,6 +261,106 @@ async function save() {
     toast.success(t('admin.userSaved'))
   }
   dialogOpen.value = false
+  await users.refresh()
+}
+
+const batchOpen = ref(false)
+const batchError = ref('')
+const batchForm = reactive({
+  applyEnabled: false,
+  enabled: true,
+  applyRole: false,
+  role: 'user',
+  applyPermissions: false,
+  permissions: [] as string[],
+  applyGroups: false,
+  groups: [] as string[],
+  applyConcurrency: false,
+  maxConcurrency: '',
+  applyDataUsage: false,
+  dataUsageEnabled: true,
+  applyLeaderboard: false,
+  leaderboardOptIn: true,
+  leaderboardMaskName: false,
+})
+const canBatchAuthorize = computed(() => isAdmin.value && can('users.authorize'))
+
+function openBatch() {
+  const first = selectedUsers.value[0]
+  if (!first) return
+  batchError.value = ''
+  batchForm.applyEnabled = false
+  batchForm.enabled = first.enabled
+  batchForm.applyRole = false
+  batchForm.role = first.role
+  batchForm.applyPermissions = false
+  batchForm.permissions = [...first.permissions]
+  batchForm.applyGroups = false
+  batchForm.groups = [...first.groups]
+  batchForm.applyConcurrency = false
+  batchForm.maxConcurrency = first.max_concurrency === null ? '' : String(first.max_concurrency)
+  batchForm.applyDataUsage = false
+  batchForm.dataUsageEnabled = first.data_usage_enabled
+  batchForm.applyLeaderboard = false
+  batchForm.leaderboardOptIn = first.leaderboard_opt_in
+  batchForm.leaderboardMaskName = first.leaderboard_mask_name
+  batchOpen.value = true
+}
+
+function toggleBatchPermission(permission: string, checked: boolean) {
+  const next = new Set(batchForm.permissions)
+  if (checked) next.add(permission)
+  else next.delete(permission)
+  batchForm.permissions = PERMISSIONS.filter(item => next.has(item.value)).map(item => item.value)
+}
+
+async function runBatch() {
+  batchError.value = ''
+  const ids = selectedUsers.value.map(user => user.id)
+  if (!ids.length) {
+    batchOpen.value = false
+    return
+  }
+  const currentUserID = account.value?.id
+  if (currentUserID && (batchForm.applyRole || batchForm.applyPermissions) && ids.includes(currentUserID)) {
+    batchError.value = t('admin.batchEditSelfAuthorization')
+    return
+  }
+  if (currentUserID && batchForm.applyEnabled && !batchForm.enabled && ids.includes(currentUserID)) {
+    batchError.value = t('admin.batchEditSelfDisable')
+    return
+  }
+
+  const update: UserBatchUpdateForm = {}
+  if (batchForm.applyEnabled) update.enabled = batchForm.enabled
+  if (batchForm.applyRole) update.role = batchForm.role
+  if (batchForm.applyPermissions) update.permissions = [...batchForm.permissions]
+  if (batchForm.applyGroups) update.groups = [...batchForm.groups]
+  if (batchForm.applyDataUsage) update.data_usage_enabled = batchForm.dataUsageEnabled
+  if (batchForm.applyLeaderboard) {
+    update.leaderboard_opt_in = batchForm.leaderboardOptIn
+    update.leaderboard_mask_name = batchForm.leaderboardOptIn && batchForm.leaderboardMaskName
+  }
+  if (batchForm.applyConcurrency) {
+    const raw = batchForm.maxConcurrency.trim()
+    const value = raw === '' ? null : Number(raw)
+    if (value !== null && (!Number.isInteger(value) || value < 1 || value > 10000)) {
+      batchError.value = t('admin.userConcurrencyInvalid')
+      return
+    }
+    update.max_concurrency = value
+  }
+  if (!Object.keys(update).length) {
+    batchError.value = t('admin.batchEditNoField')
+    return
+  }
+
+  let result: { affected: number; user_ids: string[] } | null = null
+  const ok = await run(async () => { result = await endpoints.batchUpdateUsers(ids, update) })
+  if (!ok || !result) { toast.error(t('common.actionFailed')); return }
+  toast.success(t('admin.batchUsersUpdated', { count: result.affected }))
+  batchOpen.value = false
+  clearSelection()
   await users.refresh()
 }
 
@@ -513,6 +643,10 @@ async function issueResetCards() {
   <div v-else class="space-y-4">
     <ConsoleOpsPageHeader :lead="t('admin.usersLead')">
       <template #actions>
+        <template v-if="canManage && selectedCount > 0">
+          <UiBadge tone="outline" class="text-xs">{{ t('admin.selectedCount', { count: selectedCount }) }}</UiBadge>
+          <UiButton variant="secondary" size="sm" @click="openBatch">{{ t('admin.batchEdit') }}</UiButton>
+        </template>
         <UiButton v-if="canManage" size="sm" @click="openCreate">{{ t('admin.createUser') }}</UiButton>
         <ConsoleOpsSearch v-model="search" :placeholder="t('admin.usersSearchPlaceholder')" />
         <UiButton variant="secondary" size="sm" @click="users.refresh()">{{ t('common.refresh') }}</UiButton>
@@ -536,7 +670,10 @@ async function issueResetCards() {
       <UiTable v-else>
         <thead>
           <tr>
-            <th>{{ t('admin.id') }}</th>
+            <th v-if="canManage" class="w-10">
+               <UiCheckbox :model-value="allSelected" :aria-label="t('admin.selectAllUsers')" @update:model-value="toggleAll" />
+             </th>
+             <th>{{ t('admin.id') }}</th>
             <th>{{ t('admin.email') }}</th>
             <th>{{ t('common.name') }}</th>
             <th>{{ t('admin.inviter') }}</th>
@@ -551,7 +688,15 @@ async function issueResetCards() {
         </thead>
         <tbody>
           <tr v-for="user in users.data.value.data" :key="user.id">
-            <td class="font-mono text-[13px] text-faint">{{ user.id }}</td>
+            <td v-if="canManage">
+               <UiCheckbox
+                 :model-value="selected.has(user.id)"
+                 :disabled="!canManageUser(account, user)"
+                 :aria-label="t('admin.selectUser', { email: user.email })"
+                 @update:model-value="toggleSelected(user)"
+               />
+             </td>
+             <td class="font-mono text-[13px] text-faint">{{ user.id }}</td>
             <td class="font-medium text-ink">{{ user.email }}</td>
             <td class="text-muted">{{ user.name }}</td>
             <td>
@@ -591,6 +736,91 @@ async function issueResetCards() {
         :page-size-options="['20', '50', '100']"
       />
     </ConsoleOpsListState>
+
+    <UiDialog
+      v-model:open="batchOpen"
+      size="lg"
+      :title="t('admin.batchEditUsers')"
+      :description="t('admin.batchEditUsersLead', { count: selectedUsers.length })"
+    >
+      <div class="space-y-4">
+        <UiAlert v-if="batchError" tone="danger">{{ batchError }}</UiAlert>
+        <p class="text-[13px] text-muted">{{ t('admin.batchEditUsersHint') }}</p>
+
+        <div class="space-y-3 rounded-control border border-line bg-sunken px-3 py-3">
+          <div class="flex items-center justify-between gap-4">
+            <UiCheckbox v-model="batchForm.applyEnabled">{{ t('admin.batchEditEnabled') }}</UiCheckbox>
+            <UiSwitch v-model="batchForm.enabled" :disabled="!batchForm.applyEnabled" :label="batchForm.enabled ? t('common.enabled') : t('common.disabled')" />
+          </div>
+
+          <div v-if="canBatchAuthorize" class="space-y-2 border-t border-line pt-3">
+            <UiCheckbox v-model="batchForm.applyRole">{{ t('admin.batchEditRole') }}</UiCheckbox>
+            <UiSelect v-if="batchForm.applyRole" v-model="batchForm.role" :options="roleOptions" :placeholder="t('common.selectPlaceholder')" />
+          </div>
+
+          <div v-if="canBatchAuthorize" class="space-y-2 border-t border-line pt-3">
+            <UiCheckbox v-model="batchForm.applyPermissions">{{ t('admin.batchEditPermissions') }}</UiCheckbox>
+            <div v-if="batchForm.applyPermissions" class="grid gap-x-4 gap-y-2 rounded-control border border-line bg-surface px-3 py-2.5 sm:grid-cols-2">
+              <UiCheckbox
+                v-for="permission in PERMISSIONS"
+                :key="permission.value"
+                :model-value="batchForm.permissions.includes(permission.value)"
+                @update:model-value="toggleBatchPermission(permission.value, $event)"
+              >
+                {{ t(permission.labelKey) }}
+              </UiCheckbox>
+            </div>
+          </div>
+
+          <div v-if="canManageGroups" class="space-y-2 border-t border-line pt-3">
+            <UiCheckbox v-model="batchForm.applyGroups">{{ t('admin.batchEditGroups') }}</UiCheckbox>
+            <ConsoleOpsGroupPicker v-if="batchForm.applyGroups" v-model="batchForm.groups" :options="groupOptions" />
+          </div>
+
+          <div class="space-y-2 border-t border-line pt-3">
+            <UiCheckbox v-model="batchForm.applyConcurrency">{{ t('admin.batchEditConcurrency') }}</UiCheckbox>
+            <UiInput
+              v-if="batchForm.applyConcurrency"
+              v-model="batchForm.maxConcurrency"
+              type="number"
+              min="1"
+              max="10000"
+              step="1"
+              mono
+              :placeholder="t('admin.concurrencyPlaceholder')"
+              :aria-label="t('admin.userConcurrency')"
+            />
+          </div>
+
+          <div class="space-y-3 border-t border-line pt-3">
+            <UiCheckbox v-model="batchForm.applyDataUsage">{{ t('admin.batchEditDataUsage') }}</UiCheckbox>
+            <div class="flex items-center justify-between gap-4">
+              <span class="text-[13px] text-muted">{{ t('console.dataUsageEnabled') }}</span>
+              <UiSwitch v-model="batchForm.dataUsageEnabled" :disabled="!batchForm.applyDataUsage" :label="t('console.dataUsageEnabled')" />
+            </div>
+          </div>
+
+          <div class="space-y-3 border-t border-line pt-3">
+            <UiCheckbox v-model="batchForm.applyLeaderboard">{{ t('admin.batchEditLeaderboard') }}</UiCheckbox>
+            <div class="space-y-3 pl-6">
+              <div class="flex items-center justify-between gap-4">
+                <span class="text-[13px] text-muted">{{ t('console.leaderboardOptIn') }}</span>
+                <UiSwitch v-model="batchForm.leaderboardOptIn" :disabled="!batchForm.applyLeaderboard" :label="t('console.leaderboardOptIn')" />
+              </div>
+              <div class="flex items-center justify-between gap-4">
+                <span class="text-[13px] text-muted">{{ t('console.leaderboardMaskName') }}</span>
+                <UiSwitch v-model="batchForm.leaderboardMaskName" :disabled="!batchForm.applyLeaderboard || !batchForm.leaderboardOptIn" :label="t('console.leaderboardMaskName')" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <template #footer>
+        <UiButton variant="secondary" @click="batchOpen = false">{{ t('common.cancel') }}</UiButton>
+        <UiButton :loading="busy" @click="runBatch">{{ t('admin.batchEditApply') }}</UiButton>
+      </template>
+    </UiDialog>
 
     <UiSlidePanel v-model:open="dialogOpen" size="lg" :title="creating ? t('admin.createUser') : t('admin.manageUser')" :description="creating ? t('admin.createUserLead') : t('admin.manageUserLead')">
       <div class="space-y-4">

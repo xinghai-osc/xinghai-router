@@ -1,6 +1,9 @@
 import { request as requestHTTP } from 'node:http'
 import { request as requestHTTPS } from 'node:https'
 import { Readable } from 'node:stream'
+import { parseWebTrustedProxies, sanitizeForwardingHeaders } from '../utils/proxy-headers'
+
+const trustedProxies = parseWebTrustedProxies(process.env.WEB_TRUSTED_PROXIES)
 
 const fetchUpstream: typeof fetch = async (input, init) => {
   const request = new Request(input, init)
@@ -39,6 +42,8 @@ const fetchUpstream: typeof fetch = async (input, init) => {
 }
 
 export default defineEventHandler(async (event) => {
+  const socket = event.node.req.socket
+  sanitizeForwardingHeaders(event.node.req.headers, socket.remoteAddress, 'encrypted' in socket && socket.encrypted === true, trustedProxies)
   const url = getRequestURL(event)
   const upstream = process.env.API_INTERNAL_URL
   if (!upstream) {

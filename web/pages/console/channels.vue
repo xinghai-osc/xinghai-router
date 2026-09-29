@@ -9,7 +9,7 @@ definePageMeta({ layout: 'console', middleware: 'console-auth' })
 const { t } = useI18n()
 const { can } = useAccount()
 const { toast } = useToast()
-const { busy, run } = useAction()
+const { busy, error: actionError, run } = useAction()
 
 const allowed = computed(() => can('channels.read'))
 const canManage = computed(() => can('channels.manage'))
@@ -337,7 +337,7 @@ async function saveKey() {
       return
     }
     const ok = await run(() => endpoints.createChannelKey(keysChannelId.value, { name, api_key: apiKey, priority }))
-    if (!ok) { toast.error(t('common.actionFailed')); return }
+    if (!ok) { keyFormError.value = actionError.value || t('common.actionFailed'); return }
     toast.success(t('admin.keyCreated'))
   } else {
     if (!name) {
@@ -350,7 +350,7 @@ async function saveKey() {
       return
     }
     const ok = await run(() => endpoints.updateChannelKey(keysChannelId.value, editingKeyId.value, { name, priority, ...(apiKey ? { api_key: apiKey } : {}) }))
-    if (!ok) { toast.error(t('common.actionFailed')); return }
+    if (!ok) { keyFormError.value = actionError.value || t('common.actionFailed'); return }
     toast.success(t('admin.keySaved'))
   }
   keyDialogOpen.value = false
@@ -629,7 +629,7 @@ async function save() {
     await endpoints.updateChannel(id, payload)
     await endpoints.updateChannelGroups(id, payload.groups)
   })
-  if (!ok) { toast.error(t('common.actionFailed')); return }
+  if (!ok) { formError.value = actionError.value || t('common.actionFailed'); return }
 
   toast.success(t('admin.channelSaved'))
   dialogOpen.value = false
@@ -659,7 +659,7 @@ async function testKey(key: ChannelKey) {
   const ok = await run(async () => {
     result = await endpoints.testChannelKey(keysChannelId.value, key.id)
   })
-  if (!ok || !result) { toast.error(t('common.actionFailed')); return }
+  if (!ok || !result) { toast.error(actionError.value || t('common.actionFailed')); return }
   if (result.success) {
     toast.success(t('admin.keyTestSuccess', { status_code: result.status_code, latency_ms: result.latency_ms }))
   } else if (result.auto_disabled) {
@@ -718,7 +718,7 @@ async function testChannelRow(channel: Channel) {
     result = await endpoints.testChannel(channel.id)
   })
   testingChannelId.value = null
-  if (!ok || !result) { toast.error(t('common.actionFailed')); return }
+  if (!ok || !result) { toast.error(actionError.value || t('common.actionFailed')); return }
   const failedKeys = result.keys.filter(k => !k.success)
   if (result.success) {
     if (failedKeys.length > 0) {
@@ -1241,6 +1241,8 @@ function quotaUsageForWindow(window: string) {
             :placeholder="t('admin.restrictUserPlaceholder')"
           />
         </UiField>
+
+        <UiAlert v-if="!form.groups.length && !form.user_email.trim()" tone="warn">{{ t('admin.channelAccessWarning') }}</UiAlert>
 
         <UiField :label="t('admin.autoDisable')" :hint="t('admin.autoDisableHint')">
           <UiSwitch v-model="form.auto_disable" />

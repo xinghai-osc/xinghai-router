@@ -9,6 +9,7 @@ definePageMeta({ layout: 'console', middleware: 'console-auth' })
 const { t } = useI18n()
 const { settings } = useSiteSettings()
 const { toast } = useToast()
+const { rewardLabel, rewardTone } = useRewardStatus()
 const { data, pending, error, refresh } = useResource(
   () => endpoints.getAccountInvitations(),
   { enabled: false, code: '', inviter_reward: '0', invitee_reward: '0', data: [] as Invitation[] },
@@ -20,7 +21,7 @@ const invitationLink = computed(() => {
   if (!import.meta.client || !data.value.code) return ''
   return `${window.location.origin}/auth?mode=register&invite=${encodeURIComponent(data.value.code)}`
 })
-const totalReward = computed(() => data.value.data.reduce((sum, item) => sum + Number(item.reward), 0))
+const totalReward = computed(() => data.value.data.reduce((sum, item) => sum + ((!item.inviter_reward_status || item.inviter_reward_status === 'credited') ? Number(item.reward) : 0), 0))
 
 const { copy } = useClipboard({ legacy: true })
 
@@ -41,6 +42,7 @@ function copyValue(value: string) {
       <div class="grid gap-4 lg:grid-cols-3">
         <UiCard :title="t('console.invitationCode')" class="lg:col-span-2">
           <p class="text-[13px] text-muted">{{ t('console.invitationLead', { inviter: formatMoney(data.inviter_reward), invitee: formatMoney(data.invitee_reward) }) }}</p>
+          <p class="mt-2 text-xs text-muted">{{ t('console.rewardReviewHint') }}</p>
           <div class="mt-4 flex gap-2">
             <UiInput :model-value="invitationLink" readonly mono class="flex-1" />
             <UiButton size="icon" variant="secondary" :aria-label="t('console.copyInvitationLink')" @click="copyValue(invitationLink)">
@@ -61,8 +63,8 @@ function copyValue(value: string) {
         <div class="px-5 py-4">
           <ConsoleUserDataState :pending="false" :error="null" :empty="!data.data.length" :rows="4" :empty-icon="UserPlus" :empty-title="t('console.invitationEmptyTitle')" :empty-description="t('console.invitationEmptyBody')">
             <UiTable>
-              <thead><tr><th>{{ t('console.invitedUser') }}</th><th>{{ t('auth.email') }}</th><th class="num">{{ t('console.invitationReward') }}</th><th>{{ t('console.invitedAt') }}</th></tr></thead>
-              <tbody><tr v-for="item in data.data" :key="item.id"><td>{{ item.name }}</td><td class="text-muted">{{ item.email }}</td><td class="num">{{ formatMoney(item.reward) }}</td><td class="text-muted">{{ formatDateTime(item.created_at) }}</td></tr></tbody>
+              <thead><tr><th>{{ t('console.invitedUser') }}</th><th>{{ t('auth.email') }}</th><th class="num">{{ t('console.invitationPotentialReward') }}</th><th>{{ t('console.inviterRewardStatus') }}</th><th>{{ t('console.inviteeRewardStatus') }}</th><th>{{ t('console.invitedAt') }}</th></tr></thead>
+              <tbody><tr v-for="item in data.data" :key="item.id"><td>{{ item.name }}</td><td class="text-muted">{{ item.email }}</td><td class="num">{{ formatMoney(item.reward) }}</td><td><UiBadge :tone="rewardTone(item.inviter_reward_status)">{{ rewardLabel(item.inviter_reward_status) }}</UiBadge></td><td><UiBadge :tone="rewardTone(item.invitee_reward_status)">{{ rewardLabel(item.invitee_reward_status) }}</UiBadge></td><td class="text-muted">{{ formatDateTime(item.created_at) }}</td></tr></tbody>
             </UiTable>
           </ConsoleUserDataState>
         </div>

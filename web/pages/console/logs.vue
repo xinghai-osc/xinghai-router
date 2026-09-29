@@ -211,7 +211,22 @@ watch(pageSize, applyFilters)
 const statusTone = (code: number): 'danger' | 'warn' | 'success' =>
   (code >= 400 ? 'danger' : code >= 300 ? 'warn' : 'success')
 
+function errorLabel(log: UsageLog | RequestLog): string {
+  const code = log.error_code || ''
+  if (['no_channel', 'channel_lookup_failed', 'channel_credentials', 'credential_unavailable', 'model_unavailable', 'responses_unsupported', 'upstream_format_unavailable'].includes(code)) {
+    return t('admin.routingError')
+  }
+  if (code.startsWith('upstream_')) return t('admin.upstreamError')
+  return t('admin.errorDetail')
+}
+
 const detailTarget = ref<UsageLog | RequestLog | null>(null)
+const detailOpen = computed({
+  get: () => detailTarget.value !== null,
+  set: (open: boolean) => {
+    if (!open) detailTarget.value = null
+  },
+})
 </script>
 
 <template>
@@ -356,6 +371,7 @@ const detailTarget = ref<UsageLog | RequestLog | null>(null)
                 <th class="num">{{ t('admin.firstToken') }}</th>
                 <th class="num">{{ t('admin.duration') }}</th>
                 <th class="num">{{ t('admin.cost') }}</th>
+                <th>{{ t('admin.errorDetail') }}</th>
                 <th>{{ t('common.detail') }}</th>
               </tr>
             </thead>
@@ -382,6 +398,13 @@ const detailTarget = ref<UsageLog | RequestLog | null>(null)
                     {{ formatMoney(log.cost, 4) }}
                     <UiBadge v-if="log.subscription" tone="success" dot>{{ t('admin.subscriptionCovered') }}</UiBadge>
                   </span>
+                </td>
+                <td>
+                  <div v-if="log.error_code || log.error_detail || log.status_code >= 400" class="space-y-1">
+                    <UiButton variant="ghost" size="sm" @click="detailTarget = log">{{ errorLabel(log) }}</UiButton>
+                    <p class="max-w-64 truncate text-xs text-danger" :title="log.error_detail || log.error_code || undefined">{{ log.error_detail || log.error_code || '—' }}</p>
+                  </div>
+                  <span v-else class="text-faint">—</span>
                 </td>
                 <td>
                   <UiButton variant="ghost" size="sm" @click="detailTarget = log">{{ t('common.detail') }}</UiButton>
@@ -449,6 +472,7 @@ const detailTarget = ref<UsageLog | RequestLog | null>(null)
                 <th class="num">{{ t('admin.firstToken') }}</th>
                 <th class="num">{{ t('admin.duration') }}</th>
                 <th>{{ t('admin.errorCode') }}</th>
+                <th>{{ t('admin.errorDetail') }}</th>
                 <th>{{ t('common.detail') }}</th>
               </tr>
             </thead>
@@ -469,6 +493,13 @@ const detailTarget = ref<UsageLog | RequestLog | null>(null)
                 <td class="num">{{ t('admin.durationMs', { value: log.duration_ms }) }}</td>
                 <td class="text-muted">{{ log.error_code || '—' }}</td>
                 <td>
+                  <div v-if="log.error_code || log.error_detail || log.status_code >= 400" class="space-y-1">
+                    <UiButton variant="ghost" size="sm" @click="detailTarget = log">{{ errorLabel(log) }}</UiButton>
+                    <p class="max-w-64 truncate text-xs text-danger" :title="log.error_detail || log.error_code || undefined">{{ log.error_detail || log.error_code || '—' }}</p>
+                  </div>
+                  <span v-else class="text-faint">—</span>
+                </td>
+                <td>
                   <UiButton variant="ghost" size="sm" @click="detailTarget = log">{{ t('common.detail') }}</UiButton>
                 </td>
               </tr>
@@ -478,7 +509,7 @@ const detailTarget = ref<UsageLog | RequestLog | null>(null)
       </div>
     </UiTabs>
 
-    <UiDialog v-model:open="detailTarget" :title="t('common.detail')">
+    <UiDialog v-model:open="detailOpen" :title="t('common.detail')">
       <div class="space-y-3 text-sm">
         <div>
           <div class="mb-1 text-xs text-muted">{{ t('admin.requestId') }}</div>
@@ -516,10 +547,22 @@ const detailTarget = ref<UsageLog | RequestLog | null>(null)
             <template v-else>{{ formatMoney(Number(detailTarget.cost ?? 0), 4) }}</template>
           </div>
         </div>
-        <div>
-          <div class="mb-1 text-xs text-muted">{{ t('admin.errorDetail') }}</div>
-          <div class="break-all font-mono text-ink">{{ detailTarget?.error_detail || '—' }}</div>
+        <div v-if="detailTarget && 'usage_facts' in detailTarget && (detailTarget.usage_facts?.reasoning_effort || detailTarget.usage_facts?.reasoning_tokens != null)">
+          <div class="mb-1 text-xs text-muted">{{ t('admin.reasoningIntensity') }}</div>
+          <div class="text-[13px] text-ink">
+            <span v-if="detailTarget.usage_facts.reasoning_effort">{{ detailTarget.usage_facts.reasoning_effort }}</span>
+            <span v-if="detailTarget.usage_facts.reasoning_tokens != null" class="numeric text-muted">{{ t('admin.reasoningTokens', { value: formatNumber(detailTarget.usage_facts.reasoning_tokens) }) }}</span>
+          </div>
         </div>
+        <div v-if="detailTarget?.error_code">
+          <div class="mb-1 text-xs text-muted">{{ t('admin.errorCode') }}</div>
+          <div class="break-all font-mono text-ink">{{ detailTarget.error_code }}</div>
+        </div>
+        <div>
+          <div class="mb-1 text-xs text-muted">{{ detailTarget ? errorLabel(detailTarget) : t('admin.errorDetail') }}</div>
+          <div class="whitespace-pre-wrap break-all font-mono text-ink">{{ detailTarget?.error_detail || '—' }}</div>
+        </div>
+        <UiAlert v-if="detailTarget?.error_code === 'no_channel'" tone="warn">{{ t('admin.noChannelHint') }}</UiAlert>
       </div>
     </UiDialog>
   </div>

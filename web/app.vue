@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { MODE_STORAGE_KEY, PRESET_STORAGE_KEY } from '~/composables/useTheme'
+import { DEFAULT_THEME_MODE, DEFAULT_THEME_PRESET, MODE_STORAGE_KEY, PRESET_STORAGE_KEY, THEME_PRESETS } from '~/composables/useTheme'
 import { clearLegacySession, setReauthenticationHandler } from '~/src/api'
 
-const noFlashTheme = `(()=>{try{const d=document.documentElement,m=localStorage.getItem('${MODE_STORAGE_KEY}'),p=localStorage.getItem('${PRESET_STORAGE_KEY}');d.dataset.theme=m==='dark'||m==='light'?m:'dark';d.dataset.preset=['default','cool','galaxy','deepseek'].includes(p)?p:'deepseek'}catch(e){document.documentElement.dataset.theme='dark';document.documentElement.dataset.preset='deepseek'}})()`
+const noFlashTheme = `(()=>{const d=document.documentElement;try{const m=localStorage.getItem('${MODE_STORAGE_KEY}'),p=localStorage.getItem('${PRESET_STORAGE_KEY}');d.dataset.theme=m==='dark'||m==='light'?m:'${DEFAULT_THEME_MODE}';d.dataset.preset=${JSON.stringify(THEME_PRESETS.map(preset => preset.value))}.includes(p)?p:'${DEFAULT_THEME_PRESET}'}catch(e){d.dataset.theme='${DEFAULT_THEME_MODE}';d.dataset.preset='${DEFAULT_THEME_PRESET}'}})()`
 const { settings, loadSiteSettings } = useSiteSettings()
 const { locale } = useI18n()
 const { loadAccount } = useAccount()
+const { pageKey: workspacePageKey } = useWorkspace()
 const { request: requestReauthentication, cancel: cancelReauthentication } = useReauthentication()
 
 if (import.meta.client) {
@@ -39,7 +40,7 @@ onMounted(() => {
 <template>
   <NuxtLoadingIndicator color="var(--clay)" error-color="var(--danger)" :height="3" :throttle="120" />
   <NuxtLayout>
-    <NuxtPage />
+    <NuxtPage :page-key="route => route.path.startsWith('/console') ? `${route.path}:${workspacePageKey}` : route.path" />
   </NuxtLayout>
   <ClientOnly>
     <SessionReauthenticationDialog />

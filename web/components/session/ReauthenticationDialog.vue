@@ -61,6 +61,7 @@ async function submit() {
     :title="t('auth.reauthenticationTitle')"
     :description="t('auth.reauthenticationDescription')"
     size="sm"
+    :z-index="100"
     @update:open="value => { if (!value) cancel() }"
   >
     <form id="reauthentication-form" class="space-y-4" @submit.prevent="submit">
