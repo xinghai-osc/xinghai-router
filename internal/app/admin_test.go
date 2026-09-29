@@ -170,6 +170,8 @@ func TestBatchUpdateUsersRejectsInvalidBeforeDatabaseAccess(t *testing.T) {
 		`{"user_ids":["1","1"],"enabled":true}`,
 		`{"user_ids":["1"]}`,
 		`{"user_ids":["1"],"role":"owner"}`,
+		`{"user_ids":["1"],"permissions":["unknown.perm"]}`,
+		`{"user_ids":["1"],"permissions":["users.read","users.read"]}`,
 		`{"user_ids":["1"],"max_concurrency":0}`,
 		`{"user_ids":["1"],"max_concurrency":10001}`,
 		`{"user_ids":["1"],"max_concurrency":"10"}`,
@@ -214,6 +216,11 @@ func TestNormalizeBatchUserUpdateCanonicalizesIDsAndNullableConcurrency(t *testi
 	}
 	if !update.maxConcurrencySet || update.maxConcurrency != nil {
 		t.Fatalf("max concurrency = %#v, set = %v", update.maxConcurrency, update.maxConcurrencySet)
+	}
+	permissions := []string{"users.read", "logs.read"}
+	update, err = normalizeBatchUserUpdate(batchUserUpdateInput{UserIDs: []string{"1"}, Permissions: &permissions})
+	if err != nil || !update.permissionsSet || len(update.permissions) != 2 {
+		t.Fatalf("permissions = %#v, set = %v, err = %v", update.permissions, update.permissionsSet, err)
 	}
 }
 
