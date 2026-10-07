@@ -34,6 +34,7 @@ export default {
   exchangeRates: 'Exchange rates',
   modelMetadata: 'Model metadata',
   logs: 'Request logs',
+  usageStats: 'Usage statistics',
   audit: 'Audit logs',
   conversationCache: 'Conversations',
   requestAudits: 'Request content audits',

@@ -11,10 +11,9 @@ export function useResource<T>(loader: () => Promise<T>, initial: T, options: { 
   const error = ref('')
   let requestId = 0
   let activeRequest: Promise<void> | null = null
+  let queuedRequest: Promise<void> | null = null
 
-  function refresh() {
-    if (activeRequest) return activeRequest
-
+  function startRequest() {
     const currentRequestId = ++requestId
     const request = (async () => {
       pending.value = true
@@ -35,6 +34,20 @@ export function useResource<T>(loader: () => Promise<T>, initial: T, options: { 
     })
     activeRequest = trackedRequest
     return trackedRequest
+  }
+
+  function refresh() {
+    if (!activeRequest) return startRequest()
+
+    requestId += 1
+    if (!queuedRequest) {
+      const currentRequest = activeRequest
+      queuedRequest = currentRequest.then(() => {
+        queuedRequest = null
+        return startRequest()
+      })
+    }
+    return queuedRequest
   }
 
   if (import.meta.client && options.immediate !== false) onMounted(refresh)

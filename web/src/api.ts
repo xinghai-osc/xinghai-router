@@ -13,7 +13,7 @@ export interface KeyQuotaForm { window: 'day' | 'month' | 'total'; max_requests?
 /** `groups` holds group ids, not names — resolve them through /admin/groups. */
 export interface RequestOverrides { delete: string[]; set: Record<string, unknown> }
 export interface ChannelUsageWindow { window: string; used: number | null; limit: number | null; remaining: number | null; percent: number | null; reset_at?: string; unit?: string }
-export interface Channel { id: string; name: string; base_url: string; avg_first_token_ms: number | null; upstream_balance: number | null; upstream_used: number | null; upstream_total: number | null; upstream_currency: string; upstream_usage_windows: ChannelUsageWindow[]; upstream_balance_supported: boolean; upstream_balance_error: string; upstream_balance_fetched_at: string | null; provider: 'openai' | 'openai_chat' | 'ollama' | 'kimi' | 'opencode_go' | 'anthropic' | 'deepseek' | 'commandcode' | 'jev' | 'custom'; models: string[]; test_model: string; enabled: boolean; auto_disabled: boolean; auto_disable: boolean; disabled_reason: string; priority: number; weight: number; last_test_time: string | null; last_error: string | null; response_time_ms: number; used_requests: number; used_tokens: number; groups: string[]; key_type: 'single' | 'multi'; key_count: number; upstream_path: string; upstream_format: string; request_overrides: RequestOverrides; ua_pool: string[]; created_at: string; updated_at: string; model_routes: ModelRoute[]; user_id: string | null; user_email: string; user_name: string }
+export interface Channel { id: string; name: string; base_url: string; avg_first_token_ms: number | null; upstream_balance: number | null; upstream_used: number | null; upstream_total: number | null; upstream_currency: string; upstream_usage_windows: ChannelUsageWindow[]; upstream_balance_supported: boolean; upstream_balance_error: string; upstream_balance_fetched_at: string | null; provider: 'openai' | 'openai_chat' | 'ollama' | 'kimi' | 'opencode_go' | 'anthropic' | 'deepseek' | 'commandcode' | 'jev' | 'custom'; models: string[]; test_model: string; enabled: boolean; auto_disabled: boolean; auto_disable: boolean; disabled_reason: string; priority: number; weight: number; max_concurrency: number | null; last_test_time: string | null; last_error: string | null; response_time_ms: number; used_requests: number; used_tokens: number; groups: string[]; key_type: 'single' | 'multi'; key_count: number; upstream_path: string; upstream_format: string; request_overrides: RequestOverrides; ua_pool: string[]; created_at: string; updated_at: string; model_routes: ModelRoute[]; user_id: string | null; user_email: string; user_name: string }
 
 export interface ChannelKey { id: string; name: string; enabled: boolean; priority: number; last_checked_at: string | null; last_error: string | null; created_at: string; upstream_balance: number | null; upstream_used: number | null; upstream_total: number | null; upstream_currency: string; upstream_usage_windows: ChannelUsageWindow[]; upstream_balance_supported: boolean; upstream_balance_error: string; upstream_balance_fetched_at: string | null }
 export interface ChannelKeyForm { name?: string; api_key?: string; priority?: number }
@@ -137,13 +137,43 @@ export interface CatalogModel {
   performance: ModelCatalogPerformance | null
   groups: CatalogGroup[]
 }
+export interface ModelReasoningEfforts {
+  supported_levels: string[]
+  default_level?: string
+}
+export interface ModelAPICapabilities {
+  anthropic_messages?: { system_prompt_update: 'leading-only' | 'in-history' }
+}
+export interface GatewayModel {
+  id: string
+  object: 'model'
+  created: number
+  owned_by: string
+  name: string
+  input_modalities: string[]
+  output_modalities: string[]
+  context_window: number
+  max_output_tokens: number
+  reasoning_efforts?: ModelReasoningEfforts
+  api_capabilities?: ModelAPICapabilities
+}
+export interface GatewayModelList {
+  object: 'list'
+  data: GatewayModel[]
+  models: Record<string, GatewayModel>
+}
 export interface ModelMetadata {
   id: string
   model: string
+  name: string
+  owned_by: string
   description: string
   input_modalities: string[]
   output_modalities: string[]
   context_window: number | null
+  max_output_tokens: number | null
+  reasoning_efforts: ModelReasoningEfforts | null
+  api_capabilities: ModelAPICapabilities | null
   created_at?: string
   updated_at?: string
 }
@@ -283,6 +313,22 @@ export interface UsageStats {
   avg_first_token_ms: number | null
   breakdown?: UsageStatBreakdown[]
 }
+
+export interface UsageStatsRow {
+  key: string
+  name: string
+  total_tokens: number
+  prompt_tokens: number
+  completion_tokens: number
+  cache_hit_tokens: number
+  cache_hit_rate: number
+  uncached_input_tokens: number
+  cache_write_tokens: number
+  requests: number
+  cost: number
+}
+
+export type UsageStatsPage = Page<UsageStatsRow>
 
 export interface UsageStatBreakdown {
   period: string
@@ -691,6 +737,43 @@ export interface Cluster {
   created_at: string
   updated_at: string
 }
+export interface Node {
+  id: string
+  cluster_id: string
+  cluster_name: string
+  name: string
+  address: string
+  endpoint: string
+  enabled: boolean
+  ssh_host: string
+  ssh_port: number
+  ssh_user: string
+  ssh_auth_method: 'password' | 'private_key'
+  ssh_host_key: string
+  has_ssh_host_key: boolean
+  deploy_path: string
+  router_image: string
+  deploy_status: 'idle' | 'pending' | 'running' | 'success' | 'failed'
+  deploy_message: string
+  deploy_started_at: string | null
+  deploy_finished_at: string | null
+  created_at: string
+}
+export interface NodeForm {
+  name: string
+  address?: string
+  ssh_host: string
+  ssh_port: number
+  ssh_user: string
+  ssh_auth_method: 'password' | 'private_key'
+  ssh_password?: string
+  ssh_private_key?: string
+  ssh_passphrase?: string
+  ssh_host_key: string
+  deploy_path?: string
+  router_image?: string
+  deploy?: boolean
+}
 export interface Instance {
   id: string
   cluster_id: string
@@ -931,7 +1014,7 @@ export interface LoginBody { email: string; password: string; code?: string; cap
 export interface RegisterBody { risk_context_id?: string; name: string; email: string; password: string; code?: string; invitation_code?: string; captcha_id?: string; lot_number?: string; captcha_output?: string; pass_token?: string; gen_time?: string; captcha_token?: string; captcha_purpose?: string }
 export interface KeyForm { user_id?: string; name: string; expires_at: string; group_id: string }
 export interface AccountKeyForm { name: string; expires_at: string; group_id: string }
-export interface ChannelForm { name: string; provider: string; base_url: string; key_type: 'single' | 'multi'; api_keys: string; models: string[]; test_model?: string; priority: number; groups: string[]; upstream_path?: string; upstream_format?: string; model_routes?: ModelRouteForm[]; auto_disable: boolean; request_overrides?: RequestOverrides; ua_pool?: string[]; user_email?: string }
+export interface ChannelForm { name: string; provider: string; base_url: string; key_type: 'single' | 'multi'; api_keys: string; models: string[]; test_model?: string; priority: number; groups: string[]; upstream_path?: string; upstream_format?: string; model_routes?: ModelRouteForm[]; auto_disable: boolean; request_overrides?: RequestOverrides; ua_pool?: string[]; user_email?: string; max_concurrency?: number | null }
 export interface ProviderForm { name: string; slug: string; prefixes: string[]; priority: number; id?: string }
 export interface PaymentSettingsForm { enabled: boolean; base_url: string; merchant_id: string; merchant_key: string; public_base_url: string }
 export interface PaymentMethodForm { code: string; name: string; enabled: boolean }
@@ -1067,6 +1150,11 @@ export const endpoints = {
   updateAdminCluster: (id: string, form: ClusterForm) => put<unknown>(`/admin/clusters/${encodeURIComponent(id)}`, form),
   deleteAdminCluster: (id: string) => send(`/admin/clusters/${encodeURIComponent(id)}`, 'DELETE'),
   syncAdminCluster: (id: string) => post<unknown>(`/admin/clusters/${encodeURIComponent(id)}/sync`),
+  getAdminNodes: () => get<{ data: Node[] }>('/admin/nodes'),
+  createAdminNode: (clusterId: string, form: NodeForm) => post<{ id: string; status: Node['deploy_status'] }>(`/admin/clusters/${encodeURIComponent(clusterId)}/nodes`, form),
+  updateAdminNode: (id: string, form: Partial<NodeForm>) => put<{ id: string }>(`/admin/nodes/${encodeURIComponent(id)}`, form),
+  deployAdminNode: (id: string) => post<{ id: string; status: Node['deploy_status'] }>(`/admin/nodes/${encodeURIComponent(id)}/deploy`),
+  deleteAdminNode: (id: string) => send(`/admin/nodes/${encodeURIComponent(id)}`, 'DELETE'),
   getAdminInstances: () => get<{ data: Instance[] }>('/admin/instances'),
   createAdminInstance: (clusterId: string, form: InstanceForm) => post<{ id: string }>(`/admin/clusters/${encodeURIComponent(clusterId)}/instances`, form),
   updateAdminInstance: (clusterId: string, id: string, form: InstanceForm) => put<unknown>(`/admin/clusters/${encodeURIComponent(clusterId)}/instances/${encodeURIComponent(id)}`, form),
@@ -1168,6 +1256,7 @@ export const endpoints = {
 
   getUsageLogs: (query = '') => get<{ data: UsageLog[]; total: number; page: number; page_size: number }>(`/admin/usage-logs${query}`),
   getUsageStats: (query = '') => get<UsageStats>(`/admin/usage-stats${query}`),
+  getUsageStatsByDimension: (query = '') => get<UsageStatsPage>(`/admin/usage-stats${query}`),
   getRequestAudits: (query = '') => get<{ data: RequestContentAudit[]; total: number; page: number; page_size: number }>(`/admin/request-audits${query}`),
 
   getRequestLogs: () => get<{ data: RequestLog[] }>('/admin/request-logs'),

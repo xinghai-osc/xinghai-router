@@ -43,7 +43,7 @@ func (s *Service) listUsageLogs(w http.ResponseWriter, r *http.Request) {
 
 	args := []any{}
 	argIdx := 1
-	where := []string{"coalesce(rl.error_code,'') not in ('user_concurrency_limit','group_concurrency_limit')"}
+	where := []string{"coalesce(rl.error_code,'') not in ('user_concurrency_limit','group_concurrency_limit','channel_concurrency_limit')"}
 	if userID != "" {
 		where = append(where, "rl.user_id=$"+strconv.Itoa(argIdx)+"::bigint")
 		args = append(args, userID)
@@ -157,6 +157,16 @@ func (s *Service) listUsageLogs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) usageStats(w http.ResponseWriter, r *http.Request) {
+	if rawGroupBy := strings.TrimSpace(r.URL.Query().Get("group_by")); rawGroupBy != "" {
+		groupBy := parseUsageStatsDimension(rawGroupBy)
+		if groupBy == "" {
+			writeError(w, 400, "invalid_request", "group_by must be model or channel")
+			return
+		}
+		s.usageStatsByDimension(w, r, groupBy)
+		return
+	}
+
 	userID := strings.TrimSpace(r.URL.Query().Get("user_id"))
 	model := strings.TrimSpace(r.URL.Query().Get("model"))
 	channelID := strings.TrimSpace(r.URL.Query().Get("channel_id"))
@@ -187,7 +197,7 @@ func (s *Service) usageStats(w http.ResponseWriter, r *http.Request) {
 
 	args := []any{}
 	argIdx := 1
-	where := []string{"coalesce(rl.error_code,'') not in ('user_concurrency_limit','group_concurrency_limit')"}
+	where := []string{"coalesce(rl.error_code,'') not in ('user_concurrency_limit','group_concurrency_limit','channel_concurrency_limit')"}
 	if userID != "" {
 		where = append(where, "rl.user_id=$"+strconv.Itoa(argIdx)+"::bigint")
 		args = append(args, userID)

@@ -1022,9 +1022,11 @@ func (s *Service) updateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.Enabled != nil {
 		if *in.Enabled {
-			if err = s.releaseRewardBanTx(r.Context(), tx, userID, actor.userID, "Administrator enabled account"); err != nil {
-				writeError(w, 500, "internal_error", "could not release reward ban")
-				return
+			if shouldReleaseRewardBan(currentEnabled, *in.Enabled) {
+				if err = s.releaseRewardBanTx(r.Context(), tx, userID, actor.userID, "Administrator enabled account"); err != nil {
+					writeError(w, 500, "internal_error", "could not release reward ban")
+					return
+				}
 			}
 			if _, err = tx.Exec(r.Context(), `update users set enabled=true where id=$1`, userID); err != nil {
 				writeError(w, 500, "internal_error", "could not update status")
@@ -2252,6 +2254,25 @@ func (s *Service) revealKey(w http.ResponseWriter, r *http.Request) {
 	s.audit(r, "api_key.revealed", "api_key", keyID, nil)
 	writeJSON(w, 200, map[string]any{"key": secret})
 }
+
+// channelMaxConcurrency interprets the max_concurrency JSON value of a channel
+// write. An absent value reports supplied=false so a partial update leaves the
+// stored limit alone; an explicit null or 0 clears it, meaning unlimited.
+func channelMaxConcurrency(raw json.RawMessage) (int, bool, error) {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" {
+		return 0, false, nil
+	}
+	if trimmed == "null" {
+		return 0, true, nil
+	}
+	value, err := strconv.Atoi(trimmed)
+	if err != nil || value < 0 || value > 10000 {
+		return 0, false, errors.New("max_concurrency must be between 1 and 10000, or null")
+	}
+	return value, true, nil
+}
+
 func (s *Service) createChannel(w http.ResponseWriter, r *http.Request) {
 	type routeInput struct {
 		PublicModel   string `json:"public_model"`
@@ -2277,6 +2298,7 @@ func (s *Service) createChannel(w http.ResponseWriter, r *http.Request) {
 		UAPool         []string                 `json:"ua_pool"`
 		UpstreamPath   string                   `json:"upstream_path"`
 		UpstreamFormat string                   `json:"upstream_format"`
+		MaxConcurrency json.RawMessage          `json:"max_concurrency"`
 	}
 	if decode(r, &in) != nil {
 		writeError(w, 400, "invalid_request", "name, key_type, api_keys, and models are required")
@@ -2334,6 +2356,11 @@ func (s *Service) createChannel(w http.ResponseWriter, r *http.Request) {
 	}
 	if !validChannelPriority(in.Priority) {
 		writeError(w, 400, "invalid_request", "priority must be between -10000 and 10000")
+		return
+	}
+	maxConcurrency, _, concurrencyErr := channelMaxConcurrency(in.MaxConcurrency)
+	if concurrencyErr != nil {
+		writeError(w, 400, "invalid_request", concurrencyErr.Error())
 		return
 	}
 	groupIDs := []string{}
@@ -2417,7 +2444,7 @@ func (s *Service) createChannel(w http.ResponseWriter, r *http.Request) {
 		autoDisable = *in.AutoDisable
 	}
 	var id string
-	err = tx.QueryRow(r.Context(), `insert into channels(name,base_url,api_key,models,test_model,priority,provider,key_type,auto_disable,request_overrides,ua_pool,user_id,upstream_path,upstream_format) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) returning id`, in.Name, strings.TrimRight(in.BaseURL, "/"), keys[0], models, in.TestModel, in.Priority, in.Provider, in.KeyType, autoDisable, overrides, uaPool, userID, in.UpstreamPath, in.UpstreamFormat).Scan(&id)
+	err = tx.QueryRow(r.Context(), `insert into channels(name,base_url,api_key,models,test_model,priority,provider,key_type,auto_disable,request_overrides,ua_pool,user_id,upstream_path,upstream_format,max_concurrency) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,nullif($15::int,0)) returning id`, in.Name, strings.TrimRight(in.BaseURL, "/"), keys[0], models, in.TestModel, in.Priority, in.Provider, in.KeyType, autoDisable, overrides, uaPool, userID, in.UpstreamPath, in.UpstreamFormat, maxConcurrency).Scan(&id)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -2455,9 +2482,9 @@ func (s *Service) createChannel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "internal_error", "could not create channel")
 		return
 	}
-	s.audit(r, "channel.created", "channel", id, map[string]any{"name": in.Name, "models": in.Models, "provider": in.Provider, "key_type": in.KeyType, "key_count": len(keys)})
+	s.audit(r, "channel.created", "channel", id, map[string]any{"name": in.Name, "models": in.Models, "provider": in.Provider, "key_type": in.KeyType, "key_count": len(keys), "max_concurrency": maxConcurrency})
 	s.invalidateChannels()
-	writeJSON(w, 201, map[string]any{"id": id, "name": in.Name, "models": in.Models, "provider": in.Provider, "key_type": in.KeyType, "enabled": true})
+	writeJSON(w, 201, map[string]any{"id": id, "name": in.Name, "models": in.Models, "provider": in.Provider, "key_type": in.KeyType, "max_concurrency": maxConcurrency, "enabled": true})
 }
 
 // copyChannel duplicates a channel's configuration, API keys, groups, model
@@ -2477,9 +2504,10 @@ func (s *Service) copyChannel(w http.ResponseWriter, r *http.Request) {
 	var sourceName, baseURL, apiKey, testModel, provider, keyType, upstreamPath, upstreamFormat string
 	var models, overrides, uaPool []byte
 	var priority, weight int
+	var maxConcurrency *int
 	var autoDisable bool
 	var userID *string
-	err := s.db.QueryRow(r.Context(), `select name,base_url,api_key,models,test_model,priority,weight,provider,key_type,auto_disable,request_overrides,ua_pool,upstream_path,upstream_format,user_id::text from channels where id=$1`, sourceID).Scan(&sourceName, &baseURL, &apiKey, &models, &testModel, &priority, &weight, &provider, &keyType, &autoDisable, &overrides, &uaPool, &upstreamPath, &upstreamFormat, &userID)
+	err := s.db.QueryRow(r.Context(), `select name,base_url,api_key,models,test_model,priority,weight,max_concurrency,provider,key_type,auto_disable,request_overrides,ua_pool,upstream_path,upstream_format,user_id::text from channels where id=$1`, sourceID).Scan(&sourceName, &baseURL, &apiKey, &models, &testModel, &priority, &weight, &maxConcurrency, &provider, &keyType, &autoDisable, &overrides, &uaPool, &upstreamPath, &upstreamFormat, &userID)
 	if err != nil {
 		writeError(w, 404, "not_found", "channel not found")
 		return
@@ -2504,7 +2532,7 @@ func (s *Service) copyChannel(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(r.Context())
 	var id string
-	err = tx.QueryRow(r.Context(), `insert into channels(name,base_url,api_key,models,test_model,priority,weight,provider,key_type,auto_disable,request_overrides,ua_pool,user_id,upstream_path,upstream_format,enabled) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,false) returning id`, newName, baseURL, apiKey, models, testModel, priority, weight, provider, keyType, autoDisable, overrides, uaPool, userID, upstreamPath, upstreamFormat).Scan(&id)
+	err = tx.QueryRow(r.Context(), `insert into channels(name,base_url,api_key,models,test_model,priority,weight,provider,key_type,auto_disable,request_overrides,ua_pool,user_id,upstream_path,upstream_format,max_concurrency,enabled) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,false) returning id`, newName, baseURL, apiKey, models, testModel, priority, weight, provider, keyType, autoDisable, overrides, uaPool, userID, upstreamPath, upstreamFormat, maxConcurrency).Scan(&id)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -2603,6 +2631,7 @@ func (s *Service) updateChannel(w http.ResponseWriter, r *http.Request) {
 		UAPool         []string                 `json:"ua_pool"`
 		UpstreamPath   string                   `json:"upstream_path"`
 		UpstreamFormat string                   `json:"upstream_format"`
+		MaxConcurrency json.RawMessage          `json:"max_concurrency"`
 	}
 	if decode(r, &in) != nil {
 		writeError(w, 400, "invalid_request", "name and models are required")
@@ -2657,6 +2686,11 @@ func (s *Service) updateChannel(w http.ResponseWriter, r *http.Request) {
 	}
 	if !validChannelPriority(in.Priority) {
 		writeError(w, 400, "invalid_request", "priority must be between -10000 and 10000")
+		return
+	}
+	maxConcurrency, maxConcurrencySet, concurrencyErr := channelMaxConcurrency(in.MaxConcurrency)
+	if concurrencyErr != nil {
+		writeError(w, 400, "invalid_request", concurrencyErr.Error())
 		return
 	}
 	in.BaseURL = strings.TrimSpace(in.BaseURL)
@@ -2719,6 +2753,11 @@ func (s *Service) updateChannel(w http.ResponseWriter, r *http.Request) {
 		uaPool, _ := json.Marshal(normalizedUAPool(in.UAPool))
 		query += `,ua_pool=$` + strconv.Itoa(argIdx)
 		args = append(args, string(uaPool))
+		argIdx++
+	}
+	if maxConcurrencySet {
+		query += `,max_concurrency=nullif($` + strconv.Itoa(argIdx) + `::int,0)`
+		args = append(args, maxConcurrency)
 		argIdx++
 	}
 	tx, err := s.db.Begin(r.Context())
@@ -2797,7 +2836,11 @@ func (s *Service) updateChannel(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	s.audit(r, "channel.updated", "channel", channelID, map[string]any{"name": in.Name, "models": in.Models, "provider": in.Provider, "key_type": in.KeyType})
+	detail := map[string]any{"name": in.Name, "models": in.Models, "provider": in.Provider, "key_type": in.KeyType}
+	if maxConcurrencySet {
+		detail["max_concurrency"] = maxConcurrency
+	}
+	s.audit(r, "channel.updated", "channel", channelID, detail)
 	s.invalidateChannels()
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -2866,7 +2909,7 @@ func (s *Service) listChannels(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "internal_error", "query failed")
 		return
 	}
-	rows, err := s.db.Query(r.Context(), `select c.id,c.name,c.base_url,c.models,c.test_model,c.enabled,c.auto_disabled,c.disabled_reason,c.priority,c.weight,c.last_checked_at,c.last_error,c.created_at,c.updated_at,coalesce((select array_agg(cg.group_id order by cg.group_id) from channel_groups cg where cg.channel_id=c.id), '{}'),c.provider,c.key_type,(select count(*) from channel_api_keys ak where ak.channel_id=c.id and ak.enabled),c.auto_disable,c.request_overrides,c.ua_pool,c.upstream_path,c.upstream_format,coalesce(u.id::text,''),coalesce(u.email,''),coalesce(u.name,''),coalesce(agg.avg_duration_ms,0),agg.avg_first_token_ms,coalesce(agg.used_requests,0),coalesce(agg.used_tokens,0),cb.balance,cb.used,cb.total,coalesce(cb.currency,'USD'),cb.usage,coalesce(cb.supported,false),coalesce(cb.error,''),cb.fetched_at from channels c left join users u on u.id=c.user_id left join lateral (select cb.balance,cb.used,cb.total,cb.currency,cb.usage,cb.supported,cb.error,cb.fetched_at from channel_balances cb join channel_api_keys k on k.id=cb.key_id and k.enabled where cb.channel_id=c.id order by k.priority desc nulls last,k.created_at limit 1) cb on true left join lateral (select avg(rl.duration_ms) as avg_duration_ms,avg(rl.first_token_ms) as avg_first_token_ms,count(*) as used_requests,coalesce(sum(rl.total_tokens),0) as used_tokens from request_logs rl where rl.channel_id=c.id) agg on true order by c.priority desc,c.id limit $1 offset $2`, pageSize, offset)
+	rows, err := s.db.Query(r.Context(), `select c.id,c.name,c.base_url,c.models,c.test_model,c.enabled,c.auto_disabled,c.disabled_reason,c.priority,c.weight,c.max_concurrency,c.last_checked_at,c.last_error,c.created_at,c.updated_at,coalesce((select array_agg(cg.group_id order by cg.group_id) from channel_groups cg where cg.channel_id=c.id), '{}'),c.provider,c.key_type,(select count(*) from channel_api_keys ak where ak.channel_id=c.id and ak.enabled),c.auto_disable,c.request_overrides,c.ua_pool,c.upstream_path,c.upstream_format,coalesce(u.id::text,''),coalesce(u.email,''),coalesce(u.name,''),coalesce(agg.avg_duration_ms,0),agg.avg_first_token_ms,coalesce(agg.used_requests,0),coalesce(agg.used_tokens,0),cb.balance,cb.used,cb.total,coalesce(cb.currency,'USD'),cb.usage,coalesce(cb.supported,false),coalesce(cb.error,''),cb.fetched_at from channels c left join users u on u.id=c.user_id left join lateral (select cb.balance,cb.used,cb.total,cb.currency,cb.usage,cb.supported,cb.error,cb.fetched_at from channel_balances cb join channel_api_keys k on k.id=cb.key_id and k.enabled where cb.channel_id=c.id order by k.priority desc nulls last,k.created_at limit 1) cb on true left join lateral (select avg(rl.duration_ms) as avg_duration_ms,avg(rl.first_token_ms) as avg_first_token_ms,count(*) as used_requests,coalesce(sum(rl.total_tokens),0) as used_tokens from request_logs rl where rl.channel_id=c.id) agg on true order by c.priority desc,c.id limit $1 offset $2`, pageSize, offset)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
@@ -2880,6 +2923,7 @@ func (s *Service) listChannels(w http.ResponseWriter, r *http.Request) {
 		var enabled, autoDisabled bool
 		var disabledReason string
 		var priority, weight int
+		var maxConcurrency *int
 		var lastChecked, lastError any
 		var created, updated any
 		var groups []string
@@ -2897,7 +2941,7 @@ func (s *Service) listChannels(w http.ResponseWriter, r *http.Request) {
 		var usageJSON []byte
 		var balanceSupported bool
 		var balanceFetched any
-		if rows.Scan(&id, &name, &base, &models, &testModel, &enabled, &autoDisabled, &disabledReason, &priority, &weight, &lastChecked, &lastError, &created, &updated, &groups, &provider, &keyType, &keyCount, &autoDisable, &overrides, &uaPool, &upstreamPath, &upstreamFormat, &userID, &userEmail, &userName, &avgDuration, &avgFirstTokenMs, &usedRequests, &usedTokens, &balance, &usedBalance, &totalBalance, &balanceCurrency, &usageJSON, &balanceSupported, &balanceError, &balanceFetched) != nil {
+		if rows.Scan(&id, &name, &base, &models, &testModel, &enabled, &autoDisabled, &disabledReason, &priority, &weight, &maxConcurrency, &lastChecked, &lastError, &created, &updated, &groups, &provider, &keyType, &keyCount, &autoDisable, &overrides, &uaPool, &upstreamPath, &upstreamFormat, &userID, &userEmail, &userName, &avgDuration, &avgFirstTokenMs, &usedRequests, &usedTokens, &balance, &usedBalance, &totalBalance, &balanceCurrency, &usageJSON, &balanceSupported, &balanceError, &balanceFetched) != nil {
 			continue
 		}
 		var list []string
@@ -2915,7 +2959,7 @@ func (s *Service) listChannels(w http.ResponseWriter, r *http.Request) {
 		}
 		usageWindows := decodeUpstreamUsageWindows(usageJSON)
 		routes := s.getChannelRoutes(r.Context(), id)
-		data = append(data, map[string]any{"id": id, "name": name, "base_url": base, "models": list, "test_model": testModel, "provider": provider, "key_type": keyType, "enabled": enabled, "auto_disabled": autoDisabled, "disabled_reason": disabledReason, "priority": priority, "weight": weight, "last_test_time": lastChecked, "last_error": lastError, "response_time_ms": avgDuration, "avg_first_token_ms": avgFirstTokenMs, "used_requests": usedRequests, "used_tokens": usedTokens, "upstream_balance": balance, "upstream_used": usedBalance, "upstream_total": totalBalance, "upstream_currency": balanceCurrency, "upstream_usage_windows": usageWindows, "upstream_balance_supported": balanceSupported, "upstream_balance_error": balanceError, "upstream_balance_fetched_at": balanceFetched, "groups": groups, "key_count": keyCount, "created_at": created, "updated_at": updated, "model_routes": routes, "auto_disable": autoDisable, "request_overrides": ov, "ua_pool": uaList, "upstream_path": upstreamPath, "upstream_format": upstreamFormat, "user_id": userID, "user_email": userEmail, "user_name": userName})
+		data = append(data, map[string]any{"id": id, "name": name, "base_url": base, "models": list, "test_model": testModel, "provider": provider, "key_type": keyType, "enabled": enabled, "auto_disabled": autoDisabled, "disabled_reason": disabledReason, "priority": priority, "weight": weight, "max_concurrency": maxConcurrency, "last_test_time": lastChecked, "last_error": lastError, "response_time_ms": avgDuration, "avg_first_token_ms": avgFirstTokenMs, "used_requests": usedRequests, "used_tokens": usedTokens, "upstream_balance": balance, "upstream_used": usedBalance, "upstream_total": totalBalance, "upstream_currency": balanceCurrency, "upstream_usage_windows": usageWindows, "upstream_balance_supported": balanceSupported, "upstream_balance_error": balanceError, "upstream_balance_fetched_at": balanceFetched, "groups": groups, "key_count": keyCount, "created_at": created, "updated_at": updated, "model_routes": routes, "auto_disable": autoDisable, "request_overrides": ov, "ua_pool": uaList, "upstream_path": upstreamPath, "upstream_format": upstreamFormat, "user_id": userID, "user_email": userEmail, "user_name": userName})
 	}
 	writePaged(w, data, total, page, pageSize)
 }
@@ -3842,7 +3886,7 @@ func (s *Service) deleteQuotaLimit(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 func (s *Service) listLogs(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query(r.Context(), `select rl.request_id,coalesce(rl.user_id::text,''),coalesce(u.name,'') as user_name,coalesce(rl.api_key_id::text,''),coalesce(ak.name,'') as key_name,coalesce(rl.channel_id::text,''),coalesce(c.name,'') as channel_name,coalesce(rl.channel_key_id::text,''),coalesce(ck.name,'') as channel_key_name,coalesce(rl.group_id::text,''),coalesce(g.name,'') as group_name,rl.model,rl.status_code,coalesce(rl.prompt_tokens,0),coalesce(rl.completion_tokens,0),coalesce(rl.total_tokens,0),rl.duration_ms,rl.first_token_ms,coalesce(rl.error_code,''),case when rl.error_code is not null or rl.status_code>=400 then rl.error_detail else '' end,rl.client_ip,rl.user_agent,rl.created_at from request_logs rl left join users u on u.id=rl.user_id left join api_keys ak on ak.id=rl.api_key_id left join channels c on c.id=rl.channel_id left join channel_api_keys ck on ck.id=rl.channel_key_id left join groups g on g.id=rl.group_id where coalesce(rl.error_code,'') not in ('user_concurrency_limit','group_concurrency_limit') order by rl.created_at desc limit 100`)
+	rows, err := s.db.Query(r.Context(), `select rl.request_id,coalesce(rl.user_id::text,''),coalesce(u.name,'') as user_name,coalesce(rl.api_key_id::text,''),coalesce(ak.name,'') as key_name,coalesce(rl.channel_id::text,''),coalesce(c.name,'') as channel_name,coalesce(rl.channel_key_id::text,''),coalesce(ck.name,'') as channel_key_name,coalesce(rl.group_id::text,''),coalesce(g.name,'') as group_name,rl.model,rl.status_code,coalesce(rl.prompt_tokens,0),coalesce(rl.completion_tokens,0),coalesce(rl.total_tokens,0),rl.duration_ms,rl.first_token_ms,coalesce(rl.error_code,''),case when rl.error_code is not null or rl.status_code>=400 then rl.error_detail else '' end,rl.client_ip,rl.user_agent,rl.created_at from request_logs rl left join users u on u.id=rl.user_id left join api_keys ak on ak.id=rl.api_key_id left join channels c on c.id=rl.channel_id left join channel_api_keys ck on ck.id=rl.channel_key_id left join groups g on g.id=rl.group_id where coalesce(rl.error_code,'') not in ('user_concurrency_limit','group_concurrency_limit','channel_concurrency_limit') order by rl.created_at desc limit 100`)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return

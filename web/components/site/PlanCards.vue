@@ -95,7 +95,7 @@ function benefits(plan: PublicSubscriptionPlan): string[] {
       </header>
 
       <p class="flex items-baseline gap-1">
-        <span class="display text-4xl text-ink">¥{{ Number(plan.price).toFixed(0) }}</span>
+        <span class="display text-4xl text-ink">{{ formatMoney(plan.price) }}</span>
         <span class="text-[13px] text-muted">/ {{ periodLabel(plan) }}</span>
       </p>
 

@@ -226,6 +226,7 @@ const form = reactive({
   groups: [] as string[],
   user_email: '',
   auto_disable: true,
+  max_concurrency: '',
   upstream_path: '',
   upstream_format: '',
   delete_fields: '',
@@ -414,6 +415,7 @@ function openCreate() {
   form.groups = []
   form.user_email = ''
   form.auto_disable = true
+  form.max_concurrency = ''
   form.upstream_path = ''
   form.upstream_format = ''
   form.delete_fields = ''
@@ -438,6 +440,7 @@ function openEdit(channel: Channel) {
   form.groups = [...channel.groups]
   form.user_email = channel.user_email ?? ''
   form.auto_disable = channel.auto_disable
+  form.max_concurrency = channel.max_concurrency ? String(channel.max_concurrency) : ''
   form.upstream_path = channel.upstream_path ?? ''
   form.upstream_format = channel.upstream_format ?? ''
   form.delete_fields = (channel.request_overrides?.delete ?? []).join('\n')
@@ -577,6 +580,13 @@ async function save() {
     return
   }
 
+  const rawConcurrency = form.max_concurrency.trim()
+  const maxConcurrency = rawConcurrency === '' ? null : Number(rawConcurrency)
+  if (maxConcurrency !== null && (!Number.isInteger(maxConcurrency) || maxConcurrency < 0 || maxConcurrency > 10000)) {
+    formError.value = t('admin.channelConcurrencyInvalid')
+    return
+  }
+
   const overrideFields = parseOverrideFields(form.delete_fields)
   const overrideSet = parseOverrideSet(form.set_fields)
   if (overrideSet === null) {
@@ -608,6 +618,7 @@ async function save() {
     priority,
     groups: [...form.groups],
     auto_disable: form.auto_disable,
+    max_concurrency: maxConcurrency,
     upstream_path: upstreamPath,
     upstream_format: form.upstream_format,
     request_overrides: { delete: overrideFields, set: overrideSet },
@@ -1031,6 +1042,7 @@ function quotaUsageForWindow(window: string) {
               <th>{{ t('admin.restrictUser') }}</th>
               <th class="num">{{ t('admin.priority') }}</th>
               <th class="num">{{ t('admin.weight') }}</th>
+              <th class="num">{{ t('admin.channelMaxConcurrency') }}</th>
               <th>{{ t('admin.usedTokens') }}</th>
               <th>{{ t('admin.channelBalance') }}</th>
               <th>{{ t('admin.responseTime') }}</th>
@@ -1079,6 +1091,10 @@ function quotaUsageForWindow(window: string) {
               </td>
               <td class="num">{{ channel.priority }}</td>
               <td class="num">{{ channel.weight }}</td>
+              <td class="num">
+                <span v-if="channel.max_concurrency">{{ channel.max_concurrency }}</span>
+                <span v-else class="text-faint">{{ t('admin.concurrencyPlaceholder') }}</span>
+              </td>
               <td class="num">
                 <UiTooltip :content="t('admin.usedTokensDetail', { requests: formatNumber(channel.used_requests), tokens: formatCompact(channel.used_tokens) })">
                   <span class="text-sm text-ink">{{ sensitiveVisible ? formatCompact(channel.used_tokens) : '••••' }}</span>
@@ -1246,6 +1262,18 @@ function quotaUsageForWindow(window: string) {
 
         <UiField :label="t('admin.autoDisable')" :hint="t('admin.autoDisableHint')">
           <UiSwitch v-model="form.auto_disable" />
+        </UiField>
+
+        <UiField :label="t('admin.channelMaxConcurrency')" :hint="t('admin.channelMaxConcurrencyHint')">
+          <UiInput
+            v-model="form.max_concurrency"
+            type="number"
+            min="0"
+            max="10000"
+            step="1"
+            mono
+            :placeholder="t('admin.concurrencyPlaceholder')"
+          />
         </UiField>
 
         <UiField :label="t('admin.requestOverrideDelete')" :hint="t('admin.requestOverrideDeleteHint')">

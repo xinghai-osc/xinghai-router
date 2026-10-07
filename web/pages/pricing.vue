@@ -4,7 +4,7 @@ import { filterAndSort, FILTER_ALL, PAGE_SIZE, type SquareModel, type TokenUnit 
 
 const { t } = useI18n()
 const { settings } = useSiteSettings()
-const { plans, loading: plansLoading, error: plansError, loadPlans } = usePlans()
+const { plans, loading: plansLoading, loaded: plansLoaded, error: plansError, loadPlans } = usePlans()
 const { models, groups, loading: catalogLoading, loaded: catalogLoaded, error: catalogError, loadCatalog } = useCatalog()
 const { target: catalogTarget, started: catalogStarted } = useDeferredLoad(() => { void loadCatalog() })
 
@@ -75,7 +75,7 @@ onMounted(() => {
       </UiAlert>
 
       <div v-else class="mt-12">
-        <SitePlanCards :plans="plans" :loading="plansLoading" />
+        <SitePlanCards :plans="plans" :loading="plansLoading || !plansLoaded" />
       </div>
     </section>
 

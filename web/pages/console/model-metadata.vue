@@ -17,10 +17,19 @@ const catalog = useResource(() => endpoints.getModelCatalog(), { data: [] as Cat
 const dialogOpen = ref(false)
 const removing = ref<ModelMetadata | null>(null)
 const editing = ref<ModelMetadata | null>(null)
-const form = reactive<ModelMetadataForm>({ model: '', description: '', input_modalities: [], output_modalities: [], context_window: null })
+const form = reactive<ModelMetadataForm>({ model: '', name: '', owned_by: '', description: '', input_modalities: [], output_modalities: [], context_window: null, max_output_tokens: null, reasoning_efforts: null, api_capabilities: null })
 const inputModalities = ref('')
 const outputModalities = ref('')
 const contextWindow = ref('')
+const maxOutputTokens = ref('')
+const supportedReasoningLevels = ref('')
+const defaultReasoningLevel = ref('')
+const systemPromptMode = ref('')
+const systemPromptOptions = computed(() => [
+  { value: '', label: t('admin.modelMetadataNotConfigured') },
+  { value: 'leading-only', label: t('admin.modelMetadataSystemPromptLeading') },
+  { value: 'in-history', label: t('admin.modelMetadataSystemPromptHistory') },
+])
 const search = ref('')
 const MAX_CONTEXT_WINDOW = 1_000_000_000_000
 
@@ -35,19 +44,25 @@ const modelOptions = computed(() => {
 })
 const rows = computed(() => {
   const saved = new Map(metadata.data.value.data.map(item => [item.model, item]))
-  const models = catalog.data.value.data.map(model => saved.get(model.model) ?? ({ id: '', model: model.model, description: '', input_modalities: [], output_modalities: [], context_window: null } as ModelMetadata))
+  const models = catalog.data.value.data.map(model => saved.get(model.model) ?? ({ id: '', model: model.model, name: '', owned_by: '', description: '', input_modalities: [], output_modalities: [], context_window: null, max_output_tokens: null, reasoning_efforts: null, api_capabilities: null } as ModelMetadata))
   for (const item of metadata.data.value.data) if (!models.some(model => model.model === item.model)) models.push(item)
   const query = search.value.trim().toLowerCase()
-  return query ? models.filter(model => model.model.toLowerCase().includes(query) || model.description.toLowerCase().includes(query)) : models
+  return query ? models.filter(model => [model.model, model.name, model.owned_by, model.description].some(value => value?.toLowerCase().includes(query))) : models
 })
 
 function openCreate(model = '') {
   editing.value = null
   form.model = model
+  form.name = ''
+  form.owned_by = ''
   form.description = ''
   inputModalities.value = ''
   outputModalities.value = ''
   contextWindow.value = ''
+  maxOutputTokens.value = ''
+  supportedReasoningLevels.value = ''
+  defaultReasoningLevel.value = ''
+  systemPromptMode.value = ''
   dialogOpen.value = true
 }
 
@@ -58,10 +73,16 @@ function openEdit(item: ModelMetadata) {
   }
   editing.value = item
   form.model = item.model
+  form.name = item.name ?? ''
+  form.owned_by = item.owned_by ?? ''
   form.description = item.description
   inputModalities.value = item.input_modalities.join(', ')
   outputModalities.value = item.output_modalities.join(', ')
   contextWindow.value = item.context_window == null ? '' : String(item.context_window)
+  maxOutputTokens.value = item.max_output_tokens == null ? '' : String(item.max_output_tokens)
+  supportedReasoningLevels.value = item.reasoning_efforts?.supported_levels.join(', ') ?? ''
+  defaultReasoningLevel.value = item.reasoning_efforts?.default_level ?? ''
+  systemPromptMode.value = item.api_capabilities?.anthropic_messages?.system_prompt_update ?? ''
   dialogOpen.value = true
 }
 
@@ -85,6 +106,31 @@ async function save() {
     toast.error(t('admin.modelMetadataContextInvalid'))
     return
   }
+  const context = parseContext(contextWindow.value)
+  const maxOutput = parseContext(maxOutputTokens.value)
+  if (maxOutputTokens.value.trim() && maxOutput == null) {
+    toast.error(t('admin.modelMetadataMaxOutputInvalid'))
+    return
+  }
+  if (context != null && maxOutput != null && maxOutput > context) {
+    toast.error(t('admin.modelMetadataCapacityInvalid'))
+    return
+  }
+  const levels = supportedReasoningLevels.value.split(',').map(value => value.trim().toLowerCase()).filter(Boolean)
+  const defaultLevel = defaultReasoningLevel.value.trim().toLowerCase()
+  if (levels.some(value => value === 'none' || value === 'off') || new Set(levels).size !== levels.length) {
+    toast.error(t('admin.modelMetadataReasoningLevelsInvalid'))
+    return
+  }
+  if (defaultLevel && defaultLevel !== 'none' && !levels.includes(defaultLevel)) {
+    toast.error(t('admin.modelMetadataReasoningDefaultInvalid'))
+    return
+  }
+  const mode = systemPromptMode.value
+  if (mode && mode !== 'leading-only' && mode !== 'in-history') {
+    toast.error(t('admin.modelMetadataSystemPromptInvalid'))
+    return
+  }
   const allowedModalities = new Set(['text', 'image', 'audio', 'video', 'file'])
   const input = parseModalities(inputModalities.value)
   const output = parseModalities(outputModalities.value)
@@ -94,10 +140,15 @@ async function save() {
   }
   const payload: ModelMetadataForm = {
     model: form.model.trim(),
+    name: form.name.trim(),
+    owned_by: form.owned_by.trim(),
     description: form.description.trim(),
     input_modalities: input,
     output_modalities: output,
-    context_window: parseContext(contextWindow.value),
+    context_window: context,
+    max_output_tokens: maxOutput,
+    reasoning_efforts: levels.length || defaultLevel ? { supported_levels: levels, ...(defaultLevel ? { default_level: defaultLevel } : {}) } : null,
+    api_capabilities: mode ? { anthropic_messages: { system_prompt_update: mode } } : null,
   }
   const ok = await run(() => editing.value?.id
     ? endpoints.updateAdminModelMetadata(editing.value.id, payload)
@@ -161,7 +212,11 @@ async function remove() {
             </thead>
             <tbody>
               <tr v-for="item in rows" :key="item.model">
-                <td class="font-medium text-ink">{{ item.model }}</td>
+                <td class="text-ink">
+                  <div class="font-medium">{{ item.model }}</div>
+                  <div v-if="item.name" class="text-muted">{{ item.name }}</div>
+                  <div v-if="item.owned_by" class="text-faint">{{ t('admin.modelMetadataOwnerValue', { owner: item.owned_by }) }}</div>
+                </td>
                 <td class="max-w-[24rem] truncate text-muted">
                   {{ item.description || t('admin.modelMetadataNotConfigured') }}
                 </td>
@@ -174,7 +229,7 @@ async function remove() {
                 <td class="num">{{ item.context_window ?? t('admin.modelMetadataNotConfigured') }}</td>
                 <td>
                   <div class="flex items-center gap-1">
-                    <UiButton variant="ghost" size="sm" @click="openEdit(item)">{{ item.description || item.context_window || item.input_modalities.length || item.output_modalities.length ? t('common.edit') : t('admin.modelMetadataConfigure') }}</UiButton>
+                    <UiButton variant="ghost" size="sm" @click="openEdit(item)">{{ item.id ? t('common.edit') : t('admin.modelMetadataConfigure') }}</UiButton>
                     <UiButton v-if="item.id" variant="ghost" size="sm" @click="removing = item">{{ t('common.delete') }}</UiButton>
                   </div>
                 </td>
@@ -190,6 +245,14 @@ async function remove() {
         <UiField :label="t('admin.modelMetadataModel')" required for="metadata-model">
           <UiSelect id="metadata-model" v-model="form.model" :options="modelOptions" :disabled="editing !== null" :placeholder="t('admin.modelMetadataModelPlaceholder')" />
         </UiField>
+        <div class="grid gap-4 sm:grid-cols-2">
+          <UiField :label="t('admin.modelMetadataName')" :hint="t('admin.modelMetadataNameHint')" for="metadata-name">
+            <UiInput id="metadata-name" v-model="form.name" />
+          </UiField>
+          <UiField :label="t('admin.modelMetadataOwner')" :hint="t('admin.modelMetadataOwnerHint')" for="metadata-owner">
+            <UiInput id="metadata-owner" v-model="form.owned_by" />
+          </UiField>
+        </div>
         <UiField :label="t('admin.modelMetadataDescription')" :hint="t('admin.modelMetadataDescriptionHint')" for="metadata-description">
           <UiTextarea id="metadata-description" v-model="form.description" :rows="4" :maxlength="2000" />
         </UiField>
@@ -203,6 +266,18 @@ async function remove() {
         </div>
         <UiField :label="t('admin.modelMetadataContext')" :hint="t('admin.modelMetadataContextHint')" for="metadata-context">
           <UiInput id="metadata-context" v-model="contextWindow" type="number" min="1" step="1" :placeholder="t('admin.modelMetadataContextPlaceholder')" />
+        </UiField>
+        <UiField :label="t('admin.modelMetadataMaxOutput')" :hint="t('admin.modelMetadataMaxOutputHint')" for="metadata-max-output">
+          <UiInput id="metadata-max-output" v-model="maxOutputTokens" type="number" min="1" step="1" :max="contextWindow || MAX_CONTEXT_WINDOW" :placeholder="t('admin.modelMetadataMaxOutputPlaceholder')" />
+        </UiField>
+        <UiField :label="t('admin.modelMetadataReasoningLevels')" :hint="t('admin.modelMetadataReasoningLevelsHint')" for="metadata-reasoning-levels">
+          <UiInput id="metadata-reasoning-levels" v-model="supportedReasoningLevels" :placeholder="t('admin.modelMetadataReasoningLevelsPlaceholder')" />
+        </UiField>
+        <UiField :label="t('admin.modelMetadataReasoningDefault')" :hint="t('admin.modelMetadataReasoningDefaultHint')" for="metadata-reasoning-default">
+          <UiInput id="metadata-reasoning-default" v-model="defaultReasoningLevel" />
+        </UiField>
+        <UiField :label="t('admin.modelMetadataSystemPrompt')" :hint="t('admin.modelMetadataSystemPromptHint')" for="metadata-system-prompt">
+          <UiSelect id="metadata-system-prompt" v-model="systemPromptMode" :options="systemPromptOptions" />
         </UiField>
         <div class="flex justify-end gap-2">
           <UiButton type="button" variant="secondary" @click="dialogOpen = false">{{ t('common.cancel') }}</UiButton>

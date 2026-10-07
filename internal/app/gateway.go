@@ -32,7 +32,7 @@ type channel struct {
 	id                                     int64
 	baseURL, apiKey, keyID, upstreamModel  string
 	provider, upstreamPath, upstreamFormat string
-	priority, weight                       int
+	priority, weight, maxConcurrency       int
 	inKeyGroup                             bool
 	overrides                              channelRequestOverrides
 	uaPool                                 []string
@@ -349,7 +349,7 @@ func (s *Service) models(w http.ResponseWriter, r *http.Request) {
 	// bound group when set, otherwise the groups the user belongs to, plus any
 	// channel restricted to the caller alone. Public and ungrouped channels are
 	// not exposed to callers.
-	rows, err := s.db.Query(r.Context(), `select model from (
+	rows, err := s.db.Query(r.Context(), `select available.model,coalesce(metadata.name,''),coalesce(metadata.owned_by,''),metadata.context_window,metadata.max_output_tokens,coalesce(metadata.input_modalities,'{}'),coalesce(metadata.output_modalities,'{}'),metadata.reasoning_efforts,metadata.api_capabilities from (
 		select jsonb_array_elements_text(c.models) as model from channels c where c.enabled and not c.auto_disabled and (c.api_key <> '' or exists(select 1 from channel_api_keys ak where ak.channel_id=c.id and ak.enabled and ak.key_encrypted <> '')) and (
 			($2<>'' and (exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($2,'')::uuid) or c.user_id=$1))
 			or ($2='' and (exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$1) or c.user_id=$1))
@@ -359,7 +359,7 @@ func (s *Service) models(w http.ResponseWriter, r *http.Request) {
 			($2<>'' and (exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($2,'')::uuid) or c.user_id=$1))
 			or ($2='' and (exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$1) or c.user_id=$1))
 		)
-	) available order by model`, key.userID, key.groupID)
+	) available left join model_catalog_metadata metadata on metadata.model=available.model order by available.model`, key.userID, key.groupID)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
@@ -367,17 +367,58 @@ func (s *Service) models(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	seen := map[string]bool{}
 	data := []map[string]any{}
+	models := map[string]any{}
 	for rows.Next() {
-		var model string
-		if rows.Scan(&model) != nil {
+		var model, name, ownedBy string
+		var contextWindow, maxOutputTokens *int64
+		var inputModalities, outputModalities []string
+		var reasoningEfforts, apiCapabilities []byte
+		if err := rows.Scan(&model, &name, &ownedBy, &contextWindow, &maxOutputTokens, &inputModalities, &outputModalities, &reasoningEfforts, &apiCapabilities); err != nil {
 			continue
 		}
-		if !seen[model] {
-			seen[model] = true
-			data = append(data, map[string]any{"id": model, "object": "model", "created": 0, "owned_by": "xinghai"})
+		if seen[model] {
+			continue
 		}
+		seen[model] = true
+		if strings.TrimSpace(name) == "" {
+			name = model
+		}
+		if strings.TrimSpace(ownedBy) == "" {
+			ownedBy = "xinghai"
+		}
+		if len(inputModalities) == 0 {
+			inputModalities = []string{"text"}
+		}
+		if len(outputModalities) == 0 {
+			outputModalities = []string{"text"}
+		}
+		item := map[string]any{"id": model, "object": "model", "created": 0, "owned_by": ownedBy, "name": name, "context_window": int64(0), "max_output_tokens": int64(0), "input_modalities": inputModalities, "output_modalities": outputModalities}
+		if contextWindow != nil {
+			item["context_window"] = *contextWindow
+		}
+		if maxOutputTokens != nil {
+			item["max_output_tokens"] = *maxOutputTokens
+		}
+		if len(reasoningEfforts) > 0 && string(reasoningEfforts) != "null" {
+			var value map[string]any
+			if json.Unmarshal(reasoningEfforts, &value) == nil && len(value) > 0 {
+				item["reasoning_efforts"] = value
+			}
+		}
+		if len(apiCapabilities) > 0 && string(apiCapabilities) != "null" {
+			var value map[string]any
+			if json.Unmarshal(apiCapabilities, &value) == nil && len(value) > 0 {
+				item["api_capabilities"] = value
+			}
+		}
+		data = append(data, item)
+		models[model] = item
 	}
-	writeJSON(w, 200, map[string]any{"object": "list", "data": data})
+	if err := rows.Err(); err != nil {
+		writeError(w, 500, "internal_error", "query failed")
+		return
+	}
+	writeJSON(w, 200, map[string]any{"object": "list", "data": data, "models": models})
 }
 
 func (s *Service) readGatewayBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
@@ -664,10 +705,26 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 	requiredUpstreamFormat := upstreamFormatOnly(ctx)
 	nativeAttempted := false
 	responseChatFallback := make(map[int64]bool)
+	// The channel lease for the attempt that is currently in flight. It is
+	// released when the loop moves to another candidate, or at handler return,
+	// which keeps the slot held for as long as the upstream exchange lasts —
+	// streaming responses included.
+	var releaseChannelLease func()
+	defer func() {
+		if releaseChannelLease != nil {
+			releaseChannelLease()
+			releaseChannelLease = nil
+		}
+	}()
+	channelBusySeen := false
 tryChannels:
 	for pass := 0; pass <= retryCount; pass++ {
 		for i := 0; i < len(retryChannels); i++ {
 			ch = retryChannels[i]
+			if releaseChannelLease != nil {
+				releaseChannelLease()
+				releaseChannelLease = nil
+			}
 			forceChatFallback := responseChatFallback[ch.id]
 			if imageOptions.image && (ch.provider == "anthropic" || ch.provider == "commandcode" || ch.upstreamFormat == "anthropic" || ch.upstreamFormat == "commandcode" || imageBillingOverrides(ch.overrides)) {
 				continue
@@ -787,7 +844,20 @@ tryChannels:
 			if directResponses {
 				nativeAttempted = true
 			}
-			resp, err = client.Do(upstreamReq)
+			attemptCtx, releaseAttempt, channelBusy, channelErr := s.acquireChannelConcurrency(ctx, ch)
+			if channelErr != nil {
+				s.logReject(ctx, model, 503, "concurrency_unavailable", started)
+				writeError(w, 503, "concurrency_unavailable", "could not enforce concurrency limits")
+				return
+			}
+			if channelBusy {
+				// A full channel only disqualifies that candidate; other channels
+				// may still serve the request.
+				channelBusySeen = true
+				continue
+			}
+			releaseChannelLease = releaseAttempt
+			resp, err = client.Do(upstreamReq.WithContext(attemptCtx))
 			if err != nil {
 				if code, detail, ok := classifyContextError(err); ok {
 					// The client hung up or the request timeout elapsed: retrying
@@ -893,6 +963,11 @@ tryChannels:
 			}
 			w.WriteHeader(status)
 			_, _ = w.Write(clientBody)
+			return
+		}
+		if channelBusySeen {
+			s.logRequest(ctx, key, 0, "", model, 429, prompt, 0, prompt, time.Since(started), "channel_concurrency_limit", "every candidate channel is at its concurrency limit")
+			writeError(w, 429, "channel_concurrency_exceeded", "all candidate channels are at their concurrency limit")
 			return
 		}
 		s.logRequest(ctx, key, ch.id, ch.keyID, model, 502, prompt, 0, prompt, time.Since(started), failCode, failDetail)
@@ -1469,7 +1544,7 @@ func (s *Service) channelsForModel(ctx context.Context, key keyContext, model st
 }
 
 func (s *Service) loadChannelsForModel(ctx context.Context, key keyContext, model string) ([]channel, error) {
-	rows, err := s.db.Query(ctx, `select c.id,c.base_url,c.api_key,coalesce(m.priority,c.priority),coalesce(m.weight,c.weight),coalesce(m.upstream_model,''),c.provider,c.upstream_path,c.upstream_format,c.request_overrides,c.ua_pool,case when $3='' then exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$2) or c.user_id=$2 else exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($3,'')::uuid) or c.user_id=$2 end as in_key_group from channels c left join model_routes m on m.channel_id=c.id and m.public_model=$1 and m.enabled where c.enabled and not c.auto_disabled and (c.models ? $1 or m.public_model is not null) and (($3<>'' and (exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($3,'')::uuid) or c.user_id=$2)) or ($3='' and (exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$2) or c.user_id=$2))) order by (c.enabled and not c.auto_disabled) desc, coalesce(m.priority,c.priority) desc, c.priority desc, c.id`, model, key.userID, key.groupID)
+	rows, err := s.db.Query(ctx, `select c.id,c.base_url,c.api_key,coalesce(m.priority,c.priority),coalesce(m.weight,c.weight),coalesce(m.upstream_model,''),c.provider,c.upstream_path,c.upstream_format,c.request_overrides,c.ua_pool,coalesce(c.max_concurrency,0),case when $3='' then exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$2) or c.user_id=$2 else exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($3,'')::uuid) or c.user_id=$2 end as in_key_group from channels c left join model_routes m on m.channel_id=c.id and m.public_model=$1 and m.enabled where c.enabled and not c.auto_disabled and (c.models ? $1 or m.public_model is not null) and (($3<>'' and (exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($3,'')::uuid) or c.user_id=$2)) or ($3='' and (exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$2) or c.user_id=$2))) order by (c.enabled and not c.auto_disabled) desc, coalesce(m.priority,c.priority) desc, c.priority desc, c.id`, model, key.userID, key.groupID)
 	if err != nil {
 		return nil, err
 	}
@@ -1487,7 +1562,7 @@ func (s *Service) loadChannelsForModel(ctx context.Context, key keyContext, mode
 		var ch channel
 		var encrypted string
 		var overrides, uaPool []byte
-		if err := rows.Scan(&ch.id, &ch.baseURL, &encrypted, &ch.priority, &ch.weight, &ch.upstreamModel, &ch.provider, &ch.upstreamPath, &ch.upstreamFormat, &overrides, &uaPool, &ch.inKeyGroup); err != nil {
+		if err := rows.Scan(&ch.id, &ch.baseURL, &encrypted, &ch.priority, &ch.weight, &ch.upstreamModel, &ch.provider, &ch.upstreamPath, &ch.upstreamFormat, &overrides, &uaPool, &ch.maxConcurrency, &ch.inKeyGroup); err != nil {
 			return nil, err
 		}
 		if len(overrides) > 0 {

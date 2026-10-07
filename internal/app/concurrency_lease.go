@@ -213,3 +213,38 @@ func (s *Service) acquireRequestConcurrency(ctx context.Context, key keyContext)
 		})
 	}, "", nil
 }
+
+// acquireChannelConcurrency admits one in-flight request against a channel's
+// max_concurrency. Unlike the user and group limits, a channel that is at its
+// limit only makes that candidate unusable: the caller skips to the next
+// channel, and reports channel_concurrency_exceeded only when every candidate
+// was busy. The returned release must be held for the whole upstream exchange,
+// streaming included, so the lease is not dropped while the body is still being
+// relayed.
+func (s *Service) acquireChannelConcurrency(ctx context.Context, ch channel) (context.Context, func(), bool, error) {
+	if ch.maxConcurrency <= 0 {
+		return ctx, func() {}, false, nil
+	}
+	key := strconv.FormatInt(ch.id, 10)
+	if s.cfg.DeploymentMode == "cluster" {
+		if s.concurrencyLeases == nil {
+			return ctx, nil, false, errConcurrencyUnavailable
+		}
+		leaseCtx, release, blockedScope, err := s.concurrencyLeases.acquire(ctx, []concurrencyLimit{{key: key, max: ch.maxConcurrency, scope: "channel"}})
+		if err != nil {
+			return ctx, nil, false, err
+		}
+		if blockedScope != "" {
+			return ctx, nil, true, nil
+		}
+		return leaseCtx, release, false, nil
+	}
+	if s.channelLimiter == nil {
+		return ctx, nil, false, errConcurrencyUnavailable
+	}
+	if !s.channelLimiter.acquire(key, ch.maxConcurrency) {
+		return ctx, nil, true, nil
+	}
+	var once sync.Once
+	return ctx, func() { once.Do(func() { s.channelLimiter.release(key) }) }, false, nil
+}

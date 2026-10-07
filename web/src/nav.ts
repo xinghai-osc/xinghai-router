@@ -64,6 +64,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { to: '/console/model-metadata', labelKey: 'nav.modelMetadata', icon: Database, permission: 'system.manage' },
       { to: '/console/model-routes', labelKey: 'nav.modelRoutes', icon: ArrowRightLeft, permission: 'routes.manage' },
       { to: '/console/logs', labelKey: 'nav.logs', icon: ScrollText, permission: 'logs.read' },
+      { to: '/console/usage-stats', labelKey: 'nav.usageStats', icon: Activity, permission: 'logs.read' },
       { to: '/console/conversation-cache', labelKey: 'nav.conversationCache', icon: MessageSquareText, permission: 'logs.read' },
       { to: '/console/audit', labelKey: 'nav.audit', icon: FileClock, permission: 'audit.read' },
       { to: '/console/request-audits', labelKey: 'nav.requestAudits', icon: ShieldAlert, permission: 'logs.read' },

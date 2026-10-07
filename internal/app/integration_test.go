@@ -58,7 +58,7 @@ func integrationService(t *testing.T, db *pgxpool.Pool) *Service {
 		cfg: Config{DatabaseURL: os.Getenv("TEST_DATABASE_URL"), EncryptionKey: integrationEncryptionKey, ConversationCacheDir: t.TempDir()},
 		db:  db, httpClient: http.DefaultClient, streamClient: http.DefaultClient,
 		limiter: newMemoryLimiter(1000), ipLimiter: newMemoryLimiter(1000),
-		groupLimiter: NewGroupLimiter(), userLimiter: NewGroupLimiter(),
+		groupLimiter: NewGroupLimiter(), userLimiter: NewGroupLimiter(), channelLimiter: NewGroupLimiter(),
 		pricingCache:      newTTLCache[string, pricingRule](time.Minute),
 		channelCache:      newTTLCache[channelRouteKey, []channel](time.Minute),
 		channelKeyCache:   newTTLCache[int64, []channelKeyCredential](time.Minute),

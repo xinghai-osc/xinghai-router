@@ -15,41 +15,12 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func rewardBanIntegrationService(t *testing.T) *Service {
 	t.Helper()
-	root, dsn := integrationPool(t)
-	ctx := context.Background()
-	schema := fmt.Sprintf("reward_ban_%d", time.Now().UnixNano())
-	name := pgx.Identifier{schema}.Sanitize()
-	if _, err := root.Exec(ctx, "create schema "+name); err != nil {
-		root.Close()
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if _, err := root.Exec(ctx, "drop schema "+name+" cascade"); err != nil {
-			t.Error(err)
-		}
-		root.Close()
-	})
-	cfg, err := pgxpool.ParseConfig(dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg.ConnConfig.RuntimeParams["search_path"] = schema
-	cfg.MaxConns = 16
-	pool, err := pgxpool.NewWithConfig(ctx, cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(pool.Close)
-	if err := migrate(ctx, pool); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pool.Exec(ctx, `update site_settings set reward_risk_settings='{"enabled":false,"auto_ban_enabled":false,"webrtc_enabled":false}' where id=true`); err != nil {
+	pool := rewardRiskIntegrationPool(t)
+	if _, err := pool.Exec(context.Background(), `update site_settings set reward_risk_settings='{"enabled":false,"auto_ban_enabled":false,"webrtc_enabled":false}' where id=true`); err != nil {
 		t.Fatal(err)
 	}
 	return integrationService(t, pool)

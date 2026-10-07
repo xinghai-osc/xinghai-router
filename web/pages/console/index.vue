@@ -75,6 +75,11 @@ function heatmapDayKey(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
 }
 
+const heatmapDateFormatter = computed(() => new Intl.DateTimeFormat(
+  locale.value === 'en' ? 'en-US' : locale.value === 'zh-Hant' ? 'zh-TW' : 'zh-CN',
+  { year: 'numeric', month: 'short', day: 'numeric' },
+))
+
 const heatmap = computed(() => {
   const today = new Date()
   today.setHours(0, 0, 0, 0)
@@ -93,7 +98,7 @@ const heatmap = computed(() => {
     points.push({
       key,
       date: key,
-      label: new Intl.DateTimeFormat(locale.value === 'en' ? 'en-US' : locale.value === 'zh-Hant' ? 'zh-TW' : 'zh-CN', { year: 'numeric', month: 'short', day: 'numeric' }).format(date),
+      label: heatmapDateFormatter.value.format(date),
       requests: 0,
     })
   }

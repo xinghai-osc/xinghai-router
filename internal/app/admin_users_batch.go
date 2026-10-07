@@ -1,8 +1,10 @@
 package app
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"sort"
 	"strconv"
@@ -113,6 +115,13 @@ func normalizeBatchUserUpdate(in batchUserUpdateInput) (normalizedBatchUserUpdat
 }
 
 func (s *Service) batchUpdateUsers(w http.ResponseWriter, r *http.Request) {
+	body, err := readRequestBody(w, r, s.cfg.RequestBodyTimeout)
+	if err != nil {
+		status, code, message := requestBodyError(err)
+		writeError(w, status, code, message)
+		return
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
 	var in batchUserUpdateInput
 	if decode(r, &in) != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", "invalid user batch update")
@@ -240,9 +249,11 @@ func (s *Service) batchUpdateUsers(w http.ResponseWriter, r *http.Request) {
 		}
 		if update.enabled != nil {
 			if *update.enabled {
-				if err = s.releaseRewardBanTx(r.Context(), tx, userID, actor.userID, "Administrator enabled account in batch"); err != nil {
-					writeError(w, http.StatusInternalServerError, "internal_error", "could not release reward ban")
-					return
+				if shouldReleaseRewardBan(target.access.enabled, *update.enabled) {
+					if err = s.releaseRewardBanTx(r.Context(), tx, userID, actor.userID, "Administrator enabled account in batch"); err != nil {
+						writeError(w, http.StatusInternalServerError, "internal_error", "could not release reward ban")
+						return
+					}
 				}
 				if _, err = tx.Exec(r.Context(), `update users set enabled=true where id=$1`, userID); err != nil {
 					writeError(w, http.StatusInternalServerError, "internal_error", "could not update status")

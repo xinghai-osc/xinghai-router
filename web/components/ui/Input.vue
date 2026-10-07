@@ -1,9 +1,11 @@
 <script setup lang="ts">
+import { computed, inject, useAttrs } from 'vue'
 import { cn } from '~/lib/utils'
+import { uiFieldContextKey } from './field-context'
 
 const model = defineModel<string | number>({ default: '' })
 
-withDefaults(defineProps<{
+const props = withDefaults(defineProps<{
   type?: string
   placeholder?: string
   disabled?: boolean
@@ -13,23 +15,41 @@ withDefaults(defineProps<{
   autocomplete?: string
   id?: string
 }>(), { type: 'text' })
+
+defineOptions({ inheritAttrs: false })
+
+const attrs = useAttrs()
+const field = inject(uiFieldContextKey, null)
+const inputId = computed(() => props.id ?? field?.id.value)
+const describedBy = computed(() => [attrs['aria-describedby'], field?.describedBy.value].filter(value => typeof value === 'string' && value).join(' ') || undefined)
+const invalid = computed(() => props.invalid || field?.invalid.value || attrs['aria-invalid'] === true || attrs['aria-invalid'] === 'true')
+const required = computed(() => Boolean(field?.required.value || attrs.required))
+const inputAttrs = computed(() => {
+  const { class: _class, style: _style, ...nativeAttrs } = attrs
+  return nativeAttrs
+})
+const rootClass = computed(() => cn('relative flex items-center', typeof attrs.class === 'string' ? attrs.class : undefined))
 </script>
 
 <template>
-  <div class="relative flex items-center">
+  <div :class="rootClass" :style="attrs.style">
     <span v-if="$slots.leading" class="pointer-events-none absolute left-3 flex text-faint">
       <slot name="leading" />
     </span>
 
     <input
-      :id="id"
+      v-bind="inputAttrs"
+      :id="inputId"
       v-model="model"
       :type="type"
       :placeholder="placeholder"
       :disabled="disabled"
       :readonly="readonly"
       :autocomplete="autocomplete"
+      :aria-describedby="describedBy"
       :aria-invalid="invalid || undefined"
+      :aria-required="required || undefined"
+      :required="required || undefined"
       :class="cn(
         'h-10 w-full rounded-control border border-line-strong bg-surface px-3 text-sm text-ink',
         'placeholder:text-faint transition-colors duration-150',

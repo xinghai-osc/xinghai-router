@@ -298,3 +298,15 @@ func TestIntegrationUserAuthorizationConcurrentProfileAndPromotion(t *testing.T)
 		t.Fatalf("privileged email modified: %q err=%v", email, err)
 	}
 }
+
+func TestIntegrationUserUpdateAlreadyEnabledDoesNotReleaseRewardBan(t *testing.T) {
+	s := userAuthorizationIntegrationService(t)
+	w := userAuthorizationRequest(s.updateUser, accountContext{userID: "1", role: "admin"}, "4", `{"name":"updated-name","enabled":true}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("already-enabled profile update failed: %d %s", w.Code, w.Body.String())
+	}
+	var name string
+	if err := s.db.QueryRow(context.Background(), `select name from users where id=4`).Scan(&name); err != nil || name != "updated-name" {
+		t.Fatalf("name = %q err=%v", name, err)
+	}
+}

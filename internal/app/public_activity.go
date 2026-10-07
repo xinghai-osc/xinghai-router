@@ -1,16 +1,19 @@
 package app
 
-import "net/http"
+import (
+	"net/http"
+	"time"
+)
 
 type publicActivityItem struct {
-	Model            string `json:"model"`
-	StatusCode       int    `json:"status_code"`
-	DurationMs       int    `json:"duration_ms"`
-	FirstTokenMs     *int   `json:"first_token_ms"`
-	PromptTokens     int    `json:"prompt_tokens"`
-	CompletionTokens int    `json:"completion_tokens"`
-	TotalTokens      int    `json:"total_tokens"`
-	CreatedAt        string `json:"created_at"`
+	Model            string    `json:"model"`
+	StatusCode       int       `json:"status_code"`
+	DurationMs       int       `json:"duration_ms"`
+	FirstTokenMs     *int      `json:"first_token_ms"`
+	PromptTokens     int       `json:"prompt_tokens"`
+	CompletionTokens int       `json:"completion_tokens"`
+	TotalTokens      int       `json:"total_tokens"`
+	CreatedAt        time.Time `json:"created_at"`
 }
 
 func (s *Service) publicActivity(w http.ResponseWriter, r *http.Request) {
@@ -33,9 +36,15 @@ func (s *Service) publicActivity(w http.ResponseWriter, r *http.Request) {
 	data := []publicActivityItem{}
 	for rows.Next() {
 		var item publicActivityItem
-		if rows.Scan(&item.Model, &item.StatusCode, &item.DurationMs, &item.FirstTokenMs, &item.PromptTokens, &item.CompletionTokens, &item.TotalTokens, &item.CreatedAt) == nil {
-			data = append(data, item)
+		if err := rows.Scan(&item.Model, &item.StatusCode, &item.DurationMs, &item.FirstTokenMs, &item.PromptTokens, &item.CompletionTokens, &item.TotalTokens, &item.CreatedAt); err != nil {
+			writeError(w, 500, "internal_error", "query failed")
+			return
 		}
+		data = append(data, item)
+	}
+	if err := rows.Err(); err != nil {
+		writeError(w, 500, "internal_error", "query failed")
+		return
 	}
 	writeJSON(w, 200, map[string]any{"data": data})
 }

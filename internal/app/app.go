@@ -36,6 +36,7 @@ type Service struct {
 	userConcurrencyCache  *ttlCache[string, int]
 	groupLimiter          *GroupLimiter
 	userLimiter           *GroupLimiter
+	channelLimiter        *GroupLimiter
 	concurrencyLeases     *concurrencyLeaseManager
 	redisReadiness        *redisLimiter
 	reliabilityData       *ttlCache[struct{}, reliabilitySettings]
@@ -155,6 +156,7 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 		userConcurrencyCache:  newTTLCache[string, int](groupCacheTTL),
 		groupLimiter:          NewGroupLimiter(),
 		userLimiter:           NewGroupLimiter(),
+		channelLimiter:        NewGroupLimiter(),
 		reliabilityData:       newTTLCache[struct{}, reliabilitySettings](reliabilityCacheTTL),
 		contentPolicyData:     newTTLCache[struct{}, contentPolicySnapshot](reliabilityCacheTTL),
 		conversationCacheData: newTTLCache[struct{}, conversationCacheSettings](reliabilityCacheTTL),

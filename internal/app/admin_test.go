@@ -97,6 +97,60 @@ func TestValidateModelMetadataInput(t *testing.T) {
 
 func ptrInt64(value int64) *int64 { return &value }
 
+func TestValidateRichModelMetadataInput(t *testing.T) {
+	name := "Display model"
+	owner := "provider"
+	valid := modelMetadataInput{
+		Model:            "vendor/model",
+		Name:             &name,
+		OwnedBy:          &owner,
+		Description:      "A useful model",
+		InputModalities:  []string{"text"},
+		OutputModalities: []string{"text"},
+		ContextWindow:    ptrInt64(128000),
+		MaxOutputTokens:  ptrInt64(8192),
+		ReasoningEfforts: &modelReasoningEfforts{SupportedLevels: []string{"low", "high"}, DefaultLevel: "high"},
+		APICapabilities:  &modelAPICapabilities{AnthropicMessages: &modelAnthropicMessagesCapability{SystemPromptUpdate: "leading-only"}},
+	}
+	if !validateModelMetadataInput(&valid) {
+		t.Fatal("valid rich metadata was rejected")
+	}
+	if *valid.Name != "Display model" || valid.ReasoningEfforts.SupportedLevels[1] != "high" {
+		t.Fatalf("rich metadata was not normalized: %+v", valid)
+	}
+	cases := []modelMetadataInput{
+		{Model: "model", ContextWindow: ptrInt64(100), MaxOutputTokens: ptrInt64(101)},
+		{Model: "model", ReasoningEfforts: &modelReasoningEfforts{SupportedLevels: []string{"none"}}},
+		{Model: "model", ReasoningEfforts: &modelReasoningEfforts{SupportedLevels: []string{"low"}, DefaultLevel: "high"}},
+		{Model: "model", APICapabilities: &modelAPICapabilities{AnthropicMessages: &modelAnthropicMessagesCapability{SystemPromptUpdate: "middle"}}},
+	}
+	for _, item := range cases {
+		if validateModelMetadataInput(&item) {
+			t.Fatalf("invalid rich metadata was accepted: %+v", item)
+		}
+	}
+}
+
+func TestModelMetadataInputTracksRichFieldPresence(t *testing.T) {
+	var omitted, cleared modelMetadataInput
+	if err := json.Unmarshal([]byte(`{"model":"model"}`), &omitted); err != nil {
+		t.Fatal(err)
+	}
+	if omitted.nameSet || omitted.maxOutputTokensSet || omitted.reasoningEffortsSet || omitted.apiCapabilitiesSet {
+		t.Fatalf("omitted fields were marked present: %+v", omitted)
+	}
+	if err := json.Unmarshal([]byte(`{"model":"model","name":null,"max_output_tokens":null,"reasoning_efforts":null,"api_capabilities":null}`), &cleared); err != nil {
+		t.Fatal(err)
+	}
+	if !cleared.nameSet || !cleared.maxOutputTokensSet || !cleared.reasoningEffortsSet || !cleared.apiCapabilitiesSet {
+		t.Fatalf("explicit null fields were not marked present: %+v", cleared)
+	}
+	var unknown modelMetadataInput
+	if err := json.Unmarshal([]byte(`{"model":"model","unknown":true}`), &unknown); err == nil {
+		t.Fatal("unknown model metadata field was accepted")
+	}
+}
+
 func TestValidPricePerQuotaUnit(t *testing.T) {
 	if !validPricePerQuotaUnit(0) || !validPricePerQuotaUnit(maxPricePerQuotaUnit) {
 		t.Fatal("boundary price_per_quota_unit must be valid")

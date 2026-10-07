@@ -48,6 +48,14 @@ type cacheEntry[V any] struct {
 	expires time.Time
 }
 
+type cacheFlight[V any] struct {
+	done       chan struct{}
+	generation uint64
+	value      V
+	err        error
+	retry      bool
+}
+
 // ttlCache memoises short-lived reads of slow-changing configuration rows. Values may
 // be up to ttl stale; every writer that changes the underlying row calls invalidate.
 // When the cache reaches maxCacheEntries, the oldest entry is evicted (FIFO) rather
@@ -56,6 +64,7 @@ type ttlCache[K comparable, V any] struct {
 	mu         sync.Mutex
 	ttl        time.Duration
 	entries    map[K]cacheEntry[V]
+	flights    map[K]*cacheFlight[V]
 	generation uint64
 	order      []K // FIFO eviction order; updated on store/invalidate
 }
@@ -104,15 +113,12 @@ func (c *ttlCache[K, V]) storeIfGeneration(key K, value V, generation uint64) {
 }
 
 func (c *ttlCache[K, V]) storeLocked(key K, value V) {
-	if len(c.entries) >= maxCacheEntries {
-		// FIFO eviction: drop the oldest entry.
-		if len(c.order) > 0 {
+	if _, exists := c.entries[key]; !exists {
+		if len(c.entries) >= maxCacheEntries && len(c.order) > 0 {
 			oldest := c.order[0]
 			delete(c.entries, oldest)
 			c.order = c.order[1:]
 		}
-	}
-	if _, exists := c.entries[key]; !exists {
 		c.order = append(c.order, key)
 	}
 	c.entries[key] = cacheEntry[V]{value: value, expires: time.Now().Add(c.ttl)}
@@ -129,33 +135,65 @@ func (c *ttlCache[K, V]) storeOnce(key K, value V) bool {
 	if entry, ok := c.entries[key]; ok && time.Now().Before(entry.expires) {
 		return false
 	}
-	if len(c.entries) >= maxCacheEntries {
-		if len(c.order) > 0 {
-			oldest := c.order[0]
-			delete(c.entries, oldest)
-			c.order = c.order[1:]
-		}
-	}
-	if _, exists := c.entries[key]; !exists {
-		c.order = append(c.order, key)
-	}
-	c.entries[key] = cacheEntry[V]{value: value, expires: time.Now().Add(c.ttl)}
+	c.storeLocked(key, value)
 	return true
 }
 
 // get returns the cached value for key, loading and caching it on a miss. Failed loads
 // are not cached, so a transient database error does not stick for the whole ttl.
 func (c *ttlCache[K, V]) get(ctx context.Context, key K, load func(context.Context) (V, error)) (V, error) {
-	value, ok, generation := c.lookupGeneration(key)
-	if ok {
-		return value, nil
+	if c == nil {
+		return load(ctx)
 	}
-	value, err := load(ctx)
-	if err != nil {
-		return value, err
+	for {
+		c.mu.Lock()
+		if entry, ok := c.entries[key]; ok && time.Now().Before(entry.expires) {
+			c.mu.Unlock()
+			return entry.value, nil
+		}
+		if err := ctx.Err(); err != nil {
+			c.mu.Unlock()
+			var zero V
+			return zero, err
+		}
+		if flight := c.flights[key]; flight != nil && flight.generation == c.generation {
+			c.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				var zero V
+				return zero, ctx.Err()
+			case <-flight.done:
+				if flight.retry {
+					continue
+				}
+				return flight.value, flight.err
+			}
+		}
+		flight := &cacheFlight[V]{done: make(chan struct{}), generation: c.generation, retry: true}
+		if c.flights == nil {
+			c.flights = make(map[K]*cacheFlight[V])
+		}
+		c.flights[key] = flight
+		c.mu.Unlock()
+		return c.loadFlight(ctx, key, flight, load)
 	}
-	c.storeIfGeneration(key, value, generation)
-	return value, nil
+}
+
+func (c *ttlCache[K, V]) loadFlight(ctx context.Context, key K, flight *cacheFlight[V], load func(context.Context) (V, error)) (V, error) {
+	defer func() {
+		c.mu.Lock()
+		if c.flights[key] == flight {
+			delete(c.flights, key)
+			if !flight.retry && flight.err == nil && c.generation == flight.generation {
+				c.storeLocked(key, flight.value)
+			}
+		}
+		close(flight.done)
+		c.mu.Unlock()
+	}()
+	flight.value, flight.err = load(ctx)
+	flight.retry = flight.err != nil && ctx.Err() != nil
+	return flight.value, flight.err
 }
 
 func (c *ttlCache[K, V]) invalidate(key K) {

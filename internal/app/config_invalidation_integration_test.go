@@ -146,6 +146,8 @@ func TestIntegrationConfigInvalidationIgnoresRuntimeUpdates(t *testing.T) {
 		{"wallet", `update user_wallets set balance=balance+1,updated_at=now() where user_id=$1`, userID, false},
 		{"user login", `update users set password_hash='fake-updated-hash' where id=$1`, userID, false},
 		{"channel disable", `update channels set auto_disabled=true where id=$1`, channelID, true},
+		{"channel concurrency", `update channels set max_concurrency=3 where id=$1`, channelID, true},
+		{"channel concurrency unchanged", `update channels set max_concurrency=3 where id=$1`, channelID, false},
 		{"key disable", `update channel_api_keys set enabled=false where id=$1`, keyID, true},
 		{"user limit", `update users set max_concurrency=2 where id=$1`, userID, true},
 		{"user unchanged", `update users set max_concurrency=2 where id=$1`, userID, false},

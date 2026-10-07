@@ -34,6 +34,7 @@ export default {
   exchangeRates: '汇率设置',
   modelMetadata: '模型元数据',
   logs: '请求日志',
+  usageStats: '用量统计',
   audit: '审计日志',
   conversationCache: '对话缓存',
   requestAudits: '请求内容审计',

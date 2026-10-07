@@ -1,10 +1,12 @@
 <script setup lang="ts">
+import { computed, inject } from 'vue'
 import { Check, ChevronDown } from 'lucide-vue-next'
 import {
   SelectContent, SelectIcon, SelectItem, SelectItemIndicator, SelectItemText,
   SelectPortal, SelectRoot, SelectTrigger, SelectValue, SelectViewport,
 } from 'reka-ui'
 import { cn } from '~/lib/utils'
+import { uiFieldContextKey } from './field-context'
 
 export interface SelectOption { value: string; label: string; disabled?: boolean }
 
@@ -17,6 +19,11 @@ const props = withDefaults(defineProps<{
   size?: 'sm' | 'md'
   id?: string
 }>(), { size: 'md' })
+
+const field = inject(uiFieldContextKey, null)
+const selectId = computed(() => props.id ?? field?.id.value)
+const describedBy = computed(() => field?.describedBy.value)
+const invalid = computed(() => Boolean(field?.invalid.value))
 
 // Resolved here rather than as a prop default: prop defaults are evaluated
 // before the component has a Nuxt context, so t() would not be available.
@@ -37,7 +44,10 @@ const selection = computed({
 <template>
   <SelectRoot v-model="selection" :disabled="disabled">
     <SelectTrigger
-      :id="id"
+      :id="selectId"
+      :aria-describedby="describedBy"
+      :aria-invalid="invalid || undefined"
+      :aria-required="field?.required.value || undefined"
       :class="cn(
         'inline-flex w-full items-center justify-between gap-2 rounded-control border border-line-strong bg-surface px-3 text-sm text-ink',
         'transition-colors duration-150 hover:border-faint',

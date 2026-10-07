@@ -8,6 +8,25 @@ import (
 	"testing"
 )
 
+func TestShouldReleaseRewardBanOnlyOnEnableTransition(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		currentEnabled  bool
+		requestedEnable bool
+		want            bool
+	}{
+		{"already enabled", true, true, false},
+		{"remains disabled", false, false, false},
+		{"becomes enabled", false, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := shouldReleaseRewardBan(tc.currentEnabled, tc.requestedEnable); got != tc.want {
+				t.Fatalf("shouldReleaseRewardBan(%v, %v) = %v, want %v", tc.currentEnabled, tc.requestedEnable, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRewardBanSkipsProtectedAndDisabledUsers(t *testing.T) {
 	for _, tc := range []struct {
 		name        string

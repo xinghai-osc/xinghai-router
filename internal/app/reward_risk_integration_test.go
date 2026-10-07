@@ -18,27 +18,30 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func rewardRiskIntegrationService(t *testing.T, settings rewardRiskSettings) *Service {
+func rewardRiskIntegrationPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	root, dsn := integrationPool(t)
-	ctx := context.Background()
-	schema := fmt.Sprintf("reward_entry_%d", time.Now().UnixNano())
-	quoted := pgx.Identifier{schema}.Sanitize()
-	if _, err := root.Exec(ctx, "create schema "+quoted); err != nil {
-		root.Close()
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if _, err := root.Exec(ctx, "drop schema "+quoted+" cascade"); err != nil {
-			t.Error(err)
-		}
-		root.Close()
-	})
+	t.Cleanup(root.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.ConnConfig.RuntimeParams["search_path"] = schema
+	database := fmt.Sprintf("reward_risk_%d", time.Now().UnixNano())
+	quoted := pgx.Identifier{database}.Sanitize()
+	if _, err = root.Exec(ctx, "create database "+quoted+" template template0"); err != nil {
+		t.Fatalf("create isolated reward test database (TEST_DATABASE_URL user needs CREATEDB): %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cleanupCancel()
+		if _, err := root.Exec(cleanupCtx, "drop database "+quoted+" with (force)"); err != nil {
+			t.Errorf("drop isolated reward test database: %v", err)
+		}
+	})
+	cfg.ConnConfig.Database = database
+	cfg.ConnConfig.RuntimeParams["search_path"] = "public"
 	cfg.MaxConns = 16
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
@@ -48,7 +51,12 @@ func rewardRiskIntegrationService(t *testing.T, settings rewardRiskSettings) *Se
 	if err = migrate(ctx, pool); err != nil {
 		t.Fatal(err)
 	}
-	s := integrationService(t, pool)
+	return pool
+}
+
+func rewardRiskIntegrationService(t *testing.T, settings rewardRiskSettings) *Service {
+	t.Helper()
+	s := integrationService(t, rewardRiskIntegrationPool(t))
 	raw, err := json.Marshal(settings)
 	if err != nil {
 		t.Fatal(err)
@@ -87,9 +95,7 @@ func rewardRiskRequest(handler http.HandlerFunc, userID, body, ip string, cookie
 	defer cancel()
 	r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
 	r.RemoteAddr = ip + ":12345"
-	if userID != "" {
-		ctx = context.WithValue(ctx, accountContextKey{}, accountContext{userID: userID})
-	}
+	ctx = context.WithValue(ctx, accountContextKey{}, accountContext{userID: userID})
 	r = r.WithContext(ctx)
 	if cookie != nil {
 		r.AddCookie(cookie)

@@ -157,8 +157,12 @@ type usageObject map[string]json.RawMessage
 
 func (u usageObject) object(keys ...string) usageObject {
 	for _, key := range keys {
+		raw := u[key]
+		if len(raw) == 0 {
+			continue
+		}
 		var child usageObject
-		if json.Unmarshal(u[key], &child) == nil && child != nil {
+		if json.Unmarshal(raw, &child) == nil && child != nil {
 			return child
 		}
 	}
@@ -191,8 +195,12 @@ func (u usageObject) count(keys ...string) (int64, bool) {
 
 func (u usageObject) text(keys ...string) string {
 	for _, key := range keys {
+		raw := u[key]
+		if len(raw) == 0 {
+			continue
+		}
 		var s string
-		if json.Unmarshal(u[key], &s) == nil {
+		if json.Unmarshal(raw, &s) == nil {
 			return s
 		}
 	}
@@ -319,8 +327,12 @@ func parseUsageFactsObject(root usageObject, format string) UsageFacts {
 		{[]string{"candidatesTokensDetails", "candidates_tokens_details"}, &f.AudioOutputTokens, &f.ImageOutputTokens},
 	} {
 		for _, key := range group.keys {
+			raw := u[key]
+			if len(raw) == 0 {
+				continue
+			}
 			var modalities []usageObject
-			if json.Unmarshal(u[key], &modalities) != nil {
+			if json.Unmarshal(raw, &modalities) != nil {
 				continue
 			}
 			for _, modality := range modalities {

@@ -22,16 +22,24 @@ const tab = ref('models')
 const rankings = ref<Rankings | null>(null)
 const pending = ref(false)
 const failure = ref('')
+const loaded = ref(false)
+let requestId = 0
 
 async function load() {
+  const currentRequestId = ++requestId
+  const requestedPeriod = period.value
   pending.value = true
   failure.value = ''
   try {
-    rankings.value = await endpoints.getPublicRankings(period.value)
+    const next = await endpoints.getPublicRankings(requestedPeriod)
+    if (currentRequestId !== requestId) return
+    rankings.value = next
+    loaded.value = true
   } catch (cause) {
+    if (currentRequestId !== requestId) return
     failure.value = cause instanceof Error ? cause.message : t('common.loadFailed')
   } finally {
-    pending.value = false
+    if (currentRequestId === requestId) pending.value = false
   }
 }
 
@@ -88,7 +96,7 @@ onMounted(load)
         <UiButton variant="link" size="sm" class="ml-1 h-auto p-0" @click="load">{{ t('common.retry') }}</UiButton>
       </UiAlert>
 
-      <div v-else-if="pending && !rankings" class="space-y-6">
+      <div v-else-if="!loaded || (pending && !rankings)" class="space-y-6">
         <div class="grid gap-4 sm:grid-cols-3">
           <div v-for="index in 3" :key="index" class="rounded-card border border-line bg-surface p-5">
             <UiSkeleton :rows="2" />

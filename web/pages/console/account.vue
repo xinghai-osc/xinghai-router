@@ -20,7 +20,7 @@ const passwordAction = useAction()
 const preferencesAction = useAction()
 const unlinkAction = useAction()
 
-const { data: connections, refresh: refreshConnections } = useResource(
+const { data: connections, pending: connectionsPending, error: connectionsError, refresh: refreshConnections } = useResource(
   () => endpoints.getOAuthConnections(),
   { data: [] as OAuthConnection[] },
 )
@@ -263,12 +263,21 @@ async function savePreferences() {
       :description="t('console.oauthConnectionsHint')"
       :class="locked && 'order-4'"
     >
-      <div v-if="!connections.data.value.length" class="py-4 text-center text-sm text-muted">
+      <div v-if="connectionsPending" class="py-4" aria-busy="true">
+        <UiSkeleton :rows="2" />
+      </div>
+      <UiAlert v-else-if="connectionsError" tone="danger" :title="t('common.loadFailed')">
+        {{ connectionsError }}
+        <UiButton variant="link" size="sm" class="ml-1 h-auto p-0" @click="refreshConnections">
+          {{ t('common.retry') }}
+        </UiButton>
+      </UiAlert>
+      <div v-else-if="!connections.data.length" class="py-4 text-center text-sm text-muted">
         {{ t('console.oauthNoConnections') }}
       </div>
       <div v-else class="space-y-2">
         <div
-          v-for="conn in connections.data.value"
+          v-for="conn in connections.data"
           :key="conn.provider"
           class="flex items-center justify-between rounded-control border border-line px-3 py-2"
         >

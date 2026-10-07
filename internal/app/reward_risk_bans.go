@@ -52,6 +52,10 @@ func (s *Service) autoBanRewardUserTx(ctx context.Context, tx pgx.Tx, userID, ob
 	return true, nil
 }
 
+func shouldReleaseRewardBan(currentEnabled, requestedEnabled bool) bool {
+	return !currentEnabled && requestedEnabled
+}
+
 func (s *Service) releaseRewardBanTx(ctx context.Context, tx pgx.Tx, userID, actorID, reason string) error {
 	reason = strings.TrimSpace(reason)
 	if reason == "" || len(reason) > 500 {

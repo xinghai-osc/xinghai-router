@@ -65,14 +65,8 @@ func (s *Service) withdrawAdminCheckin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(r.Context())
-	var lockedUserID string
-	err = tx.QueryRow(r.Context(), `select id::text from users where id=$1 for update`, userID).Scan(&lockedUserID)
-	if err == pgx.ErrNoRows {
-		writeError(w, http.StatusNotFound, "not_found", "check-in record not found")
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "could not lock account")
+	if _, _, err = lockUserMutation(r.Context(), tx, accountFromContext(r).userID, userID, userMutation{balance: true}, false); err != nil {
+		writeUserMutationError(w, err)
 		return
 	}
 	var reward, status, sourceID string

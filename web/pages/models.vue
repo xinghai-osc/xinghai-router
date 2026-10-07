@@ -198,16 +198,30 @@ watch(detailOpen, (open) => {
   }
 })
 
+function syncDetailFromQuery() {
+  if (!loaded.value || !import.meta.client) return
+  const modelName = queryValue('model')
+  if (!modelName) {
+    detailOpen.value = false
+    selected.value = null
+    return
+  }
+  const match = models.value.find(item => item.model === modelName)
+  if (!match) {
+    detailOpen.value = false
+    selected.value = null
+    return
+  }
+  selected.value = match
+  detailOpen.value = true
+}
+
 watch([loaded, models], ([isLoaded]) => {
   if (!isLoaded || !import.meta.client) return
-  const modelName = queryValue('model')
-  if (!modelName || detailOpen.value) return
-  const match = models.value.find(item => item.model === modelName)
-  if (match) {
-    selected.value = match
-    detailOpen.value = true
-  }
+  syncDetailFromQuery()
 })
+
+watch(() => route.query.model, syncDetailFromQuery)
 
 onMounted(async () => {
   const storedView = localStorage.getItem(VIEW_PREF_KEY)
@@ -217,6 +231,7 @@ onMounted(async () => {
   applyQuery()
   hydrated.value = true
   await loadCatalog()
+  syncDetailFromQuery()
   page.value = Math.min(page.value, totalPages.value)
   pageReady.value = true
 })

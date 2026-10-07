@@ -204,13 +204,13 @@ function buildUpdate(): UserUpdate | null {
 
   const update: UserUpdate = {
     name,
-    enabled: form.enabled,
     leaderboard_opt_in: form.leaderboardOptIn,
     leaderboard_mask_name: form.leaderboardMaskName,
     data_usage_enabled: form.dataUsageEnabled,
     max_concurrency: maxConcurrency,
     inviter_id: inviterId,
   }
+  if (creating.value || form.enabled !== editing.value?.enabled) update.enabled = form.enabled
   if (creating.value || email !== editing.value?.email) update.email = email
   if (canAuthorize.value) {
     if (creating.value || form.role !== editing.value?.role) update.role = form.role
