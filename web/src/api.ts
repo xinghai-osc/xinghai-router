@@ -330,6 +330,31 @@ export interface UsageStatsRow {
 
 export type UsageStatsPage = Page<UsageStatsRow>
 
+export type ConcurrencyScope = 'channel' | 'user' | 'group'
+
+export interface ConcurrencyStatusEntry {
+  id: string
+  name: string
+  email?: string
+  limit: number
+  current: number
+}
+
+export interface ConcurrencyStatusScope {
+  scope: ConcurrencyScope
+  limit: number
+  current: number
+  entries: ConcurrencyStatusEntry[]
+}
+
+export interface ConcurrencyStatus {
+  deployment_mode: 'single' | 'cluster'
+  /** True when the counts are shared by every replica, false when process-local. */
+  shared: boolean
+  generated_at: string
+  scopes: ConcurrencyStatusScope[]
+}
+
 export interface UsageStatBreakdown {
   period: string
   requests: number
@@ -1256,6 +1281,7 @@ export const endpoints = {
 
   getUsageLogs: (query = '') => get<{ data: UsageLog[]; total: number; page: number; page_size: number }>(`/admin/usage-logs${query}`),
   getUsageStats: (query = '') => get<UsageStats>(`/admin/usage-stats${query}`),
+  getConcurrencyStatus: () => get<ConcurrencyStatus>('/admin/concurrency'),
   getUsageStatsByDimension: (query = '') => get<UsageStatsPage>(`/admin/usage-stats${query}`),
   getRequestAudits: (query = '') => get<{ data: RequestContentAudit[]; total: number; page: number; page_size: number }>(`/admin/request-audits${query}`),
 

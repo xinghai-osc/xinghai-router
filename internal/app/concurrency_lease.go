@@ -53,6 +53,19 @@ end
 return 1
 `
 
+// concurrencyCountScript counts the unexpired leases per key. Members whose
+// score is at or before Redis's own clock are already expired, so the exclusive
+// lower bound keeps the read consistent with the acquire script's eviction.
+const concurrencyCountScript = `
+local t = redis.call('TIME')
+local now = t[1] * 1000 + math.floor(t[2] / 1000)
+local out = {}
+for i, key in ipairs(KEYS) do
+  out[i] = redis.call('ZCOUNT', key, '(' .. now, '+inf')
+end
+return out
+`
+
 var errConcurrencyUnavailable = errors.New("concurrency backend unavailable")
 
 type concurrencyLimit struct {
@@ -168,6 +181,45 @@ func (m *concurrencyLeaseManager) releaseToken(client *redisLimiter, keys []stri
 	if _, err := client.command(ctx, args...); err != nil {
 		m.alert.setDegraded(true, "concurrency", "deny")
 	}
+}
+
+// counts returns the number of live leases held for each key, in key order. It
+// reads the same keys the acquire path writes, so the answer is shared by every
+// replica instead of reflecting only this process.
+func (m *concurrencyLeaseManager) counts(ctx context.Context, scope string, keys []string) ([]int, error) {
+	counts := make([]int, len(keys))
+	if len(keys) == 0 {
+		return counts, nil
+	}
+	client, err := newRedisClient(m.redisURL, 1)
+	if err != nil {
+		return nil, errConcurrencyUnavailable
+	}
+	defer client.close()
+	redisKeys := make([]string, len(keys))
+	for i, key := range keys {
+		redisKeys[i] = "xh:concurrency:{leases}:" + scope + ":" + key
+	}
+	args := append([]string{"EVAL", concurrencyCountScript, strconv.Itoa(len(redisKeys))}, redisKeys...)
+	reply, err := client.command(ctx, args...)
+	if err != nil {
+		return nil, errConcurrencyUnavailable
+	}
+	values, ok := reply.([]any)
+	if !ok || len(values) != len(keys) {
+		return nil, errConcurrencyUnavailable
+	}
+	for i, value := range values {
+		count, ok := value.(int64)
+		if !ok {
+			return nil, errConcurrencyUnavailable
+		}
+		if count < 0 {
+			count = 0
+		}
+		counts[i] = int(count)
+	}
+	return counts, nil
 }
 
 func (s *Service) acquireRequestConcurrency(ctx context.Context, key keyContext) (context.Context, func(), string, error) {

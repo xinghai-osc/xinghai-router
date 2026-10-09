@@ -13,6 +13,24 @@ import (
 	"time"
 )
 
+func TestGatewayReasoningEfforts(t *testing.T) {
+	configured, ok := gatewayReasoningEfforts("any-model", []byte(`{"supported_levels":["low","high"],"default_level":"high"}`))
+	if !ok || configured["default_level"] != "high" {
+		t.Fatalf("configured reasoning_efforts = %#v, ok=%v", configured, ok)
+	}
+	fallback, ok := gatewayReasoningEfforts("gpt-5.6-luna", nil)
+	if !ok {
+		t.Fatal("known reasoning model did not return reasoning_efforts")
+	}
+	levels, ok := fallback["supported_levels"].([]string)
+	if !ok || len(levels) == 0 {
+		t.Fatalf("fallback reasoning levels = %#v", fallback["supported_levels"])
+	}
+	if _, ok := gatewayReasoningEfforts("plain-model", nil); ok {
+		t.Fatal("unknown model unexpectedly received reasoning_efforts")
+	}
+}
+
 func TestSuccessfulUpstreamResponseIsNotTreatedAsFailure(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

@@ -46,12 +46,16 @@
 :root {
   --app-font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
     'Hiragino Sans GB', 'Noto Sans SC', 'Microsoft YaHei', sans-serif;
-  --app-font-display: ui-serif, Georgia, 'Times New Roman', serif;
-  --app-display-weight: 400;
-  --app-display-tracking: -0.015em;
-  --app-display-leading: 1.08;
+  --app-font-display: var(--app-font-sans);
+  --app-display-weight: 650;
+  --app-display-tracking: -0.035em;
+  --app-display-leading: 1.12;
   --radius-control-token: 10px;
-  --radius-card-token: 16px;
+  --radius-card-token: 20px;
   --radius-button-token: 10px;
+  --layout-public-width: 80rem;
+  --layout-console-width: 96rem;
+  --motion-duration: 150ms;
+  --motion-enter-duration: 420ms;
   --shadow-glow: none;
 }

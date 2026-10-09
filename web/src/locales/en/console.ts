@@ -97,6 +97,7 @@ export default {
   overviewSummaryError: 'Could not load monthly usage',
   overviewDailyError: 'Could not load daily usage',
   overviewRetry: 'Retry',
+  overviewRefresh: 'Refresh data',
   overviewUnavailable: '—',
   overviewChartRange: 'Last 14 days',
   overviewChartTotal: 'Total tokens in the last 14 days',

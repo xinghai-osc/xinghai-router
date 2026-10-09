@@ -30,22 +30,22 @@ watch(() => route.fullPath, () => { open.value = false })
 </script>
 
 <template>
-  <div class="sticky top-0 z-40" @keydown.esc="closeMenu">
+  <div class="sticky top-0 z-40 border-b border-line bg-paper/95 backdrop-blur-xl" @keydown.esc="closeMenu">
     <div v-if="settings.announcement" class="border-b border-clay/15 bg-clay-soft px-4 py-2 text-center text-xs text-clay">
       {{ settings.announcement }}
     </div>
-    <header class="border-b border-line bg-paper/95 backdrop-blur-xl">
+    <header class="bg-transparent">
       <div class="shell">
-        <div class="flex h-[4.5rem] items-center justify-between gap-3 lg:gap-6">
+        <div class="flex h-20 items-center justify-between gap-3 lg:gap-6">
           <SiteLogo :name="settings.name" :icon-url="settings.icon_url" class="min-w-0" />
 
-          <nav class="hidden items-center gap-1 rounded-full border border-line bg-transparent p-1 lg:flex" :aria-label="t('common.menu')">
+          <nav class="hidden items-center gap-1 rounded-control border border-line bg-sunken/50 p-1 lg:flex" :aria-label="t('common.menu')">
             <NuxtLink
               v-for="link in links"
               :key="link.to"
               :to="link.to"
-              class="rounded-full border border-transparent px-4 py-1.5 text-[13px] font-medium text-muted transition-colors duration-150 ease-out hover:bg-surface hover:text-ink"
-              active-class="!border-clay/20 bg-clay-soft !text-clay"
+              class="rounded-control border border-transparent px-4 py-2 text-[13px] font-medium text-muted transition-colors duration-150 ease-out hover:bg-surface hover:text-ink"
+              active-class="!border-line bg-surface !text-ink"
             >{{ t(link.key) }}</NuxtLink>
           </nav>
 

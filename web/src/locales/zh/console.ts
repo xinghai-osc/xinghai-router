@@ -97,6 +97,7 @@ export default {
   overviewSummaryError: '本月用量统计加载失败',
   overviewDailyError: '每日用量加载失败',
   overviewRetry: '重新加载',
+  overviewRefresh: '刷新数据',
   overviewUnavailable: '—',
   overviewChartRange: '近 14 天',
   overviewChartTotal: '近 14 天 Tokens 合计',

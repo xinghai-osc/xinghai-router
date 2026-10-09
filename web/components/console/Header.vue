@@ -16,7 +16,7 @@ const heading = computed(() => {
 </script>
 
 <template>
-  <header class="sticky top-0 z-30 flex min-h-16 items-center gap-2 border-b border-line bg-surface/95 px-3 py-2 backdrop-blur-md sm:gap-3 sm:px-6 lg:px-8">
+  <header class="sticky top-0 z-30 flex min-h-16 items-center gap-2 border-b border-line bg-surface/95 px-3 py-2 backdrop-blur-md sm:gap-3 sm:px-6 lg:top-3 lg:rounded-t-[1.75rem] lg:px-8 xl:px-10">
     <button
       type="button"
       class="inline-flex size-9 shrink-0 items-center justify-center rounded-control text-muted transition-colors duration-150 ease-out hover:bg-sunken hover:text-ink lg:hidden"
@@ -32,7 +32,7 @@ const heading = computed(() => {
       <ChevronRight class="size-3.5 text-faint" aria-hidden="true" />
     </div>
     <div class="min-w-0 flex-1">
-      <h1 class="truncate text-sm font-semibold text-ink">{{ title ?? heading }}</h1>
+      <h1 :key="route.path" class="header-heading truncate text-sm font-semibold text-ink">{{ title ?? heading }}</h1>
       <p v-if="workspace" class="truncate text-2xs text-muted">{{ workspace.is_personal ? t('console.workspacePersonal') : workspace.name }}</p>
     </div>
 
@@ -50,3 +50,11 @@ const heading = computed(() => {
     </div>
   </header>
 </template>
+
+<style scoped>
+@media (prefers-reduced-motion: no-preference) {
+  .header-heading {
+    animation: rise 150ms ease-out;
+  }
+}
+</style>

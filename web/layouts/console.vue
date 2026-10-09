@@ -60,9 +60,9 @@ watchEffect(() => {
 </script>
 
 <template>
-  <div :class="['console-shell min-h-dvh bg-paper lg:grid', navCollapsed ? 'lg:grid-cols-[4.5rem_minmax(0,1fr)]' : 'lg:grid-cols-[15rem_minmax(0,1fr)]']">
+  <div :class="['console-shell min-h-dvh bg-paper lg:grid', navCollapsed ? 'lg:grid-cols-[4.5rem_minmax(0,1fr)]' : 'lg:grid-cols-[16rem_minmax(0,1fr)]']">
     <a href="#console-content" class="sr-only z-50 rounded-control bg-clay px-4 py-2 text-sm text-clay-ink focus:not-sr-only focus:fixed focus:top-2 focus:left-2">{{ t('common.skipToContent') }}</a>
-    <aside class="sticky top-0 hidden h-dvh border-r border-line bg-surface lg:block">
+    <aside class="sticky top-0 hidden h-dvh bg-paper lg:block">
       <ConsoleSidebar :can="canNavigate" :site-name="settings.name" :icon-url="settings.icon_url" :collapsed="navCollapsed" collapsible @toggle="toggleSidebar" />
     </aside>
 
@@ -79,7 +79,7 @@ watchEffect(() => {
       </DialogPortal>
     </DialogRoot>
 
-    <div class="flex min-w-0 flex-col">
+    <div class="console-workspace flex min-w-0 flex-col bg-sunken/40 lg:my-3 lg:mr-3 lg:rounded-[1.75rem] lg:border lg:border-line">
       <ConsoleHeader @open-nav="navOpen = true">
         <template #account>
           <ConsoleAccountMenu v-if="mounted && account" />
@@ -87,7 +87,7 @@ watchEffect(() => {
         </template>
       </ConsoleHeader>
 
-      <main id="console-content" tabindex="-1" class="mx-auto w-full max-w-[100rem] flex-1 space-y-5 px-4 py-6 outline-none sm:px-6 lg:px-8 lg:py-8">
+      <main id="console-content" tabindex="-1" class="mx-auto min-w-0 w-full max-w-[var(--layout-console-width)] flex-1 space-y-6 px-4 py-6 outline-none sm:px-6 lg:px-8 lg:py-8 xl:px-10">
         <UiAlert v-if="mustChangePassword" tone="warn" :title="t('console.mustChangePasswordTitle')">
           {{ t('console.mustChangePasswordBody') }}
         </UiAlert>

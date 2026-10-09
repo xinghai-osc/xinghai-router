@@ -28,7 +28,7 @@ const inputAttrs = computed(() => {
   const { class: _class, style: _style, ...nativeAttrs } = attrs
   return nativeAttrs
 })
-const rootClass = computed(() => cn('relative flex items-center', typeof attrs.class === 'string' ? attrs.class : undefined))
+const rootClass = computed(() => cn('relative flex min-w-0 items-center', typeof attrs.class === 'string' ? attrs.class : undefined))
 </script>
 
 <template>
@@ -51,11 +51,11 @@ const rootClass = computed(() => cn('relative flex items-center', typeof attrs.c
       :aria-required="required || undefined"
       :required="required || undefined"
       :class="cn(
-        'h-10 w-full rounded-control border border-line-strong bg-surface px-3 text-sm text-ink',
-        'placeholder:text-faint transition-colors duration-150',
-        'hover:border-faint focus:border-clay focus:outline-none focus:ring-2 focus:ring-clay/20',
+        'h-10 min-w-0 w-full rounded-control border border-line-strong bg-surface px-3 text-sm leading-6 text-ink',
+        'placeholder:text-faint transition-colors duration-150 ease-out motion-reduce:transition-none',
+        'enabled:hover:border-faint focus:border-clay focus:outline-2 focus:outline-offset-2 focus:outline-clay/60',
         'disabled:cursor-not-allowed disabled:bg-sunken disabled:text-muted',
-        'aria-invalid:border-danger aria-invalid:focus:ring-danger/20',
+        'aria-invalid:border-danger aria-invalid:focus:border-danger aria-invalid:focus:outline-danger/60',
         mono && 'font-mono text-[13px]',
         $slots.leading && 'pl-9',
         $slots.trailing && 'pr-9',

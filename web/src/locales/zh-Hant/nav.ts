@@ -31,6 +31,7 @@ export default {
   modelMetadata: '模型元數據',
   logs: '請求日誌',
   usageStats: '用量統計',
+  concurrency: '並發監控',
   audit: '審計日誌',
   requestAudits: '請求內容審計',
   contentPolicy: '禁用詞策略',

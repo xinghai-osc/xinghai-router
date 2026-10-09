@@ -192,6 +192,47 @@ func TestConcurrencyLeaseRedisUnavailableFailsClosed(t *testing.T) {
 	}
 }
 
+func TestConcurrencyLeaseCountsTrackAcquireReleaseAndExpiry(t *testing.T) {
+	url, _, id := leaseTestRedis(t)
+	manager := &concurrencyLeaseManager{redisURL: url, ttl: 300 * time.Millisecond}
+	_, release, scope, err := manager.acquire(context.Background(), []concurrencyLimit{{key: id, max: 3, scope: "channel"}})
+	if err != nil || scope != "" {
+		t.Fatalf("acquire: %s %v", scope, err)
+	}
+	counts, err := manager.counts(context.Background(), "channel", []string{id, "absent"})
+	if err != nil || len(counts) != 2 || counts[0] != 1 || counts[1] != 0 {
+		t.Fatalf("counts = %v (%v), want [1 0]", counts, err)
+	}
+	other := &concurrencyLeaseManager{redisURL: url, ttl: 300 * time.Millisecond}
+	counts, err = other.counts(context.Background(), "channel", []string{id})
+	if err != nil || counts[0] != 1 {
+		t.Fatalf("replica read %v (%v), want [1]", counts, err)
+	}
+	release()
+	counts, err = manager.counts(context.Background(), "channel", []string{id})
+	if err != nil || counts[0] != 0 {
+		t.Fatalf("released lease counted as %v (%v)", counts, err)
+	}
+	if _, _, scope, err = manager.acquire(context.Background(), []concurrencyLimit{{key: id, max: 3, scope: "channel"}}); err != nil || scope != "" {
+		t.Fatalf("re-acquire: %s %v", scope, err)
+	}
+	<-time.After(450 * time.Millisecond)
+	counts, err = manager.counts(context.Background(), "channel", []string{id})
+	if err != nil || counts[0] != 0 {
+		t.Fatalf("expired lease counted as %v (%v)", counts, err)
+	}
+}
+
+func TestConcurrencyLeaseCountsUnavailableFailsClosed(t *testing.T) {
+	manager := &concurrencyLeaseManager{redisURL: "redis://127.0.0.1:1", ttl: time.Second}
+	if counts, err := manager.counts(context.Background(), "channel", []string{"x"}); err == nil {
+		t.Fatalf("outage reported usage %v instead of failing", counts)
+	}
+	if counts, err := manager.counts(context.Background(), "channel", nil); err != nil || len(counts) != 0 {
+		t.Fatalf("empty key set = %v (%v)", counts, err)
+	}
+}
+
 func TestConcurrencyLeaseCancelledOwnerExpires(t *testing.T) {
 	url, _, id := leaseTestRedis(t)
 	manager := &concurrencyLeaseManager{redisURL: url, ttl: 300 * time.Millisecond}

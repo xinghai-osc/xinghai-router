@@ -13,7 +13,7 @@
 @utility shell {
   margin-inline: auto;
   width: 100%;
-  max-width: 76rem;
+  max-width: var(--layout-public-width);
   padding-inline: 1.25rem;
 
   @media (min-width: 768px) {

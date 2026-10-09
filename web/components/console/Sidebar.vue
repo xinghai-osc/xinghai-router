@@ -30,16 +30,16 @@ function isActive(to: string) {
 
 <template>
   <div class="flex h-full min-h-0 flex-col">
-    <div :class="['flex h-16 shrink-0 items-center border-b border-line', collapsed ? 'justify-center px-2' : 'px-5']">
+    <div :class="['flex h-[4.75rem] shrink-0 items-center', collapsed ? 'justify-center px-2' : 'px-5']">
       <SiteLogo :name="siteName" :icon-url="iconUrl" :compact="collapsed" class="max-w-full" />
     </div>
 
-    <div class="mx-3 mt-4 shrink-0">
+    <div class="mx-3 mt-1 shrink-0">
       <UiDropdownMenu align="start" :side="collapsed ? 'right' : 'bottom'">
         <template #trigger>
           <button
             type="button"
-            :class="['flex w-full items-center gap-3 rounded-control border border-line bg-sunken/50 py-3 text-left transition-colors hover:bg-sunken', collapsed ? 'justify-center px-1' : 'px-3']"
+            :class="['flex w-full items-center gap-3 rounded-control border border-line bg-surface py-3 text-left transition-colors duration-150 ease-out hover:bg-sunken', collapsed ? 'justify-center px-1' : 'px-3']"
             :aria-label="t('console.workspaceSwitch')"
             :title="t('console.workspaceSwitch')"
             :disabled="!workspaceReady || workspaceLoading"
@@ -64,16 +64,16 @@ function isActive(to: string) {
       </UiDropdownMenu>
     </div>
 
-    <nav class="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain px-3 py-5" :aria-label="t('common.console')">
+    <nav class="min-h-0 flex-1 space-y-6 overflow-y-auto overscroll-contain px-3 py-5" :aria-label="t('common.console')">
       <div v-for="section in sections" :key="section.titleKey" class="space-y-1">
-        <p :class="collapsed ? 'sr-only' : 'px-3 pb-1.5 text-2xs font-medium tracking-wider text-faint'">{{ t(section.titleKey) }}</p>
+        <p :class="collapsed ? 'sr-only' : 'px-3 pb-1.5 text-2xs font-semibold tracking-wider text-muted'">{{ t(section.titleKey) }}</p>
         <div v-if="collapsed" class="mx-2 mb-3 border-t border-line" aria-hidden="true" />
         <NuxtLink
           v-for="item in section.items"
           :key="item.to"
           :to="item.to"
           :class="[
-            'group flex min-h-10 items-center gap-3 rounded-control text-[13px] leading-5 transition-colors duration-150 ease-out',
+            'console-nav-link group relative flex min-h-11 items-center gap-3 rounded-control text-[13px] leading-5 transition-colors duration-150 ease-out',
             collapsed ? 'justify-center px-2 py-2.5' : 'px-3 py-2.5',
             isActive(item.to) ? 'bg-clay-soft font-semibold text-clay' : 'text-muted hover:bg-sunken hover:text-ink',
           ]"
@@ -115,3 +115,33 @@ function isActive(to: string) {
     </div>
   </div>
 </template>
+
+<style scoped>
+.console-nav-link::before {
+  content: '';
+  position: absolute;
+  inset-inline-start: 0;
+  width: 3px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--clay);
+  opacity: 0;
+  transform: scaleY(0.4);
+  transition: opacity 150ms ease-out, transform 150ms ease-out;
+}
+
+.console-nav-link[aria-current='page']::before {
+  opacity: 1;
+  transform: scaleY(1);
+}
+
+.console-nav-link :deep(svg) {
+  transition: transform 150ms ease-out;
+}
+
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .console-nav-link:hover :deep(svg) {
+    transform: translateX(2px);
+  }
+}
+</style>

@@ -23,17 +23,17 @@ defineProps<{ dense?: boolean }>()
 }
 
 .ui-table :deep(th) {
-  padding: 0.75rem 1rem;
+  padding: 0.875rem 1rem;
   font-size: 0.75rem;
   font-weight: 600;
   line-height: 1.5;
-  letter-spacing: 0.01em;
+  letter-spacing: 0.025em;
   color: var(--muted);
   white-space: nowrap;
 }
 
 .ui-table :deep(td) {
-  padding: 0.875rem 1rem;
+  padding: 1rem;
   color: var(--ink);
   vertical-align: middle;
 }
@@ -61,5 +61,24 @@ defineProps<{ dense?: boolean }>()
   font-variant-numeric: tabular-nums;
   text-align: right;
   white-space: nowrap;
+}
+.ui-table :deep(tfoot) {
+  border-top: 1px solid var(--line);
+  background-color: var(--sunken);
+  font-weight: 500;
+}
+
+@media (min-width: 640px) {
+  .ui-table :deep(th),
+  .ui-table :deep(td) {
+    padding-right: 1.5rem;
+    padding-left: 1.5rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-table :deep(tbody tr) {
+    transition: none;
+  }
 }
 </style>

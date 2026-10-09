@@ -35,6 +35,7 @@ export default {
   modelMetadata: 'Model metadata',
   logs: 'Request logs',
   usageStats: 'Usage statistics',
+  concurrency: 'Concurrency monitor',
   audit: 'Audit logs',
   conversationCache: 'Conversations',
   requestAudits: 'Request content audits',

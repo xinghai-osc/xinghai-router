@@ -52,3 +52,25 @@ func (gl *GroupLimiter) release(groupID string) {
 		c.mu.Unlock()
 	}
 }
+
+// snapshot reports the live count for each key, using 0 when the key has no
+// counter because nothing has been admitted against its limit yet.
+func (gl *GroupLimiter) snapshot(keys []string) map[string]int {
+	gl.mu.Lock()
+	counters := make([]*groupCounter, len(keys))
+	for i, key := range keys {
+		counters[i] = gl.counters[key]
+	}
+	gl.mu.Unlock()
+	out := make(map[string]int, len(keys))
+	for i, c := range counters {
+		if c == nil {
+			out[keys[i]] = 0
+			continue
+		}
+		c.mu.Lock()
+		out[keys[i]] = int(c.current)
+		c.mu.Unlock()
+	}
+	return out
+}

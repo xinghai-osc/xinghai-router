@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Activity, ArrowRight, ChartColumn, Coins, KeyRound, Lock, ReceiptText, Wallet } from 'lucide-vue-next'
+import { Activity, ArrowRight, ChartColumn, Coins, KeyRound, Lock, ReceiptText, RefreshCw, Wallet } from 'lucide-vue-next'
 import { endpoints, type DailyUsageRecord } from '~/src/api'
 import { formatCompact, formatMoney, formatNumber } from '~/src/format'
 
@@ -37,6 +37,18 @@ const { data: summary, pending: summaryPending, error: summaryError, refresh: re
   () => endpoints.getAccountUsageSummary(),
   { requests: 0, tokens: 0, cost: '0' },
 )
+
+const dashboardRefreshing = ref(false)
+
+async function refreshDashboard() {
+  if (dashboardRefreshing.value) return
+  dashboardRefreshing.value = true
+  try {
+    await Promise.all([loadAccount(true), refreshDaily(), refreshSummary(), refreshHeatmap()])
+  } finally {
+    dashboardRefreshing.value = false
+  }
+}
 
 const endpointUrl = `${useRequestURL().origin}/api/v1`
 
@@ -121,8 +133,8 @@ const quickLinks = computed(() => [
 </script>
 
 <template>
-  <div class="space-y-5 sm:space-y-6">
-    <section class="rounded-card border border-line bg-surface p-5 sm:p-6">
+  <div class="overview-motion space-y-5 sm:space-y-6">
+    <section class="overview-welcome relative isolate overflow-hidden rounded-card border border-line bg-surface p-5 sm:p-8">
       <div class="flex flex-col gap-5 xl:flex-row xl:items-center xl:justify-between">
         <div class="min-w-0 max-w-2xl">
           <p class="mb-2 text-xs font-semibold text-clay">{{ t('console.overviewTitle') }}</p>
@@ -132,6 +144,10 @@ const quickLinks = computed(() => [
           <p class="mt-2 text-sm leading-6 text-muted">{{ t('console.overviewDescription') }}</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 xl:shrink-0">
+          <UiButton variant="secondary" size="sm" :loading="dashboardRefreshing" :aria-label="t('console.overviewRefresh')" @click="refreshDashboard">
+            <RefreshCw class="size-4" aria-hidden="true" />
+            <span class="hidden sm:inline">{{ t('console.overviewRefresh') }}</span>
+          </UiButton>
           <UiButton to="/console/keys?create=1">
             <KeyRound class="size-4" aria-hidden="true" />
             {{ t('console.createKey') }}
@@ -157,7 +173,7 @@ const quickLinks = computed(() => [
           <UiButton variant="secondary" size="sm" @click="refreshSummary()">{{ t('console.overviewRetry') }}</UiButton>
         </div>
       </UiAlert>
-      <div class="grid grid-cols-2 gap-3 md:grid-cols-3 2xl:grid-cols-6">
+      <div class="overview-stats grid grid-cols-2 gap-3 md:grid-cols-3 2xl:grid-cols-6">
         <ConsoleUserStatCard
           :label="t('console.balance')"
           :value="accountError ? t('console.overviewUnavailable') : formatMoney(account?.balance ?? 0)"
@@ -242,7 +258,7 @@ const quickLinks = computed(() => [
           <li v-for="link in quickLinks" :key="link.to">
             <NuxtLink
               :to="link.to"
-              class="flex items-center gap-3 px-4 py-4 transition-colors duration-150 ease-out hover:bg-sunken focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-clay sm:px-5"
+              class="overview-shortcut group flex items-center gap-3 px-4 py-4 transition-colors duration-150 ease-out hover:bg-sunken focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-clay sm:px-5"
             >
               <span class="flex size-9 shrink-0 items-center justify-center rounded-control" :class="link.tone">
                 <component :is="link.icon" class="size-4" aria-hidden="true" />
@@ -251,7 +267,7 @@ const quickLinks = computed(() => [
                 <span class="block text-sm font-medium text-ink">{{ link.title }}</span>
                 <span class="mt-0.5 block text-xs leading-5 text-muted">{{ link.hint }}</span>
               </span>
-              <ArrowRight class="size-4 shrink-0 text-faint" aria-hidden="true" />
+              <ArrowRight class="size-4 shrink-0 text-faint transition-transform duration-150 ease-out motion-safe:group-hover:translate-x-1 motion-safe:group-focus-visible:translate-x-1" aria-hidden="true" />
             </NuxtLink>
           </li>
         </ul>
@@ -292,3 +308,47 @@ const quickLinks = computed(() => [
     </div>
   </div>
 </template>
+
+<style scoped>
+.overview-welcome::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  background: radial-gradient(ellipse at 100% 0%, var(--clay-soft), transparent 65%);
+  pointer-events: none;
+}
+
+.overview-welcome::after {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--clay);
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .overview-motion > * {
+    animation: rise 420ms ease-out both;
+  }
+
+  .overview-motion > :nth-child(2) {
+    animation-delay: 60ms;
+  }
+
+  .overview-motion > :nth-child(3) {
+    animation-delay: 120ms;
+  }
+
+  .overview-stats > * {
+    animation: rise 360ms ease-out both;
+  }
+
+  .overview-stats > :nth-child(2) { animation-delay: 40ms; }
+  .overview-stats > :nth-child(3) { animation-delay: 80ms; }
+  .overview-stats > :nth-child(4) { animation-delay: 120ms; }
+  .overview-stats > :nth-child(5) { animation-delay: 160ms; }
+  .overview-stats > :nth-child(6) { animation-delay: 200ms; }
+}
+</style>

@@ -22,15 +22,15 @@ provide(uiFieldContextKey, { id: fieldId, describedBy, invalid, required })
 </script>
 
 <template>
-  <div class="space-y-1.5">
-    <label v-if="label" :for="fieldId" class="flex items-center gap-1 text-[13px] font-medium text-ink">
+  <div class="min-w-0 space-y-2">
+    <label v-if="label" :for="fieldId" class="flex flex-wrap items-center gap-1 text-[13px] leading-5 font-medium text-ink">
       {{ label }}
       <span v-if="required" class="text-danger">*</span>
     </label>
 
     <slot />
 
-    <p v-if="error" :id="errorId" class="text-[13px] text-danger">{{ error }}</p>
-    <p v-else-if="hint" :id="hintId" class="text-[13px] text-muted">{{ hint }}</p>
+    <p v-if="error" :id="errorId" class="text-[13px] leading-5 break-words text-danger">{{ error }}</p>
+    <p v-else-if="hint" :id="hintId" class="text-[13px] leading-5 break-words text-muted">{{ hint }}</p>
   </div>
 </template>

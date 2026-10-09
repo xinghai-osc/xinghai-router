@@ -14,6 +14,7 @@ import (
 	"math/rand"
 	"net/http"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -343,6 +344,32 @@ func resolveGatewayMaxTokens(maxTokens int) (int, bool) {
 	return maxTokens, true
 }
 
+func gatewayReasoningEfforts(model string, raw []byte) (map[string]any, bool) {
+	if len(raw) > 0 && string(raw) != "null" {
+		var value map[string]any
+		if json.Unmarshal(raw, &value) == nil {
+			if levels, ok := value["supported_levels"].([]any); ok && len(levels) > 0 {
+				return value, true
+			}
+		}
+	}
+	levels, ok := commandCodeReasoningEfforts[model]
+	if !ok || len(levels) == 0 {
+		return nil, false
+	}
+	supported := make([]string, 0, len(levels))
+	for level := range levels {
+		if level != "none" && level != "off" {
+			supported = append(supported, level)
+		}
+	}
+	if len(supported) == 0 {
+		return nil, false
+	}
+	sort.Strings(supported)
+	return map[string]any{"supported_levels": supported}, true
+}
+
 func (s *Service) models(w http.ResponseWriter, r *http.Request) {
 	key := r.Context().Value(contextKey{}).(keyContext)
 	// Only models served by a channel the caller may use are listed: the key's
@@ -399,11 +426,8 @@ func (s *Service) models(w http.ResponseWriter, r *http.Request) {
 		if maxOutputTokens != nil {
 			item["max_output_tokens"] = *maxOutputTokens
 		}
-		if len(reasoningEfforts) > 0 && string(reasoningEfforts) != "null" {
-			var value map[string]any
-			if json.Unmarshal(reasoningEfforts, &value) == nil && len(value) > 0 {
-				item["reasoning_efforts"] = value
-			}
+		if value, ok := gatewayReasoningEfforts(model, reasoningEfforts); ok {
+			item["reasoning_efforts"] = value
 		}
 		if len(apiCapabilities) > 0 && string(apiCapabilities) != "null" {
 			var value map[string]any

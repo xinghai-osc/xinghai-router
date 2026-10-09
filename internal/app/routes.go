@@ -151,6 +151,7 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("GET /admin/request-logs", s.permission("logs.read", s.listLogs))
 	mux.Handle("GET /admin/usage-logs", s.permission("logs.read", s.listUsageLogs))
 	mux.Handle("GET /admin/usage-stats", s.permission("logs.read", s.usageStats))
+	mux.Handle("GET /admin/concurrency", s.permission("logs.read", s.concurrencyStatus))
 	mux.Handle("GET /admin/pricing", s.permission("pricing.read", s.listPricing))
 	mux.Handle("POST /admin/pricing", s.permission("pricing.manage", s.upsertPricing))
 	mux.Handle("GET /admin/exchange-rates", s.permission("pricing.read", s.listExchangeRates))

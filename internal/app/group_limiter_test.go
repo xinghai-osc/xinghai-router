@@ -65,6 +65,27 @@ func TestGroupLimiterIsolated(t *testing.T) {
 	}
 }
 
+func TestGroupLimiterSnapshot(t *testing.T) {
+	gl := NewGroupLimiter()
+	if !gl.acquire("a", 3) || !gl.acquire("a", 3) {
+		t.Fatal("a should admit two slots")
+	}
+	if !gl.acquire("b", 3) {
+		t.Fatal("b should admit one slot")
+	}
+	snapshot := gl.snapshot([]string{"a", "b", "untouched"})
+	if snapshot["a"] != 2 || snapshot["b"] != 1 || snapshot["untouched"] != 0 {
+		t.Fatalf("snapshot = %v", snapshot)
+	}
+	gl.release("a")
+	if snapshot := gl.snapshot([]string{"a"}); snapshot["a"] != 1 {
+		t.Fatalf("snapshot after release = %v", snapshot)
+	}
+	if snapshot := gl.snapshot(nil); len(snapshot) != 0 {
+		t.Fatalf("empty snapshot = %v", snapshot)
+	}
+}
+
 func TestGroupLimiterConcurrent(t *testing.T) {
 	gl := NewGroupLimiter()
 	const max = 10

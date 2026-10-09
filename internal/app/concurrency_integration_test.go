@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -199,6 +200,102 @@ func TestIntegrationChannelConcurrencyAdmission(t *testing.T) {
 	if held != 0 {
 		t.Fatalf("reservation leaked: %v", held)
 	}
+}
+
+func TestIntegrationConcurrencyStatusReportsLiveUsage(t *testing.T) {
+	db, _ := integrationPool(t)
+	defer db.Close()
+	resetIntegrationDatabase(t, db)
+	userID, _ := integrationUser(t, db, "concurrency-status@example.com", 100)
+	models, err := json.Marshal([]string{"concurrency-status-model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var limitedChannelID, unlimitedChannelID int64
+	if err := db.QueryRow(context.Background(), `insert into channels(name,base_url,api_key,models,provider,max_concurrency) values('limited',$1,'fake-key',$2,'openai',2) returning id`, "https://example.invalid", string(models)).Scan(&limitedChannelID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(context.Background(), `insert into channels(name,base_url,api_key,models,provider) values('unlimited',$1,'fake-key',$2,'openai') returning id`, "https://example.invalid", string(models)).Scan(&unlimitedChannelID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(context.Background(), `update users set max_concurrency=3 where id=$1`, userID); err != nil {
+		t.Fatal(err)
+	}
+	var groupID string
+	if err := db.QueryRow(context.Background(), `insert into groups(id,name,max_concurrency) values(gen_random_uuid(),'status-group',4) returning id`).Scan(&groupID); err != nil {
+		t.Fatal(err)
+	}
+
+	s := integrationService(t, db)
+	_, releaseChannel, busy, err := s.acquireChannelConcurrency(context.Background(), channel{id: limitedChannelID, maxConcurrency: 2})
+	if err != nil || busy {
+		t.Fatalf("hold channel slot: busy=%v err=%v", busy, err)
+	}
+	defer releaseChannel()
+	if !s.groupLimiter.acquire(groupID, 4) {
+		t.Fatal("hold group slot")
+	}
+	defer s.groupLimiter.release(groupID)
+
+	rec := httptest.NewRecorder()
+	s.concurrencyStatus(rec, httptest.NewRequest(http.MethodGet, "/admin/concurrency", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var status struct {
+		DeploymentMode string `json:"deployment_mode"`
+		Shared         bool   `json:"shared"`
+		Scopes         []struct {
+			Scope   string `json:"scope"`
+			Limit   int    `json:"limit"`
+			Current int    `json:"current"`
+			Entries []struct {
+				ID      string `json:"id"`
+				Name    string `json:"name"`
+				Email   string `json:"email"`
+				Limit   int    `json:"limit"`
+				Current int    `json:"current"`
+			} `json:"entries"`
+		} `json:"scopes"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &status); err != nil {
+		t.Fatalf("decode: %v body=%s", err, rec.Body.String())
+	}
+	if status.Shared || status.DeploymentMode != "single" {
+		t.Fatalf("single deployment reported as shared: %+v", status)
+	}
+	if len(status.Scopes) != 3 {
+		t.Fatalf("scopes = %+v", status.Scopes)
+	}
+	want := map[string]struct {
+		id      string
+		limit   int
+		current int
+	}{
+		"channel": {strconv.FormatInt(limitedChannelID, 10), 2, 1},
+		"user":    {userID, 3, 0},
+		"group":   {groupID, 4, 1},
+	}
+	for _, scope := range status.Scopes {
+		expect, ok := want[scope.Scope]
+		if !ok {
+			t.Fatalf("unexpected scope %q", scope.Scope)
+		}
+		if len(scope.Entries) != 1 {
+			t.Fatalf("%s entries = %+v", scope.Scope, scope.Entries)
+		}
+		entry := scope.Entries[0]
+		if entry.ID != expect.id || entry.Limit != expect.limit || entry.Current != expect.current {
+			t.Fatalf("%s entry = %+v, want id=%s limit=%d current=%d", scope.Scope, entry, expect.id, expect.limit, expect.current)
+		}
+		if scope.Limit != expect.limit || scope.Current != expect.current {
+			t.Fatalf("%s totals = limit %d current %d", scope.Scope, scope.Limit, scope.Current)
+		}
+		if scope.Scope == "user" && entry.Email != "concurrency-status@example.com" {
+			t.Fatalf("user email = %q", entry.Email)
+		}
+	}
+	_ = unlimitedChannelID
 }
 
 func TestIntegrationClusterRedisFailureHTTP(t *testing.T) {
