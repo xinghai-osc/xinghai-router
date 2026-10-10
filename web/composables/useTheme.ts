@@ -1,5 +1,5 @@
 export type ThemeMode = 'light' | 'dark'
-export type ThemePreset = 'default' | 'cool' | 'galaxy' | 'deepseek' | 'newapi'
+export type ThemePreset = 'default' | 'cool' | 'galaxy' | 'deepseek' | 'newapi' | 'shadcn'
 
 export const DEFAULT_THEME_MODE: ThemeMode = 'light'
 export const DEFAULT_THEME_PRESET: ThemePreset = 'newapi'
@@ -16,6 +16,7 @@ export const PRESET_STORAGE_KEY = 'xinghai.preset'
  */
 export const THEME_PRESETS: { value: ThemePreset; swatch: string[] }[] = [
   { value: 'newapi', swatch: ['#f7f8fa', '#3563e9', '#1c2434'] },
+  { value: 'shadcn', swatch: ['#ffffff', '#18181b', '#09090b'] },
   { value: 'default', swatch: ['#faf9f5', '#c96442', '#141413'] },
   { value: 'cool', swatch: ['#08090f', '#7c7cff', '#2fd3a5'] },
   { value: 'galaxy', swatch: ['#0a0a18', '#a78bfa', '#4f82f6'] },
