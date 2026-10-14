@@ -38,10 +38,11 @@ export default {
   concurrency: 'Concurrency monitor',
   audit: 'Audit logs',
   conversationCache: 'Conversations',
+  sessionAffinity: 'Session affinity',
   requestAudits: 'Request content audits',
   contentPolicy: 'Blocked-term policy',
 
-  subscriptionPlans: 'Plans',
+  subscriptionPlans: 'Subscriptions',
   redemptionCodes: 'Redemption codes',
   resetCards: 'Reset cards',
   adminSubscriptions: 'Subscriptions',

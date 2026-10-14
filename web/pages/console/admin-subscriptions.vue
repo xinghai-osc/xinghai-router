@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { Repeat } from 'lucide-vue-next'
-import { endpoints, type AdminSubscription, type SubscriptionPlan } from '~/src/api'
+import { endpoints, type AdminSubscription, type SubscriptionProduct } from '~/src/api'
 import { formatDateTime, formatMoney, formatNumber } from '~/src/format'
+import { periodLabel, tierOptions } from '~/src/subscriptions'
 
 definePageMeta({ layout: 'console', middleware: 'console-auth' })
 
@@ -17,9 +18,9 @@ const { data: subsData, pending, error, refresh } = useResource(
   () => endpoints.getAdminSubscriptions(),
   { data: [] as AdminSubscription[] },
 )
-const { data: plansData } = useResource(
-  () => endpoints.getAdminSubscriptionPlans(),
-  { data: [] as SubscriptionPlan[] },
+const { data: productsData } = useResource(
+  () => endpoints.getAdminSubscriptionProducts(),
+  { data: [] as SubscriptionProduct[] },
 )
 
 const STATUS_KEYS = {
@@ -49,12 +50,16 @@ const subscriptions = computed(() => {
   return subsData.value.data.filter((item) => {
     if (statusFilter.value !== 'all' && item.status !== statusFilter.value) return false
     if (!term) return true
-    return [item.email, item.user_name, item.plan_name]
+    return [item.email, item.user_name, item.display_name, item.plan_name]
       .some(field => (field ?? '').toLowerCase().includes(term))
   })
 })
 
 const canManage = computed(() => can('system.manage'))
+
+function displayName(item: AdminSubscription): string {
+  return item.display_name || item.plan_name
+}
 
 function remainingQuota(item: AdminSubscription): string[] {
   const lines: string[] = []
@@ -71,16 +76,16 @@ function remainingQuota(item: AdminSubscription): string[] {
   return lines
 }
 
-const extendPlanId = ref('all')
+const extendTierId = ref('')
 const extendDays = ref('30')
 const extendStatus = ref<'active' | 'inactive' | 'all'>('active')
 const resetQuotasOpen = ref(false)
 const resetQuotaStatus = ref<'active' | 'inactive' | 'all'>('active')
 const resetQuotaTarget = ref<AdminSubscription | null>(null)
 
-const extendPlanOptions = computed(() => [
-  { value: 'all', label: t('system.batchExtendAllPlans') },
-  ...plansData.value.data.map(plan => ({ value: plan.id, label: plan.name })),
+const extendTierOptions = computed(() => [
+  { value: '', label: t('common.all') },
+  ...tierOptions(productsData.value.data),
 ])
 
 const extendStatusOptions = computed(() => [
@@ -104,7 +109,7 @@ async function runExtend() {
   let affected = 0
   const ok = await run(async () => {
     const result = await endpoints.batchExtendSubscriptions(
-      extendPlanId.value === 'all' ? '' : extendPlanId.value,
+      extendTierId.value,
       days,
       extendStatus.value,
     )
@@ -143,7 +148,7 @@ async function resetSubscriptionQuota() {
     toast.error(t('common.actionFailed'))
     return
   }
-  toast.success(t('system.resetSubscriptionQuotaDone', { plan: target.plan_name }))
+  toast.success(t('system.resetSubscriptionQuotaDone', { plan: displayName(target) }))
   await refresh()
 }
 </script>
@@ -158,11 +163,11 @@ async function resetSubscriptionQuota() {
 
       <UiCard v-if="canManage" :title="t('system.batchExtend')" :description="t('system.batchExtendLead')">
         <div class="grid items-end gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto]">
-          <UiField :label="t('system.batchExtendPlan')" for="extend-plan">
+          <UiField :label="t('admin.tier')" for="extend-tier">
             <UiSelect
-              id="extend-plan"
-              v-model="extendPlanId"
-              :options="extendPlanOptions"
+              id="extend-tier"
+              v-model="extendTierId"
+              :options="extendTierOptions"
               :placeholder="t('common.selectPlaceholder')"
             />
           </UiField>
@@ -223,6 +228,7 @@ async function resetSubscriptionQuota() {
             <tr>
               <th>{{ t('system.subscriber') }}</th>
               <th>{{ t('system.plan') }}</th>
+              <th>{{ t('admin.billingPeriod') }}</th>
               <th>{{ t('system.remainingQuota') }}</th>
               <th>{{ t('common.status') }}</th>
               <th class="num">{{ t('system.periodStart') }}</th>
@@ -239,7 +245,8 @@ async function resetSubscriptionQuota() {
                 <p class="font-medium text-ink">{{ item.email }}</p>
                 <p v-if="item.user_name" class="mt-0.5 text-[13px] text-muted">{{ item.user_name }}</p>
               </td>
-              <td>{{ item.plan_name }}</td>
+              <td>{{ displayName(item) }}</td>
+              <td class="text-muted">{{ periodLabel(t, item.billing_period, 'system') }}</td>
               <td>
                 <p v-for="line in remainingQuota(item)" :key="line" class="whitespace-nowrap text-[13px] text-muted">
                   {{ line }}
@@ -273,7 +280,7 @@ async function resetSubscriptionQuota() {
 
       <UiDialog :open="resetQuotaTarget !== null" size="sm" :title="t('system.resetSubscriptionQuota')">
         <p class="text-sm text-muted">
-          {{ t('system.confirmResetSubscriptionQuota', { plan: resetQuotaTarget?.plan_name ?? '' }) }}
+          {{ t('system.confirmResetSubscriptionQuota', { plan: resetQuotaTarget ? displayName(resetQuotaTarget) : '' }) }}
         </p>
         <template #footer>
           <UiButton variant="secondary" @click="resetQuotaTarget = null">{{ t('common.cancel') }}</UiButton>

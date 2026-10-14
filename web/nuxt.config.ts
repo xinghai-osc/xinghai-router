@@ -1,4 +1,14 @@
+import { readFileSync } from 'node:fs'
 import tailwindcss from '@tailwindcss/vite'
+import { legalVersion } from './lib/legal-version.mjs'
+import en from './src/locales/en/site'
+import zh from './src/locales/zh/site'
+import zhHant from './src/locales/zh-Hant/site'
+
+const legalVersions = Object.fromEntries(['terms', 'privacy'].map(name => [
+  `${name}_version`,
+  legalVersion(readFileSync(new URL(`./pages/${name}.vue`, import.meta.url), 'utf8'), { en, zh, 'zh-Hant': zhHant }),
+]))
 
 const publicRoutes = ['/', '/auth', '/auth/reset', '/redeem', '/activity', '/models', '/rankings', '/pricing', '/terms', '/privacy']
 const seoRoutes = [...publicRoutes, '/robots.txt', '/sitemap.xml']
@@ -9,6 +19,7 @@ export default defineNuxtConfig({
   runtimeConfig: {
     public: {
       siteUrl: '',
+      legalVersions,
     },
   },
   css: ['~/assets/css/main.css'],

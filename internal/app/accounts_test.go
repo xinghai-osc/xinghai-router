@@ -273,6 +273,41 @@ func TestCreateAccountKeyRejectsInvalidNameBeforeDatabase(t *testing.T) {
 	}
 }
 
+func TestLegalConsentVersionValidation(t *testing.T) {
+	valid := strings.Repeat("a", 64)
+	if !validLegalConsentVersion(valid) {
+		t.Fatal("valid lowercase sha256 hash rejected")
+	}
+	for _, value := range []string{
+		"",
+		strings.Repeat("a", 63),
+		strings.Repeat("a", 65),
+		strings.Repeat("A", 64),
+		strings.Repeat("g", 64),
+		strings.Repeat("0", 63) + "G",
+	} {
+		if validLegalConsentVersion(value) {
+			t.Fatalf("invalid legal consent version accepted: %q", value)
+		}
+	}
+}
+
+func TestPutLegalConsentRejectsInvalidVersionsBeforeDatabase(t *testing.T) {
+	for _, body := range []string{
+		`{}`,
+		`{"terms_version":"` + strings.Repeat("a", 64) + `"}`,
+		`{"terms_version":"` + strings.Repeat("A", 64) + `","privacy_version":"` + strings.Repeat("b", 64) + `"}`,
+	} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPut, "/account/legal-consent", strings.NewReader(body))
+		request = request.WithContext(context.WithValue(request.Context(), accountContextKey{}, accountContext{userID: "1"}))
+		(&Service{}).putLegalConsent(recorder, request)
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("body %s status = %d, want %d", body, recorder.Code, http.StatusBadRequest)
+		}
+	}
+}
+
 func TestValidEmail(t *testing.T) {
 	valid := []string{
 		"user@example.com",

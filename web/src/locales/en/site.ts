@@ -1,4 +1,14 @@
 export default {
+  consentTitle: 'Review the Terms and Privacy Policy',
+  consentDescription: 'On your first visit or after an update, please read and accept the current Terms of Service and Privacy Policy before continuing to use this website.',
+  consentCheckbox: 'I have read and agree to the Terms of Service and Privacy Policy',
+  consentAccept: 'Agree and continue',
+  consentDecline: 'Disagree',
+  consentDeclined: 'You have not agreed, so you cannot continue using the website. You can review the documents and reconsider, or close this page.',
+  consentReview: 'Review again',
+  consentError: 'Unable to load or save your consent. Please try again.',
+  consentRetry: 'Retry',
+  consentLoading: 'Checking your consent…',
   riskProbePrivacyLink: 'Network check privacy',
   riskProbePrivacy: 'Network checks and reward protection: after you choose to register, continue with OAuth or check in, we may run a WebRTC data-channel check lasting at most 2 seconds. Configured STUN services (Cloudflare by default) receive your network address; no camera or microphone is accessed. Up to eight public network addresses and the check status are submitted for reward-abuse review. Private addresses, hostnames and session descriptions are not submitted. A signed HttpOnly browser cookie helps identify repeated reward actions. Unavailable checks alone do not establish abuse.',
 
@@ -37,6 +47,7 @@ export default {
   wallLead: 'Flagship and lightweight models share one catalogue, with published prices and group multipliers.',
   wallCta: 'See all models',
   wallModelCount: '{count} models',
+  dataLoading: 'Syncing live data',
   wallEmptyTitle: 'No models configured yet',
   wallEmptyBody: 'Models appear here once an administrator adds a channel in the console.',
 
@@ -286,12 +297,12 @@ export default {
   termsMetaTitle: 'Terms of Service',
   termsMetaDescription: 'Xinghai Router terms of service: what the service is, account rules, acceptable use, billing and limitation of liability.',
   termsTitle: 'Terms of Service',
-  termsUpdatedAt: '1 July 2026',
+  termsUpdatedAt: '12 October 2026',
   termsIntro: 'These terms form the agreement between you and Xinghai Router (the "Service") covering your use of it. By creating an account, issuing an API key or calling any endpoint, you confirm that you have read and accepted them.',
 
   termsS1Title: '1. What the service is',
   termsS1P1: 'The Service is an LLM API gateway. We aggregate the APIs of multiple model providers behind one OpenAI- and Anthropic-compatible protocol, and add key management, group-multiplier pricing, reserved balances, failover and usage analytics on top.',
-  termsS1P2: 'We do not train models ourselves. Your request is ultimately handled by the upstream provider behind the model you select, and that provider determines its capabilities, output quality and content policy.',
+  termsS1P2: 'We develop, research and train our own models. When you actively opt in to sharing data with us, your data is recorded and used to improve our models. Your request is routed by model id to our own hosted servers or to a partner, and we enter into ZDR agreements for some models.',
 
   termsS2Title: '2. Accounts and registration',
   termsS2P1: 'An account is required to use the Service. You are responsible for everything that happens under it.',
@@ -334,7 +345,7 @@ export default {
   termsS8P1: 'You may stop using the Service and close your account from the console at any time. We may suspend or terminate an account that materially breaches these terms, has unpaid fees, or endangers the security of the Service. On termination, unused promotional credit expires immediately and purchased balance is handled as the law requires.',
 
   termsS9Title: '9. Changes and governing law',
-  termsS9P1: 'We may update these terms from time to time; the updated version applies from the effective date shown on this page. Continuing to use the Service after a change means you accept the new terms. These terms are governed by the laws of mainland China, and disputes go to the competent court where our principal place of business is located.',
+  termsS9P1: 'We may update these terms from time to time; the updated version applies from the effective date shown on this page. When the Terms of Service or Privacy Policy change, we prompt you on entering the website; you must explicitly accept the latest versions before continuing to use the website. These terms are governed by the laws of mainland China, and disputes go to the competent court where our principal place of business is located.',
 
   termsS10Title: '10. Contact',
   termsS10P1: 'If you have questions about these terms, email {email} and we will respond within 15 business days.',
@@ -342,7 +353,7 @@ export default {
   privacyMetaTitle: 'Privacy Policy',
   privacyMetaDescription: 'Xinghai Router privacy policy: the data we collect, how we use and retain it, and the rights you can exercise.',
   privacyTitle: 'Privacy Policy',
-  privacyUpdatedAt: '1 July 2026',
+  privacyUpdatedAt: '12 October 2026',
   privacyIntro: 'This policy explains what information Xinghai Router collects, how we use and store it, and which rights you can exercise. Read it alongside the Terms of Service.',
 
   privacyS1Title: '1. Information we collect',
@@ -352,6 +363,7 @@ export default {
   privacyS1L3: 'Billing data: top-up and deduction records, subscription status, and order numbers returned by the payment provider. We never see or store your card number.',
   privacyS1L4: 'Security logs: IP address, user agent, browser and operating system for sign-ins and sensitive operations, used for fraud prevention and audit.',
   privacyS1L5: 'Preferences: interface language, theme, and whether you take part in the public leaderboard.',
+  privacyS1L6: 'Model-improvement data: your requests and responses are recorded only when you actively turn on "Use my data to help improve".',
   privacyS1P2: 'We do not collect information unrelated to providing the Service, and we never ask you for identity documents.',
 
   privacyS2Title: '2. How we use it',
@@ -360,17 +372,19 @@ export default {
   privacyS2L2: 'Detect abnormal traffic, prevent credential theft and abuse, and keep accounts secure;',
   privacyS2L3: 'Provide technical support and debugging when you contact us;',
   privacyS2L4: 'Show the public leaderboard in aggregated or masked form, if you have opted in;',
-  privacyS2L5: 'Meet legal, regulatory and tax obligations.',
+  privacyS2L5: 'Meet legal, regulatory and tax obligations;',
+  privacyS2L6: 'Improve the quality and reliability of our models as we develop, research and train them — recorded requests and responses are used for this only after you turn that switch on, and you can turn it off at any time.',
   privacyS2P2: 'We do not use your information for advertising and we do not sell it to third parties.',
 
   privacyS3Title: '3. Request content and upstream providers',
-  privacyS3P1: 'By default we do not persist request bodies or model output: the gateway releases the message content once forwarding completes, and only the request metadata described above is stored. Raw payloads are kept briefly only when you enable debug retention yourself, or when investigating a specific incident with your confirmation.',
+  privacyS3P1: 'By default we do not persist request bodies or model output: the gateway releases the message content once forwarding completes, and only the request metadata described above is stored. There are two exceptions. Once you turn on data sharing, requests and responses are recorded and used to improve our own models. And when you enable debug retention, or when investigating a specific incident with your confirmation, raw payloads are kept briefly.',
   privacyS3P2: 'Your request is forwarded to the upstream provider behind the model you chose — OpenAI, Anthropic, Kimi or your own endpoint, for example — and that content is also covered by their privacy policy. Choosing a model means choosing its data processor, so review their policy before sending sensitive data.',
+  privacyS3P3: 'The model id decides whether your request goes to servers we host ourselves or to a partner. For some models we have signed zero data retention (ZDR) agreements requiring the partner not to retain request content; models not covered by ZDR are still handled under that partner\'s policy, so check before sending sensitive data.',
 
   privacyS4Title: '4. Cookies and local storage',
   privacyS4P1: 'We use only the cookies and browser storage the product needs, with no third-party advertising or cross-site tracking scripts:',
   privacyS4L1: 'Session cookie: keeps you signed in for seven days and is cleared when you sign out.',
-  privacyS4L2: 'Local storage: remembers your interface language, theme and light or dark preference.',
+  privacyS4L2: 'Local storage: remembers your interface language, theme, light or dark preference, and the legal versions accepted by visitors. For signed-in users, accepted versions and acceptance times are stored with the account.',
   privacyS4L3: 'We serve no third-party advertising cookies and embed no cross-site analytics SDKs.',
 
   privacyS5Title: '5. Data retention',
@@ -379,10 +393,11 @@ export default {
   privacyS5L2: 'Billing and payment records: as long as tax and accounting rules require, typically at least five years.',
   privacyS5L3: 'Security and audit logs: six months.',
   privacyS5L4: 'After you close your account we delete or anonymise the above within 30 days, except where the law requires us to keep it.',
+  privacyS5L5: 'Training data recorded after you turn on data sharing: kept while you do not withdraw consent; after withdrawal or account closure it is no longer used for further training and is deleted within 30 days.',
 
   privacyS6Title: '6. Sharing',
   privacyS6P1: 'We share the minimum necessary information, and only in these cases:',
-  privacyS6L1: 'Upstream model providers: request content is forwarded so the call you made can be completed.',
+  privacyS6L1: 'Upstream model providers and partners: request content is forwarded so the call you made can be completed, and for some models a zero data retention (ZDR) agreement is in place.',
   privacyS6L2: 'Payment providers: order amounts and order numbers, to process top-ups and subscription charges.',
   privacyS6L3: 'Cloud and infrastructure providers: the hosting needed to run our databases and servers.',
   privacyS6L4: 'Legal requirements: disclosure limited to what a valid judicial or administrative request demands.',
@@ -404,4 +419,9 @@ export default {
 
   privacyS10Title: '10. Changes and contact',
   privacyS10P1: 'If this policy changes materially we will update the effective date on this page and, where necessary, notify you by email. For any question about this policy or your data, contact {email}.',
+  planChoosePeriod: 'Billing period',
+  planPerPeriod: '/ {period}',
+  planTierLevel: 'Level {level}',
+  planRenewHint: 'Buying again extends the expiry and resets the quota of the new period',
+  planTier: 'Tier',
 }

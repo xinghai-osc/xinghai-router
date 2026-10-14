@@ -17,7 +17,7 @@ const SECTIONS: Section[] = [
     titleKey: 'site.privacyS1Title',
     blocks: [
       { kind: 'p', keys: ['site.privacyS1P1'] },
-      { kind: 'ul', keys: ['site.privacyS1L1', 'site.privacyS1L2', 'site.privacyS1L3', 'site.privacyS1L4', 'site.privacyS1L5'] },
+      { kind: 'ul', keys: ['site.privacyS1L1', 'site.privacyS1L2', 'site.privacyS1L3', 'site.privacyS1L4', 'site.privacyS1L5', 'site.privacyS1L6'] },
       { kind: 'p', keys: ['site.privacyS1P2', 'site.riskProbePrivacy'] },
     ],
   },
@@ -26,11 +26,11 @@ const SECTIONS: Section[] = [
     titleKey: 'site.privacyS2Title',
     blocks: [
       { kind: 'p', keys: ['site.privacyS2P1'] },
-      { kind: 'ul', keys: ['site.privacyS2L1', 'site.privacyS2L2', 'site.privacyS2L3', 'site.privacyS2L4', 'site.privacyS2L5'] },
+      { kind: 'ul', keys: ['site.privacyS2L1', 'site.privacyS2L2', 'site.privacyS2L3', 'site.privacyS2L4', 'site.privacyS2L5', 'site.privacyS2L6'] },
       { kind: 'p', keys: ['site.privacyS2P2'] },
     ],
   },
-  { id: 'content', titleKey: 'site.privacyS3Title', blocks: [{ kind: 'p', keys: ['site.privacyS3P1', 'site.privacyS3P2'] }] },
+  { id: 'content', titleKey: 'site.privacyS3Title', blocks: [{ kind: 'p', keys: ['site.privacyS3P1', 'site.privacyS3P2', 'site.privacyS3P3'] }] },
   {
     id: 'cookies',
     titleKey: 'site.privacyS4Title',
@@ -44,7 +44,7 @@ const SECTIONS: Section[] = [
     titleKey: 'site.privacyS5Title',
     blocks: [
       { kind: 'p', keys: ['site.privacyS5P1'] },
-      { kind: 'ul', keys: ['site.privacyS5L1', 'site.privacyS5L2', 'site.privacyS5L3', 'site.privacyS5L4'] },
+      { kind: 'ul', keys: ['site.privacyS5L1', 'site.privacyS5L2', 'site.privacyS5L3', 'site.privacyS5L4', 'site.privacyS5L5'] },
     ],
   },
   {

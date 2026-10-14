@@ -1,9 +1,9 @@
-import { endpoints, type PublicSubscriptionPlan } from '~/src/api'
+import { endpoints, type SubscriptionProduct } from '~/src/api'
 
-/** Public subscription plans, shared by the landing page and /pricing. */
+/** Public subscription products, shared by the landing page and /pricing. */
 export function usePlans() {
   const { t } = useI18n()
-  const plans = useState<PublicSubscriptionPlan[]>('public-plans', () => [])
+  const products = useState<SubscriptionProduct[]>('public-plans', () => [])
   const loading = useState('public-plans-loading', () => false)
   const loaded = useState('public-plans-loaded', () => false)
   const error = useState('public-plans-error', () => '')
@@ -14,7 +14,7 @@ export function usePlans() {
     error.value = ''
     try {
       const response = await endpoints.getPublicSubscriptionPlans()
-      plans.value = response.data ?? []
+      products.value = response.data ?? []
       loaded.value = true
     } catch (cause) {
       error.value = cause instanceof Error ? cause.message : t('common.loadFailed')
@@ -23,5 +23,5 @@ export function usePlans() {
     }
   }
 
-  return { plans, loading, loaded, error, loadPlans }
+  return { products, loading, loaded, error, loadPlans }
 }

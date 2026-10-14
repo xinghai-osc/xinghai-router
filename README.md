@@ -10,12 +10,12 @@
 - OpenAI-compatible `GET /v1/models`、`POST /v1/chat/completions`、`POST /v1/responses`，Anthropic-compatible `POST /v1/messages`，以及 TypeSafe-compatible `POST /v1/systemone`。
 - 透明 SSE、每 Key 每分钟基础限流、请求 ID、安全响应头、panic 恢复、模型别名和同优先级权重路由。
 - 渠道支持独立的并发上限（`channels.max_concurrency`，留空或 0 表示不限）：达到上限的渠道只被跳过并改用其他可用渠道；全部候选渠道都满时返回 429 `channel_concurrency_exceeded`，不会把渠道繁忙记为渠道失败。
-- 控制台“并发监控”页实时显示渠道、用户与分组并发上限的当前占用（`GET /admin/concurrency`，需 `logs.read`），页面打开时每 5 秒自动刷新；单实例模式下计数来自本进程，集群模式下取自共享 Redis 租约并覆盖全部副本。
+- 控制台“并发监控”页实时显示渠道、用户与分组的并发占用（`GET /admin/concurrency`，需 `logs.read`），页面打开时每 5 秒自动刷新；未设置上限的实体只要有请求进行中也会列出。单实例模式下计数来自本进程；集群模式下已设上限的实体取自共享 Redis 租约、覆盖全部副本，未设上限的实体因为没有租约可共享而只统计本副本，页面对两者分别标注。
 - 对可重试上游错误自动切换备用渠道；连续失败三次的渠道冷却一分钟。管理员可在站点设置中开启故障渠道自动检测：系统会重试检测三次，全部失败后自动停用渠道。
 - “路由可靠性”分组支持独立的请求重试配置（重试次数 0-10、逗号分隔的状态码与包含性范围）、后台渠道健康检查（定时全量测试或仅被动恢复、可配置频率、渠道 ID 白名单、检查成功后自动恢复上线），以及自动禁用规则（测试失败禁用、慢响应秒数阈值、状态码和上游错误关键字匹配，关键字不区分大小写）。
 - 请求日志关联用户、Key、模型和最终渠道；非流式请求记录 token、按定价结算，并在上游调用前预留余额以避免并发透支。
 - 支持彩虹易支付兼容接口自助充值；管理员可配置平台并动态管理支付渠道，异步通知验签后幂等入账。
-- 套餐订阅系统：管理员可定义按月/年计费的套餐，支持赠送额度、模型白名单与每周期上限；订阅支付复用易支付，激活后自动发放额度并加入分组，订阅期内对白名单内模型的调用跳过钱包扣费。
+- 订阅系统：按「订阅产品 → 等级 → 周期价格」组织，同一订阅的月付/年付是同一等级下的多行周期价格；等级定义赠送额度、分组、模型白名单与每周期上限，周期价格可覆盖该周期的额度。用户在同一等级上只保留一条订阅，重复购买顺延到期时间并重置本周期额度；订阅支付复用易支付，订阅期内对白名单内模型的调用跳过钱包扣费。
 
 设置 `REDIS_URL` 后，API Key 限流使用 Redis 固定窗口计数（每 Key 每分钟）。默认 `DEPLOYMENT_MODE=single`，用户/分组/渠道并发只在单进程内计数，Redis 故障默认回退内存；这不等于多实例行为一致。多副本必须显式使用 `DEPLOYMENT_MODE=cluster`，详见下文的共享租约、配置通知和故障策略。流式响应解析上游 SSE 用量并结算；完全缺少用量的成功文本流保留请求估算兜底，并标记 `usage_source=request_estimate`，明确返回零用量则不再替换成估算。多维计量、图片计费配置与账单复算规则见 [统一用量与计费](docs/billing.md)。
 
@@ -70,10 +70,10 @@ LOCAL_PROMPT_CACHE=false
 - `CONCURRENCY_LEASE_TTL` 支持 `5s`–`5m`，默认 `30s`。每个请求使用唯一令牌，在一个 Lua 操作中检查并占用用户/分组槽位，以 Redis 时间计算过期；每 TTL/3 续租，完成后按令牌幂等释放。崩溃或释放失败的槽位在租约过期后回收；降低上限不驱逐现有请求，但阻止继续超额准入。集群模式每次准入从 PostgreSQL 读取用户/分组并发上限，读取失败返回 503，不把故障解释为无限制。渠道上限随渠道配置缓存加载（写入后由事务通知即时失效），租约同样按渠道 ID 全局共享；渠道满只跳过该候选，因此单渠道繁忙不会让请求失败。并发监控页显示的占用在集群模式下对全部副本一致，单实例模式下只是本进程的数字。
 - `deny` 优先保障共享限额：Redis 启动检查失败即拒绝启动；运行时 API Key 限流或并发后端故障返回 503，确实达到限制才返回 429。续租失败或租约丢失会取消正在进行的上游请求；已发送响应头的流式请求只能中断流，不能再改写为 503。`/readyz` 在此策略下同时检查 PostgreSQL 和 Redis；`/healthz` 仍是进程存活检查。
 - `memory` 只用于单实例可用性优先场景：故障时使用独立的本地固定窗口，恢复后重新连接 Redis。两套窗口不合并，故障/恢复切换会改变限额语义，不能当作严格全局额度。日志 `event=redis_degraded` / `event=redis_recovered` 标明组件和策略，按状态变化发出；应在日志平台配置告警，日志本身不是外部告警投递。`event=concurrency_lease_lost` 表示在途请求因失去租约被取消。
-- 迁移 `098_config_invalidation.sql` 为定价、渠道与密钥、路由/分组、并发上限、配额定义、站点/内容策略及订阅配置安装事务通知触发器。回滚不发送通知；各集群副本使用专用 PostgreSQL 连接监听，通知到达时清空相关缓存，重连成功后再次清空，加载中的旧数据不会重新填回已失效缓存。通知不包含配置值或秘密。数据库代理必须支持会话级 `LISTEN`（不能使用事务池模式），每副本额外预留一个连接。后续迁移 `113_channel_max_concurrency_invalidation.sql` 把 `channels.max_concurrency` 补进同一触发器，避免只在改动渠道并发上限时漏发通知。
+- 迁移 `098_config_invalidation.sql` 为定价、渠道与密钥、路由/分组、并发上限、配额定义、站点/内容策略及订阅配置安装事务通知触发器。回滚不发送通知；各集群副本使用专用 PostgreSQL 连接监听，通知到达时清空相关缓存，重连成功后再次清空，加载中的旧数据不会重新填回已失效缓存。通知不包含配置值或秘密。数据库代理必须支持会话级 `LISTEN`（不能使用事务池模式），每副本额外预留一个连接。后续迁移 `113_channel_max_concurrency_invalidation.sql` 把 `channels.max_concurrency` 补进同一触发器，避免只在改动渠道并发上限时漏发通知。订阅目录重做后，`114_subscription_tiers.sql` 负责三层表结构与旧套餐归并，`115_subscription_invalidation.sql` 把新表与 `user_subscriptions` 重新挂上同一套触发器（可重复执行）。
 - **配置通知是最终一致，不是跨副本同步屏障。** 通知处理前、网络断开或加载已经在途时仍可能读到旧配置；现有缓存 TTL（通常 5–30 秒）作为兜底，TTL 从加载完成时起算，嵌套的渠道列表/密钥缓存可能叠加到约 60 秒再加查询耗时，不承诺自提交起严格固定延迟。停用渠道、改价等需要立即一致的操作，应先排空流量并等待所有副本刷新，再恢复接入。静态环境变量不经通知更新，须一致地重启副本。
 - **租约不是上游执行的 fencing 保证。** Redis 丢失数据、异步复制故障切换、管理员清空/驱逐键、进程长暂停或上游忽略取消，都可能造成短暂重叠执行。Redis 应使用独立数据库、`noeviction` 与适当持久化/高可用策略；丢失限流状态后先停止准入并排空旧请求，再恢复流量。客户端使用一个 Redis endpoint，不自动发现 Sentinel，也不处理 Redis Cluster 的 MOVED/ASK 跳转；这里的 `cluster` 指应用多副本，不表示支持 Redis Cluster 拓扑。
-- 每个受限在途请求占用一个 Redis 连接，应为最大并发预留连接/文件描述符并压测。未设并发上限的请求不创建租约。不要混跑 `single` 与 `cluster`，升级时先排空旧实例；不同项目应使用不同 Redis 数据库，避免固定命名空间冲突。
+- 每个受限在途请求占用一个 Redis 连接，应为最大并发预留连接/文件描述符并压测。未设并发上限的请求不创建租约，只在进程内计数（供并发监控页显示本副本占用），不产生 Redis 开销。不要混跑 `single` 与 `cluster`，升级时先排空旧实例；不同项目应使用不同 Redis 数据库，避免固定命名空间冲突。
 - 本地会话 JSON 文件、公开榜单/性能聚合、后台定时任务、订阅与渠道软额度仍有各自的多实例边界；本次不承诺调度器单主、文件跨副本可见或所有软额度都变为严格额度。现有 Compose 是单机启动模板（固定宿主端口），不是直接 `--scale` 的生产集群编排。生产扩容仍需负载均衡、共享数据方案与独立压测验收。
 
 可用独立测试基础设施验证（`TEST_DATABASE_URL` 对应数据库会被集成测试清空，切勿指向业务库）：
@@ -129,20 +129,27 @@ curl -X POST http://localhost:8080/account/payments \
 
 ## 订阅系统
 
-管理员可在“订阅套餐”页面定义按月或按年计费的套餐：套餐价格、计费周期、赠送额度（订阅激活时一次性充值进用户钱包，可叠加现有按量计费）、自动加入分组、模型白名单（留空表示订阅期内可调用全部模型）、每周期最大请求数/Token 数，以及对外展示顺序与启用状态。
+订阅采用三层结构：**订阅产品 → 等级 → 周期价格**。管理员在“订阅产品”页面创建一个订阅（如“星海会员”），为它添加若干等级（基础版/高级版/旗舰版），再为每个等级配置一个或多个计费周期价格（小时/天/周/月/年）。同一订阅的月付、季付、年付因此是同一等级下的多行周期价格，不再需要拆成多个彼此独立的套餐。
 
-用户在“订阅”页面选择套餐后跳转易支付收银台，异步通知通过签名、商户 ID、金额校验后激活订阅：设置当前周期起止时间（月套餐 1 个月、年套餐 1 年），将赠送额度充值进钱包并写入账本（`subscription_topup`），如套餐绑定了分组则将用户加入该分组；同一订单重复通知幂等返回 `success` 但不重复发放。订阅期内，对套餐白名单内（或白名单为空时的全部模型）的调用会跳过钱包结算（订阅期内免费），并在达到套餐每周期上限时回退到按量计费。
+等级承载权益：赠送额度（激活时一次性充值进用户钱包并写入账本 `subscription_topup`，可叠加按量计费）、自动加入分组、模型白名单（留空表示全部模型可用）、每周期最大请求数与最大额度，以及额度耗尽策略。周期价格除了金额与币种，还可以单独覆盖赠送额度、每周期请求数与每周期额度；留空表示继承等级默认值，这是“年付给一年额度、月付给一月额度”的表达方式。
+
+同一等级允许存在多个订阅实例（例如管理员单独发放的多份额度）。普通购买/续费会顺延一个当前有效实例的到期时间，并将其本周期额度重置为所购周期的额度；管理员新增订阅时可创建同等级的独立实例。创建或编辑 API Key 时可绑定其中一个有效实例：绑定后该 Key 只使用该实例的订阅权益与额度，不会借用同等级的其他实例；留空则沿用系统自动选择。订阅期内，对该实例等级白名单内（或白名单为空时的全部模型）的调用会跳过钱包结算，达到本周期上限后按 `overage_policy` 处理。
 
 订阅相关 API：
 
 ```sh
-# 浏览对外可见的套餐（无需登录）
+# 浏览对外可见的订阅产品（无需登录）
 curl http://localhost:8080/subscription-plans
 
-# 用户订阅当前套餐
+# 用户订阅某个等级的某个周期
 curl -X POST http://localhost:8080/account/subscriptions \
   -b cookies.txt -c cookies.txt -H 'X-Xinghai-Request: 1' -H 'Content-Type: application/json' \
-  -d '{"plan_id":"PLAN_UUID","payment_type":"alipay","auto_renew":false}'
+  -d '{"tier_id":"TIER_UUID","billing_period":"month","payment_type":"alipay","auto_renew":false}'
+
+# 余额直付（立即生效）
+curl -X POST http://localhost:8080/account/subscriptions/balance \
+  -b cookies.txt -c cookies.txt -H 'X-Xinghai-Request: 1' -H 'Content-Type: application/json' \
+  -d '{"tier_id":"TIER_UUID","billing_period":"year"}'
 
 # 查询我的订阅与订单
 curl http://localhost:8080/account/subscriptions -b cookies.txt -c cookies.txt -H 'X-Xinghai-Request: 1'
@@ -151,28 +158,40 @@ curl http://localhost:8080/account/subscription-orders -b cookies.txt -c cookies
 curl -X POST http://localhost:8080/account/subscriptions/{id}/cancel -b cookies.txt -c cookies.txt -H 'X-Xinghai-Request: 1'
 ```
 
-管理员 API：`GET /admin/subscription-plans`、`POST /admin/subscription-plans`、`PUT /admin/subscription-plans/{id}`、`DELETE /admin/subscription-plans/{id}`（`system.manage`），以及 `GET /admin/subscriptions`（`users.read`）查看全站订阅。套餐请求体示例：
+易支付异步通知通过签名、商户 ID 与金额校验后激活订阅：顺延当前周期、把赠送额度充值进钱包、按需加入分组，并重置本周期额度；同一订单重复通知幂等返回 `success` 但不重复发放。
+
+管理员 API：`GET|POST /admin/subscription-products`、`PUT|DELETE /admin/subscription-products/{id}`（`system.manage`）管理整个三层目录，`DELETE` 默认拒绝删除仍有用户订阅的订阅（可用 `?force=1` 强制），以及 `GET /admin/subscriptions`（`users.read`）查看全站订阅。产品请求体示例：
 
 ```json
 {
-  "name": "标准月度",
+  "name": "星海会员",
   "description": "适合个人开发者",
-  "price": "29.00",
-  "currency": "CNY",
-  "billing_period": "month",
-  "credit_amount": "30",
-  "group_id": "",
-  "model_whitelist": [],
-  "max_requests_per_period": null,
-  "max_credit_per_period": null,
-  "overage_policy": "allow_wallet",
-  "model_quotas": [],
   "sort_order": 10,
-  "enabled": true
+  "enabled": true,
+  "tiers": [
+    {
+      "level": 1,
+      "name": "基础版",
+      "credit_amount": "30",
+      "group_id": "",
+      "model_whitelist": [],
+      "max_requests_per_period": 1000,
+      "max_credit_per_period": null,
+      "overage_policy": "allow_wallet",
+      "model_quotas": [],
+      "sort_order": 0,
+      "enabled": true,
+      "prices": [
+        { "billing_period": "month", "price": "29.00", "currency": "CNY", "sort_order": 0, "enabled": true },
+        { "billing_period": "year", "price": "299.00", "currency": "CNY", "max_requests_per_period": 12000, "sort_order": 1, "enabled": true }
+      ]
+    }
+  ]
 }
 ```
 
-`max_requests_per_period` 限制每个计费周期的请求数；`max_credit_per_period` 按成本限制周期内订阅覆盖请求的总消耗（数值来自定价规则）。`overage_policy` 为 `allow_wallet`（默认，额度耗尽后按钱包计费）或 `block`（耗尽后拒绝请求，返回 402 `subscription_quota_exceeded`）。`model_quotas` 可按模型单独设置 `max_requests_per_period` / `max_credit_per_period`，未填写的维度继承套餐全局值。
+等级上的 `max_requests_per_period` 限制每个计费周期的请求数；`max_credit_per_period` 按成本限制周期内订阅覆盖请求的总消耗（数值来自定价规则）。`overage_policy` 为 `allow_wallet`（默认，额度耗尽后按钱包计费）或 `block`（耗尽后拒绝请求，返回 402 `subscription_quota_exceeded`）。`model_quotas` 可按模型单独设置 `max_requests_per_period` / `max_credit_per_period`，未填写的维度继承等级值。周期价格里的同名字段是该周期的覆盖值，留空即继承等级。
+
 
 ## Administration API
 

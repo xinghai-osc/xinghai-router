@@ -42,6 +42,7 @@ export default {
   error: 'Something went wrong',
   retry: 'Retry',
   requestFailed: 'Request failed',
+  requestId: 'Request ID: {id}',
   loadFailed: 'Failed to load',
   actionFailed: 'Action failed',
   sessionExpired: 'Your session has expired',

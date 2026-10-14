@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { KeyRound, MoreHorizontal, Plus } from 'lucide-vue-next'
-import { endpoints, type AccountKeyForm, type ApiKey, type CatalogModel, type Group, type KeyQuota, type KeyQuotaForm, type KeyQuotaLimit } from '~/src/api'
+import { endpoints, type AccountKeyForm, type ApiKey, type CatalogModel, type Group, type KeyQuota, type KeyQuotaForm, type KeyQuotaLimit, type UserSubscription } from '~/src/api'
 import { formatCompact, formatDateTime, formatMoney, formatNumber } from '~/src/format'
+import { periodLabel } from '~/src/subscriptions'
 
 definePageMeta({ layout: 'console', middleware: 'console-auth' })
 
@@ -19,6 +20,10 @@ const { data: keys, pending, error, refresh } = useResource(
 const { data: groups } = useResource(
   () => endpoints.getAccountGroups(),
   { data: [] as string[], groups: [] as Group[] },
+)
+const { data: subscriptions } = useResource(
+  () => endpoints.getAccountSubscriptions(),
+  { data: [] as UserSubscription[] },
 )
 const { busy, run } = useAction()
 
@@ -39,7 +44,18 @@ const opencodeError = ref('')
 const opencodeFormat = ref<'opencode' | 'codex'>('opencode')
 const opencodeThinking = ref<'none' | 'low' | 'medium' | 'high'>('medium')
 const formError = ref('')
-const form = reactive({ name: '', expiresOn: '', groupId: '' })
+const form = reactive({ name: '', expiresOn: '', groupId: '', subscriptionId: '' })
+
+const activeSubscriptions = computed(() => subscriptions.value.data.filter(subscription =>
+  subscription.status === 'active' && (!subscription.current_period_end || new Date(subscription.current_period_end).getTime() > Date.now()),
+))
+const subscriptionOptions = computed(() => [
+  { value: '', label: t('console.keySubscriptionAuto') },
+  ...activeSubscriptions.value.map(subscription => ({
+    value: subscription.id,
+    label: `${subscription.display_name} · ${periodLabel(t, subscription.billing_period, 'console')} · ${subscription.current_period_end ? formatDateTime(subscription.current_period_end) : t('console.keyNeverExpires')}`,
+  })),
+])
 
 const quotaPanelOpen = ref(false)
 const editingQuotaWindow = ref('')
@@ -102,6 +118,7 @@ function openCreate() {
   form.name = ''
   form.expiresOn = ''
   form.groupId = ''
+  form.subscriptionId = ''
   formOpen.value = true
 }
 
@@ -111,6 +128,7 @@ function openEdit(key: ApiKey) {
   form.name = key.name
   form.expiresOn = toDateInput(key.expires_at)
   form.groupId = key.group_id
+  form.subscriptionId = key.subscription_id
   formOpen.value = true
   keyQuota.refresh()
 }
@@ -219,7 +237,7 @@ async function submitForm() {
     formError.value = t('console.keyNameRequired')
     return
   }
-  const payload: AccountKeyForm = { name, expires_at: toRfc3339(form.expiresOn), group_id: form.groupId }
+  const payload: AccountKeyForm = { name, expires_at: toRfc3339(form.expiresOn), group_id: form.groupId, subscription_id: form.subscriptionId }
   const target = editing.value
 
   if (target) {
@@ -364,6 +382,7 @@ onMounted(() => { if (route.query.create) openCreate() })
                 <th>{{ t('common.name') }}</th>
                 <th>{{ t('console.keyPrefix') }}</th>
                 <th>{{ t('console.group') }}</th>
+                <th>{{ t('console.keySubscription') }}</th>
                 <th>{{ t('common.status') }}</th>
                 <th>{{ t('console.keyExpiry') }}</th>
                 <th>{{ t('console.keyLastUsed') }}</th>
@@ -376,6 +395,7 @@ onMounted(() => { if (route.query.create) openCreate() })
                 <td class="font-medium">{{ key.name }}</td>
                 <td><code class="font-mono text-[13px] text-muted">{{ key.key_prefix }}</code></td>
                 <td class="text-muted">{{ key.group_name || t('console.keyGroupDefault') }}</td>
+                <td class="text-muted">{{ key.subscription_name || t('console.keySubscriptionAuto') }}</td>
                 <td>
                   <UiBadge :tone="state.tone" dot>{{ t(state.labelKey) }}</UiBadge>
                 </td>
@@ -434,6 +454,14 @@ onMounted(() => { if (route.query.create) openCreate() })
           <p v-if="selectedGroup?.description" class="mt-1.5 text-xs leading-relaxed text-muted">
             {{ selectedGroup.description }}
           </p>
+        </UiField>
+
+        <UiField :label="t('console.keySubscription')" :hint="t('console.keySubscriptionHint')">
+          <UiSelect
+            v-model="form.subscriptionId"
+            :options="subscriptionOptions"
+            :placeholder="t('common.selectPlaceholder')"
+          />
         </UiField>
       </form>
 

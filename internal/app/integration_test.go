@@ -64,6 +64,7 @@ func integrationService(t *testing.T, db *pgxpool.Pool) *Service {
 		channelKeyCache:   newTTLCache[int64, []channelKeyCredential](time.Minute),
 		subscriptionCache: newTTLCache[subscriptionRouteKey, subscriptionAccess](time.Minute),
 		keyTouchCache:     newTTLCache[string, struct{}](time.Minute),
+		sessionAffinity:   newSessionAffinityCache(time.Minute, 1024),
 		background:        newBackgroundWriter(),
 	}
 	t.Cleanup(func() { s.background.close(); s.limiter.close(); s.ipLimiter.close() })

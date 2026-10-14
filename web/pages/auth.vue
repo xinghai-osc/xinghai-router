@@ -41,7 +41,8 @@ let cooldownTimer: ReturnType<typeof setInterval> | null = null
 
 const isRegister = computed(() => mode.value === 'register')
 const isReset = computed(() => mode.value === 'reset')
-const plan = computed(() => (typeof route.query.plan === 'string' ? route.query.plan : ''))
+const tier = computed(() => (typeof route.query.tier === 'string' ? route.query.tier : ''))
+const period = computed(() => (typeof route.query.period === 'string' ? route.query.period : ''))
 /** Effective captcha provider as resolved by the Go service. */
 const captchaProvider = computed(() => settings.value.captcha_provider ?? '')
 const geetestCaptchaId = computed(() => settings.value.geetest_captcha_id ?? '')
@@ -98,11 +99,16 @@ onMounted(async () => {
 })
 
 /** Post-sign-in destination. `redirect` (e.g. a shared redeem link) wins over
- * the console; only same-origin relative paths are accepted. */
+ * the console; only same-origin relative paths are accepted. A `tier` from a
+ * public plan card opens the console subscriptions view with that tier chosen. */
 function consoleTarget() {
   const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : ''
   if (redirect && redirect.startsWith('/') && !redirect.startsWith('//') && !redirect.includes('\\') && !Array.from(redirect).some(char => char.charCodeAt(0) < 32) && !/^\/auth(?:[/?#]|$)/.test(redirect)) return redirect
-  return { path: '/console', query: plan.value ? { plan: plan.value } : {} }
+  if (!tier.value) return { path: '/console' }
+  return {
+    path: '/console/subscriptions',
+    query: period.value ? { tier: tier.value, period: period.value } : { tier: tier.value },
+  }
 }
 
 function validate(): string {

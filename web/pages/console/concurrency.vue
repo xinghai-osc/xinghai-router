@@ -43,6 +43,13 @@ function usagePercent(scope: { current: number; limit: number }): number {
   if (scope.limit <= 0) return 0
   return Math.min(100, Math.round((scope.current / scope.limit) * 1000) / 10)
 }
+
+function scopeSummary(scope: ConcurrencyStatusScope): string {
+  const values = { current: formatNumber(scope.current), limit: formatNumber(scope.limit), unlimited: formatNumber(scope.unlimited) }
+  return scope.unlimited > 0
+    ? t('admin.concurrencyScopeSummaryUnlimited', values)
+    : t('admin.concurrencyScopeSummary', values)
+}
 </script>
 
 <template>
@@ -76,7 +83,7 @@ function usagePercent(scope: { current: number; limit: number }): number {
           v-for="scope in scopes"
           :key="scope.scope"
           :title="scopeLabel(scope.scope)"
-          :description="t('admin.concurrencyScopeSummary', { current: formatNumber(scope.current), limit: formatNumber(scope.limit) })"
+          :description="scopeSummary(scope)"
         >
           <UiEmptyState
             v-if="!scope.entries.length"
@@ -99,10 +106,18 @@ function usagePercent(scope: { current: number; limit: number }): number {
                   <div class="font-medium text-ink">{{ entryLabel(entry) }}</div>
                   <div v-if="entry.name && entry.email" class="text-2xs text-faint">{{ entry.email }}</div>
                 </td>
-                <td class="num">{{ formatNumber(entry.current) }}</td>
-                <td class="num">{{ formatNumber(entry.limit) }}</td>
+                <td class="num">
+                  <div>{{ formatNumber(entry.current) }}</div>
+                  <div v-if="data.shared && entry.local !== entry.current" class="text-2xs text-faint">
+                    {{ t('admin.concurrencyLocalShare', { count: formatNumber(entry.local) }) }}
+                  </div>
+                </td>
+                <td class="num">
+                  <span v-if="entry.limit > 0">{{ formatNumber(entry.limit) }}</span>
+                  <span v-else class="text-faint">{{ t('admin.concurrencyPlaceholder') }}</span>
+                </td>
                 <td>
-                  <div class="flex items-center gap-2">
+                  <div v-if="entry.limit > 0" class="flex items-center gap-2">
                     <div class="h-1.5 w-24 rounded-full bg-sunken">
                       <div
                         class="h-full rounded-full"
@@ -112,6 +127,7 @@ function usagePercent(scope: { current: number; limit: number }): number {
                     </div>
                     <span class="numeric text-muted">{{ formatPercent(usagePercent(entry)) }}</span>
                   </div>
+                  <span v-else class="text-faint">—</span>
                 </td>
               </tr>
             </tbody>

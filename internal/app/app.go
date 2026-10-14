@@ -50,6 +50,8 @@ type Service struct {
 	channelQuotaCache     *ttlCache[int64, bool]
 	quotaAbsentCache      *ttlCache[quotaRouteKey, struct{}]
 	promptCache           *promptPrefixCache
+	sessionAffinity       *sessionAffinityCache
+	sessionAffinityWrite  sync.Mutex
 	keyTouchCache         *ttlCache[string, struct{}]
 	scheduler             context.CancelFunc
 	migration             migrationStatus
@@ -168,6 +170,7 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 		channelQuotaCache:     newTTLCache[int64, bool](quotaCacheTTL),
 		quotaAbsentCache:      newTTLCache[quotaRouteKey, struct{}](quotaCacheTTL),
 		promptCache:           newPromptPrefixCache(cfg.LocalPromptCache, cfg.LocalPromptCacheSize),
+		sessionAffinity:       newSessionAffinityCache(cfg.SessionAffinityTTL, maxSessionAffinityEntries),
 		keyTouchCache:         newTTLCache[string, struct{}](keyTouchInterval),
 		migration:             migrationStatus{mu: &sync.Mutex{}},
 	}
@@ -191,6 +194,13 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 	if err := os.MkdirAll(s.cfg.ConversationCacheDir, 0o755); err != nil {
 		log.Printf("conversation cache dir: %v", err)
 	}
+	if s.cfg.SessionAffinityDir != "" {
+		if err := os.MkdirAll(s.cfg.SessionAffinityDir, 0o755); err != nil {
+			log.Printf("session affinity dir: %v", err)
+		}
+	}
+	s.loadSessionAffinity()
+	s.startSessionAffinityFlusher(schedulerCtx)
 	s.startConversationCacheCleanup(schedulerCtx)
 	go s.limiterCleanup(schedulerCtx)
 	initialized = true
@@ -215,6 +225,7 @@ func (s *Service) Close() {
 	if s.scheduler != nil {
 		s.scheduler()
 	}
+	s.flushSessionAffinity()
 	s.background.close()
 	if s.limiter != nil {
 		s.limiter.close()

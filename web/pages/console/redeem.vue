@@ -103,7 +103,7 @@ async function submit() {
                 <th>{{ t('console.redeemCode') }}</th>
                 <th>{{ t('console.redeemRewardType') }}</th>
                 <th class="num">{{ t('console.redeemAmount') }}</th>
-                <th>{{ t('console.redeemPlan') }}</th>
+                <th>{{ t('console.tier') }}</th>
                 <th>{{ t('console.redeemRedeemedAt') }}</th>
               </tr>
             </thead>
@@ -111,12 +111,12 @@ async function submit() {
               <tr v-for="item in redemptions.data" :key="item.id">
                 <td><code class="font-mono text-[13px] text-muted">{{ item.code }}</code></td>
                 <td>
-                  <UiBadge :tone="item.plan_id ? 'clay' : 'neutral'">
-                    {{ item.plan_id ? t('console.redeemRewardSubscription') : t('console.redeemRewardBalance') }}
+                  <UiBadge :tone="item.tier_id ? 'clay' : 'neutral'">
+                    {{ item.tier_id ? t('console.redeemRewardSubscription') : t('console.redeemRewardBalance') }}
                   </UiBadge>
                 </td>
                 <td class="num">{{ item.amount ? formatMoney(item.amount) : '—' }}</td>
-                <td class="text-muted">{{ item.plan_name || '—' }}</td>
+                <td class="text-muted">{{ item.tier_name || '—' }}</td>
                 <td class="text-muted">{{ formatDateTime(item.created_at) }}</td>
               </tr>
             </tbody>

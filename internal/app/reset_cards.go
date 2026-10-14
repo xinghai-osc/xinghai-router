@@ -22,8 +22,8 @@ type resetCard struct {
 	UserID         string `json:"user_id"`
 	UserEmail      string `json:"user_email"`
 	UserName       string `json:"user_name"`
-	PlanID         string `json:"plan_id"`
-	PlanName       string `json:"plan_name"`
+	TierID         string `json:"tier_id"`
+	TierName       string `json:"tier_name"`
 	Enabled        bool   `json:"enabled"`
 	ExpiresAt      any    `json:"expires_at"`
 	Note           string `json:"note"`
@@ -96,6 +96,7 @@ func (s *Service) createResetCards(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) createResetCardsByPlan(w http.ResponseWriter, r *http.Request) {
 	var in struct {
+		TierID    string `json:"tier_id"`
 		PlanID    string `json:"plan_id"`
 		Status    string `json:"status"`
 		Quantity  int    `json:"quantity"`
@@ -106,9 +107,12 @@ func (s *Service) createResetCardsByPlan(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "invalid_request", "invalid payload")
 		return
 	}
-	planID := strings.TrimSpace(in.PlanID)
+	planID := strings.TrimSpace(in.TierID)
 	if planID == "" {
-		writeError(w, http.StatusBadRequest, "invalid_request", "plan_id is required")
+		planID = strings.TrimSpace(in.PlanID)
+	}
+	if planID == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "tier_id is required")
 		return
 	}
 	status := strings.TrimSpace(in.Status)
@@ -144,7 +148,7 @@ func (s *Service) createResetCardsByPlan(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var planExists bool
-	if err := s.db.QueryRow(r.Context(), `select exists(select 1 from subscription_plans where id=$1)`, planID).Scan(&planExists); err != nil || !planExists {
+	if err := s.db.QueryRow(r.Context(), `select exists(select 1 from subscription_tiers where id=$1)`, planID).Scan(&planExists); err != nil || !planExists {
 		writeError(w, http.StatusNotFound, "not_found", "plan not found")
 		return
 	}
@@ -154,7 +158,7 @@ func (s *Service) createResetCardsByPlan(w http.ResponseWriter, r *http.Request)
 	} else if status == "all" {
 		statusClause = "status in ('pending','active','expired','cancelled')"
 	}
-	rows, err := s.db.Query(r.Context(), `select id from user_subscriptions where plan_id=$1 and `+statusClause, planID)
+	rows, err := s.db.Query(r.Context(), `select id from user_subscriptions where tier_id=$1 and `+statusClause, planID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not load subscriptions")
 		return
@@ -188,7 +192,7 @@ func (s *Service) createResetCardsByPlan(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not create cards")
 		return
 	}
-	s.audit(r, "reset_cards.batch_created", "subscription_plans", planID, map[string]any{"subscriptions": len(subIDs), "per_subscription": quantity, "quantity": quantityCreated, "status": status})
+	s.audit(r, "reset_cards.batch_created", "subscription_tier", planID, map[string]any{"subscriptions": len(subIDs), "per_subscription": quantity, "quantity": quantityCreated, "status": status})
 	writeJSON(w, http.StatusCreated, map[string]any{"batch_id": batchID, "subscriptions": len(subIDs), "quantity": quantityCreated})
 }
 
@@ -315,7 +319,7 @@ func (s *Service) listResetCards(w http.ResponseWriter, r *http.Request) {
 	page, pageSize, offset := listPage(r)
 	var total int
 	_ = s.db.QueryRow(r.Context(), `select count(*) from reset_cards`).Scan(&total)
-	rows, err := s.db.Query(r.Context(), `select rc.id,rc.batch_id::text,rc.subscription_id::text,us.user_id::text,coalesce(u.email,''),coalesce(u.name,''),us.plan_id::text,coalesce(p.name,''),rc.enabled,rc.expires_at,rc.note,rc.used_by::text,rc.used_at,rc.created_at,rc.updated_at from reset_cards rc join user_subscriptions us on us.id=rc.subscription_id join subscription_plans p on p.id=us.plan_id left join users u on u.id=us.user_id order by rc.created_at desc limit $1 offset $2`, pageSize, offset)
+	rows, err := s.db.Query(r.Context(), `select rc.id,rc.batch_id::text,rc.subscription_id::text,us.user_id::text,coalesce(u.email,''),coalesce(u.name,''),us.tier_id::text,(s.name || case when coalesce(t.name,'')='' then '' else ' · ' || t.name end),rc.enabled,rc.expires_at,rc.note,rc.used_by::text,rc.used_at,rc.created_at,rc.updated_at from reset_cards rc join user_subscriptions us on us.id=rc.subscription_id join subscription_tiers t on t.id=us.tier_id join subscriptions s on s.id=t.subscription_id left join users u on u.id=us.user_id order by rc.created_at desc limit $1 offset $2`, pageSize, offset)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not load cards")
 		return
@@ -324,7 +328,7 @@ func (s *Service) listResetCards(w http.ResponseWriter, r *http.Request) {
 	data := []resetCard{}
 	for rows.Next() {
 		var c resetCard
-		if err = rows.Scan(&c.ID, &c.BatchID, &c.SubscriptionID, &c.UserID, &c.UserEmail, &c.UserName, &c.PlanID, &c.PlanName, &c.Enabled, &c.ExpiresAt, &c.Note, &c.UsedBy, &c.UsedAt, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		if err = rows.Scan(&c.ID, &c.BatchID, &c.SubscriptionID, &c.UserID, &c.UserEmail, &c.UserName, &c.TierID, &c.TierName, &c.Enabled, &c.ExpiresAt, &c.Note, &c.UsedBy, &c.UsedAt, &c.CreatedAt, &c.UpdatedAt); err != nil {
 			writeError(w, http.StatusInternalServerError, "internal_error", "could not load cards")
 			return
 		}

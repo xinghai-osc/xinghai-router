@@ -43,30 +43,32 @@ type modelAPICapabilities struct {
 }
 
 type modelMetadata struct {
-	ID               string                 `json:"id"`
-	Model            string                 `json:"model"`
-	Name             string                 `json:"name"`
-	OwnedBy          string                 `json:"owned_by"`
-	Description      string                 `json:"description"`
-	InputModalities  []string               `json:"input_modalities"`
-	OutputModalities []string               `json:"output_modalities"`
-	ContextWindow    *int64                 `json:"context_window"`
-	MaxOutputTokens  *int64                 `json:"max_output_tokens"`
-	ReasoningEfforts *modelReasoningEfforts `json:"reasoning_efforts"`
-	APICapabilities  *modelAPICapabilities  `json:"api_capabilities"`
+	ID                          string                 `json:"id"`
+	Model                       string                 `json:"model"`
+	Name                        string                 `json:"name"`
+	OwnedBy                     string                 `json:"owned_by"`
+	Description                 string                 `json:"description"`
+	InputModalities             []string               `json:"input_modalities"`
+	OutputModalities            []string               `json:"output_modalities"`
+	ContextWindow               *int64                 `json:"context_window"`
+	MaxOutputTokens             *int64                 `json:"max_output_tokens"`
+	ReasoningEfforts            *modelReasoningEfforts `json:"reasoning_efforts"`
+	APICapabilities             *modelAPICapabilities  `json:"api_capabilities"`
+	RequiresDataTransferConsent bool                   `json:"requires_data_transfer_consent"`
 }
 
 type modelMetadataInput struct {
-	Model            string                 `json:"model"`
-	Name             *string                `json:"name"`
-	OwnedBy          *string                `json:"owned_by"`
-	Description      string                 `json:"description"`
-	InputModalities  []string               `json:"input_modalities"`
-	OutputModalities []string               `json:"output_modalities"`
-	ContextWindow    *int64                 `json:"context_window"`
-	MaxOutputTokens  *int64                 `json:"max_output_tokens"`
-	ReasoningEfforts *modelReasoningEfforts `json:"reasoning_efforts"`
-	APICapabilities  *modelAPICapabilities  `json:"api_capabilities"`
+	Model                       string                 `json:"model"`
+	Name                        *string                `json:"name"`
+	OwnedBy                     *string                `json:"owned_by"`
+	Description                 string                 `json:"description"`
+	InputModalities             []string               `json:"input_modalities"`
+	OutputModalities            []string               `json:"output_modalities"`
+	ContextWindow               *int64                 `json:"context_window"`
+	MaxOutputTokens             *int64                 `json:"max_output_tokens"`
+	ReasoningEfforts            *modelReasoningEfforts `json:"reasoning_efforts"`
+	APICapabilities             *modelAPICapabilities  `json:"api_capabilities"`
+	RequiresDataTransferConsent bool                   `json:"requires_data_transfer_consent"`
 
 	nameSet, ownedBySet, maxOutputTokensSet, reasoningEffortsSet, apiCapabilitiesSet bool
 }
@@ -213,19 +215,20 @@ func modelMetadataResponse(item modelMetadata, createdAt, updatedAt any) map[str
 		output = []string{}
 	}
 	return map[string]any{
-		"id":                item.ID,
-		"model":             item.Model,
-		"name":              item.Name,
-		"owned_by":          item.OwnedBy,
-		"description":       item.Description,
-		"input_modalities":  input,
-		"output_modalities": output,
-		"context_window":    item.ContextWindow,
-		"max_output_tokens": item.MaxOutputTokens,
-		"reasoning_efforts": item.ReasoningEfforts,
-		"api_capabilities":  item.APICapabilities,
-		"created_at":        createdAt,
-		"updated_at":        updatedAt,
+		"id":                             item.ID,
+		"model":                          item.Model,
+		"name":                           item.Name,
+		"owned_by":                       item.OwnedBy,
+		"description":                    item.Description,
+		"input_modalities":               input,
+		"output_modalities":              output,
+		"context_window":                 item.ContextWindow,
+		"max_output_tokens":              item.MaxOutputTokens,
+		"reasoning_efforts":              item.ReasoningEfforts,
+		"api_capabilities":               item.APICapabilities,
+		"requires_data_transfer_consent": item.RequiresDataTransferConsent,
+		"created_at":                     createdAt,
+		"updated_at":                     updatedAt,
 	}
 }
 
@@ -239,7 +242,7 @@ func scanModelMetadata(rows interface {
 		var item modelMetadata
 		var createdAt, updatedAt any
 		var reasoningRaw, capabilitiesRaw []byte
-		if err := rows.Scan(&item.ID, &item.Model, &item.Name, &item.OwnedBy, &item.Description, &item.InputModalities, &item.OutputModalities, &item.ContextWindow, &item.MaxOutputTokens, &reasoningRaw, &capabilitiesRaw, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.Model, &item.Name, &item.OwnedBy, &item.Description, &item.InputModalities, &item.OutputModalities, &item.ContextWindow, &item.MaxOutputTokens, &reasoningRaw, &capabilitiesRaw, &item.RequiresDataTransferConsent, &createdAt, &updatedAt); err != nil {
 			return nil, err
 		}
 		if len(reasoningRaw) > 0 && string(reasoningRaw) != "null" {
@@ -275,7 +278,7 @@ func (s *Service) modelExistsInCatalog(ctx context.Context, model string) (bool,
 }
 
 func (s *Service) listModelMetadata(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query(r.Context(), `select id::text,model,name,owned_by,description,input_modalities,output_modalities,context_window,max_output_tokens,reasoning_efforts,api_capabilities,created_at,updated_at from model_catalog_metadata order by model`)
+	rows, err := s.db.Query(r.Context(), `select id::text,model,name,owned_by,description,input_modalities,output_modalities,context_window,max_output_tokens,reasoning_efforts,api_capabilities,requires_data_transfer_consent,created_at,updated_at from model_catalog_metadata order by model`)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not load model metadata")
 		return
@@ -329,7 +332,7 @@ func (s *Service) createModelMetadata(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var id string
-	err = s.db.QueryRow(r.Context(), `insert into model_catalog_metadata(model,name,owned_by,description,input_modalities,output_modalities,context_window,max_output_tokens,reasoning_efforts,api_capabilities) values($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb) returning id::text`, in.Model, name, ownedBy, in.Description, in.InputModalities, in.OutputModalities, in.ContextWindow, in.MaxOutputTokens, reasoning, capabilities).Scan(&id)
+	err = s.db.QueryRow(r.Context(), `insert into model_catalog_metadata(model,name,owned_by,description,input_modalities,output_modalities,context_window,max_output_tokens,reasoning_efforts,api_capabilities,requires_data_transfer_consent) values($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11) returning id::text`, in.Model, name, ownedBy, in.Description, in.InputModalities, in.OutputModalities, in.ContextWindow, in.MaxOutputTokens, reasoning, capabilities, in.RequiresDataTransferConsent).Scan(&id)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -365,7 +368,7 @@ func (s *Service) updateModelMetadata(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var model string
-	err = s.db.QueryRow(r.Context(), `update model_catalog_metadata set name=case when $7 then coalesce($1,'') else name end,owned_by=case when $8 then coalesce($2,'') else owned_by end,description=$3,input_modalities=$4,output_modalities=$5,context_window=$6,max_output_tokens=case when $9 then $10 else max_output_tokens end,reasoning_efforts=case when $11 then $12::jsonb else reasoning_efforts end,api_capabilities=case when $13 then $14::jsonb else api_capabilities end,updated_at=now() where id=$15::uuid and model=$16 returning model`, in.Name, in.OwnedBy, in.Description, in.InputModalities, in.OutputModalities, in.ContextWindow, in.nameSet, in.ownedBySet, in.maxOutputTokensSet, in.MaxOutputTokens, in.reasoningEffortsSet, reasoning, in.apiCapabilitiesSet, capabilities, id, in.Model).Scan(&model)
+	err = s.db.QueryRow(r.Context(), `update model_catalog_metadata set name=case when $7 then coalesce($1,'') else name end,owned_by=case when $8 then coalesce($2,'') else owned_by end,description=$3,input_modalities=$4,output_modalities=$5,context_window=$6,max_output_tokens=case when $9 then $10 else max_output_tokens end,reasoning_efforts=case when $11 then $12::jsonb else reasoning_efforts end,api_capabilities=case when $13 then $14::jsonb else api_capabilities end,requires_data_transfer_consent=$15,updated_at=now() where id=$16::uuid and model=$17 returning model`, in.Name, in.OwnedBy, in.Description, in.InputModalities, in.OutputModalities, in.ContextWindow, in.nameSet, in.ownedBySet, in.maxOutputTokensSet, in.MaxOutputTokens, in.reasoningEffortsSet, reasoning, in.apiCapabilitiesSet, capabilities, in.RequiresDataTransferConsent, id, in.Model).Scan(&model)
 	if err == pgx.ErrNoRows {
 		writeError(w, http.StatusNotFound, "not_found", "model metadata not found")
 		return

@@ -222,10 +222,42 @@ func (m *concurrencyLeaseManager) counts(ctx context.Context, scope string, keys
 	return counts, nil
 }
 
+// trackConcurrency counts one request against the user and group scopes of
+// this process. A max of 0 or less counts without ever rejecting, which is what
+// cluster mode uses: the shared leases enforce the limit there, while the local
+// counters still report this replica's share. It returns the scope that refused
+// admission, or an empty scope with the release to run once the request ends.
+func (s *Service) trackConcurrency(key keyContext, userMax, groupMax int) (func(), string) {
+	trackUser := key.userID != ""
+	if trackUser && !s.userLimiter.acquire(key.userID, userMax) {
+		return nil, "user"
+	}
+	trackGroup := key.groupID != ""
+	if trackGroup && !s.groupLimiter.acquire(key.groupID, groupMax) {
+		if trackUser {
+			s.userLimiter.release(key.userID)
+		}
+		return nil, "group"
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			if trackUser {
+				s.userLimiter.release(key.userID)
+			}
+			if trackGroup {
+				s.groupLimiter.release(key.groupID)
+			}
+		})
+	}, ""
+}
+
 func (s *Service) acquireRequestConcurrency(ctx context.Context, key keyContext) (context.Context, func(), string, error) {
-	userMax, groupMax := 0, 0
 	if s.cfg.DeploymentMode == "cluster" {
+		releaseLocal, _ := s.trackConcurrency(key, 0, 0)
+		userMax, groupMax := 0, 0
 		if err := s.db.QueryRow(ctx, `select coalesce(u.max_concurrency,0),coalesce((select g.max_concurrency from groups g where g.id=nullif($2,'')::uuid),0) from users u where u.id=$1`, key.userID, key.groupID).Scan(&userMax, &groupMax); err != nil {
+			releaseLocal()
 			return ctx, nil, "", fmt.Errorf("load concurrency limits: %w", err)
 		}
 		limits := make([]concurrencyLimit, 0, 2)
@@ -236,34 +268,36 @@ func (s *Service) acquireRequestConcurrency(ctx context.Context, key keyContext)
 			limits = append(limits, concurrencyLimit{key: key.groupID, max: groupMax, scope: "group"})
 		}
 		if s.concurrencyLeases == nil {
+			releaseLocal()
 			return ctx, nil, "", errConcurrencyUnavailable
 		}
-		return s.concurrencyLeases.acquire(ctx, limits)
+		leaseCtx, releaseLease, blockedScope, err := s.concurrencyLeases.acquire(ctx, limits)
+		if err != nil {
+			releaseLocal()
+			return ctx, nil, "", err
+		}
+		if blockedScope != "" {
+			releaseLocal()
+			return ctx, nil, blockedScope, nil
+		}
+		var once sync.Once
+		return leaseCtx, func() {
+			once.Do(func() {
+				releaseLease()
+				releaseLocal()
+			})
+		}, "", nil
 	}
-	userMax = s.userConcurrencyLimitFor(ctx, key.userID)
+	userMax := s.userConcurrencyLimitFor(ctx, key.userID)
+	groupMax := 0
 	if key.groupID != "" {
 		groupMax = s.groupConcurrencyLimitFor(ctx, key.groupID)
 	}
-	if userMax > 0 && !s.userLimiter.acquire(key.userID, userMax) {
-		return ctx, nil, "user", nil
+	release, blockedScope := s.trackConcurrency(key, userMax, groupMax)
+	if blockedScope != "" {
+		return ctx, nil, blockedScope, nil
 	}
-	if groupMax > 0 && !s.groupLimiter.acquire(key.groupID, groupMax) {
-		if userMax > 0 {
-			s.userLimiter.release(key.userID)
-		}
-		return ctx, nil, "group", nil
-	}
-	var once sync.Once
-	return ctx, func() {
-		once.Do(func() {
-			if userMax > 0 {
-				s.userLimiter.release(key.userID)
-			}
-			if groupMax > 0 {
-				s.groupLimiter.release(key.groupID)
-			}
-		})
-	}, "", nil
+	return ctx, release, "", nil
 }
 
 // acquireChannelConcurrency admits one in-flight request against a channel's
@@ -274,29 +308,49 @@ func (s *Service) acquireRequestConcurrency(ctx context.Context, key keyContext)
 // streaming included, so the lease is not dropped while the body is still being
 // relayed.
 func (s *Service) acquireChannelConcurrency(ctx context.Context, ch channel) (context.Context, func(), bool, error) {
-	if ch.maxConcurrency <= 0 {
-		return ctx, func() {}, false, nil
-	}
 	key := strconv.FormatInt(ch.id, 10)
+	// In cluster mode the shared lease enforces the limit, so this replica's
+	// counter only has to report its own share; in single mode it enforces too.
+	localMax := ch.maxConcurrency
 	if s.cfg.DeploymentMode == "cluster" {
-		if s.concurrencyLeases == nil {
-			return ctx, nil, false, errConcurrencyUnavailable
-		}
-		leaseCtx, release, blockedScope, err := s.concurrencyLeases.acquire(ctx, []concurrencyLimit{{key: key, max: ch.maxConcurrency, scope: "channel"}})
-		if err != nil {
-			return ctx, nil, false, err
-		}
-		if blockedScope != "" {
+		localMax = 0
+	}
+	if s.channelLimiter != nil {
+		if !s.channelLimiter.acquire(key, localMax) {
 			return ctx, nil, true, nil
 		}
-		return leaseCtx, release, false, nil
-	}
-	if s.channelLimiter == nil {
+	} else if localMax > 0 {
 		return ctx, nil, false, errConcurrencyUnavailable
 	}
-	if !s.channelLimiter.acquire(key, ch.maxConcurrency) {
+	var localOnce sync.Once
+	releaseLocal := func() {
+		localOnce.Do(func() {
+			if s.channelLimiter != nil {
+				s.channelLimiter.release(key)
+			}
+		})
+	}
+	if ch.maxConcurrency <= 0 || s.cfg.DeploymentMode != "cluster" {
+		return ctx, releaseLocal, false, nil
+	}
+	if s.concurrencyLeases == nil {
+		releaseLocal()
+		return ctx, nil, false, errConcurrencyUnavailable
+	}
+	leaseCtx, releaseLease, blockedScope, err := s.concurrencyLeases.acquire(ctx, []concurrencyLimit{{key: key, max: ch.maxConcurrency, scope: "channel"}})
+	if err != nil {
+		releaseLocal()
+		return ctx, nil, false, err
+	}
+	if blockedScope != "" {
+		releaseLocal()
 		return ctx, nil, true, nil
 	}
 	var once sync.Once
-	return ctx, func() { once.Do(func() { s.channelLimiter.release(key) }) }, false, nil
+	return leaseCtx, func() {
+		once.Do(func() {
+			releaseLease()
+			releaseLocal()
+		})
+	}, false, nil
 }

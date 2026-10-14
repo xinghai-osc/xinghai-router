@@ -10,7 +10,7 @@ defineProps<{ items: TabItem[] }>()
 
 <template>
   <TabsRoot v-model="model" class="min-w-0">
-    <TabsList class="relative flex max-w-full items-center gap-1 overflow-x-auto overscroll-x-contain rounded-control border border-line bg-sunken/60 p-1">
+    <TabsList class="ui-tabs-list relative flex max-w-full items-center gap-1 overflow-x-auto overscroll-x-contain rounded-control border border-line bg-sunken/60 p-1">
       <TabsTrigger
         v-for="item in items"
         :key="item.value"

@@ -4,7 +4,7 @@ defineProps<{ dense?: boolean }>()
 
 <template>
   <div
-    class="ui-table min-w-0 overflow-x-auto overscroll-x-contain rounded-card border border-line bg-surface focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-clay"
+    class="ui-table ui-shadcn-table min-w-0 overflow-x-auto overscroll-x-contain rounded-card border border-line bg-surface focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-clay"
     :class="dense && 'is-dense'"
     tabindex="0"
   >

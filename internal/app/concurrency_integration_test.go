@@ -232,6 +232,16 @@ func TestIntegrationConcurrencyStatusReportsLiveUsage(t *testing.T) {
 		t.Fatalf("hold channel slot: busy=%v err=%v", busy, err)
 	}
 	defer releaseChannel()
+	// A channel without a limit is still tracked while it has work in flight.
+	_, releaseUnlimited, busy, err := s.acquireChannelConcurrency(context.Background(), channel{id: unlimitedChannelID})
+	if err != nil || busy {
+		t.Fatalf("hold unlimited channel slot: busy=%v err=%v", busy, err)
+	}
+	defer releaseUnlimited()
+	if !s.userLimiter.acquire(userID, 3) {
+		t.Fatal("hold user slot")
+	}
+	defer s.userLimiter.release(userID)
 	if !s.groupLimiter.acquire(groupID, 4) {
 		t.Fatal("hold group slot")
 	}
@@ -246,15 +256,17 @@ func TestIntegrationConcurrencyStatusReportsLiveUsage(t *testing.T) {
 		DeploymentMode string `json:"deployment_mode"`
 		Shared         bool   `json:"shared"`
 		Scopes         []struct {
-			Scope   string `json:"scope"`
-			Limit   int    `json:"limit"`
-			Current int    `json:"current"`
-			Entries []struct {
+			Scope     string `json:"scope"`
+			Limit     int    `json:"limit"`
+			Current   int    `json:"current"`
+			Unlimited int    `json:"unlimited"`
+			Entries   []struct {
 				ID      string `json:"id"`
 				Name    string `json:"name"`
 				Email   string `json:"email"`
 				Limit   int    `json:"limit"`
 				Current int    `json:"current"`
+				Local   int    `json:"local"`
 			} `json:"entries"`
 		} `json:"scopes"`
 	}
@@ -267,35 +279,52 @@ func TestIntegrationConcurrencyStatusReportsLiveUsage(t *testing.T) {
 	if len(status.Scopes) != 3 {
 		t.Fatalf("scopes = %+v", status.Scopes)
 	}
-	want := map[string]struct {
-		id      string
+	type wantEntry struct {
 		limit   int
 		current int
+	}
+	want := map[string]struct {
+		entries   map[string]wantEntry
+		unlimited int
+		limit     int
+		current   int
 	}{
-		"channel": {strconv.FormatInt(limitedChannelID, 10), 2, 1},
-		"user":    {userID, 3, 0},
-		"group":   {groupID, 4, 1},
+		"channel": {
+			entries: map[string]wantEntry{
+				strconv.FormatInt(limitedChannelID, 10):   {2, 1},
+				strconv.FormatInt(unlimitedChannelID, 10): {0, 1},
+			},
+			unlimited: 1,
+			limit:     2,
+			current:   2,
+		},
+		"user":  {entries: map[string]wantEntry{userID: {3, 1}}, limit: 3, current: 1},
+		"group": {entries: map[string]wantEntry{groupID: {4, 1}}, limit: 4, current: 1},
 	}
 	for _, scope := range status.Scopes {
 		expect, ok := want[scope.Scope]
 		if !ok {
 			t.Fatalf("unexpected scope %q", scope.Scope)
 		}
-		if len(scope.Entries) != 1 {
-			t.Fatalf("%s entries = %+v", scope.Scope, scope.Entries)
+		if len(scope.Entries) != len(expect.entries) {
+			t.Fatalf("%s entries = %+v, want %d", scope.Scope, scope.Entries, len(expect.entries))
 		}
-		entry := scope.Entries[0]
-		if entry.ID != expect.id || entry.Limit != expect.limit || entry.Current != expect.current {
-			t.Fatalf("%s entry = %+v, want id=%s limit=%d current=%d", scope.Scope, entry, expect.id, expect.limit, expect.current)
+		for _, entry := range scope.Entries {
+			wantEntry, ok := expect.entries[entry.ID]
+			if !ok {
+				t.Fatalf("%s unexpected entry %+v", scope.Scope, entry)
+			}
+			if entry.Limit != wantEntry.limit || entry.Current != wantEntry.current || entry.Local != wantEntry.current {
+				t.Fatalf("%s entry = %+v, want limit=%d current=%d", scope.Scope, entry, wantEntry.limit, wantEntry.current)
+			}
+			if scope.Scope == "user" && entry.Email != "concurrency-status@example.com" {
+				t.Fatalf("user email = %q", entry.Email)
+			}
 		}
-		if scope.Limit != expect.limit || scope.Current != expect.current {
-			t.Fatalf("%s totals = limit %d current %d", scope.Scope, scope.Limit, scope.Current)
-		}
-		if scope.Scope == "user" && entry.Email != "concurrency-status@example.com" {
-			t.Fatalf("user email = %q", entry.Email)
+		if scope.Limit != expect.limit || scope.Current != expect.current || scope.Unlimited != expect.unlimited {
+			t.Fatalf("%s totals = limit %d current %d unlimited %d", scope.Scope, scope.Limit, scope.Current, scope.Unlimited)
 		}
 	}
-	_ = unlimitedChannelID
 }
 
 func TestIntegrationClusterRedisFailureHTTP(t *testing.T) {

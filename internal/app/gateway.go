@@ -376,17 +376,17 @@ func (s *Service) models(w http.ResponseWriter, r *http.Request) {
 	// bound group when set, otherwise the groups the user belongs to, plus any
 	// channel restricted to the caller alone. Public and ungrouped channels are
 	// not exposed to callers.
-	rows, err := s.db.Query(r.Context(), `select available.model,coalesce(metadata.name,''),coalesce(metadata.owned_by,''),metadata.context_window,metadata.max_output_tokens,coalesce(metadata.input_modalities,'{}'),coalesce(metadata.output_modalities,'{}'),metadata.reasoning_efforts,metadata.api_capabilities from (
-		select jsonb_array_elements_text(c.models) as model from channels c where c.enabled and not c.auto_disabled and (c.api_key <> '' or exists(select 1 from channel_api_keys ak where ak.channel_id=c.id and ak.enabled and ak.key_encrypted <> '')) and (
+	rows, err := s.db.Query(r.Context(), `select available.model,coalesce(metadata.name,''),coalesce(metadata.owned_by,''),metadata.context_window,metadata.max_output_tokens,coalesce(metadata.input_modalities,'{}'),coalesce(metadata.output_modalities,'{}'),metadata.reasoning_efforts,metadata.api_capabilities,metadata.requires_data_transfer_consent from (
+		select jsonb_array_elements_text(c.models) as model from channels c where c.enabled and not c.auto_disabled and (not c.shared_data_only or $3) and (c.api_key <> '' or exists(select 1 from channel_api_keys ak where ak.channel_id=c.id and ak.enabled and ak.key_encrypted <> '')) and (
 			($2<>'' and (exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($2,'')::uuid) or c.user_id=$1))
 			or ($2='' and (exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$1) or c.user_id=$1))
 		)
 		union
-		select m.public_model as model from model_routes m join channels c on c.id=m.channel_id where m.enabled and not m.hidden and c.enabled and not c.auto_disabled and (c.api_key <> '' or exists(select 1 from channel_api_keys ak where ak.channel_id=c.id and ak.enabled and ak.key_encrypted <> '')) and (
+		select m.public_model as model from model_routes m join channels c on c.id=m.channel_id where m.enabled and not m.hidden and c.enabled and not c.auto_disabled and (not c.shared_data_only or $3) and (c.api_key <> '' or exists(select 1 from channel_api_keys ak where ak.channel_id=c.id and ak.enabled and ak.key_encrypted <> '')) and (
 			($2<>'' and (exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($2,'')::uuid) or c.user_id=$1))
 			or ($2='' and (exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$1) or c.user_id=$1))
 		)
-	) available left join model_catalog_metadata metadata on metadata.model=available.model order by available.model`, key.userID, key.groupID)
+	) available left join model_catalog_metadata metadata on metadata.model=available.model order by available.model`, key.userID, key.groupID, key.dataUsageEnabled)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
@@ -400,7 +400,8 @@ func (s *Service) models(w http.ResponseWriter, r *http.Request) {
 		var contextWindow, maxOutputTokens *int64
 		var inputModalities, outputModalities []string
 		var reasoningEfforts, apiCapabilities []byte
-		if err := rows.Scan(&model, &name, &ownedBy, &contextWindow, &maxOutputTokens, &inputModalities, &outputModalities, &reasoningEfforts, &apiCapabilities); err != nil {
+		var requiresDataTransferConsent bool
+		if err := rows.Scan(&model, &name, &ownedBy, &contextWindow, &maxOutputTokens, &inputModalities, &outputModalities, &reasoningEfforts, &apiCapabilities, &requiresDataTransferConsent); err != nil {
 			continue
 		}
 		if seen[model] {
@@ -419,7 +420,7 @@ func (s *Service) models(w http.ResponseWriter, r *http.Request) {
 		if len(outputModalities) == 0 {
 			outputModalities = []string{"text"}
 		}
-		item := map[string]any{"id": model, "object": "model", "created": 0, "owned_by": ownedBy, "name": name, "context_window": int64(0), "max_output_tokens": int64(0), "input_modalities": inputModalities, "output_modalities": outputModalities}
+		item := map[string]any{"id": model, "object": "model", "created": 0, "owned_by": ownedBy, "name": name, "context_window": int64(0), "max_output_tokens": int64(0), "input_modalities": inputModalities, "output_modalities": outputModalities, "requires_data_transfer_consent": requiresDataTransferConsent}
 		if contextWindow != nil {
 			item["context_window"] = *contextWindow
 		}
@@ -576,6 +577,17 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 	started := time.Now()
 	ctx := r.Context()
 	key := ctx.Value(contextKey{}).(keyContext)
+	needsConsent, err := s.requiresDataTransferConsent(ctx, key.userID, model)
+	if err != nil {
+		s.logReject(ctx, model, http.StatusInternalServerError, "internal_error", started)
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not verify data transfer consent")
+		return
+	}
+	if needsConsent {
+		s.logReject(ctx, model, http.StatusForbidden, "data_transfer_consent_required", started)
+		writeError(w, http.StatusForbidden, "data_transfer_consent_required", "please accept the data transfer terms before using this model")
+		return
+	}
 	imageOptions := imageGatewayOptionsFromContext(ctx)
 	// The normalized prompt is derived once and reused by both the local prefix
 	// cache lookup and store; deriving it on each call parsed the body twice.
@@ -635,6 +647,11 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 				s.logReject(ctx, model, 402, "pricing_unavailable", started)
 				writeError(w, 402, "pricing_unavailable", "no enabled pricing rule for this model")
 				return
+			}
+			var available float64
+			var updatedAt time.Time
+			if s.db.QueryRow(ctx, `select balance-reserved,updated_at from user_wallets where user_id=$1`, key.userID).Scan(&available, &updatedAt) == nil && available <= 0 {
+				s.notifyQuotaExhausted(ctx, key.userID, "wallet", updatedAt.UTC().Format(time.RFC3339Nano))
 			}
 			s.logReject(ctx, model, 402, "insufficient_quota", started)
 			writeError(w, 402, "insufficient_quota", "insufficient balance for this request")
@@ -716,6 +733,19 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 		if len(inGroup) > 0 {
 			retryChannels = inGroup
 		}
+	}
+	// The retry order of a conversation follows its affinity: the channel that
+	// served an earlier turn is tried first, whatever its provider, because it
+	// already cached the conversation's prompt prefix, and the channels without
+	// affinity for the session stay behind it as the fallback. Only a
+	// conversation that is recognized again on its next turn is pinned; a
+	// request-scoped identity has no next turn to serve. The OpenCode session
+	// header is forwarded upstream below.
+	affinity := sessionAffinityKey{userID: key.userID, groupID: key.groupID, model: model}
+	identity := requestSessionID(ctx, r, body, key.userID)
+	if identity.stable {
+		affinity.session = identity.session
+		retryChannels = s.applySessionAffinity(affinity, retryChannels)
 	}
 	// Keep the runtime bounded even if an old or manually modified database row
 	// contains a value outside the API validation range.
@@ -858,7 +888,7 @@ tryChannels:
 				upstreamReq.Header.Set("Authorization", "Bearer "+ch.apiKey)
 			}
 			if ch.provider == "opencode_go" {
-				upstreamReq.Header.Set("x-opencode-session", opencodeSessionID(requestContext, r.Header.Get("x-opencode-session")))
+				upstreamReq.Header.Set("x-opencode-session", opencodeSessionID(requestContext, affinity.session))
 			}
 			upstreamReq.Header.Set("Content-Type", upstreamContentType)
 			upstreamReq.Header.Set("Accept", accept)
@@ -1095,6 +1125,9 @@ tryChannels:
 				reserved = s.settleUsageFacts(ctx, key, reserved, model, st.facts, pricing, groupMultiplier)
 			}
 			s.channelSucceeded(ctx, ch.id, ch.keyID)
+			if identity.stable {
+				s.bindSessionChannel(affinity, ch)
+			}
 		}
 		// Only cache a stream that ran to completion. A stream interrupted by a
 		// client disconnect or an upstream error is partial output and useless for
@@ -1175,6 +1208,9 @@ tryChannels:
 			reserved = s.settleUsageFacts(ctx, key, reserved, model, facts, pricing, groupMultiplier)
 		}
 		s.channelSucceeded(ctx, ch.id, ch.keyID)
+		if identity.stable {
+			s.bindSessionChannel(affinity, ch)
+		}
 		if selectedDirectResponses || selectedPassthrough {
 			// Native Responses and JEV responses are already in the client-facing format.
 		} else if providerTransform != nil {
@@ -1426,6 +1462,9 @@ func (s *Service) settleSubscriptionFacts(ctx context.Context, key keyContext, m
 	usageID, _ := randomID()
 	settleCtx, cancel := detach(ctx, settlementTimeout)
 	defer cancel()
+	// xmax = 0 marks the row this statement inserted rather than the row an
+	// ON CONFLICT re-settle updated: a period quota must be spent once per
+	// request, even when the first settle wrote a provisional unpriced status.
 	_, err = s.db.Exec(settleCtx, `with inserted as (
 		insert into usage_records(id,request_id,user_id,api_key_id,model,prompt_tokens,cached_prompt_tokens,completion_tokens,cost,usage_facts,billing_snapshot,status)
 		values($1::uuid,$2::text,$3,$4::uuid,$5::text,$6::int,$7::int,$8::int,$9,$11::jsonb,$12::jsonb,$13)
@@ -1433,28 +1472,39 @@ func (s *Service) settleSubscriptionFacts(ctx context.Context, key keyContext, m
 			completion_tokens=excluded.completion_tokens,cost=excluded.cost,status=excluded.status,
 			usage_facts=excluded.usage_facts,billing_snapshot=excluded.billing_snapshot
 			where usage_records.status not in ('settled','subscription')
-		returning 1
+		returning (xmax = 0) as created
+	), fresh as (
+		select 1 from inserted where created
 	), subscription as (
 		update user_subscriptions us set
 			remaining_requests = case when us.remaining_requests is null then null
-				when exists (select 1 from subscription_plan_model_quotas q where q.plan_id=us.plan_id and q.model=$5 and q.max_requests_per_period is not null)
+				when exists (select 1 from subscription_tier_model_quotas q where q.tier_id=us.tier_id and q.model=$5 and q.max_requests_per_period is not null)
 					then us.remaining_requests
 				else greatest(0, us.remaining_requests-1) end,
 			remaining_credit = case when us.remaining_credit is null then null
-				when exists (select 1 from subscription_plan_model_quotas q where q.plan_id=us.plan_id and q.model=$5 and q.max_credit_per_period is not null)
+				when exists (select 1 from subscription_tier_model_quotas q where q.tier_id=us.tier_id and q.model=$5 and q.max_credit_per_period is not null)
 					then us.remaining_credit
 				else greatest(0, us.remaining_credit-case when $13 in ('unpriced','missing_usage') then 0 else $9 end) end,
 			updated_at=now()
-		where us.id=$10 and exists (select 1 from inserted)
+		where us.id=$10 and exists (select 1 from fresh)
 		returning 1
 	)
 	update user_subscription_model_usage set
 		remaining_requests = case when remaining_requests is null then null else greatest(0, remaining_requests-1) end,
 		remaining_credit = case when remaining_credit is null then null else greatest(0, remaining_credit-$9) end
-	where subscription_id=$10 and model=$5 and exists (select 1 from inserted)`,
+	where subscription_id=$10 and model=$5 and exists (select 1 from fresh)`,
 		usageID, requestID(ctx), key.userID, key.keyID, model, prompt, cached, completion, cost, access.SubscriptionID, factsJSON, billJSON, subscriptionUsageStatus(bill))
 	if err != nil {
 		log.Printf("settleSubscriptionUsage failed: %v", err)
+		return
+	}
+	var exhausted bool
+	var periodStart time.Time
+	if err := s.db.QueryRow(settleCtx, `select (remaining_requests=0 or remaining_credit=0 or exists (
+		select 1 from user_subscription_model_usage where subscription_id=user_subscriptions.id and model=$2
+		and (remaining_requests=0 or remaining_credit=0)
+	)),current_period_start from user_subscriptions where id=$1`, access.SubscriptionID, model).Scan(&exhausted, &periodStart); err == nil && exhausted {
+		s.notifyQuotaExhausted(settleCtx, key.userID, "subscription", access.SubscriptionID+":"+periodStart.UTC().Format(time.RFC3339Nano))
 	}
 }
 
@@ -1568,7 +1618,7 @@ func (s *Service) channelsForModel(ctx context.Context, key keyContext, model st
 }
 
 func (s *Service) loadChannelsForModel(ctx context.Context, key keyContext, model string) ([]channel, error) {
-	rows, err := s.db.Query(ctx, `select c.id,c.base_url,c.api_key,coalesce(m.priority,c.priority),coalesce(m.weight,c.weight),coalesce(m.upstream_model,''),c.provider,c.upstream_path,c.upstream_format,c.request_overrides,c.ua_pool,coalesce(c.max_concurrency,0),case when $3='' then exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$2) or c.user_id=$2 else exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($3,'')::uuid) or c.user_id=$2 end as in_key_group from channels c left join model_routes m on m.channel_id=c.id and m.public_model=$1 and m.enabled where c.enabled and not c.auto_disabled and (c.models ? $1 or m.public_model is not null) and (($3<>'' and (exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($3,'')::uuid) or c.user_id=$2)) or ($3='' and (exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$2) or c.user_id=$2))) order by (c.enabled and not c.auto_disabled) desc, coalesce(m.priority,c.priority) desc, c.priority desc, c.id`, model, key.userID, key.groupID)
+	rows, err := s.db.Query(ctx, `select c.id,c.base_url,c.api_key,coalesce(m.priority,c.priority),coalesce(m.weight,c.weight),coalesce(m.upstream_model,''),c.provider,c.upstream_path,c.upstream_format,c.request_overrides,c.ua_pool,coalesce(c.max_concurrency,0),case when $3='' then exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$2) or c.user_id=$2 else exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($3,'')::uuid) or c.user_id=$2 end as in_key_group from channels c left join model_routes m on m.channel_id=c.id and m.public_model=$1 and m.enabled where c.enabled and not c.auto_disabled and (not c.shared_data_only or $4) and (c.models ? $1 or m.public_model is not null) and (($3<>'' and (exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($3,'')::uuid) or c.user_id=$2)) or ($3='' and (exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$2) or c.user_id=$2))) order by (c.enabled and not c.auto_disabled) desc, coalesce(m.priority,c.priority) desc, c.priority desc, c.id`, model, key.userID, key.groupID, key.dataUsageEnabled)
 	if err != nil {
 		return nil, err
 	}

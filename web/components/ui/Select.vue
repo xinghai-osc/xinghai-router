@@ -49,7 +49,7 @@ const selection = computed({
       :aria-invalid="invalid || undefined"
       :aria-required="field?.required.value || undefined"
       :class="cn(
-        'inline-flex min-w-0 w-full items-center justify-between gap-2 rounded-control border border-line-strong bg-surface px-3 text-left text-sm text-ink',
+        'ui-select-trigger inline-flex min-w-0 w-full items-center justify-between gap-2 rounded-control border border-line-strong bg-surface px-3 text-left text-sm text-ink',
         'transition-colors duration-150 ease-out enabled:hover:border-faint motion-reduce:transition-none',
         'focus-visible:border-clay focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-clay/60',
         'disabled:cursor-not-allowed disabled:bg-sunken disabled:text-muted',

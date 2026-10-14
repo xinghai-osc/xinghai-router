@@ -33,10 +33,11 @@ export default {
   usageStats: '用量統計',
   concurrency: '並發監控',
   audit: '審計日誌',
+  sessionAffinity: '會話親和',
   requestAudits: '請求內容審計',
   contentPolicy: '禁用詞策略',
 
-  subscriptionPlans: '訂閱計劃',
+  subscriptionPlans: '訂閱產品',
   adminSubscriptions: '訂閱管理',
   reliability: '可靠性',
   paymentSettings: '支付設定',

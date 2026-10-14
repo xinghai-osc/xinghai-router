@@ -92,11 +92,14 @@ func TestIntegrationBillingSubscriptionFacts(t *testing.T) {
 	if err := db.QueryRow(context.Background(), `select user_id::text,id::text from api_keys limit 1`).Scan(&key.userID, &key.keyID); err != nil {
 		t.Fatal(err)
 	}
-	var planID, subID string
-	if err := db.QueryRow(context.Background(), `insert into subscription_plans(id,name,billing_period) values(gen_random_uuid(),'billing-test','month') returning id::text`).Scan(&planID); err != nil {
+	var productID, tierID, subID string
+	if err := db.QueryRow(context.Background(), `insert into subscriptions(id,name) values(gen_random_uuid(),'billing-test') returning id::text`).Scan(&productID); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.QueryRow(context.Background(), `insert into user_subscriptions(id,user_id,plan_id,status,current_period_start,current_period_end,remaining_requests,remaining_credit) values(gen_random_uuid(),$1,$2,'active',now(),now()+interval '1 month',10,10) returning id::text`, key.userID, planID).Scan(&subID); err != nil {
+	if err := db.QueryRow(context.Background(), `insert into subscription_tiers(id,subscription_id,level,name) values(gen_random_uuid(),$1,1,'') returning id::text`, productID).Scan(&tierID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(context.Background(), `insert into user_subscriptions(id,user_id,tier_id,status,current_period_start,current_period_end,remaining_requests,remaining_credit,billing_period) values(gen_random_uuid(),$1,$2,'active',now(),now()+interval '1 month',10,10,'month') returning id::text`, key.userID, tierID).Scan(&subID); err != nil {
 		t.Fatal(err)
 	}
 	pricing := pricingRule{found: true, input: 1, multiplier: 1, exchangeRate: 1}

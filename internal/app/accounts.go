@@ -405,7 +405,7 @@ func (s *Service) updateAccountProfile(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) accountKeys(w http.ResponseWriter, r *http.Request) {
 	account := accountFromContext(r)
-	rows, err := s.db.Query(r.Context(), `select k.id,k.name,k.key_prefix,k.expires_at,k.revoked_at,k.last_used_at,k.created_at,coalesce(k.group_id::text,''),coalesce(coalesce(g.display_name, g.name),''),k.secret_encrypted<>'' from api_keys k left join groups g on g.id=k.group_id where k.user_id=$1 and k.workspace_id=$2 order by k.created_at desc`, account.userID, account.workspaceID)
+	rows, err := s.db.Query(r.Context(), `select k.id,k.name,k.key_prefix,k.expires_at,k.revoked_at,k.last_used_at,k.created_at,coalesce(k.group_id::text,''),coalesce(coalesce(g.display_name, g.name),''),k.secret_encrypted<>'',coalesce(k.subscription_id::text,''),case when s.id is null then '' when coalesce(t.name,'')='' then s.name else s.name||' · '||t.name end from api_keys k left join groups g on g.id=k.group_id left join user_subscriptions us on us.id=k.subscription_id left join subscription_tiers t on t.id=us.tier_id left join subscriptions s on s.id=t.subscription_id where k.user_id=$1 and k.workspace_id=$2 order by k.created_at desc`, account.userID, account.workspaceID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
 		return
@@ -413,22 +413,36 @@ func (s *Service) accountKeys(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	data := []map[string]any{}
 	for rows.Next() {
-		var id, name, prefix, groupID, groupName string
+		var id, name, prefix, groupID, groupName, subscriptionID, subscriptionName string
 		var revealable bool
 		var expires, revoked, used, created any
-		if rows.Scan(&id, &name, &prefix, &expires, &revoked, &used, &created, &groupID, &groupName, &revealable) == nil {
-			data = append(data, map[string]any{"id": id, "name": name, "key_prefix": prefix, "group_id": groupID, "group_name": groupName, "expires_at": expires, "revoked_at": revoked, "last_used_at": used, "created_at": created, "revealable": revealable})
+		if rows.Scan(&id, &name, &prefix, &expires, &revoked, &used, &created, &groupID, &groupName, &revealable, &subscriptionID, &subscriptionName) == nil {
+			data = append(data, map[string]any{"id": id, "name": name, "key_prefix": prefix, "group_id": groupID, "group_name": groupName, "subscription_id": subscriptionID, "subscription_name": subscriptionName, "expires_at": expires, "revoked_at": revoked, "last_used_at": used, "created_at": created, "revealable": revealable})
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": data})
 }
 
+func (s *Service) validKeySubscription(ctx context.Context, userID, subscriptionRef string) (any, error) {
+	subscriptionRef = strings.TrimSpace(subscriptionRef)
+	if subscriptionRef == "" {
+		return nil, nil
+	}
+	var subscriptionID string
+	err := s.db.QueryRow(ctx, `select id::text from user_subscriptions where id::text=$1 and user_id=$2 and status='active' and (current_period_end is null or current_period_end>now())`, subscriptionRef, userID).Scan(&subscriptionID)
+	if err != nil {
+		return nil, err
+	}
+	return subscriptionID, nil
+}
+
 func (s *Service) createAccountKey(w http.ResponseWriter, r *http.Request) {
 	account := accountFromContext(r)
 	var in struct {
-		Name      string `json:"name"`
-		ExpiresAt string `json:"expires_at"`
-		GroupID   string `json:"group_id"`
+		Name           string `json:"name"`
+		ExpiresAt      string `json:"expires_at"`
+		GroupID        string `json:"group_id"`
+		SubscriptionID string `json:"subscription_id"`
 	}
 	if decode(r, &in) != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", "name is required")
@@ -459,6 +473,11 @@ func (s *Service) createAccountKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "group must belong to user")
 		return
 	}
+	subscriptionID, err := s.validKeySubscription(r.Context(), account.userID, in.SubscriptionID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "subscription instance must be active and belong to the user")
+		return
+	}
 	encryptedSecret, err := crypt(s.cfg.EncryptionKey, secret, false)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not create API key")
@@ -474,7 +493,7 @@ func (s *Service) createAccountKey(w http.ResponseWriter, r *http.Request) {
 		writeUserMutationError(w, err)
 		return
 	}
-	_, err = tx.Exec(r.Context(), `insert into api_keys(id,user_id,name,key_prefix,secret_hash,secret_encrypted,expires_at,group_id,workspace_id) values($1,$2,$3,$4,$5,$6,$7,$8,$9)`, id, account.userID, name, secret[:12], hashSecret(secret), encryptedSecret, expires, groupID, account.workspaceID)
+	_, err = tx.Exec(r.Context(), `insert into api_keys(id,user_id,name,key_prefix,secret_hash,secret_encrypted,expires_at,group_id,workspace_id,subscription_id) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, id, account.userID, name, secret[:12], hashSecret(secret), encryptedSecret, expires, groupID, account.workspaceID, subscriptionID)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23514" {
@@ -489,7 +508,7 @@ func (s *Service) createAccountKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "api_key.created", "api_key", id, map[string]any{"user_id": account.userID, "name": name, "self_service": true})
-	writeJSON(w, http.StatusCreated, map[string]any{"id": id, "name": name, "key": secret, "expires_at": expires, "group_id": groupID})
+	writeJSON(w, http.StatusCreated, map[string]any{"id": id, "name": name, "key": secret, "expires_at": expires, "group_id": groupID, "subscription_id": subscriptionID})
 }
 
 func (s *Service) setAccountKeyGroup(w http.ResponseWriter, r *http.Request) {
@@ -522,9 +541,10 @@ func (s *Service) setAccountKeyGroup(w http.ResponseWriter, r *http.Request) {
 func (s *Service) updateAccountKey(w http.ResponseWriter, r *http.Request) {
 	account := accountFromContext(r)
 	var in struct {
-		Name      string `json:"name"`
-		ExpiresAt string `json:"expires_at"`
-		GroupID   string `json:"group_id"`
+		Name           string `json:"name"`
+		ExpiresAt      string `json:"expires_at"`
+		GroupID        string `json:"group_id"`
+		SubscriptionID string `json:"subscription_id"`
 	}
 	if decode(r, &in) != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", "name is required and must be at most 100 characters")
@@ -545,7 +565,12 @@ func (s *Service) updateAccountKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "group must belong to user")
 		return
 	}
-	result, err := s.db.Exec(r.Context(), `update api_keys set name=$1,expires_at=$2,group_id=$3 where id=$4 and user_id=$5 and workspace_id=$6 and revoked_at is null`, name, expires, groupID, r.PathValue("id"), account.userID, account.workspaceID)
+	subscriptionID, err := s.validKeySubscription(r.Context(), account.userID, in.SubscriptionID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "subscription instance must be active and belong to the user")
+		return
+	}
+	result, err := s.db.Exec(r.Context(), `update api_keys set name=$1,expires_at=$2,group_id=$3,subscription_id=$4 where id=$5 and user_id=$6 and workspace_id=$7 and revoked_at is null`, name, expires, groupID, subscriptionID, r.PathValue("id"), account.userID, account.workspaceID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not update API key")
 		return
@@ -554,8 +579,8 @@ func (s *Service) updateAccountKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "API key not found")
 		return
 	}
-	s.audit(r, "api_key.updated", "api_key", r.PathValue("id"), map[string]any{"name": name, "expires_at": expires, "group_id": groupID, "self_service": true})
-	writeJSON(w, http.StatusOK, map[string]any{"id": r.PathValue("id"), "name": name, "expires_at": expires, "group_id": groupID})
+	s.audit(r, "api_key.updated", "api_key", r.PathValue("id"), map[string]any{"name": name, "expires_at": expires, "group_id": groupID, "subscription_id": subscriptionID, "self_service": true})
+	writeJSON(w, http.StatusOK, map[string]any{"id": r.PathValue("id"), "name": name, "expires_at": expires, "group_id": groupID, "subscription_id": subscriptionID})
 }
 
 func (s *Service) revokeAccountKey(w http.ResponseWriter, r *http.Request) {
@@ -782,7 +807,7 @@ func (s *Service) optionalAccount(next http.HandlerFunc) http.Handler {
 
 func passwordChangeAllowedPath(path string) bool {
 	switch path {
-	case "/account/me", "/account/password", "/auth/logout":
+	case "/account/me", "/account/password", "/account/legal-consent", "/account/data-transfer-consent", "/auth/logout":
 		return true
 	default:
 		return false

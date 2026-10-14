@@ -2,11 +2,13 @@
 import { Plus, RotateCcw, Trash2 } from 'lucide-vue-next'
 import {
   endpoints,
+  type AdminUserSubscription,
   type ResetCard,
   type ResetCardUpdate,
-  type SubscriptionPlan,
+  type SubscriptionProduct,
 } from '~/src/api'
 import { formatDateTime } from '~/src/format'
+import { tierOptions } from '~/src/subscriptions'
 
 definePageMeta({ layout: 'console', middleware: 'console-auth' })
 
@@ -25,12 +27,14 @@ const { data: cardsData, pending, error, refresh } = useResource(
   { data: [] as ResetCard[], total: 0, page: 1, page_size: PAGE_SIZE },
 )
 
-const { data: plansData } = useResource(
-  () => endpoints.getAdminSubscriptionPlans(),
-  { data: [] as SubscriptionPlan[] },
+const { data: productsData } = useResource(
+  () => endpoints.getAdminSubscriptionProducts(),
+  { data: [] as SubscriptionProduct[] },
 )
 
-const planOptions = computed(() => plansData.value.data.map(plan => ({ value: plan.id, label: plan.name })))
+const tierSelectOptions = computed(() =>
+  tierOptions(productsData.value.data, true).map(option => ({ value: option.value, label: option.label })),
+)
 
 const totalPages = computed(() => Math.max(1, Math.ceil(cardsData.value.total / PAGE_SIZE)))
 
@@ -46,7 +50,7 @@ const editOpen = ref(false)
 const editing = ref<ResetCard | null>(null)
 const removing = ref<ResetCard | null>(null)
 const issueUser = ref('')
-const issueSubscriptions = ref<{ id: string; plan_name: string; status: string }[]>([])
+const issueSubscriptions = ref<AdminUserSubscription[]>([])
 
 const createForm = reactive({
   subscription_id: '',
@@ -58,7 +62,7 @@ const createError = ref('')
 
 const subOptions = computed(() => issueSubscriptions.value.map(sub => ({
   value: sub.id,
-  label: `${sub.plan_name}${sub.status === 'active' ? '' : ` (${t(`system.status${sub.status.charAt(0).toUpperCase() + sub.status.slice(1)}`)})`}`,
+  label: `${sub.display_name}${sub.status === 'active' ? '' : ` (${t(`system.status${sub.status.charAt(0).toUpperCase() + sub.status.slice(1)}`)})`}`,
 })))
 
 async function openCreate() {
@@ -114,7 +118,7 @@ async function submitCreate() {
 
 const batchOpen = ref(false)
 const batchForm = reactive({
-  plan_id: '',
+  tier_id: '',
   status: 'active',
   quantity: '1',
   expires_at: '',
@@ -131,7 +135,7 @@ const statusOptions = computed(() => [
 async function openBatch() {
   batchOpen.value = true
   batchError.value = ''
-  batchForm.plan_id = ''
+  batchForm.tier_id = ''
   batchForm.status = 'active'
   batchForm.quantity = '1'
   batchForm.expires_at = ''
@@ -140,8 +144,8 @@ async function openBatch() {
 
 async function submitBatch() {
   batchError.value = ''
-  if (!batchForm.plan_id) {
-    batchError.value = t('admin.resetCardBatchPlanRequired')
+  if (!batchForm.tier_id) {
+    batchError.value = t('admin.resetCardTierRequired')
     return
   }
   const quantity = Number(batchForm.quantity.trim())
@@ -152,7 +156,7 @@ async function submitBatch() {
   let result: { subscriptions: number; quantity: number } | null = null
   const ok = await run(async () => {
     result = await endpoints.createResetCardsByPlan({
-      plan_id: batchForm.plan_id,
+      tier_id: batchForm.tier_id,
       status: batchForm.status,
       quantity,
       expires_at: batchForm.expires_at,
@@ -320,7 +324,7 @@ async function confirmDelete() {
           </thead>
           <tbody>
             <tr v-for="card in cardsData.data" :key="card.id">
-              <td class="font-medium text-ink">{{ card.plan_name }}</td>
+              <td class="font-medium text-ink">{{ card.tier_name }}</td>
               <td>
                 <p class="font-medium text-ink">{{ card.user_email || '—' }}</p>
                 <p v-if="card.user_name" class="text-[13px] text-muted">{{ card.user_name }}</p>
@@ -363,10 +367,10 @@ async function confirmDelete() {
       <UiDialog v-model:open="batchOpen" :title="t('admin.resetCardBatchByPlan')" size="md">
         <div class="space-y-4">
           <UiAlert v-if="batchError" tone="danger" :title="batchError" />
-          <UiField :label="t('admin.resetCardBatchPlan')" required>
+          <UiField :label="t('admin.resetCardTier')" required>
             <UiSelect
-              v-model="batchForm.plan_id"
-              :options="planOptions"
+              v-model="batchForm.tier_id"
+              :options="tierSelectOptions"
               :placeholder="t('common.selectPlaceholder')"
             />
           </UiField>
@@ -464,7 +468,7 @@ async function confirmDelete() {
           <div class="rounded-control border border-line bg-sunken px-3 py-2.5 text-sm">
             <div class="flex items-center justify-between gap-4">
               <span class="text-muted">{{ t('admin.resetCardSubscription') }}</span>
-              <span class="font-medium text-ink">{{ editing.plan_name }}</span>
+              <span class="font-medium text-ink">{{ editing.tier_name }}</span>
             </div>
             <div class="mt-1.5 flex items-center justify-between gap-4">
               <span class="text-muted">{{ t('admin.resetCardUser') }}</span>

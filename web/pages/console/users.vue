@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { Users } from 'lucide-vue-next'
-import { endpoints, type AdminUserSubscription, type Group, type SubscriptionPlan, type User, type UserBatchUpdateForm, type UserCreate, type UserUpdate } from '~/src/api'
+import { endpoints, type AdminUserSubscription, type BillingPeriod, type Group, type SubscriptionProduct, type User, type UserBatchUpdateForm, type UserCreate, type UserUpdate } from '~/src/api'
 import { formatDateTime, formatMoney, formatNumber } from '~/src/format'
+import { periodLabel, tierOptions, tierPrices } from '~/src/subscriptions'
 import { canAuthorizeUser, canManageUser } from '~/src/user-permissions'
 
 definePageMeta({ layout: 'console', middleware: 'console-auth' })
@@ -426,7 +427,7 @@ const subsUser = ref<User | null>(null)
 const subs = ref<AdminUserSubscription[]>([])
 const subsPending = ref(false)
 const subsError = ref('')
-const subPlans = ref<SubscriptionPlan[]>([])
+const subProducts = ref<SubscriptionProduct[]>([])
 const editingSub = ref<AdminUserSubscription | null>(null)
 const resetQuotaTarget = ref<AdminUserSubscription | null>(null)
 const voidTarget = ref<AdminUserSubscription | null>(null)
@@ -435,7 +436,9 @@ const issueCardTarget = ref<AdminUserSubscription | null>(null)
 const issueCardForm = reactive({ quantity: '1', expires_at: '', note: '' })
 const issueCardError = ref('')
 const subForm = reactive({
-  plan_id: '',
+  tier_id: '',
+  billing_period: '' as BillingPeriod | '',
+  period_days: '',
   start_at: '',
   end_at: '',
   auto_renew: false,
@@ -444,7 +447,32 @@ const subForm = reactive({
 })
 const subFormError = ref('')
 
-const subPlanOptions = computed(() => subPlans.value.map(plan => ({ value: plan.id, label: plan.name })))
+function money(value: number | string | null | undefined, currency?: string): string {
+  const formatted = formatMoney(value)
+  const code = (currency ?? '').trim().toUpperCase()
+  return code && code !== 'CNY' && code !== 'RMB' ? `${formatted} ${code}` : formatted
+}
+
+const subTierOptions = computed(() => tierOptions(subProducts.value))
+
+const subPeriodOptions = computed(() => {
+  const tier = subProducts.value
+    .flatMap(product => product.tiers ?? [])
+    .find(item => item.id === subForm.tier_id)
+  if (!tier) return []
+  return tierPrices(tier).map(price => ({
+    value: price.billing_period,
+    label: `${periodLabel(t, price.billing_period, 'system')} · ${money(price.price, price.currency)}`,
+  }))
+})
+
+watch(() => subForm.tier_id, () => {
+  if (editingSub.value) return
+  const options = subPeriodOptions.value
+  if (!options.some(option => option.value === subForm.billing_period)) {
+    subForm.billing_period = options[0] ? options[0].value : ''
+  }
+})
 
 function subQuotaLines(sub: AdminUserSubscription): string[] {
   const lines: string[] = []
@@ -475,7 +503,9 @@ function toLocalInput(iso: string | null): string {
 }
 
 function resetSubForm() {
-  subForm.plan_id = ''
+  subForm.tier_id = ''
+  subForm.billing_period = ''
+  subForm.period_days = ''
   subForm.start_at = ''
   subForm.end_at = ''
   subForm.auto_renew = false
@@ -505,17 +535,19 @@ async function openSubscriptions(user: User) {
   subscriptionsOpen.value = true
   await loadSubscriptions()
   try {
-    const result = await endpoints.getAdminSubscriptionPlans()
-    subPlans.value = result.data
+    const result = await endpoints.getAdminSubscriptionProducts()
+    subProducts.value = result.data
   } catch {
-    subPlans.value = []
+    subProducts.value = []
   }
 }
 
 function startEditSubscription(sub: AdminUserSubscription) {
   editingSub.value = sub
   subFormError.value = ''
-  subForm.plan_id = sub.plan_id
+  subForm.tier_id = sub.tier_id
+  subForm.billing_period = sub.billing_period
+  subForm.period_days = ''
   subForm.start_at = toLocalInput(sub.current_period_start)
   subForm.end_at = toLocalInput(sub.current_period_end)
   subForm.auto_renew = sub.auto_renew
@@ -559,9 +591,20 @@ async function saveSubscription() {
     if (!ok) { toast.error(t('common.actionFailed')); return }
     toast.success(t('admin.subscriptionUpdated'))
   } else {
-    if (!subForm.plan_id) { subFormError.value = t('admin.planRequired'); return }
+    const tierId = subForm.tier_id
+    const billingPeriod = subForm.billing_period
+    if (!tierId) { subFormError.value = t('admin.tierRequired'); return }
+    if (!billingPeriod) { subFormError.value = t('admin.billingPeriodRequired'); return }
+    const rawPeriodDays = String(subForm.period_days).trim()
+    const periodDays = rawPeriodDays === '' ? null : Number(rawPeriodDays)
+    if (periodDays !== null && (!Number.isInteger(periodDays) || periodDays < 1 || periodDays > 3650)) {
+      subFormError.value = t('admin.customPeriodDaysInvalid')
+      return
+    }
     const ok = await run(() => endpoints.createAdminUserSubscription(target.id, {
-      plan_id: subForm.plan_id,
+      tier_id: tierId,
+      billing_period: billingPeriod,
+      period_days: periodDays,
       start_at: startIso,
       end_at: endIso,
       auto_renew: subForm.auto_renew,
@@ -922,15 +965,32 @@ async function issueResetCards() {
           <div class="space-y-4">
             <UiAlert v-if="subFormError" tone="danger">{{ subFormError }}</UiAlert>
             <div class="grid gap-4 sm:grid-cols-2">
-              <UiField v-if="editingSub" :label="t('admin.plan')">
-                <UiInput :model-value="editingSub.plan_name" disabled />
+              <UiField v-if="editingSub" :label="t('admin.tier')">
+                <UiInput :model-value="editingSub.display_name" disabled />
               </UiField>
-              <UiField v-else :label="t('admin.plan')" required>
+              <UiField v-else :label="t('admin.tier')" required>
                 <UiSelect
-                  v-model="subForm.plan_id"
-                  :options="subPlanOptions"
+                  v-model="subForm.tier_id"
+                  :options="subTierOptions"
                   :placeholder="t('common.selectPlaceholder')"
                 />
+              </UiField>
+              <UiField v-if="editingSub" :label="t('admin.billingPeriod')">
+                <UiInput :model-value="periodLabel(t, editingSub.billing_period, 'system')" disabled />
+              </UiField>
+              <UiField v-else :label="t('admin.billingPeriod')" required>
+                <UiSelect
+                  v-model="subForm.billing_period"
+                  :options="subPeriodOptions"
+                  :placeholder="t('common.selectPlaceholder')"
+                />
+              </UiField>
+              <UiField
+                v-if="!editingSub"
+                :label="t('admin.customPeriodDays')"
+                :hint="t('admin.customPeriodDaysHint')"
+              >
+                <UiInput v-model="subForm.period_days" type="number" min="1" max="3650" step="1" mono />
               </UiField>
               <UiField :label="t('admin.periodStart')">
                 <UiInput v-model="subForm.start_at" type="datetime-local" />
@@ -972,7 +1032,7 @@ async function issueResetCards() {
         <UiTable v-else-if="subs.length">
           <thead>
             <tr>
-              <th>{{ t('admin.plan') }}</th>
+              <th>{{ t('admin.tier') }}</th>
               <th>{{ t('system.remainingQuota') }}</th>
               <th>{{ t('common.status') }}</th>
               <th class="num">{{ t('admin.periodStart') }}</th>
@@ -983,7 +1043,12 @@ async function issueResetCards() {
           </thead>
           <tbody>
             <tr v-for="sub in subs" :key="sub.id">
-              <td class="font-medium text-ink">{{ sub.plan_name }}</td>
+              <td>
+                <p class="font-medium text-ink">{{ sub.display_name }}</p>
+                <p class="mt-0.5 text-[13px] text-muted">
+                  {{ money(sub.price, sub.currency) }} / {{ periodLabel(t, sub.billing_period, 'system') }}
+                </p>
+              </td>
               <td>
                 <p v-for="line in subQuotaLines(sub)" :key="line" class="whitespace-nowrap text-[13px] text-muted">
                   {{ line }}
@@ -1069,7 +1134,7 @@ async function issueResetCards() {
     <UiDialog :open="issueCardTarget !== null" :title="t('admin.issueResetCard')" size="md">
       <div class="space-y-4">
         <p v-if="issueCardTarget" class="text-[13px] text-muted">
-          {{ t('admin.issueResetCardLead', { plan: issueCardTarget.plan_name }) }}
+          {{ t('admin.issueResetCardLead', { plan: issueCardTarget.display_name }) }}
         </p>
         <UiAlert v-if="issueCardError" tone="danger" :title="issueCardError" />
         <UiField :label="t('admin.resetCardQuantity')" :hint="t('admin.resetCardQuantityHint')" required>

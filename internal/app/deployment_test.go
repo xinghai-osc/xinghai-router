@@ -23,6 +23,8 @@ func TestDeploymentConfiguration(t *testing.T) {
 		{name: "invalid policy", cfg: Config{RedisFailurePolicy: "allow"}, wantError: "REDIS_FAILURE_POLICY"},
 		{name: "short lease", cfg: Config{ConcurrencyLeaseTTL: time.Second}, wantError: "CONCURRENCY_LEASE_TTL"},
 		{name: "long lease", cfg: Config{ConcurrencyLeaseTTL: time.Hour}, wantError: "CONCURRENCY_LEASE_TTL"},
+		{name: "short affinity lease", cfg: Config{SessionAffinityTTL: time.Second}, wantError: "SESSION_AFFINITY_TTL"},
+		{name: "long affinity lease", cfg: Config{SessionAffinityTTL: 31 * 24 * time.Hour}, wantError: "SESSION_AFFINITY_TTL"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			cfg := test.cfg
@@ -43,6 +45,9 @@ func TestDeploymentConfiguration(t *testing.T) {
 			if cfg.RedisFailurePolicy != wantPolicy || cfg.ConcurrencyLeaseTTL != 30*time.Second {
 				t.Fatalf("unexpected configuration: mode=%s policy=%s ttl=%s", cfg.DeploymentMode, cfg.RedisFailurePolicy, cfg.ConcurrencyLeaseTTL)
 			}
+			if cfg.SessionAffinityTTL != sessionAffinityTTL {
+				t.Fatalf("session affinity ttl = %s, want %s", cfg.SessionAffinityTTL, sessionAffinityTTL)
+			}
 		})
 	}
 }
@@ -55,6 +60,8 @@ func TestLoadDeploymentEnvironment(t *testing.T) {
 	t.Setenv("REDIS_FAILURE_POLICY", "")
 	t.Setenv("LOCAL_PROMPT_CACHE", "false")
 	t.Setenv("CONCURRENCY_LEASE_TTL", "15s")
+	t.Setenv("SESSION_AFFINITY_TTL", "12h")
+	t.Setenv("SESSION_AFFINITY_DIR", "/tmp/xh-affinity-test")
 	cfg, err := LoadConfig()
 	if err != nil {
 		t.Fatal(err)
@@ -62,6 +69,16 @@ func TestLoadDeploymentEnvironment(t *testing.T) {
 	if cfg.DeploymentMode != "cluster" || cfg.RedisFailurePolicy != "deny" || cfg.ConcurrencyLeaseTTL != 15*time.Second {
 		t.Fatal("deployment env not applied")
 	}
+	if cfg.SessionAffinityTTL != 12*time.Hour || cfg.SessionAffinityDir != "/tmp/xh-affinity-test" {
+		t.Fatalf("session affinity env not applied: %s %s", cfg.SessionAffinityTTL, cfg.SessionAffinityDir)
+	}
+	for _, ttl := range []string{"invalid", "0s", "-1s", "30s", "800h"} {
+		t.Setenv("SESSION_AFFINITY_TTL", ttl)
+		if _, err := LoadConfig(); err == nil {
+			t.Fatalf("accepted invalid session affinity ttl %s", ttl)
+		}
+	}
+	t.Setenv("SESSION_AFFINITY_TTL", "168h")
 	for _, ttl := range []string{"invalid", "0s", "-1s", "1s", "10m"} {
 		t.Setenv("CONCURRENCY_LEASE_TTL", ttl)
 		if _, err := LoadConfig(); err == nil {

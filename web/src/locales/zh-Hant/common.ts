@@ -42,6 +42,7 @@ export default {
   error: '出錯了',
   retry: '重試',
   requestFailed: '請求失敗',
+  requestId: '請求編號：{id}',
   loadFailed: '加載失敗',
   actionFailed: '操作失敗',
   sessionExpired: '登錄狀態已失效',

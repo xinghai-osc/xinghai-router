@@ -36,6 +36,12 @@ func (c *Config) normalizeDeployment() error {
 			return fmt.Errorf("DEPLOYMENT_MODE=cluster requires LOCAL_PROMPT_CACHE=false; local prompt discounts differ between replicas")
 		}
 	}
+	if c.SessionAffinityTTL == 0 {
+		c.SessionAffinityTTL = sessionAffinityTTL
+	}
+	if c.SessionAffinityTTL < time.Minute || c.SessionAffinityTTL > 30*24*time.Hour {
+		return fmt.Errorf("SESSION_AFFINITY_TTL must be between 1m and 720h")
+	}
 	if c.ConcurrencyLeaseTTL == 0 {
 		c.ConcurrencyLeaseTTL = 30 * time.Second
 	}

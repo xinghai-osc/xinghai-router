@@ -17,6 +17,7 @@ func TestPasswordChangeAllowedPath(t *testing.T) {
 		{"/account/me", true},
 		{"/account/password", true},
 		{"/auth/logout", true},
+		{"/account/legal-consent", true},
 		{"/account/keys", false},
 		{"/admin/users", false},
 		{"/account/usage", false},

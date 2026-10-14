@@ -1,3 +1,10 @@
+import { ApiError } from '../src/api'
+
+function errorMessage(cause: unknown, fallback: string, requestIdLabel: (id: string) => string): string {
+  if (!(cause instanceof Error)) return fallback
+  return cause instanceof ApiError && cause.requestId ? `${cause.message} (${requestIdLabel(cause.requestId)})` : cause.message
+}
+
 /**
  * Minimal client-side resource loader for console views.
  *
@@ -23,7 +30,7 @@ export function useResource<T>(loader: () => Promise<T>, initial: T, options: { 
         if (currentRequestId === requestId) data.value = next
       } catch (cause) {
         if (currentRequestId === requestId) {
-          error.value = cause instanceof Error ? cause.message : t('common.loadFailed')
+          error.value = errorMessage(cause, t('common.loadFailed'), id => t('common.requestId', { id }))
         }
       } finally {
         if (currentRequestId === requestId) pending.value = false
@@ -72,7 +79,7 @@ export function useAction() {
       await work()
       return true
     } catch (cause) {
-      error.value = cause instanceof Error ? cause.message : t('common.actionFailed')
+      error.value = errorMessage(cause, t('common.actionFailed'), id => t('common.requestId', { id }))
       return false
     } finally {
       busy.value = false

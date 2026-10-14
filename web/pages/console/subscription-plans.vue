@@ -1,7 +1,11 @@
 <script setup lang="ts">
 import { Plus, Sparkles } from 'lucide-vue-next'
-import { clearPublicCache, endpoints, type Group, type SubscriptionPlan, type SubscriptionPlanForm } from '~/src/api'
+import {
+  ApiError, clearPublicCache, endpoints,
+  type Group, type SubscriptionProduct, type SubscriptionProductForm, type SubscriptionTier,
+} from '~/src/api'
 import { formatMoney, formatNumber } from '~/src/format'
+import { periodLabel, sortProducts, sortTiers, tierPrices } from '~/src/subscriptions'
 
 definePageMeta({ layout: 'console', middleware: 'console-auth' })
 
@@ -10,65 +14,84 @@ const { settings } = useSiteSettings()
 const { toast } = useToast()
 const { busy, run } = useAction()
 
-useHead({ title: () => `${t('system.plansTitle')} · ${settings.value.name}` })
+useHead({ title: () => `${t('system.productsTitle')} · ${settings.value.name}` })
 
-const { data: plansData, pending, error, refresh } = useResource(
-  () => endpoints.getAdminSubscriptionPlans(),
-  { data: [] as SubscriptionPlan[] },
+const { data: productsData, pending, error, refresh } = useResource(
+  () => endpoints.getAdminSubscriptionProducts(),
+  { data: [] as SubscriptionProduct[] },
 )
-const { data: groupsData } = useResource(() => endpoints.getAdminGroups('?page_size=100'), { data: [] as Group[], total: 0, page: 1, page_size: 100 })
+const { data: groupsData } = useResource(
+  () => endpoints.getAdminGroups('?page_size=100'),
+  { data: [] as Group[], total: 0, page: 1, page_size: 100 },
+)
 
-const plans = computed(() => [...plansData.value.data].sort((a, b) => a.sort_order - b.sort_order))
+const products = computed(() => sortProducts(productsData.value.data))
 const groups = computed(() => groupsData.value.data)
 
 const dialogOpen = ref(false)
-const editing = ref<SubscriptionPlan | null>(null)
-const removing = ref<SubscriptionPlan | null>(null)
-
-const PERIOD_KEYS: Record<string, string> = {
-  hour: 'system.periodHour',
-  day: 'system.periodDay',
-  week: 'system.periodWeek',
-  month: 'system.periodMonth',
-  year: 'system.periodYear',
-}
+const editing = ref<SubscriptionProduct | null>(null)
+const removing = ref<SubscriptionProduct | null>(null)
+const forcing = ref<SubscriptionProduct | null>(null)
 
 function openCreate() {
   editing.value = null
   dialogOpen.value = true
 }
 
-function openEdit(plan: SubscriptionPlan) {
-  editing.value = plan
+function openEdit(product: SubscriptionProduct) {
+  editing.value = product
   dialogOpen.value = true
 }
 
-async function submitPlan(form: SubscriptionPlanForm) {
+function priceSummary(tier: SubscriptionTier): string {
+  const prices = tierPrices(tier)
+  if (!prices.length) return '—'
+  return prices
+    .map(price => `${periodLabel(t, price.billing_period, 'system')} ${formatMoney(price.price)}`)
+    .join(' · ')
+}
+
+async function save(form: SubscriptionProductForm) {
   const target = editing.value
   const ok = await run(() => (target
-    ? endpoints.updateSubscriptionPlan(target.id, form)
-    : endpoints.createSubscriptionPlan(form)))
+    ? endpoints.updateSubscriptionProduct(target.id, form)
+    : endpoints.createSubscriptionProduct(form)))
   if (!ok) {
     toast.error(t('common.actionFailed'))
     return
   }
   clearPublicCache('subscription-plans')
-  toast.success(target ? t('system.planUpdated') : t('system.planCreated'))
+  toast.success(target ? t('system.productUpdated') : t('system.productCreated'))
   dialogOpen.value = false
   await refresh()
 }
 
-async function confirmDelete() {
-  const target = removing.value
+async function remove(force: boolean) {
+  const target = force ? forcing.value : removing.value
   if (!target) return
-  const ok = await run(() => endpoints.deleteSubscriptionPlan(target.id))
+  let code = ''
+  const ok = await run(async () => {
+    try {
+      await endpoints.deleteSubscriptionProduct(target.id, force)
+    } catch (cause) {
+      if (cause instanceof ApiError) code = cause.code
+      throw cause
+    }
+  })
   if (!ok) {
+    if (code === 'subscription_in_use') {
+      removing.value = null
+      await nextTick()
+      forcing.value = target
+      return
+    }
     toast.error(t('common.actionFailed'))
     return
   }
   clearPublicCache('subscription-plans')
-  toast.success(t('system.planDeleted'))
+  toast.success(t('system.productDeleted'))
   removing.value = null
+  forcing.value = null
   await refresh()
 }
 </script>
@@ -78,86 +101,66 @@ async function confirmDelete() {
     <div class="space-y-4">
       <div class="flex flex-wrap items-end justify-between gap-3">
         <div class="min-w-0 space-y-1">
-          <h2 class="text-lg font-semibold text-ink">{{ t('system.plansTitle') }}</h2>
-          <p class="text-[13px] text-muted">{{ t('system.plansLead') }}</p>
+          <h2 class="text-lg font-semibold text-ink">{{ t('system.productsTitle') }}</h2>
+          <p class="text-[13px] text-muted">{{ t('system.productsLead') }}</p>
         </div>
         <UiButton size="sm" @click="openCreate">
           <Plus class="size-4" />
-          {{ t('system.newPlan') }}
+          {{ t('system.newProduct') }}
         </UiButton>
       </div>
 
       <ConsoleSystemDataState
         :pending="pending"
         :error="error"
-        :empty="plans.length === 0"
+        :empty="products.length === 0"
         :empty-icon="Sparkles"
-        :empty-title="t('system.plansEmptyTitle')"
-        :empty-description="t('system.plansEmptyBody')"
+        :empty-title="t('system.productsEmptyTitle')"
+        :empty-description="t('system.productsEmptyBody')"
       >
         <UiTable>
           <thead>
             <tr>
               <th>{{ t('common.name') }}</th>
-              <th class="num">{{ t('system.price') }}</th>
-              <th class="num">{{ t('system.creditAmount') }}</th>
-              <th>{{ t('system.planGroup') }}</th>
-              <th class="num">{{ t('system.modelWhitelist') }}</th>
-              <th class="num">{{ t('system.quotaLimits') }}</th>
-              <th>{{ t('system.overagePolicy') }}</th>
-              <th class="num">{{ t('system.sortOrder') }}</th>
+              <th>{{ t('system.tiersTitle') }}</th>
+              <th class="num">{{ t('system.productSortOrder') }}</th>
               <th>{{ t('common.status') }}</th>
               <th>{{ t('common.actions') }}</th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="plan in plans" :key="plan.id">
+            <tr v-for="product in products" :key="product.id">
               <td>
-                <p class="font-medium text-ink">{{ plan.name }}</p>
-                <p v-if="plan.description" class="mt-0.5 text-[13px] text-muted">{{ plan.description }}</p>
+                <p class="font-medium text-ink">{{ product.name }}</p>
+                <p v-if="product.description" class="mt-0.5 text-[13px] text-muted">{{ product.description }}</p>
               </td>
-              <td class="num">
-                {{ plan.price }} {{ plan.currency }}
-                <span class="text-muted"> · {{ t(PERIOD_KEYS[plan.billing_period]) }}</span>
-              </td>
-              <td class="num">{{ plan.credit_amount || t('system.unlimited') }}</td>
-              <td>{{ plan.group_name || '—' }}</td>
-              <td class="num">
-                {{ plan.model_whitelist.length
-                  ? t('system.modelWhitelistCount', { count: formatNumber(plan.model_whitelist.length) })
-                  : t('system.unlimited') }}
-              </td>
-              <td class="num">
-                <div class="text-[13px]">
-                  <p v-if="plan.max_requests_per_period !== null">
-                    {{ t('system.quotaRequests', { count: formatNumber(plan.max_requests_per_period) }) }}
-                  </p>
-                  <p v-if="plan.max_credit_per_period !== null">
-                    {{ t('system.quotaCredit', { amount: formatMoney(plan.max_credit_per_period) }) }}
-                  </p>
-                  <p v-if="plan.model_quotas.length" class="text-muted">
-                    {{ t('system.modelQuotaCount', { count: formatNumber(plan.model_quotas.length) }) }}
-                  </p>
-                  <p v-if="plan.max_requests_per_period === null && plan.max_credit_per_period === null && plan.model_quotas.length === 0" class="text-muted">
-                    {{ t('system.unlimited') }}
+              <td>
+                <p class="text-[13px] text-muted">
+                  {{ t('system.tierCount', { count: formatNumber(product.tiers.length) }) }}
+                </p>
+                <div v-if="product.tiers.length" class="mt-1 space-y-0.5">
+                  <p
+                    v-for="tier in sortTiers(product.tiers)"
+                    :key="tier.id"
+                    class="flex flex-wrap items-baseline gap-x-2 text-[13px]"
+                  >
+                    <span class="numeric text-faint">{{ tier.level }}</span>
+                    <span class="font-medium text-ink">{{ tier.name || '—' }}</span>
+                    <span class="text-muted">{{ priceSummary(tier) }}</span>
+                    <span v-if="!tier.enabled" class="text-faint">{{ t('common.disabled') }}</span>
                   </p>
                 </div>
               </td>
+              <td class="num">{{ product.sort_order }}</td>
               <td>
-                <UiBadge :tone="plan.overage_policy === 'block' ? 'warn' : 'neutral'">
-                  {{ plan.overage_policy === 'block' ? t('system.overageBlock') : t('system.overageWallet') }}
-                </UiBadge>
-              </td>
-              <td class="num">{{ plan.sort_order }}</td>
-              <td>
-                <UiBadge :tone="plan.enabled ? 'success' : 'neutral'" dot>
-                  {{ plan.enabled ? t('common.enabled') : t('common.disabled') }}
+                <UiBadge :tone="product.enabled ? 'success' : 'neutral'" dot>
+                  {{ product.enabled ? t('common.enabled') : t('common.disabled') }}
                 </UiBadge>
               </td>
               <td>
                 <div class="flex items-center gap-1">
-                  <UiButton variant="ghost" size="sm" @click="openEdit(plan)">{{ t('common.edit') }}</UiButton>
-                  <UiButton variant="ghost" size="sm" @click="removing = plan">{{ t('common.delete') }}</UiButton>
+                  <UiButton variant="ghost" size="sm" @click="openEdit(product)">{{ t('common.edit') }}</UiButton>
+                  <UiButton variant="ghost" size="sm" @click="removing = product">{{ t('common.delete') }}</UiButton>
                 </div>
               </td>
             </tr>
@@ -166,20 +169,30 @@ async function confirmDelete() {
       </ConsoleSystemDataState>
     </div>
 
-    <ConsoleSystemPlanDialog
+    <ConsoleSystemSubscriptionProductDialog
       v-model:open="dialogOpen"
-      :plan="editing"
+      :product="editing"
       :groups="groups"
       :busy="busy"
-      @submit="submitPlan"
+      @submit="save"
     />
 
     <ConsoleSystemConfirmDialog
       :open="removing !== null"
-      :body="t('system.deletePlanBody', { name: removing?.name ?? '' })"
+      :body="t('system.deleteProductBody')"
       :busy="busy"
       @update:open="value => { if (!value) removing = null }"
-      @confirm="confirmDelete"
+      @confirm="remove(false)"
+    />
+
+    <ConsoleSystemConfirmDialog
+      :open="forcing !== null"
+      :title="t('system.productInUse')"
+      :body="t('system.deleteProductBody')"
+      :confirm-label="t('system.forceDeleteProduct')"
+      :busy="busy"
+      @update:open="value => { if (!value) forcing = null }"
+      @confirm="remove(true)"
     />
   </ConsoleSystemGate>
 </template>

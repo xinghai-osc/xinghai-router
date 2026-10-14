@@ -39,11 +39,7 @@ const vendors = computed(() => {
         </UiButton>
       </div>
 
-      <div v-if="loading" class="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <div v-for="index in 6" :key="index" class="rounded-card border border-line bg-surface p-5">
-          <UiSkeleton :rows="4" />
-        </div>
-      </div>
+      <SiteDataLoader v-if="loading" class="mt-12" />
 
       <UiAlert v-else-if="error" class="mt-12" tone="danger" :title="t('site.sqErrorTitle')">
         <div class="flex flex-wrap items-center justify-between gap-3">

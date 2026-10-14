@@ -38,10 +38,11 @@ export default {
   concurrency: '并发监控',
   audit: '审计日志',
   conversationCache: '对话缓存',
+  sessionAffinity: '会话亲和',
   requestAudits: '请求内容审计',
   contentPolicy: '违禁词策略',
 
-  subscriptionPlans: '订阅计划',
+  subscriptionPlans: '订阅产品',
   redemptionCodes: '兑换码',
   resetCards: '重置卡',
   adminSubscriptions: '订阅管理',

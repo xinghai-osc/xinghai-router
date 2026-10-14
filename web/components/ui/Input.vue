@@ -51,7 +51,7 @@ const rootClass = computed(() => cn('relative flex min-w-0 items-center', typeof
       :aria-required="required || undefined"
       :required="required || undefined"
       :class="cn(
-        'h-10 min-w-0 w-full rounded-control border border-line-strong bg-surface px-3 text-sm leading-6 text-ink',
+        'ui-input h-10 min-w-0 w-full rounded-control border border-line-strong bg-surface px-3 text-sm leading-6 text-ink',
         'placeholder:text-faint transition-colors duration-150 ease-out motion-reduce:transition-none',
         'enabled:hover:border-faint focus:border-clay focus:outline-2 focus:outline-offset-2 focus:outline-clay/60',
         'disabled:cursor-not-allowed disabled:bg-sunken disabled:text-muted',

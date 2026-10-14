@@ -226,6 +226,7 @@ const form = reactive({
   groups: [] as string[],
   user_email: '',
   auto_disable: true,
+  shared_data_only: false,
   max_concurrency: '',
   upstream_path: '',
   upstream_format: '',
@@ -415,6 +416,7 @@ function openCreate() {
   form.groups = []
   form.user_email = ''
   form.auto_disable = true
+  form.shared_data_only = false
   form.max_concurrency = ''
   form.upstream_path = ''
   form.upstream_format = ''
@@ -440,6 +442,7 @@ function openEdit(channel: Channel) {
   form.groups = [...channel.groups]
   form.user_email = channel.user_email ?? ''
   form.auto_disable = channel.auto_disable
+  form.shared_data_only = channel.shared_data_only
   form.max_concurrency = channel.max_concurrency ? String(channel.max_concurrency) : ''
   form.upstream_path = channel.upstream_path ?? ''
   form.upstream_format = channel.upstream_format ?? ''
@@ -618,6 +621,7 @@ async function save() {
     priority,
     groups: [...form.groups],
     auto_disable: form.auto_disable,
+    shared_data_only: form.shared_data_only,
     max_concurrency: maxConcurrency,
     upstream_path: upstreamPath,
     upstream_format: form.upstream_format,
@@ -1259,6 +1263,10 @@ function quotaUsageForWindow(window: string) {
         </UiField>
 
         <UiAlert v-if="!form.groups.length && !form.user_email.trim()" tone="warn">{{ t('admin.channelAccessWarning') }}</UiAlert>
+
+        <UiField :label="t('admin.sharedDataOnly')" :hint="t('admin.sharedDataOnlyHint')">
+          <UiSwitch v-model="form.shared_data_only" />
+        </UiField>
 
         <UiField :label="t('admin.autoDisable')" :hint="t('admin.autoDisableHint')">
           <UiSwitch v-model="form.auto_disable" />

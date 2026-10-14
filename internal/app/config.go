@@ -31,6 +31,8 @@ type Config struct {
 	SMTPPassword             string
 	SMTPFrom                 string
 	ConversationCacheDir     string
+	SessionAffinityDir       string
+	SessionAffinityTTL       time.Duration
 	LocalPromptCache         bool
 	LocalPromptCacheSize     int
 	BootstrapAdminEmail      string
@@ -80,6 +82,14 @@ func LoadConfig() (Config, error) {
 	c := Config{DatabaseURL: os.Getenv("DATABASE_URL"), RedisURL: os.Getenv("REDIS_URL"), EncryptionKey: os.Getenv("ENCRYPTION_KEY"), ListenAddr: env("LISTEN_ADDR", ":8080"), RateLimitPerMinute: 60, IPRateLimitPerMinute: envInt("IP_RATE_LIMIT_PER_MINUTE", 10), DBMaxConns: envInt("DB_MAX_CONNS", 0), TrustedProxies: strings.TrimSpace(os.Getenv("TRUSTED_PROXIES")), GeetestCaptchaID: os.Getenv("GEETEST_CAPTCHA_ID"), GeetestCaptchaKey: os.Getenv("GEETEST_CAPTCHA_KEY"), CaptchaProvider: strings.ToLower(strings.TrimSpace(os.Getenv("CAPTCHA_PROVIDER"))), CorptchaSiteID: os.Getenv("CORPTCHA_SITE_ID"), CorptchaSecret: os.Getenv("CORPTCHA_SECRET"), SMTPHost: os.Getenv("SMTP_HOST"), SMTPPort: env("SMTP_PORT", "465"), SMTPUsername: os.Getenv("SMTP_USERNAME"), SMTPPassword: os.Getenv("SMTP_PASSWORD"), SMTPFrom: os.Getenv("SMTP_FROM"), ConversationCacheDir: env("CONVERSATION_CACHE_DIR", "data/conversations"), LocalPromptCache: envBool("LOCAL_PROMPT_CACHE", true), LocalPromptCacheSize: envInt("LOCAL_PROMPT_CACHE_SIZE", 4096), BootstrapAdminEmail: strings.ToLower(strings.TrimSpace(os.Getenv("BOOTSTRAP_ADMIN_EMAIL"))), BootstrapAdminName: strings.TrimSpace(os.Getenv("BOOTSTRAP_ADMIN_NAME")), BootstrapAdminPass: os.Getenv("BOOTSTRAP_ADMIN_PASSWORD")}
 	c.DeploymentMode = os.Getenv("DEPLOYMENT_MODE")
 	c.RedisFailurePolicy = os.Getenv("REDIS_FAILURE_POLICY")
+	c.SessionAffinityDir = env("SESSION_AFFINITY_DIR", "data/sessions")
+	if raw := os.Getenv("SESSION_AFFINITY_TTL"); raw != "" {
+		var err error
+		c.SessionAffinityTTL, err = time.ParseDuration(raw)
+		if err != nil || c.SessionAffinityTTL <= 0 {
+			return c, fmt.Errorf("SESSION_AFFINITY_TTL must be a positive duration")
+		}
+	}
 	if raw := os.Getenv("CONCURRENCY_LEASE_TTL"); raw != "" {
 		var err error
 		c.ConcurrencyLeaseTTL, err = time.ParseDuration(raw)

@@ -4,24 +4,35 @@ import (
 	"context"
 	"net/http"
 	"sort"
+	"strconv"
 	"time"
 )
 
-// concurrencyStatusEntry is one entity with a configured concurrency limit plus
-// its live in-flight count.
+// concurrencyStatusEntry is one channel, user, or group with a concurrency
+// limit, or with requests currently in flight. Current is the number the limit
+// is enforced against (shared across replicas in cluster mode); Local is this
+// replica's own share, which is all that is knowable for a key without a limit.
 type concurrencyStatusEntry struct {
 	ID      string `json:"id"`
 	Name    string `json:"name"`
 	Email   string `json:"email,omitempty"`
 	Limit   int    `json:"limit"`
 	Current int    `json:"current"`
+	Local   int    `json:"local"`
 }
 
 type concurrencyStatusScope struct {
-	Scope   string                   `json:"scope"`
-	Limit   int                      `json:"limit"`
-	Current int                      `json:"current"`
-	Entries []concurrencyStatusEntry `json:"entries"`
+	Scope     string                   `json:"scope"`
+	Limit     int                      `json:"limit"`
+	Current   int                      `json:"current"`
+	Unlimited int                      `json:"unlimited"`
+	Entries   []concurrencyStatusEntry `json:"entries"`
+}
+
+type concurrencySource struct {
+	scope   string
+	limited func(context.Context) ([]concurrencyStatusEntry, error)
+	byIDs   func(context.Context, []string) ([]concurrencyStatusEntry, error)
 }
 
 func (s *Service) concurrencyLimiterFor(scope string) *GroupLimiter {
@@ -36,20 +47,8 @@ func (s *Service) concurrencyLimiterFor(scope string) *GroupLimiter {
 	return nil
 }
 
-func (s *Service) limitedChannels(ctx context.Context) ([]concurrencyStatusEntry, error) {
-	return s.limitedConcurrencyEntities(ctx, `select id::text,name,'',max_concurrency from channels where max_concurrency>0`)
-}
-
-func (s *Service) limitedUsers(ctx context.Context) ([]concurrencyStatusEntry, error) {
-	return s.limitedConcurrencyEntities(ctx, `select id::text,coalesce(name,''),coalesce(email,''),max_concurrency from users where max_concurrency>0`)
-}
-
-func (s *Service) limitedGroups(ctx context.Context) ([]concurrencyStatusEntry, error) {
-	return s.limitedConcurrencyEntities(ctx, `select id::text,name,'',max_concurrency from groups where max_concurrency>0`)
-}
-
-func (s *Service) limitedConcurrencyEntities(ctx context.Context, query string) ([]concurrencyStatusEntry, error) {
-	rows, err := s.db.Query(ctx, query)
+func (s *Service) queryConcurrencyEntries(ctx context.Context, query string, args ...any) ([]concurrencyStatusEntry, error) {
+	rows, err := s.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -65,63 +64,169 @@ func (s *Service) limitedConcurrencyEntities(ctx context.Context, query string) 
 	return entries, rows.Err()
 }
 
-func (s *Service) concurrencyCounts(ctx context.Context, scope string, entries []concurrencyStatusEntry, shared bool) ([]int, error) {
-	keys := make([]string, len(entries))
-	for i, entry := range entries {
-		keys[i] = entry.ID
+// intIDs converts the scope's textual keys into the bigint array the id lookup
+// expects. Keys that are not numeric cannot exist in the table, so they are
+// dropped and the caller reports them as id-only entries instead.
+func intIDs(ids []string) []int64 {
+	out := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if value, err := strconv.ParseInt(id, 10, 64); err == nil {
+			out = append(out, value)
+		}
 	}
-	if len(keys) == 0 {
+	return out
+}
+
+func (s *Service) concurrencySources() []concurrencySource {
+	return []concurrencySource{
+		{
+			scope: "channel",
+			limited: func(ctx context.Context) ([]concurrencyStatusEntry, error) {
+				return s.queryConcurrencyEntries(ctx, `select id::text,name,'',max_concurrency from channels where max_concurrency>0`)
+			},
+			byIDs: func(ctx context.Context, ids []string) ([]concurrencyStatusEntry, error) {
+				return s.queryConcurrencyEntries(ctx, `select id::text,name,'',coalesce(max_concurrency,0) from channels where id = any($1::bigint[])`, intIDs(ids))
+			},
+		},
+		{
+			scope: "user",
+			limited: func(ctx context.Context) ([]concurrencyStatusEntry, error) {
+				return s.queryConcurrencyEntries(ctx, `select id::text,coalesce(name,''),coalesce(email,''),max_concurrency from users where max_concurrency>0`)
+			},
+			byIDs: func(ctx context.Context, ids []string) ([]concurrencyStatusEntry, error) {
+				return s.queryConcurrencyEntries(ctx, `select id::text,coalesce(name,''),coalesce(email,''),coalesce(max_concurrency,0) from users where id = any($1::bigint[])`, intIDs(ids))
+			},
+		},
+		{
+			scope: "group",
+			limited: func(ctx context.Context) ([]concurrencyStatusEntry, error) {
+				return s.queryConcurrencyEntries(ctx, `select id::text,name,'',max_concurrency from groups where max_concurrency>0`)
+			},
+			byIDs: func(ctx context.Context, ids []string) ([]concurrencyStatusEntry, error) {
+				return s.queryConcurrencyEntries(ctx, `select id::text,name,'',coalesce(max_concurrency,0) from groups where id::text = any($1::text[])`, ids)
+			},
+		},
+	}
+}
+
+// concurrencyEntries lists every entity that either has a configured limit or
+// currently has requests in flight, with this replica's count and the count the
+// limit is enforced against.
+func (s *Service) concurrencyEntries(ctx context.Context, source concurrencySource, shared bool) ([]concurrencyStatusEntry, error) {
+	entries, err := source.limited(ctx)
+	if err != nil {
+		return nil, err
+	}
+	limiter := s.concurrencyLimiterFor(source.scope)
+	if limiter == nil {
+		return nil, errConcurrencyUnavailable
+	}
+	active := limiter.active()
+	index := make(map[string]int, len(entries))
+	for i, entry := range entries {
+		index[entry.ID] = i
+	}
+	extraIDs := make([]string, 0, len(active))
+	for id, current := range active {
+		if current <= 0 {
+			continue
+		}
+		if _, ok := index[id]; !ok {
+			extraIDs = append(extraIDs, id)
+		}
+	}
+	if len(extraIDs) > 0 {
+		named, err := source.byIDs(ctx, extraIDs)
+		if err != nil {
+			return nil, err
+		}
+		for _, entry := range named {
+			if _, ok := index[entry.ID]; ok {
+				continue
+			}
+			index[entry.ID] = len(entries)
+			entries = append(entries, entry)
+		}
+		// An entity deleted mid-request still holds a slot until it finishes.
+		for _, id := range extraIDs {
+			if _, ok := index[id]; ok {
+				continue
+			}
+			index[id] = len(entries)
+			entries = append(entries, concurrencyStatusEntry{ID: id})
+		}
+	}
+	for i := range entries {
+		entries[i].Local = active[entries[i].ID]
+		entries[i].Current = entries[i].Local
+	}
+	if !shared {
+		return entries, nil
+	}
+	limitedIDs := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Limit > 0 {
+			limitedIDs = append(limitedIDs, entry.ID)
+		}
+	}
+	counts, err := s.concurrencyCounts(ctx, source.scope, limitedIDs, true)
+	if err != nil {
+		return nil, err
+	}
+	for i, id := range limitedIDs {
+		entries[index[id]].Current = counts[i]
+	}
+	return entries, nil
+}
+
+func (s *Service) concurrencyCounts(ctx context.Context, scope string, ids []string, shared bool) ([]int, error) {
+	if len(ids) == 0 {
 		return []int{}, nil
 	}
 	if shared {
 		if s.concurrencyLeases == nil {
 			return nil, errConcurrencyUnavailable
 		}
-		return s.concurrencyLeases.counts(ctx, scope, keys)
+		return s.concurrencyLeases.counts(ctx, scope, ids)
 	}
 	limiter := s.concurrencyLimiterFor(scope)
 	if limiter == nil {
 		return nil, errConcurrencyUnavailable
 	}
-	live := limiter.snapshot(keys)
-	counts := make([]int, len(keys))
-	for i, key := range keys {
-		counts[i] = live[key]
+	live := limiter.snapshot(ids)
+	counts := make([]int, len(ids))
+	for i, id := range ids {
+		counts[i] = live[id]
 	}
 	return counts, nil
 }
 
-// concurrencyStatus reports the live in-flight count against every configured
-// user, group, and channel concurrency limit. In cluster mode the counts come
-// from the shared Redis leases; otherwise they are this process's own counters.
+// concurrencyStatus reports live concurrency for channels, users, and groups.
+// Entities without a limit appear while they have requests in flight; their
+// count is this replica's own, because a key that never takes a lease has
+// nothing shared to read.
 func (s *Service) concurrencyStatus(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	loaders := []struct {
-		scope string
-		load  func(context.Context) ([]concurrencyStatusEntry, error)
-	}{
-		{"channel", s.limitedChannels},
-		{"user", s.limitedUsers},
-		{"group", s.limitedGroups},
-	}
 	shared := s.cfg.DeploymentMode == "cluster"
-	scopes := make([]concurrencyStatusScope, 0, len(loaders))
-	for _, loader := range loaders {
-		entries, err := loader.load(ctx)
+	sources := s.concurrencySources()
+	scopes := make([]concurrencyStatusScope, 0, len(sources))
+	for _, source := range sources {
+		entries, err := s.concurrencyEntries(ctx, source, shared)
 		if err != nil {
+			if err == errConcurrencyUnavailable {
+				writeError(w, 503, "concurrency_unavailable", "could not read concurrency usage")
+				return
+			}
 			writeError(w, 500, "internal_error", "query failed")
 			return
 		}
-		counts, err := s.concurrencyCounts(ctx, loader.scope, entries, shared)
-		if err != nil {
-			writeError(w, 503, "concurrency_unavailable", "could not read concurrency usage")
-			return
-		}
-		scope := concurrencyStatusScope{Scope: loader.scope, Entries: entries}
-		for i := range scope.Entries {
-			scope.Entries[i].Current = counts[i]
-			scope.Limit += scope.Entries[i].Limit
-			scope.Current += counts[i]
+		scope := concurrencyStatusScope{Scope: source.scope, Entries: entries}
+		for _, entry := range entries {
+			scope.Limit += entry.Limit
+			scope.Current += entry.Current
+			if entry.Limit <= 0 {
+				scope.Unlimited++
+			}
 		}
 		sort.SliceStable(scope.Entries, func(i, j int) bool {
 			if scope.Entries[i].Current != scope.Entries[j].Current {

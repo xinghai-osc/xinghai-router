@@ -1566,7 +1566,7 @@ func (s *Service) modelCatalog(w http.ResponseWriter, r *http.Request) {
 			)
 			select c.model,c.group_id,c.group_name,c.group_multiplier,c.group_public,
 				p.input_per_million,p.cached_input_per_million,p.output_per_million,p.multiplier,coalesce(p.currency,'CNY'),
-				coalesce(m.description,''),coalesce(m.input_modalities,'{}'),coalesce(m.output_modalities,'{}'),m.context_window,
+				coalesce(m.description,''),coalesce(m.input_modalities,'{}'),coalesce(m.output_modalities,'{}'),m.context_window,m.requires_data_transfer_consent,
 				perf.requests,perf.success_rate,perf.avg_latency_ms,perf.avg_first_token_ms
 			from catalog c
 			left join pricing_rules p on p.model=c.model and p.enabled
@@ -1584,6 +1584,7 @@ func (s *Service) modelCatalog(w http.ResponseWriter, r *http.Request) {
 		Description                       string
 		InputModalities, OutputModalities []string
 		ContextWindow                     *int64
+		RequiresDataTransferConsent       bool
 		Performance                       map[string]any
 		Groups                            []map[string]any
 	}
@@ -1599,9 +1600,10 @@ func (s *Service) modelCatalog(w http.ResponseWriter, r *http.Request) {
 		var description string
 		var inputModalities, outputModalities []string
 		var contextWindow *int64
+		var requiresDataTransferConsent bool
 		var requests *int64
 		var successRate, avgLatency, avgFirstToken *float64
-		if err := rows.Scan(&model, &groupID, &groupName, &groupMultiplier, &groupPublic, &input, &cached, &output, &modelMultiplier, &currency, &description, &inputModalities, &outputModalities, &contextWindow, &requests, &successRate, &avgLatency, &avgFirstToken); err != nil {
+		if err := rows.Scan(&model, &groupID, &groupName, &groupMultiplier, &groupPublic, &input, &cached, &output, &modelMultiplier, &currency, &description, &inputModalities, &outputModalities, &contextWindow, &requiresDataTransferConsent, &requests, &successRate, &avgLatency, &avgFirstToken); err != nil {
 			writeError(w, http.StatusInternalServerError, "internal_error", "could not read model catalog")
 			return
 		}
@@ -1615,7 +1617,7 @@ func (s *Service) modelCatalog(w http.ResponseWriter, r *http.Request) {
 			if outputModalities == nil {
 				outputModalities = []string{}
 			}
-			item = &catalogModel{Model: model, Currency: currency, Input: input, Cached: cached, Output: output, Multiplier: modelMultiplier, InputModalities: inputModalities, OutputModalities: outputModalities, ContextWindow: contextWindow, Groups: []map[string]any{}}
+			item = &catalogModel{Model: model, Currency: currency, Input: input, Cached: cached, Output: output, Multiplier: modelMultiplier, InputModalities: inputModalities, OutputModalities: outputModalities, ContextWindow: contextWindow, RequiresDataTransferConsent: requiresDataTransferConsent, Groups: []map[string]any{}}
 			item.Description = description
 			if requests != nil {
 				item.Performance = map[string]any{"requests": *requests, "success_rate": successRate, "avg_latency_ms": avgLatency, "avg_first_token_ms": avgFirstToken}
@@ -1634,7 +1636,7 @@ func (s *Service) modelCatalog(w http.ResponseWriter, r *http.Request) {
 	for _, model := range order {
 		item := models[model]
 		provider := providerForModel(item.Model, providers)
-		data = append(data, map[string]any{"id": item.ID, "model": item.Model, "provider": provider.Name, "provider_slug": provider.Slug, "currency": item.Currency, "description": item.Description, "input_modalities": item.InputModalities, "output_modalities": item.OutputModalities, "context_window": item.ContextWindow, "input_per_million": item.Input, "cached_input_per_million": item.Cached, "output_per_million": item.Output, "multiplier": item.Multiplier, "performance": item.Performance, "groups": item.Groups})
+		data = append(data, map[string]any{"id": item.ID, "model": item.Model, "provider": provider.Name, "provider_slug": provider.Slug, "currency": item.Currency, "description": item.Description, "input_modalities": item.InputModalities, "output_modalities": item.OutputModalities, "context_window": item.ContextWindow, "requires_data_transfer_consent": item.RequiresDataTransferConsent, "input_per_million": item.Input, "cached_input_per_million": item.Cached, "output_per_million": item.Output, "multiplier": item.Multiplier, "performance": item.Performance, "groups": item.Groups})
 	}
 	groupList := make([]map[string]any, 0, len(groups))
 	for _, group := range groups {
@@ -2104,10 +2106,11 @@ func (s *Service) setUserPermissions(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Service) createKey(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		UserID    string `json:"user_id"`
-		Name      string `json:"name"`
-		ExpiresAt string `json:"expires_at"`
-		GroupID   string `json:"group_id"`
+		UserID         string `json:"user_id"`
+		Name           string `json:"name"`
+		ExpiresAt      string `json:"expires_at"`
+		GroupID        string `json:"group_id"`
+		SubscriptionID string `json:"subscription_id"`
 	}
 	if decode(r, &in) != nil || strings.TrimSpace(in.UserID) == "" {
 		writeError(w, 400, "invalid_request", "user_id and name are required")
@@ -2134,6 +2137,11 @@ func (s *Service) createKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_request", "group must belong to user")
 		return
 	}
+	subscriptionID, err := s.validKeySubscription(r.Context(), in.UserID, in.SubscriptionID)
+	if err != nil {
+		writeError(w, 400, "invalid_request", "subscription instance must be active and belong to the user")
+		return
+	}
 	encryptedSecret, err := crypt(s.cfg.EncryptionKey, secret, false)
 	if err != nil {
 		writeError(w, 500, "internal_error", "could not create API key")
@@ -2149,7 +2157,7 @@ func (s *Service) createKey(w http.ResponseWriter, r *http.Request) {
 		writeUserMutationError(w, err)
 		return
 	}
-	_, err = tx.Exec(r.Context(), `insert into api_keys(id,user_id,name,key_prefix,secret_hash,secret_encrypted,expires_at,group_id) values($1,$2,$3,$4,$5,$6,$7,$8)`, id, in.UserID, name, secret[:12], hashSecret(secret), encryptedSecret, expires, groupID)
+	_, err = tx.Exec(r.Context(), `insert into api_keys(id,user_id,name,key_prefix,secret_hash,secret_encrypted,expires_at,group_id,subscription_id) values($1,$2,$3,$4,$5,$6,$7,$8,$9)`, id, in.UserID, name, secret[:12], hashSecret(secret), encryptedSecret, expires, groupID, subscriptionID)
 	if err != nil {
 		writeError(w, 400, "invalid_request", "unknown user")
 		return
@@ -2158,8 +2166,8 @@ func (s *Service) createKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "internal_error", "could not create API key")
 		return
 	}
-	s.audit(r, "api_key.created", "api_key", id, map[string]any{"user_id": in.UserID, "name": name})
-	writeJSON(w, 201, map[string]any{"id": id, "name": name, "key": secret, "expires_at": expires, "group_id": groupID})
+	s.audit(r, "api_key.created", "api_key", id, map[string]any{"user_id": in.UserID, "name": name, "subscription_id": subscriptionID})
+	writeJSON(w, 201, map[string]any{"id": id, "name": name, "key": secret, "expires_at": expires, "group_id": groupID, "subscription_id": subscriptionID})
 }
 func (s *Service) listKeys(w http.ResponseWriter, r *http.Request) {
 	page, pageSize, offset := listPage(r)
@@ -2168,7 +2176,7 @@ func (s *Service) listKeys(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "internal_error", "query failed")
 		return
 	}
-	rows, err := s.db.Query(r.Context(), `select k.id,k.user_id,k.name,k.key_prefix,k.expires_at,k.revoked_at,k.last_used_at,k.created_at,coalesce(k.group_id::text,''),coalesce(g.name,''),k.secret_encrypted<>'' from api_keys k left join groups g on g.id=k.group_id order by k.created_at desc limit $1 offset $2`, pageSize, offset)
+	rows, err := s.db.Query(r.Context(), `select k.id,k.user_id,k.name,k.key_prefix,k.expires_at,k.revoked_at,k.last_used_at,k.created_at,coalesce(k.group_id::text,''),coalesce(g.name,''),k.secret_encrypted<>'',coalesce(k.subscription_id::text,''),case when s.id is null then '' when coalesce(t.name,'')='' then s.name else s.name||' · '||t.name end from api_keys k left join groups g on g.id=k.group_id left join user_subscriptions us on us.id=k.subscription_id left join subscription_tiers t on t.id=us.tier_id left join subscriptions s on s.id=t.subscription_id order by k.created_at desc limit $1 offset $2`, pageSize, offset)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
@@ -2177,11 +2185,11 @@ func (s *Service) listKeys(w http.ResponseWriter, r *http.Request) {
 	data := []map[string]any{}
 	for rows.Next() {
 		var id, uid, name, prefix string
-		var groupID, groupName string
+		var groupID, groupName, subscriptionID, subscriptionName string
 		var revealable bool
 		var expiry, revoked, used, created any
-		rows.Scan(&id, &uid, &name, &prefix, &expiry, &revoked, &used, &created, &groupID, &groupName, &revealable)
-		data = append(data, map[string]any{"id": id, "user_id": uid, "name": name, "key_prefix": prefix, "expires_at": expiry, "revoked_at": revoked, "last_used_at": used, "created_at": created, "group_id": groupID, "group_name": groupName, "revealable": revealable})
+		rows.Scan(&id, &uid, &name, &prefix, &expiry, &revoked, &used, &created, &groupID, &groupName, &revealable, &subscriptionID, &subscriptionName)
+		data = append(data, map[string]any{"id": id, "user_id": uid, "name": name, "key_prefix": prefix, "expires_at": expiry, "revoked_at": revoked, "last_used_at": used, "created_at": created, "group_id": groupID, "group_name": groupName, "subscription_id": subscriptionID, "subscription_name": subscriptionName, "revealable": revealable})
 	}
 	writePaged(w, data, total, page, pageSize)
 }
@@ -2294,6 +2302,7 @@ func (s *Service) createChannel(w http.ResponseWriter, r *http.Request) {
 		Provider       string                   `json:"provider"`
 		ModelRoutes    []routeInput             `json:"model_routes"`
 		AutoDisable    *bool                    `json:"auto_disable"`
+		SharedDataOnly bool                     `json:"shared_data_only"`
 		Overrides      *channelRequestOverrides `json:"request_overrides"`
 		UAPool         []string                 `json:"ua_pool"`
 		UpstreamPath   string                   `json:"upstream_path"`
@@ -2444,7 +2453,7 @@ func (s *Service) createChannel(w http.ResponseWriter, r *http.Request) {
 		autoDisable = *in.AutoDisable
 	}
 	var id string
-	err = tx.QueryRow(r.Context(), `insert into channels(name,base_url,api_key,models,test_model,priority,provider,key_type,auto_disable,request_overrides,ua_pool,user_id,upstream_path,upstream_format,max_concurrency) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,nullif($15::int,0)) returning id`, in.Name, strings.TrimRight(in.BaseURL, "/"), keys[0], models, in.TestModel, in.Priority, in.Provider, in.KeyType, autoDisable, overrides, uaPool, userID, in.UpstreamPath, in.UpstreamFormat, maxConcurrency).Scan(&id)
+	err = tx.QueryRow(r.Context(), `insert into channels(name,base_url,api_key,models,test_model,priority,provider,key_type,auto_disable,shared_data_only,request_overrides,ua_pool,user_id,upstream_path,upstream_format,max_concurrency) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,nullif($16::int,0)) returning id`, in.Name, strings.TrimRight(in.BaseURL, "/"), keys[0], models, in.TestModel, in.Priority, in.Provider, in.KeyType, autoDisable, in.SharedDataOnly, overrides, uaPool, userID, in.UpstreamPath, in.UpstreamFormat, maxConcurrency).Scan(&id)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -2505,9 +2514,9 @@ func (s *Service) copyChannel(w http.ResponseWriter, r *http.Request) {
 	var models, overrides, uaPool []byte
 	var priority, weight int
 	var maxConcurrency *int
-	var autoDisable bool
+	var autoDisable, sharedDataOnly bool
 	var userID *string
-	err := s.db.QueryRow(r.Context(), `select name,base_url,api_key,models,test_model,priority,weight,max_concurrency,provider,key_type,auto_disable,request_overrides,ua_pool,upstream_path,upstream_format,user_id::text from channels where id=$1`, sourceID).Scan(&sourceName, &baseURL, &apiKey, &models, &testModel, &priority, &weight, &maxConcurrency, &provider, &keyType, &autoDisable, &overrides, &uaPool, &upstreamPath, &upstreamFormat, &userID)
+	err := s.db.QueryRow(r.Context(), `select name,base_url,api_key,models,test_model,priority,weight,max_concurrency,provider,key_type,auto_disable,shared_data_only,request_overrides,ua_pool,upstream_path,upstream_format,user_id::text from channels where id=$1`, sourceID).Scan(&sourceName, &baseURL, &apiKey, &models, &testModel, &priority, &weight, &maxConcurrency, &provider, &keyType, &autoDisable, &sharedDataOnly, &overrides, &uaPool, &upstreamPath, &upstreamFormat, &userID)
 	if err != nil {
 		writeError(w, 404, "not_found", "channel not found")
 		return
@@ -2532,7 +2541,7 @@ func (s *Service) copyChannel(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(r.Context())
 	var id string
-	err = tx.QueryRow(r.Context(), `insert into channels(name,base_url,api_key,models,test_model,priority,weight,provider,key_type,auto_disable,request_overrides,ua_pool,user_id,upstream_path,upstream_format,max_concurrency,enabled) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,false) returning id`, newName, baseURL, apiKey, models, testModel, priority, weight, provider, keyType, autoDisable, overrides, uaPool, userID, upstreamPath, upstreamFormat, maxConcurrency).Scan(&id)
+	err = tx.QueryRow(r.Context(), `insert into channels(name,base_url,api_key,models,test_model,priority,weight,provider,key_type,auto_disable,shared_data_only,request_overrides,ua_pool,user_id,upstream_path,upstream_format,max_concurrency,enabled) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,false) returning id`, newName, baseURL, apiKey, models, testModel, priority, weight, provider, keyType, autoDisable, sharedDataOnly, overrides, uaPool, userID, upstreamPath, upstreamFormat, maxConcurrency).Scan(&id)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -2627,6 +2636,7 @@ func (s *Service) updateChannel(w http.ResponseWriter, r *http.Request) {
 		UserEmail      *string                  `json:"user_email"`
 		ModelRoutes    []routeInput             `json:"model_routes"`
 		AutoDisable    *bool                    `json:"auto_disable"`
+		SharedDataOnly *bool                    `json:"shared_data_only"`
 		Overrides      *channelRequestOverrides `json:"request_overrides"`
 		UAPool         []string                 `json:"ua_pool"`
 		UpstreamPath   string                   `json:"upstream_path"`
@@ -2741,6 +2751,11 @@ func (s *Service) updateChannel(w http.ResponseWriter, r *http.Request) {
 	if in.AutoDisable != nil {
 		query += `,auto_disable=$` + strconv.Itoa(argIdx)
 		args = append(args, *in.AutoDisable)
+		argIdx++
+	}
+	if in.SharedDataOnly != nil {
+		query += `,shared_data_only=$` + strconv.Itoa(argIdx)
+		args = append(args, *in.SharedDataOnly)
 		argIdx++
 	}
 	if in.Overrides != nil {
@@ -2909,7 +2924,7 @@ func (s *Service) listChannels(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "internal_error", "query failed")
 		return
 	}
-	rows, err := s.db.Query(r.Context(), `select c.id,c.name,c.base_url,c.models,c.test_model,c.enabled,c.auto_disabled,c.disabled_reason,c.priority,c.weight,c.max_concurrency,c.last_checked_at,c.last_error,c.created_at,c.updated_at,coalesce((select array_agg(cg.group_id order by cg.group_id) from channel_groups cg where cg.channel_id=c.id), '{}'),c.provider,c.key_type,(select count(*) from channel_api_keys ak where ak.channel_id=c.id and ak.enabled),c.auto_disable,c.request_overrides,c.ua_pool,c.upstream_path,c.upstream_format,coalesce(u.id::text,''),coalesce(u.email,''),coalesce(u.name,''),coalesce(agg.avg_duration_ms,0),agg.avg_first_token_ms,coalesce(agg.used_requests,0),coalesce(agg.used_tokens,0),cb.balance,cb.used,cb.total,coalesce(cb.currency,'USD'),cb.usage,coalesce(cb.supported,false),coalesce(cb.error,''),cb.fetched_at from channels c left join users u on u.id=c.user_id left join lateral (select cb.balance,cb.used,cb.total,cb.currency,cb.usage,cb.supported,cb.error,cb.fetched_at from channel_balances cb join channel_api_keys k on k.id=cb.key_id and k.enabled where cb.channel_id=c.id order by k.priority desc nulls last,k.created_at limit 1) cb on true left join lateral (select avg(rl.duration_ms) as avg_duration_ms,avg(rl.first_token_ms) as avg_first_token_ms,count(*) as used_requests,coalesce(sum(rl.total_tokens),0) as used_tokens from request_logs rl where rl.channel_id=c.id) agg on true order by c.priority desc,c.id limit $1 offset $2`, pageSize, offset)
+	rows, err := s.db.Query(r.Context(), `select c.id,c.name,c.base_url,c.models,c.test_model,c.enabled,c.auto_disabled,c.disabled_reason,c.priority,c.weight,c.max_concurrency,c.last_checked_at,c.last_error,c.created_at,c.updated_at,coalesce((select array_agg(cg.group_id order by cg.group_id) from channel_groups cg where cg.channel_id=c.id), '{}'),c.provider,c.key_type,(select count(*) from channel_api_keys ak where ak.channel_id=c.id and ak.enabled),c.auto_disable,c.shared_data_only,c.request_overrides,c.ua_pool,c.upstream_path,c.upstream_format,coalesce(u.id::text,''),coalesce(u.email,''),coalesce(u.name,''),coalesce(agg.avg_duration_ms,0),agg.avg_first_token_ms,coalesce(agg.used_requests,0),coalesce(agg.used_tokens,0),cb.balance,cb.used,cb.total,coalesce(cb.currency,'USD'),cb.usage,coalesce(cb.supported,false),coalesce(cb.error,''),cb.fetched_at from channels c left join users u on u.id=c.user_id left join lateral (select cb.balance,cb.used,cb.total,cb.currency,cb.usage,cb.supported,cb.error,cb.fetched_at from channel_balances cb join channel_api_keys k on k.id=cb.key_id and k.enabled where cb.channel_id=c.id order by k.priority desc nulls last,k.created_at limit 1) cb on true left join lateral (select avg(rl.duration_ms) as avg_duration_ms,avg(rl.first_token_ms) as avg_first_token_ms,count(*) as used_requests,coalesce(sum(rl.total_tokens),0) as used_tokens from request_logs rl where rl.channel_id=c.id) agg on true order by c.priority desc,c.id limit $1 offset $2`, pageSize, offset)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
@@ -2929,7 +2944,7 @@ func (s *Service) listChannels(w http.ResponseWriter, r *http.Request) {
 		var groups []string
 		var provider, keyType string
 		var keyCount int
-		var autoDisable bool
+		var autoDisable, sharedDataOnly bool
 		var overrides, uaPool []byte
 		var upstreamPath, upstreamFormat string
 		var userID, userEmail, userName string
@@ -2941,7 +2956,7 @@ func (s *Service) listChannels(w http.ResponseWriter, r *http.Request) {
 		var usageJSON []byte
 		var balanceSupported bool
 		var balanceFetched any
-		if rows.Scan(&id, &name, &base, &models, &testModel, &enabled, &autoDisabled, &disabledReason, &priority, &weight, &maxConcurrency, &lastChecked, &lastError, &created, &updated, &groups, &provider, &keyType, &keyCount, &autoDisable, &overrides, &uaPool, &upstreamPath, &upstreamFormat, &userID, &userEmail, &userName, &avgDuration, &avgFirstTokenMs, &usedRequests, &usedTokens, &balance, &usedBalance, &totalBalance, &balanceCurrency, &usageJSON, &balanceSupported, &balanceError, &balanceFetched) != nil {
+		if rows.Scan(&id, &name, &base, &models, &testModel, &enabled, &autoDisabled, &disabledReason, &priority, &weight, &maxConcurrency, &lastChecked, &lastError, &created, &updated, &groups, &provider, &keyType, &keyCount, &autoDisable, &sharedDataOnly, &overrides, &uaPool, &upstreamPath, &upstreamFormat, &userID, &userEmail, &userName, &avgDuration, &avgFirstTokenMs, &usedRequests, &usedTokens, &balance, &usedBalance, &totalBalance, &balanceCurrency, &usageJSON, &balanceSupported, &balanceError, &balanceFetched) != nil {
 			continue
 		}
 		var list []string
@@ -2959,7 +2974,7 @@ func (s *Service) listChannels(w http.ResponseWriter, r *http.Request) {
 		}
 		usageWindows := decodeUpstreamUsageWindows(usageJSON)
 		routes := s.getChannelRoutes(r.Context(), id)
-		data = append(data, map[string]any{"id": id, "name": name, "base_url": base, "models": list, "test_model": testModel, "provider": provider, "key_type": keyType, "enabled": enabled, "auto_disabled": autoDisabled, "disabled_reason": disabledReason, "priority": priority, "weight": weight, "max_concurrency": maxConcurrency, "last_test_time": lastChecked, "last_error": lastError, "response_time_ms": avgDuration, "avg_first_token_ms": avgFirstTokenMs, "used_requests": usedRequests, "used_tokens": usedTokens, "upstream_balance": balance, "upstream_used": usedBalance, "upstream_total": totalBalance, "upstream_currency": balanceCurrency, "upstream_usage_windows": usageWindows, "upstream_balance_supported": balanceSupported, "upstream_balance_error": balanceError, "upstream_balance_fetched_at": balanceFetched, "groups": groups, "key_count": keyCount, "created_at": created, "updated_at": updated, "model_routes": routes, "auto_disable": autoDisable, "request_overrides": ov, "ua_pool": uaList, "upstream_path": upstreamPath, "upstream_format": upstreamFormat, "user_id": userID, "user_email": userEmail, "user_name": userName})
+		data = append(data, map[string]any{"id": id, "name": name, "base_url": base, "models": list, "test_model": testModel, "provider": provider, "key_type": keyType, "enabled": enabled, "auto_disabled": autoDisabled, "disabled_reason": disabledReason, "priority": priority, "weight": weight, "max_concurrency": maxConcurrency, "last_test_time": lastChecked, "last_error": lastError, "response_time_ms": avgDuration, "avg_first_token_ms": avgFirstTokenMs, "used_requests": usedRequests, "used_tokens": usedTokens, "upstream_balance": balance, "upstream_used": usedBalance, "upstream_total": totalBalance, "upstream_currency": balanceCurrency, "upstream_usage_windows": usageWindows, "upstream_balance_supported": balanceSupported, "upstream_balance_error": balanceError, "upstream_balance_fetched_at": balanceFetched, "groups": groups, "key_count": keyCount, "created_at": created, "updated_at": updated, "model_routes": routes, "auto_disable": autoDisable, "shared_data_only": sharedDataOnly, "request_overrides": ov, "ua_pool": uaList, "upstream_path": upstreamPath, "upstream_format": upstreamFormat, "user_id": userID, "user_email": userEmail, "user_name": userName})
 	}
 	writePaged(w, data, total, page, pageSize)
 }

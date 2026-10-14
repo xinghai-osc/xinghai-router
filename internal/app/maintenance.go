@@ -92,24 +92,24 @@ func (s *Service) expireStalePendingOrders(ctx context.Context) {
 	} else {
 		lapsedN = tag.RowsAffected()
 	}
-	// Revoke the plan group from users whose subscriptions to it no longer
-	// cover it, so an expired subscription does not keep granting group access.
-	// Only groups tied to a subscription plan are touched, and membership is
-	// kept while any active subscription still covers the group (e.g. another
-	// plan or a renewed subscription sharing the same group).
+	// Revoke the tier group from users whose subscriptions to it no longer cover
+	// it, so an expired subscription does not keep granting group access. Only
+	// groups tied to a subscription tier are touched, and membership is kept
+	// while any active subscription still covers the group (e.g. another tier or
+	// a renewed subscription sharing the same group).
 	groupN := int64(0)
 	if tag, err := s.db.Exec(ctx, `delete from user_groups ug
 		where exists (
 			select 1
-			from subscription_plans p
-			join user_subscriptions us on us.plan_id=p.id
-			where p.group_id=ug.group_id and us.user_id=ug.user_id
+			from subscription_tiers t
+			join user_subscriptions us on us.tier_id=t.id
+			where t.group_id=ug.group_id and us.user_id=ug.user_id
 		)
 		  and not exists (
 			select 1
-			from subscription_plans p
-			join user_subscriptions us on us.plan_id=p.id
-			where p.group_id=ug.group_id and us.user_id=ug.user_id
+			from subscription_tiers t
+			join user_subscriptions us on us.tier_id=t.id
+			where t.group_id=ug.group_id and us.user_id=ug.user_id
 			  and us.status='active'
 			  and (us.current_period_end is null or us.current_period_end > now())
 		  )`); err != nil {

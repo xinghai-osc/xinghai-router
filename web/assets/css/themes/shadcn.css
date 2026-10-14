@@ -61,3 +61,85 @@
   --shadow-pop: 0 10px 30px -12px rgb(0 0 0 / 0.65);
   --shimmer-highlight: rgb(255 255 255 / 0.06);
 }
+
+:root[data-preset='shadcn'] .ui-button {
+  border-radius: 6px;
+  box-shadow: 0 1px 2px rgb(9 9 11 / 0.05);
+  font-weight: 500;
+}
+
+:root[data-preset='shadcn'] .ui-button::after {
+  display: none;
+}
+
+:root[data-preset='shadcn'] .ui-button-primary {
+  background-color: var(--clay);
+  color: var(--clay-ink);
+}
+
+:root[data-preset='shadcn'] .ui-button-primary:hover {
+  background-color: var(--clay-hover);
+}
+
+:root[data-preset='shadcn'] .ui-button-secondary {
+  background-color: var(--surface);
+  border-color: var(--line-strong);
+}
+
+:root[data-preset='shadcn'] .ui-button-secondary:hover,
+:root[data-preset='shadcn'] .ui-button-ghost:hover {
+  background-color: var(--sunken);
+}
+
+:root[data-preset='shadcn'] .ui-button-danger {
+  background-color: var(--danger);
+  color: #fff;
+}
+
+:root[data-preset='shadcn'] .ui-button-link {
+  box-shadow: none;
+  font-weight: 500;
+}
+
+:root[data-preset='shadcn'] .ui-card {
+  border-radius: 8px;
+  box-shadow: none;
+}
+
+:root[data-preset='shadcn'] .ui-card-header {
+  background-color: transparent;
+}
+
+:root[data-preset='shadcn'] .ui-input,
+:root[data-preset='shadcn'] .ui-select-trigger {
+  border-radius: 6px;
+  box-shadow: 0 1px 2px rgb(9 9 11 / 0.02);
+}
+
+:root[data-preset='shadcn'] .ui-input:focus,
+:root[data-preset='shadcn'] .ui-select-trigger:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--clay) 20%, transparent);
+  outline-offset: 0;
+}
+
+:root[data-preset='shadcn'] .ui-badge {
+  border-radius: 6px;
+  font-size: 0.75rem;
+}
+
+:root[data-preset='shadcn'] .ui-switch {
+  height: 20px;
+  width: 36px;
+}
+
+:root[data-preset='shadcn'] .ui-switch [data-state='checked'] {
+  transform: translateX(14px);
+}
+
+:root[data-preset='shadcn'] .ui-shadcn-table {
+  border-radius: 8px;
+}
+
+:root[data-preset='shadcn'] .ui-shadcn-table thead {
+  background-color: var(--sunken);
+}

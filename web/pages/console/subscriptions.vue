@@ -2,13 +2,26 @@
 import { Check, RotateCcw, Sparkles } from 'lucide-vue-next'
 import {
   endpoints,
+  type BillingPeriod,
   type PaymentMethod,
   type PaymentOrder,
-  type PublicSubscriptionPlan,
   type SubscriptionOrder,
+  type SubscriptionProduct,
+  type SubscriptionTier,
+  type SubscriptionTierPrice,
   type UserSubscription,
 } from '~/src/api'
 import { formatDateTime, formatMoney, formatNumber } from '~/src/format'
+import {
+  effectiveAmounts,
+  periodLabel,
+  priceFor,
+  sortProducts,
+  sortTiers,
+  tierDisplayName,
+  tierOptions,
+  tierPrices,
+} from '~/src/subscriptions'
 
 definePageMeta({ layout: 'console', middleware: 'console-auth' })
 
@@ -21,6 +34,7 @@ const SUB_STATUS_KEYS: Record<string, string> = {
 
 const { t } = useI18n()
 const { toast } = useToast()
+const route = useRoute()
 const { settings } = useSiteSettings()
 const { account, loadAccount } = useAccount()
 
@@ -31,8 +45,8 @@ const {
 } = useResource(() => endpoints.getAccountSubscriptions(), { data: [] as UserSubscription[] })
 
 const {
-  data: plans, pending: plansPending, error: plansError,
-} = useResource(() => endpoints.getPublicSubscriptionPlans(), { data: [] as PublicSubscriptionPlan[] })
+  data: products, pending: productsPending, error: productsError,
+} = useResource(() => endpoints.getPublicSubscriptionPlans(), { data: [] as SubscriptionProduct[] })
 
 const {
   data: orders, pending: ordersPending, error: ordersError, refresh: refreshOrders,
@@ -48,11 +62,68 @@ const { busy, run } = useAction()
 const subscribeOpen = ref(false)
 const cancelOpen = ref(false)
 const resetOpen = ref(false)
-const selectedPlan = ref<PublicSubscriptionPlan | null>(null)
+const selectedTierId = ref('')
+const selectedPeriod = ref<BillingPeriod | ''>('')
 const cancelling = ref<UserSubscription | null>(null)
 const resetting = ref<UserSubscription | null>(null)
 const method = ref('balance')
 const autoRenew = ref(true)
+
+function money(value: number | string | null | undefined, currency?: string): string {
+  const formatted = formatMoney(value)
+  const code = (currency ?? '').trim().toUpperCase()
+  return code && code !== 'CNY' && code !== 'RMB' ? `${formatted} ${code}` : formatted
+}
+
+const sortedProducts = computed(() => sortProducts(products.value.data))
+
+const subscribeTierOptions = computed(() => tierOptions(sortedProducts.value))
+
+function findTier(id: string): SubscriptionTier | null {
+  for (const product of sortedProducts.value) {
+    const tier = (product.tiers ?? []).find(item => item.id === id)
+    if (tier) return tier
+  }
+  return null
+}
+
+const selectedTier = computed(() => findTier(selectedTierId.value))
+const selectedTierLabel = computed(
+  () => subscribeTierOptions.value.find(option => option.value === selectedTierId.value)?.label ?? '',
+)
+const selectedPrice = computed<SubscriptionTierPrice | null>(() => {
+  const tier = selectedTier.value
+  const period = selectedPeriod.value
+  if (!tier || !period) return null
+  return priceFor(tier, period) ?? null
+})
+
+const periodOptions = computed(() => {
+  const tier = selectedTier.value
+  if (!tier) return []
+  return tierPrices(tier).map(price => ({
+    value: price.billing_period,
+    label: `${money(price.price, price.currency)} / ${periodLabel(t, price.billing_period, 'console')}`,
+  }))
+})
+
+interface AvailableTier {
+  product: SubscriptionProduct
+  tier: SubscriptionTier
+  prices: SubscriptionTierPrice[]
+}
+
+const availableTiers = computed<AvailableTier[]>(() => {
+  const list: AvailableTier[] = []
+  for (const product of sortedProducts.value) {
+    for (const tier of sortTiers(product.tiers ?? [])) {
+      if (!tier.enabled) continue
+      const prices = tierPrices(tier)
+      if (prices.length) list.push({ product, tier, prices })
+    }
+  }
+  return list
+})
 
 const availableBalance = computed(() => Math.max(0, (account.value?.balance ?? 0) - (account.value?.reserved ?? 0)))
 const methodOptions = computed(() => [
@@ -60,52 +131,72 @@ const methodOptions = computed(() => [
   ...payments.value.payment_methods.map(entry => ({ value: entry.code, label: entry.name })),
 ])
 const payingWithBalance = computed(() => method.value === 'balance')
-const selectedPrice = computed(() => Number(selectedPlan.value?.price ?? 0))
-const balanceSufficient = computed(() => availableBalance.value >= selectedPrice.value)
+const purchaseAmount = computed(() => Number(selectedPrice.value?.price ?? 0))
+const balanceSufficient = computed(() => availableBalance.value >= purchaseAmount.value)
 const canSubscribe = computed(() => methodOptions.value.length > 0)
-
-const sortedPlans = computed(() => [...plans.value.data].sort((a, b) => a.sort_order - b.sort_order))
+const canConfirm = computed(() => Boolean(selectedPrice.value) && Boolean(method.value))
 
 watch(methodOptions, (options) => {
   if (!options.some(option => option.value === method.value)) method.value = options[0]?.value ?? 'balance'
 })
 
-const PERIOD_KEYS: Record<string, string> = {
-  hour: 'console.perHour',
-  day: 'console.perDay',
-  week: 'console.perWeek',
-  month: 'console.perMonth',
-  year: 'console.perYear',
+watch(selectedTierId, () => {
+  const tier = selectedTier.value
+  const prices = tier ? tierPrices(tier) : []
+  if (!prices.some(price => price.billing_period === selectedPeriod.value)) {
+    selectedPeriod.value = prices[0]?.billing_period ?? ''
+  }
+})
+
+function queryParam(value: unknown): string {
+  if (Array.isArray(value)) return typeof value[0] === 'string' ? value[0] : ''
+  return typeof value === 'string' ? value : ''
 }
 
-function periodLabel(period: string): string {
-  return PERIOD_KEYS[period] ? t(PERIOD_KEYS[period]) : period
+const queryApplied = ref(false)
+
+function applyQuerySelection() {
+  if (queryApplied.value) return
+  const productList = sortedProducts.value
+  if (!productList.length) return
+  queryApplied.value = true
+  const option = subscribeTierOptions.value.find(item => item.value === queryParam(route.query.tier))
+  if (!option) return
+  const tier = findTier(option.value)
+  if (!tier) return
+  const prices = tierPrices(tier)
+  if (!prices.length) return
+  const match = prices.find(price => price.billing_period === queryParam(route.query.period))
+  openSubscribe(tier.id, match?.billing_period)
 }
+
+watch(sortedProducts, applyQuerySelection, { immediate: true })
 
 function statusLabel(status: string): string {
   return SUB_STATUS_KEYS[status] ? t(SUB_STATUS_KEYS[status]) : status
 }
 
-function planBenefits(plan: PublicSubscriptionPlan): string[] {
+function tierBenefits(tier: SubscriptionTier, price?: SubscriptionTierPrice): string[] {
   const list: string[] = []
-  if (plan.credit_amount) {
-    list.push(t('console.planCredit', { amount: Number(plan.credit_amount).toFixed(2) }))
-  } else if (plan.max_credit_per_period === null
-    && !(plan.model_quotas ?? []).some(quota => quota.max_credit_per_period !== null)) {
+  const amounts = effectiveAmounts(tier, price)
+  if (amounts.creditAmount) {
+    list.push(t('console.planCredit', { amount: Number(amounts.creditAmount).toFixed(2) }))
+  } else if (amounts.maxCredit === null
+    && !(tier.model_quotas ?? []).some(quota => quota.max_credit_per_period !== null)) {
     list.push(t('console.planUnlimitedCredit'))
   }
-  if (plan.max_requests_per_period !== null) {
-    list.push(t('console.planQuotaRequests', { count: formatNumber(plan.max_requests_per_period) }))
+  if (amounts.maxRequests !== null) {
+    list.push(t('console.planQuotaRequests', { count: formatNumber(amounts.maxRequests) }))
   }
-  if (plan.max_credit_per_period !== null) {
-    list.push(t('console.planQuotaCredit', { amount: formatMoney(plan.max_credit_per_period) }))
+  if (amounts.maxCredit !== null) {
+    list.push(t('console.planQuotaCredit', { amount: formatMoney(amounts.maxCredit) }))
   }
-  for (const quota of plan.model_quotas ?? []) {
+  for (const quota of tier.model_quotas ?? []) {
     list.push(t('console.planModelQuota', { model: quota.model }))
   }
-  if (plan.group_name) list.push(t('console.planGroup', { group: plan.group_name }))
-  list.push(plan.model_whitelist.length
-    ? t('console.planWhitelist', { count: plan.model_whitelist.length })
+  if (tier.group_name) list.push(t('console.planGroup', { group: tier.group_name }))
+  list.push((tier.model_whitelist ?? []).length
+    ? t('console.planWhitelist', { count: (tier.model_whitelist ?? []).length })
     : t('console.planAllModels'))
   return list
 }
@@ -167,8 +258,13 @@ function quotaBars(subscription: UserSubscription): QuotaBar[] {
   return bars
 }
 
-function openSubscribe(plan: PublicSubscriptionPlan) {
-  selectedPlan.value = plan
+function openSubscribe(tierId?: string, period?: BillingPeriod) {
+  if (tierId) selectedTierId.value = tierId
+  if (!selectedTierId.value) selectedTierId.value = subscribeTierOptions.value[0]?.value ?? ''
+  const prices = selectedTier.value ? tierPrices(selectedTier.value) : []
+  selectedPeriod.value = period && prices.some(item => item.billing_period === period)
+    ? period
+    : prices[0]?.billing_period ?? ''
   method.value = 'balance'
   autoRenew.value = false
   subscribeOpen.value = true
@@ -180,12 +276,14 @@ function openCancel(subscription: UserSubscription) {
 }
 
 async function confirmSubscribe() {
-  const plan = selectedPlan.value
-  if (!plan || !method.value) return
+  const tier = selectedTier.value
+  const price = selectedPrice.value
+  if (!tier || !price || !method.value) return
+  const period = price.billing_period
 
   if (payingWithBalance.value) {
     if (!balanceSufficient.value) return
-    const ok = await run(() => endpoints.createBalanceSubscription(plan.id))
+    const ok = await run(() => endpoints.createBalanceSubscription(tier.id, period))
     if (!ok) { toast.error(t('common.actionFailed')); return }
     subscribeOpen.value = false
     toast.success(t('console.balancePurchaseSuccess'))
@@ -195,7 +293,7 @@ async function confirmSubscribe() {
 
   let payUrl = ''
   const ok = await run(async () => {
-    payUrl = (await endpoints.createAccountSubscription(plan.id, method.value, autoRenew.value)).pay_url
+    payUrl = (await endpoints.createAccountSubscription(tier.id, period, method.value, autoRenew.value)).pay_url
   })
   if (!ok) { toast.error(t('common.actionFailed')); return }
 
@@ -255,9 +353,12 @@ async function confirmReset() {
             >
               <header class="flex items-start justify-between gap-3">
                 <div class="min-w-0">
-                  <p class="truncate text-sm font-medium text-ink">{{ subscription.plan_name }}</p>
+                  <p class="truncate text-sm font-medium text-ink">{{ subscription.display_name }}</p>
                   <p class="numeric mt-0.5 text-[13px] text-muted">
-                    {{ formatMoney(subscription.price) }} / {{ periodLabel(subscription.billing_period) }}
+                    {{ money(subscription.price, subscription.currency) }} / {{ periodLabel(t, subscription.billing_period, 'console') }}
+                  </p>
+                  <p class="mt-0.5 text-[13px] text-faint">
+                    {{ t('console.tierLevel', { level: subscription.tier_level }) }}
                   </p>
                 </div>
                 <ConsoleUserStatusBadge :status="subscription.status" />
@@ -343,9 +444,9 @@ async function confirmReset() {
     <UiCard :title="t('console.availablePlans')" flush>
       <div class="px-5 py-4">
         <ConsoleUserDataState
-          :pending="plansPending"
-          :error="plansError"
-          :empty="!sortedPlans.length"
+          :pending="productsPending"
+          :error="productsError"
+          :empty="!availableTiers.length"
           :rows="4"
           :empty-icon="Sparkles"
           :empty-title="t('console.plansEmptyTitle')"
@@ -353,23 +454,38 @@ async function confirmReset() {
         >
           <div class="grid gap-3 md:grid-cols-3">
             <article
-              v-for="plan in sortedPlans"
-              :key="plan.id"
+              v-for="entry in availableTiers"
+              :key="entry.tier.id"
               class="flex flex-col gap-4 rounded-card border border-line bg-surface p-5 transition-colors duration-150 hover:border-line-strong"
             >
               <header class="space-y-1">
-                <h3 class="text-sm font-semibold text-ink">{{ plan.name }}</h3>
-                <p v-if="plan.description" class="text-[13px] text-muted">{{ plan.description }}</p>
+                <div class="flex items-start justify-between gap-2">
+                  <h3 class="text-sm font-semibold text-ink">
+                    {{ tierDisplayName(entry.product.name, entry.tier.name) }}
+                  </h3>
+                  <UiBadge tone="outline">
+                    {{ t('console.tierLevel', { level: entry.tier.level }) }}
+                  </UiBadge>
+                </div>
+                <p v-if="entry.tier.description || entry.product.description" class="text-[13px] text-muted">
+                  {{ entry.tier.description || entry.product.description }}
+                </p>
               </header>
 
-              <p class="flex items-baseline gap-1">
-                <span class="display text-3xl text-ink">{{ formatMoney(plan.price, 0) }}</span>
-                <span class="text-[13px] text-muted">/ {{ periodLabel(plan.billing_period) }}</span>
-              </p>
+              <ul class="space-y-1 border-y border-line py-3">
+                <li
+                  v-for="price in entry.prices"
+                  :key="price.id"
+                  class="flex items-baseline justify-between gap-3 text-[13px]"
+                >
+                  <span class="text-muted">{{ periodLabel(t, price.billing_period, 'console') }}</span>
+                  <span class="numeric text-ink">{{ money(price.price, price.currency) }}</span>
+                </li>
+              </ul>
 
               <ul class="flex-1 space-y-1.5">
                 <li
-                  v-for="benefit in planBenefits(plan)"
+                  v-for="benefit in tierBenefits(entry.tier, entry.prices[0])"
                   :key="benefit"
                   class="flex items-start gap-2 text-[13px] text-muted"
                 >
@@ -378,7 +494,11 @@ async function confirmReset() {
                 </li>
               </ul>
 
-              <UiButton block :disabled="!canSubscribe" @click="openSubscribe(plan)">
+              <UiButton
+                block
+                :disabled="!canSubscribe"
+                @click="openSubscribe(entry.tier.id, entry.prices[0]?.billing_period)"
+              >
                 {{ t('console.subscribe') }}
               </UiButton>
             </article>
@@ -433,9 +553,30 @@ async function confirmReset() {
     <UiSlidePanel
       v-model:open="subscribeOpen"
       size="sm"
-      :title="selectedPlan ? t('console.subscribeTitle', { name: selectedPlan.name }) : t('console.subscribe')"
+      :title="selectedTierLabel ? t('console.subscribeTitle', { name: selectedTierLabel }) : t('console.subscribe')"
     >
       <div class="space-y-4">
+        <UiField :label="t('console.tier')" required>
+          <UiSelect
+            v-model="selectedTierId"
+            :options="subscribeTierOptions"
+            :placeholder="t('common.selectPlaceholder')"
+          />
+        </UiField>
+
+        <UiField :label="t('console.choosePeriod')" required>
+          <UiSelect
+            v-model="selectedPeriod"
+            :options="periodOptions"
+            :placeholder="t('common.selectPlaceholder')"
+          />
+        </UiField>
+
+        <div class="space-y-1.5 rounded-card border border-line bg-sunken p-4 text-[13px]">
+          <p class="text-muted">{{ t('console.renewalHint') }}</p>
+          <p class="text-faint">{{ t('console.subscriptionMergedHint') }}</p>
+        </div>
+
         <UiField :label="t('console.paymentMethod')" required>
           <UiSelect
             v-model="method"
@@ -451,14 +592,14 @@ async function confirmReset() {
           </div>
           <div class="flex justify-between gap-3">
             <span class="text-muted">{{ t('console.purchaseAmount') }}</span>
-            <span class="numeric text-ink">{{ formatMoney(selectedPrice) }}</span>
+            <span class="numeric text-ink">{{ money(selectedPrice?.price, selectedPrice?.currency) }}</span>
           </div>
           <div v-if="balanceSufficient" class="flex justify-between gap-3 border-t border-line pt-3">
             <span class="text-muted">{{ t('console.balanceAfterPurchase') }}</span>
-            <span class="numeric text-ink">{{ formatMoney(availableBalance - selectedPrice) }}</span>
+            <span class="numeric text-ink">{{ formatMoney(availableBalance - purchaseAmount) }}</span>
           </div>
           <UiAlert v-else tone="warn">
-            {{ t('console.insufficientBalance', { amount: formatMoney(selectedPrice - availableBalance) }) }}
+            {{ t('console.insufficientBalance', { amount: formatMoney(purchaseAmount - availableBalance) }) }}
             <UiButton to="/console/wallet" variant="link" size="sm" class="ml-1 h-auto p-0">
               {{ t('console.topUpToContinue') }}
             </UiButton>
@@ -472,7 +613,7 @@ async function confirmReset() {
 
       <template #footer>
         <UiButton variant="secondary" @click="subscribeOpen = false">{{ t('common.cancel') }}</UiButton>
-        <UiButton :loading="busy" :disabled="!method || (payingWithBalance && !balanceSufficient)" @click="confirmSubscribe">
+        <UiButton :loading="busy" :disabled="!canConfirm || (payingWithBalance && !balanceSufficient)" @click="confirmSubscribe">
           {{ payingWithBalance ? t('console.payBalanceAndActivate') : t('console.subscribe') }}
         </UiButton>
       </template>
@@ -482,7 +623,7 @@ async function confirmReset() {
       v-model:open="cancelOpen"
       size="sm"
       :title="t('console.cancelSubscriptionTitle')"
-      :description="cancelling?.plan_name"
+      :description="cancelling?.display_name"
     >
       <p class="text-[13px] text-muted">{{ t('console.cancelSubscriptionBody') }}</p>
 
@@ -498,7 +639,7 @@ async function confirmReset() {
       :open="resetOpen"
       size="sm"
       :title="t('console.resetCardUse')"
-      :description="resetting?.plan_name"
+      :description="resetting?.display_name"
     >
       <p class="text-[13px] text-muted">{{ t('console.resetCardConfirmBody') }}</p>
 

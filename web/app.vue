@@ -5,7 +5,16 @@ import { clearLegacySession, setReauthenticationHandler } from '~/src/api'
 const noFlashTheme = `(()=>{const d=document.documentElement;try{const m=localStorage.getItem('${MODE_STORAGE_KEY}'),p=localStorage.getItem('${PRESET_STORAGE_KEY}');d.dataset.theme=m==='dark'||m==='light'?m:'${DEFAULT_THEME_MODE}';d.dataset.preset=${JSON.stringify(THEME_PRESETS.map(preset => preset.value))}.includes(p)?p:'${DEFAULT_THEME_PRESET}'}catch(e){d.dataset.theme='${DEFAULT_THEME_MODE}';d.dataset.preset='${DEFAULT_THEME_PRESET}'}})()`
 const { settings, loadSiteSettings } = useSiteSettings()
 const { locale } = useI18n()
-const { loadAccount } = useAccount()
+const { loadAccount, loaded: accountLoaded, sessionScope } = useAccount()
+const { accepted: legalAccepted, check: checkLegalConsent } = useLegalConsent()
+const router = useRouter()
+const mounted = ref(false)
+const legalPage = computed(() => /^\/(terms|privacy)\/?$/.test(router.currentRoute.value.path))
+const canUseSite = computed(() => !mounted.value || legalPage.value || legalAccepted.value)
+
+watch([accountLoaded, sessionScope], () => {
+  if (import.meta.client) void checkLegalConsent()
+})
 const { pageKey: workspacePageKey } = useWorkspace()
 const { request: requestReauthentication, cancel: cancelReauthentication } = useReauthentication()
 
@@ -30,6 +39,8 @@ const { initializeTheme } = useTheme()
 const { initializeLocale } = useI18n()
 
 onMounted(() => {
+  mounted.value = true
+  void checkLegalConsent()
   initializeTheme()
   initializeLocale()
   loadSiteSettings()
@@ -39,10 +50,11 @@ onMounted(() => {
 
 <template>
   <NuxtLoadingIndicator color="var(--clay)" error-color="var(--danger)" :height="3" :throttle="120" />
-  <NuxtLayout>
+  <NuxtLayout v-if="canUseSite">
     <NuxtPage :page-key="route => route.path.startsWith('/console') ? `${route.path}:${workspacePageKey}` : route.path" />
   </NuxtLayout>
   <ClientOnly>
+    <SiteLegalConsentDialog v-if="!legalPage && !legalAccepted" />
     <SessionReauthenticationDialog />
   </ClientOnly>
 </template>

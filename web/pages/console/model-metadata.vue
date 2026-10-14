@@ -17,7 +17,7 @@ const catalog = useResource(() => endpoints.getModelCatalog(), { data: [] as Cat
 const dialogOpen = ref(false)
 const removing = ref<ModelMetadata | null>(null)
 const editing = ref<ModelMetadata | null>(null)
-const form = reactive<ModelMetadataForm>({ model: '', name: '', owned_by: '', description: '', input_modalities: [], output_modalities: [], context_window: null, max_output_tokens: null, reasoning_efforts: null, api_capabilities: null })
+const form = reactive<ModelMetadataForm>({ model: '', name: '', owned_by: '', description: '', input_modalities: [], output_modalities: [], context_window: null, max_output_tokens: null, reasoning_efforts: null, api_capabilities: null, requires_data_transfer_consent: false })
 const inputModalities = ref('')
 const outputModalities = ref('')
 const contextWindow = ref('')
@@ -44,7 +44,7 @@ const modelOptions = computed(() => {
 })
 const rows = computed(() => {
   const saved = new Map(metadata.data.value.data.map(item => [item.model, item]))
-  const models = catalog.data.value.data.map(model => saved.get(model.model) ?? ({ id: '', model: model.model, name: '', owned_by: '', description: '', input_modalities: [], output_modalities: [], context_window: null, max_output_tokens: null, reasoning_efforts: null, api_capabilities: null } as ModelMetadata))
+  const models = catalog.data.value.data.map(model => saved.get(model.model) ?? ({ id: '', model: model.model, name: '', owned_by: '', description: '', input_modalities: [], output_modalities: [], context_window: null, max_output_tokens: null, reasoning_efforts: null, api_capabilities: null, requires_data_transfer_consent: false } as ModelMetadata))
   for (const item of metadata.data.value.data) if (!models.some(model => model.model === item.model)) models.push(item)
   const query = search.value.trim().toLowerCase()
   return query ? models.filter(model => [model.model, model.name, model.owned_by, model.description].some(value => value?.toLowerCase().includes(query))) : models
@@ -62,7 +62,8 @@ function openCreate(model = '') {
   maxOutputTokens.value = ''
   supportedReasoningLevels.value = ''
   defaultReasoningLevel.value = ''
-  systemPromptMode.value = ''
+  form.api_capabilities = null
+  form.requires_data_transfer_consent = false
   dialogOpen.value = true
 }
 
@@ -83,6 +84,7 @@ function openEdit(item: ModelMetadata) {
   supportedReasoningLevels.value = item.reasoning_efforts?.supported_levels.join(', ') ?? ''
   defaultReasoningLevel.value = item.reasoning_efforts?.default_level ?? ''
   systemPromptMode.value = item.api_capabilities?.anthropic_messages?.system_prompt_update ?? ''
+  form.requires_data_transfer_consent = item.requires_data_transfer_consent
   dialogOpen.value = true
 }
 
@@ -149,6 +151,7 @@ async function save() {
     max_output_tokens: maxOutput,
     reasoning_efforts: levels.length || defaultLevel ? { supported_levels: levels, ...(defaultLevel ? { default_level: defaultLevel } : {}) } : null,
     api_capabilities: mode ? { anthropic_messages: { system_prompt_update: mode } } : null,
+    requires_data_transfer_consent: form.requires_data_transfer_consent,
   }
   const ok = await run(() => editing.value?.id
     ? endpoints.updateAdminModelMetadata(editing.value.id, payload)
@@ -207,6 +210,7 @@ async function remove() {
                 <th>{{ t('admin.modelMetadataDescription') }}</th>
                 <th>{{ t('admin.modelMetadataModalities') }}</th>
                 <th class="num">{{ t('admin.modelMetadataContext') }}</th>
+                <th>{{ t('admin.modelMetadataTransferTerms') }}</th>
                 <th>{{ t('common.actions') }}</th>
               </tr>
             </thead>
@@ -227,6 +231,7 @@ async function remove() {
                   <span v-else class="text-faint">{{ t('admin.modelMetadataNotConfigured') }}</span>
                 </td>
                 <td class="num">{{ item.context_window ?? t('admin.modelMetadataNotConfigured') }}</td>
+                <td><UiBadge v-if="item.requires_data_transfer_consent" tone="warn">{{ t('admin.modelMetadataTransferTermsRequired') }}</UiBadge><span v-else class="text-faint">{{ t('admin.modelMetadataNotConfigured') }}</span></td>
                 <td>
                   <div class="flex items-center gap-1">
                     <UiButton variant="ghost" size="sm" @click="openEdit(item)">{{ item.id ? t('common.edit') : t('admin.modelMetadataConfigure') }}</UiButton>
@@ -279,6 +284,7 @@ async function remove() {
         <UiField :label="t('admin.modelMetadataSystemPrompt')" :hint="t('admin.modelMetadataSystemPromptHint')" for="metadata-system-prompt">
           <UiSelect id="metadata-system-prompt" v-model="systemPromptMode" :options="systemPromptOptions" />
         </UiField>
+        <UiCheckbox v-model="form.requires_data_transfer_consent" :label="t('admin.modelMetadataTransferTermsRequired')" />
         <div class="flex justify-end gap-2">
           <UiButton type="button" variant="secondary" @click="dialogOpen = false">{{ t('common.cancel') }}</UiButton>
           <UiButton type="submit" :loading="busy">{{ t('common.save') }}</UiButton>

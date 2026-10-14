@@ -3,11 +3,12 @@ package app
 import "sync"
 
 type groupCounter struct {
-	mu      sync.Mutex
 	current int32
 	max     int32
 }
 
+// GroupLimiter counts in-flight requests per key. The same type backs the
+// channel, user, and group scopes, and each scope gets its own instance.
 type GroupLimiter struct {
 	mu       sync.Mutex
 	counters map[string]*groupCounter
@@ -17,60 +18,70 @@ func NewGroupLimiter() *GroupLimiter {
 	return &GroupLimiter{counters: make(map[string]*groupCounter)}
 }
 
-func (gl *GroupLimiter) acquire(groupID string, max int) bool {
-	if max <= 0 {
-		return true
-	}
+// acquire admits one request against the key's limit. A max of 0 or less means
+// the key has no configured limit: the request is still counted so the console
+// can report live concurrency, but it is never rejected.
+func (gl *GroupLimiter) acquire(key string, max int) bool {
 	gl.mu.Lock()
-	c, ok := gl.counters[groupID]
+	defer gl.mu.Unlock()
+	c, ok := gl.counters[key]
 	if !ok {
-		c = &groupCounter{max: int32(max)}
-		gl.counters[groupID] = c
+		c = &groupCounter{}
+		gl.counters[key] = c
 	}
-	gl.mu.Unlock()
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.max != int32(max) {
+	if max > 0 {
 		c.max = int32(max)
+	} else {
+		c.max = 0
 	}
-	if c.current >= c.max {
+	if c.max > 0 && c.current >= c.max {
 		return false
 	}
 	c.current++
 	return true
 }
 
-func (gl *GroupLimiter) release(groupID string) {
+// release returns one slot. Idle keys are dropped so the map only keeps entries
+// with requests actually in flight.
+func (gl *GroupLimiter) release(key string) {
 	gl.mu.Lock()
-	c, ok := gl.counters[groupID]
-	gl.mu.Unlock()
-	if ok {
-		c.mu.Lock()
-		if c.current > 0 {
-			c.current--
-		}
-		c.mu.Unlock()
+	defer gl.mu.Unlock()
+	c, ok := gl.counters[key]
+	if !ok {
+		return
+	}
+	if c.current > 0 {
+		c.current--
+	}
+	if c.current == 0 {
+		delete(gl.counters, key)
 	}
 }
 
-// snapshot reports the live count for each key, using 0 when the key has no
-// counter because nothing has been admitted against its limit yet.
 func (gl *GroupLimiter) snapshot(keys []string) map[string]int {
 	gl.mu.Lock()
-	counters := make([]*groupCounter, len(keys))
-	for i, key := range keys {
-		counters[i] = gl.counters[key]
-	}
-	gl.mu.Unlock()
+	defer gl.mu.Unlock()
 	out := make(map[string]int, len(keys))
-	for i, c := range counters {
-		if c == nil {
-			out[keys[i]] = 0
-			continue
+	for _, key := range keys {
+		if c, ok := gl.counters[key]; ok {
+			out[key] = int(c.current)
+		} else {
+			out[key] = 0
 		}
-		c.mu.Lock()
-		out[keys[i]] = int(c.current)
-		c.mu.Unlock()
+	}
+	return out
+}
+
+// active reports every key with requests in flight in this process, whether or
+// not it has a configured limit.
+func (gl *GroupLimiter) active() map[string]int {
+	gl.mu.Lock()
+	defer gl.mu.Unlock()
+	out := make(map[string]int, len(gl.counters))
+	for key, c := range gl.counters {
+		if c.current > 0 {
+			out[key] = int(c.current)
+		}
 	}
 	return out
 }

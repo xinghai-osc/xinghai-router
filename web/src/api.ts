@@ -1,11 +1,11 @@
-export interface User { id: string; email: string; name: string; role: string; enabled: boolean; leaderboard_opt_in: boolean; leaderboard_mask_name: boolean; data_usage_enabled: boolean; max_concurrency: number | null; balance: number; reserved: number; permissions: string[]; groups: string[]; inviter_id: string | null; inviter_email: string | null; inviter_name: string | null; created_at: string }
+export interface User { id: number; email: string; name: string; role: string; enabled: boolean; leaderboard_opt_in: boolean; leaderboard_mask_name: boolean; data_usage_enabled: boolean; max_concurrency: number | null; balance: number; reserved: number; permissions: string[]; groups: string[]; inviter_id: number | null; inviter_email: string | null; inviter_name: string | null; created_at: string }
 export interface Page<T> { data: T[]; total: number; page: number; page_size: number }
 export type WorkspaceRole = 'owner' | 'admin' | 'member'
 export interface Workspace { id: string; name: string; slug: string; owner_id: string; role: WorkspaceRole; is_personal: boolean; created_at: string; updated_at: string }
 export interface WorkspaceForm { name: string; slug: string }
-export interface WorkspaceMember { user_id: string; email: string; name: string; role: WorkspaceRole; created_at: string }
+export interface WorkspaceMember { user_id: number; email: string; name: string; role: WorkspaceRole; created_at: string }
 export interface WorkspaceMemberForm { email: string; role: 'admin' | 'member' }
-export interface ApiKey { id: string; user_id: string; name: string; key_prefix: string; group_id: string; group_name: string; expires_at: string | null; revoked_at: string | null; last_used_at: string | null; created_at: string; revealable: boolean }
+export interface ApiKey { id: string; user_id: number; name: string; key_prefix: string; group_id: string; group_name: string; subscription_id: string; subscription_name: string; expires_at: string | null; revoked_at: string | null; last_used_at: string | null; created_at: string; revealable: boolean }
 export interface KeyQuotaLimit { id: string; window: 'day' | 'month' | 'total'; max_requests: number | null; max_tokens: number | null; max_cost: number | null; created_at: string }
 export interface KeyQuotaUsage { window: string; requests: number; tokens: number; cost: number }
 export interface KeyQuota { limits: KeyQuotaLimit[]; usage: KeyQuotaUsage[] }
@@ -13,7 +13,7 @@ export interface KeyQuotaForm { window: 'day' | 'month' | 'total'; max_requests?
 /** `groups` holds group ids, not names — resolve them through /admin/groups. */
 export interface RequestOverrides { delete: string[]; set: Record<string, unknown> }
 export interface ChannelUsageWindow { window: string; used: number | null; limit: number | null; remaining: number | null; percent: number | null; reset_at?: string; unit?: string }
-export interface Channel { id: string; name: string; base_url: string; avg_first_token_ms: number | null; upstream_balance: number | null; upstream_used: number | null; upstream_total: number | null; upstream_currency: string; upstream_usage_windows: ChannelUsageWindow[]; upstream_balance_supported: boolean; upstream_balance_error: string; upstream_balance_fetched_at: string | null; provider: 'openai' | 'openai_chat' | 'ollama' | 'kimi' | 'opencode_go' | 'anthropic' | 'deepseek' | 'commandcode' | 'jev' | 'custom'; models: string[]; test_model: string; enabled: boolean; auto_disabled: boolean; auto_disable: boolean; disabled_reason: string; priority: number; weight: number; max_concurrency: number | null; last_test_time: string | null; last_error: string | null; response_time_ms: number; used_requests: number; used_tokens: number; groups: string[]; key_type: 'single' | 'multi'; key_count: number; upstream_path: string; upstream_format: string; request_overrides: RequestOverrides; ua_pool: string[]; created_at: string; updated_at: string; model_routes: ModelRoute[]; user_id: string | null; user_email: string; user_name: string }
+export interface Channel { id: string; name: string; base_url: string; avg_first_token_ms: number | null; upstream_balance: number | null; upstream_used: number | null; upstream_total: number | null; upstream_currency: string; upstream_usage_windows: ChannelUsageWindow[]; upstream_balance_supported: boolean; upstream_balance_error: string; upstream_balance_fetched_at: string | null; provider: 'openai' | 'openai_chat' | 'ollama' | 'kimi' | 'opencode_go' | 'anthropic' | 'deepseek' | 'commandcode' | 'jev' | 'custom'; models: string[]; test_model: string; enabled: boolean; auto_disabled: boolean; auto_disable: boolean; disabled_reason: string; priority: number; weight: number; max_concurrency: number | null; last_test_time: string | null; last_error: string | null; response_time_ms: number; used_requests: number; used_tokens: number; groups: string[]; key_type: 'single' | 'multi'; key_count: number; upstream_path: string; upstream_format: string; request_overrides: RequestOverrides; ua_pool: string[]; created_at: string; updated_at: string; model_routes: ModelRoute[]; user_id: number | null; user_email: string; user_name: string; shared_data_only: boolean }
 
 export interface ChannelKey { id: string; name: string; enabled: boolean; priority: number; last_checked_at: string | null; last_error: string | null; created_at: string; upstream_balance: number | null; upstream_used: number | null; upstream_total: number | null; upstream_currency: string; upstream_usage_windows: ChannelUsageWindow[]; upstream_balance_supported: boolean; upstream_balance_error: string; upstream_balance_fetched_at: string | null }
 export interface ChannelKeyForm { name?: string; api_key?: string; priority?: number }
@@ -42,8 +42,8 @@ export interface ModelRoute { id: string; public_model: string; upstream_model: 
 export interface ModelRouteForm { public_model: string; upstream_model: string; priority?: number; weight?: number; hidden?: boolean }
 export interface Group { id: string; name: string; display_name: string | null; description: string | null; multiplier: number; max_concurrency: number | null; public: boolean; created_at: string }
 export interface GroupUpdate { id: string; multiplier: number; max_concurrency: number | null; public: boolean; display_name?: string; description?: string }
-export interface RequestLog { request_id: string; user_id: string | null; user_name: string; api_key_id: string | null; key_name: string; channel_id: string | null; channel_name: string; channel_key_id: string | null; channel_key_name: string; group_id: string | null; group_name: string; model: string; status_code: number; prompt_tokens: number | null; completion_tokens: number | null; total_tokens: number | null; duration_ms: number; first_token_ms: number | null; error_code: string | null; error_detail: string; client_ip: string; user_agent: string; created_at: string }
-export interface Account { id: string; email: string; name: string; role: string; avatar_url: string; permissions: string[]; balance: number; reserved: number; pending_settlement: number; leaderboard_opt_in: boolean; leaderboard_mask_name: boolean; data_usage_enabled: boolean; must_change_password?: boolean }
+export interface RequestLog { request_id: string; user_id: number | null; user_name: string; api_key_id: string | null; key_name: string; channel_id: string | null; channel_name: string; channel_key_id: string | null; channel_key_name: string; group_id: string | null; group_name: string; model: string; status_code: number; prompt_tokens: number | null; completion_tokens: number | null; total_tokens: number | null; duration_ms: number; first_token_ms: number | null; error_code: string | null; error_detail: string; client_ip: string; user_agent: string; created_at: string }
+export interface Account { id: number; email: string; name: string; role: string; avatar_url: string; permissions: string[]; balance: number; reserved: number; pending_settlement: number; leaderboard_opt_in: boolean; leaderboard_mask_name: boolean; data_usage_enabled: boolean; must_change_password?: boolean }
 export interface ImagePrice { size: string; quality: string; price: number }
 export interface DimensionPrices {
   cache_write_per_million?: number | null
@@ -136,6 +136,7 @@ export interface CatalogModel {
   context_window: number | null
   performance: ModelCatalogPerformance | null
   groups: CatalogGroup[]
+  requires_data_transfer_consent: boolean
 }
 export interface ModelReasoningEfforts {
   supported_levels: string[]
@@ -156,6 +157,7 @@ export interface GatewayModel {
   max_output_tokens: number
   reasoning_efforts?: ModelReasoningEfforts
   api_capabilities?: ModelAPICapabilities
+  requires_data_transfer_consent: boolean
 }
 export interface GatewayModelList {
   object: 'list'
@@ -174,6 +176,7 @@ export interface ModelMetadata {
   max_output_tokens: number | null
   reasoning_efforts: ModelReasoningEfforts | null
   api_capabilities: ModelAPICapabilities | null
+  requires_data_transfer_consent: boolean
   created_at?: string
   updated_at?: string
 }
@@ -185,9 +188,9 @@ export interface UsageRecord { request_id: string; model: string; prompt_tokens:
 
 export interface AccountUsageSummary { requests: number; tokens: number; cost: string }
 export interface DailyUsageRecord { day: string; requests: number; prompt_tokens: number; completion_tokens: number }
-export interface ActivityLog { id: string; type: 'request' | 'login' | 'register' | 'logout' | 'topup' | 'operation'; action: string; user_id: string; user_name: string; model: string; group_id: string; group_name: string; status_code: number | null; duration_ms: number | null; first_token_ms: number | null; prompt_tokens: number; completion_tokens: number; total_tokens: number; cost: number; details: Record<string, unknown>; created_at: string }
+export interface ActivityLog { id: string; type: 'request' | 'login' | 'register' | 'logout' | 'topup' | 'operation'; action: string; user_id: number; user_name: string; model: string; group_id: string; group_name: string; status_code: number | null; duration_ms: number | null; first_token_ms: number | null; prompt_tokens: number; completion_tokens: number; total_tokens: number; cost: number; details: Record<string, unknown>; created_at: string }
 export interface LedgerEntry { id: string; amount: string; balance_after: string; kind: string; request_id: string | null; note: string | null; created_at: string; settlement_status: 'not_applicable' | 'pending' | 'processing' | 'settled' | 'failed'; settlement_date: string | null; settled_at: string | null; settlement_error?: string; daily?: boolean; business_date?: string | null; call_count?: number }
-export interface AdminLedgerEntry extends LedgerEntry { user_id: string; user_email: string; user_name: string }
+export interface AdminLedgerEntry extends LedgerEntry { user_id: number; user_email: string; user_name: string }
 
 export type RewardStatus = 'pending' | 'credited' | 'rejected' | 'withdrawn'
 export type RiskProbeStatus = 'completed' | 'timeout' | 'unsupported' | 'error' | 'disabled'
@@ -212,13 +215,13 @@ export interface RewardRiskSettings {
   version: number
 }
 export type RewardRiskSettingsForm = Omit<RewardRiskSettings, 'version'>
-export interface RewardRiskClaim { id: string; user_id: string; user_name: string; email: string; origin_user_id: string; source: 'invitation' | 'checkin'; source_id: string; amount: string; status: RewardStatus; reasons: string[]; created_at: string; updated_at: string }
-export interface RewardRiskEvent { id: string; user_id: string; user_name: string; email: string; action: string; decision: 'allow' | 'review' | 'ban'; reasons: string[]; details: Record<string, unknown>; created_at: string }
-export interface RewardRiskBan { id: string; user_id: string; user_name: string; email: string; rule_version: number; details: Record<string, unknown>; observation_id: string | null; banned_at: string; released_at: string | null; released_by: string | null; release_reason: string }
+export interface RewardRiskClaim { id: string; user_id: number; user_name: string; email: string; origin_user_id: number; source: 'invitation' | 'checkin'; source_id: string; amount: string; status: RewardStatus; reasons: string[]; created_at: string; updated_at: string }
+export interface RewardRiskEvent { id: string; user_id: number; user_name: string; email: string; action: string; decision: 'allow' | 'review' | 'ban'; reasons: string[]; details: Record<string, unknown>; created_at: string }
+export interface RewardRiskBan { id: string; user_id: number; user_name: string; email: string; rule_version: number; details: Record<string, unknown>; observation_id: string | null; banned_at: string; released_at: string | null; released_by: string | null; release_reason: string }
 export interface CheckinResult { checked_in: boolean; already_checked_in: boolean; checkin_date: string; streak?: number; reward?: number; reward_status: RewardStatus; scheduled_reward?: number }
 export interface CheckinEntry { checkin_date: string; streak: number; reward: string; reward_status: RewardStatus; created_at: string }
 export interface CheckinStatus { checked_in: boolean; data: CheckinEntry[] }
-export interface AdminCheckin { user_id: string; email: string; user_name: string; checkin_date: string; streak: number; reward: string; created_at: string }
+export interface AdminCheckin { user_id: number; email: string; user_name: string; checkin_date: string; streak: number; reward: string; created_at: string }
 export interface PaymentOrder { order_no: string; payment_type: string; amount: string; status: 'pending' | 'paid' | 'failed' | 'expired'; provider_trade_no?: string; paid_at: string | null; created_at: string }
 export interface PaymentMethod { id: string; code: string; name: string; enabled: boolean; created_at: string | null }
 export interface PaymentSettings { enabled: boolean; base_url: string; merchant_id: string; has_merchant_key: boolean; public_base_url: string; methods: PaymentMethod[] }
@@ -241,7 +244,7 @@ export interface ReliabilitySettings { retry_count: number; retry_status_codes: 
 export interface ContentPolicySettings { request_audit_enabled: boolean; request_audit_store_mode: 'none' | 'hash' | 'excerpt'; request_audit_retention_days: number; content_policy_mode: 'off' | 'audit' | 'block' }
 export interface ContentPolicyRule { id: string; name: string; term: string; action: 'block' | 'audit'; case_sensitive: boolean; enabled: boolean; priority: number; created_at: string; updated_at: string }
 export interface ContentPolicyBatchResult { created: number; skipped: number }
-export interface RequestContentAudit { id: string; request_id: string; user_id: string; api_key_id: string; model: string; endpoint: string; decision: 'allow' | 'audit' | 'block'; matched_rule_ids: string[]; request_bytes: number; content_length: number; content_hash: string; excerpt: string; created_at: string }
+export interface RequestContentAudit { id: string; request_id: string; user_id: number; api_key_id: string; model: string; endpoint: string; decision: 'allow' | 'audit' | 'block'; matched_rule_ids: string[]; request_bytes: number; content_length: number; content_hash: string; excerpt: string; created_at: string }
 
 export interface ConversationCacheSettings { conversation_cache_enabled: boolean }
 
@@ -263,6 +266,24 @@ export interface ConversationLogDetail extends ConversationLog {
   response_body: unknown
 }
 
+export interface SessionAffinity {
+  session: string
+  session_prefix: string
+  session_length: number
+  user_id: string
+  user_name: string
+  group_id: string
+  group_name: string
+  model: string
+  channel_id: number
+  channel_name: string
+  channel_key_id: string
+  channel_key_name: string
+  expires_at: string
+}
+
+export interface SessionAffinityPurgeResult { ok: boolean; removed: number }
+
 export interface PaymentRedirect { order_no: string; amount: string; status: 'pending'; pay_url: string }
 export interface BalanceSubscriptionResult { order_no: string; subscription_id: string; amount: string; status: 'paid'; balance: string }
 
@@ -270,7 +291,7 @@ export interface AccountGroups { data: string[]; groups: Group[]; user_groups: s
 
 export interface UsageLog {
   request_id: string
-  user_id: string | null
+  user_id: number | null
   user_name: string
   api_key_id: string | null
   key_name: string
@@ -337,13 +358,18 @@ export interface ConcurrencyStatusEntry {
   name: string
   email?: string
   limit: number
+  /** In-flight count the limit is enforced against (shared across replicas in cluster mode). */
   current: number
+  /** This replica's own in-flight count; all that is knowable without a limit. */
+  local: number
 }
 
 export interface ConcurrencyStatusScope {
   scope: ConcurrencyScope
   limit: number
   current: number
+  /** Entries listed only because they have requests in flight, with no limit set. */
+  unlimited: number
   entries: ConcurrencyStatusEntry[]
 }
 
@@ -382,13 +408,24 @@ export interface SubscriptionModelUsage {
   credit: number
 }
 
-export interface SubscriptionPlan {
+export interface SubscriptionTierPrice {
   id: string
-  name: string
-  description: string
+  billing_period: BillingPeriod
   price: string
   currency: string
-  billing_period: BillingPeriod
+  credit_amount: string
+  max_requests_per_period: number | null
+  max_credit_per_period: number | null
+  enabled: boolean
+  sort_order: number
+}
+
+export interface SubscriptionTier {
+  id: string
+  subscription_id: string
+  level: number
+  name: string
+  description: string
   credit_amount: string
   group_id: string
   group_name: string
@@ -397,34 +434,33 @@ export interface SubscriptionPlan {
   max_credit_per_period: number | null
   overage_policy: OveragePolicy
   model_quotas: SubscriptionPlanModelQuota[]
+  prices: SubscriptionTierPrice[]
   sort_order: number
   enabled: boolean
   created_at: string
   updated_at: string
 }
 
-export interface PublicSubscriptionPlan {
+export interface SubscriptionProduct {
   id: string
   name: string
   description: string
-  price: string
-  currency: string
-  billing_period: BillingPeriod
-  credit_amount: string
-  group_name: string
-  model_whitelist: string[]
-  max_requests_per_period: number | null
-  max_credit_per_period: number | null
-  overage_policy: OveragePolicy
-  model_quotas: SubscriptionPlanModelQuota[]
   sort_order: number
+  enabled: boolean
+  tiers: SubscriptionTier[]
+  created_at: string
+  updated_at: string
 }
 
 export interface UserSubscription {
   id: string
   user_id: string
-  plan_id: string
-  plan_name: string
+  subscription_id: string
+  product_name: string
+  tier_id: string
+  tier_name: string
+  tier_level: number
+  display_name: string
   status: 'pending' | 'active' | 'expired' | 'cancelled'
   current_period_start: string | null
   current_period_end: string | null
@@ -433,6 +469,7 @@ export interface UserSubscription {
   created_at: string
   updated_at: string
   price: string
+  currency: string
   billing_period: BillingPeriod
   credit_amount: string
   group_id: string
@@ -452,11 +489,12 @@ export interface SubscriptionOrder {
   id: string
   order_no: string
   subscription_id: string
-  plan_id: string
+  tier_id: string
   plan_name: string
   provider: string
   payment_type: string
   amount: string
+  billing_period: BillingPeriod
   status: 'pending' | 'paid' | 'failed' | 'expired'
   provider_trade_no?: string
   period_kind: 'new' | 'renewal'
@@ -493,8 +531,9 @@ export interface RedemptionCode {
   code: string
   reward_type: RedemptionRewardType
   amount: string
-  plan_id: string
-  plan_name: string
+  tier_id: string
+  tier_name: string
+  billing_period: BillingPeriod
   period_days: number | null
   max_uses: number
   used_count: number
@@ -515,8 +554,8 @@ export interface RedemptionCodeRedemption {
   user_email: string
   user_name: string
   amount: string
-  plan_id: string
-  plan_name: string
+  tier_id: string
+  tier_name: string
   subscription_id: string
   created_at: string
 }
@@ -524,7 +563,8 @@ export interface RedemptionCodeRedemption {
 export interface RedemptionCodeForm {
   reward_type: RedemptionRewardType
   amount: string
-  plan_id: string
+  tier_id: string
+  billing_period: BillingPeriod
   period_days: number | null
   max_uses: number
   quantity: number
@@ -536,7 +576,8 @@ export interface RedemptionResult {
   reward_type: RedemptionRewardType
   amount?: string
   subscription_id?: string
-  plan_id?: string
+  tier_id?: string
+  tier_name?: string
 }
 
 export interface RedemptionCodeUpdate {
@@ -553,8 +594,8 @@ export interface ResetCard {
   user_id: string
   user_email: string
   user_name: string
-  plan_id: string
-  plan_name: string
+  tier_id: string
+  tier_name: string
   enabled: boolean
   expires_at: string | null
   note: string
@@ -578,7 +619,7 @@ export interface ResetCardUpdate {
 }
 
 export interface ResetCardByPlanForm {
-  plan_id: string
+  tier_id: string
   status: string
   quantity: number
   expires_at: string
@@ -638,7 +679,12 @@ export interface AdminSubscription {
   user_id: string
   email: string
   user_name: string
-  plan_id: string
+  tier_id: string
+  subscription_id: string
+  product_name: string
+  tier_level: number
+  tier_name: string
+  display_name: string
   plan_name: string
   status: 'pending' | 'active' | 'expired' | 'cancelled'
   current_period_start: string | null
@@ -652,6 +698,7 @@ export interface AdminSubscription {
   remaining_requests: number | null
   remaining_credit: number | null
   model_quota_count: number
+  billing_period: BillingPeriod
 }
 
 export interface AdminUserSubscriptionModelUsage {
@@ -664,8 +711,12 @@ export interface AdminUserSubscriptionModelUsage {
 
 export interface AdminUserSubscription {
   id: string
-  plan_id: string
-  plan_name: string
+  tier_id: string
+  subscription_id: string
+  product_name: string
+  tier_level: number
+  tier_name: string
+  display_name: string
   status: 'pending' | 'active' | 'expired' | 'cancelled'
   current_period_start: string | null
   current_period_end: string | null
@@ -677,11 +728,16 @@ export interface AdminUserSubscription {
   max_credit_per_period: number | null
   remaining_requests: number | null
   remaining_credit: number | null
+  billing_period: BillingPeriod
+  price: string
+  currency: string
   model_usage: AdminUserSubscriptionModelUsage[]
 }
 
 export interface AdminCreateSubscriptionForm {
-  plan_id: string
+  tier_id: string
+  billing_period: BillingPeriod
+  period_days: number | null
   start_at: string
   end_at: string
   auto_renew: boolean
@@ -946,11 +1002,13 @@ export function clearPublicCache(key: string): void {
 export class ApiError extends Error {
   code: string
   status: number
-  constructor(message: string, status: number, code = '') {
+  requestId: string
+  constructor(message: string, status: number, code = '', requestId = '') {
     super(message)
     this.name = 'ApiError'
     this.code = code
     this.status = status
+    this.requestId = requestId
   }
 }
 
@@ -987,10 +1045,16 @@ async function request(path: string, init: RequestInit = {}, retried = false): P
   if (stale()) throw new DOMException('Workspace changed', 'AbortError')
   if (response.ok) return response
 
-  const body = await response.json().catch(() => null)
+  const contentType = response.headers.get('content-type') ?? ''
+  const body: unknown = contentType.includes('json') ? await response.json().catch(() => null) : await response.text().catch(() => '')
   if (stale()) throw new DOMException('Workspace changed', 'AbortError')
-  const code = typeof body?.error?.code === 'string' ? body.error.code : ''
-  const failure = new ApiError(body?.error?.message ?? response.statusText, response.status, code)
+  const root = body && typeof body === 'object' ? body as Record<string, unknown> : null
+  const error = root?.error && typeof root.error === 'object' ? root.error as Record<string, unknown> : null
+  const code = typeof error?.code === 'string' ? error.code : typeof error?.type === 'string' ? error.type : ''
+  const requestId = typeof error?.request_id === 'string' && error.request_id ? error.request_id : response.headers.get('x-request-id') ?? ''
+  const messageValue = typeof error?.message === 'string' ? error.message : typeof error?.detail === 'string' ? error.detail : typeof root?.message === 'string' ? root.message : typeof body === 'string' && body.trim() ? body.trim() : response.statusText || `HTTP ${response.status}`
+  const message = messageValue.length > 500 ? `${messageValue.slice(0, 500)}…` : messageValue
+  const failure = new ApiError(message, response.status, code, requestId)
   if (response.status === 403 && code === 'reauthentication_required' && !retried && !path.startsWith('/auth/') && import.meta.client && reauthenticationHandler && generation === sessionGeneration) {
     const verified = verification !== verificationGeneration || await reauthenticationHandler()
     if (stale()) throw new DOMException('Workspace changed', 'AbortError')
@@ -1037,15 +1101,17 @@ export interface SessionResult { expires_at: string }
 
 export interface LoginBody { email: string; password: string; code?: string; captcha_id?: string; lot_number?: string; captcha_output?: string; pass_token?: string; gen_time?: string; captcha_token?: string; captcha_purpose?: string }
 export interface RegisterBody { risk_context_id?: string; name: string; email: string; password: string; code?: string; invitation_code?: string; captcha_id?: string; lot_number?: string; captcha_output?: string; pass_token?: string; gen_time?: string; captcha_token?: string; captcha_purpose?: string }
-export interface KeyForm { user_id?: string; name: string; expires_at: string; group_id: string }
-export interface AccountKeyForm { name: string; expires_at: string; group_id: string }
-export interface ChannelForm { name: string; provider: string; base_url: string; key_type: 'single' | 'multi'; api_keys: string; models: string[]; test_model?: string; priority: number; groups: string[]; upstream_path?: string; upstream_format?: string; model_routes?: ModelRouteForm[]; auto_disable: boolean; request_overrides?: RequestOverrides; ua_pool?: string[]; user_email?: string; max_concurrency?: number | null }
+export interface KeyForm { user_id?: string; name: string; expires_at: string; group_id: string; subscription_id: string }
+export interface AccountKeyForm { name: string; expires_at: string; group_id: string; subscription_id: string }
+export interface ChannelForm { name: string; provider: string; base_url: string; key_type: 'single' | 'multi'; api_keys: string; models: string[]; test_model?: string; priority: number; groups: string[]; upstream_path?: string; upstream_format?: string; model_routes?: ModelRouteForm[]; auto_disable: boolean; request_overrides?: RequestOverrides; ua_pool?: string[]; user_email?: string; max_concurrency?: number | null; shared_data_only: boolean }
 export interface ProviderForm { name: string; slug: string; prefixes: string[]; priority: number; id?: string }
 export interface PaymentSettingsForm { enabled: boolean; base_url: string; merchant_id: string; merchant_key: string; public_base_url: string }
 export interface PaymentMethodForm { code: string; name: string; enabled: boolean }
 export interface PricingForm { model: string; input_per_million: number; cached_input_per_million: number; output_per_million: number; multiplier: number; currency: string; dimension_prices?: DimensionPrices }
 export interface NewApiPricingForm { base_url: string; api_key: string; price_per_quota_unit: number; currency?: string }
-export interface SubscriptionPlanForm { name: string; description: string; price: string; currency: string; billing_period: string; credit_amount: string; group_id: string; model_whitelist: string[]; max_requests_per_period: number | null; max_credit_per_period: number | null; overage_policy: OveragePolicy; model_quotas: SubscriptionPlanModelQuota[]; sort_order: number; enabled: boolean }
+export interface SubscriptionTierPriceForm { id: string; billing_period: BillingPeriod; price: string; currency: string; credit_amount: string; max_requests_per_period: number | null; max_credit_per_period: number | null; enabled: boolean; sort_order: number }
+export interface SubscriptionTierForm { id: string; level: number; name: string; description: string; credit_amount: string; group_id: string; model_whitelist: string[]; max_requests_per_period: number | null; max_credit_per_period: number | null; overage_policy: OveragePolicy; model_quotas: SubscriptionPlanModelQuota[]; prices: SubscriptionTierPriceForm[]; sort_order: number; enabled: boolean }
+export interface SubscriptionProductForm { name: string; description: string; sort_order: number; enabled: boolean; tiers: SubscriptionTierForm[] }
 export interface UserUpdate { id?: number; name?: string; email?: string; role?: string; enabled?: boolean; password?: string; balance?: number | null; note?: string; permissions?: string[]; groups?: string[]; leaderboard_opt_in?: boolean; leaderboard_mask_name?: boolean; data_usage_enabled?: boolean; max_concurrency?: number | null; inviter_id?: number | null }
 export interface UserBatchUpdateForm { enabled?: boolean; role?: string; permissions?: string[]; groups?: string[]; leaderboard_opt_in?: boolean; leaderboard_mask_name?: boolean; data_usage_enabled?: boolean; max_concurrency?: number | null }
 export interface UserCreate { name: string; email: string; password: string; role: string; enabled: boolean; permissions: string[]; groups: string[] }
@@ -1076,7 +1142,15 @@ export type SiteSettingsForm =
   Omit<AdminSiteSettings, 'has_geetest_captcha_key' | 'has_corptcha_secret' | 'has_smtp_password'>
   & { geetest_captcha_key: string; corptcha_secret: string; smtp_password: string }
 
+export interface LegalVersions { terms_version: string; privacy_version: string }
+export interface LegalConsent extends LegalVersions { accepted_at: string | null }
+export interface DataTransferConsent { terms_version: string; document: string; accepted: boolean; accepted_at: string | null }
+
 export const endpoints = {
+  getLegalConsent: () => get<LegalConsent>('/account/legal-consent'),
+  acceptLegalConsent: (versions: LegalVersions) => put<LegalConsent>('/account/legal-consent', versions),
+  getDataTransferConsent: () => get<DataTransferConsent>('/account/data-transfer-consent'),
+  acceptDataTransferConsent: (termsVersion: string) => put<DataTransferConsent>('/account/data-transfer-consent', { terms_version: termsVersion }),
   getSiteSettings: () => cachedPublic('site-settings', () => get<SiteSettings>('/site-settings'), 5 * 60 * 1000),
   getAccount: () => get<Account>('/account/me'),
   getWorkspaces: () => get<{ data: Workspace[]; current_id: string }>('/account/workspaces'),
@@ -1100,8 +1174,8 @@ export const endpoints = {
   getAccountPayment: (orderNo: string) => get<PaymentOrder>(`/account/payments/${encodeURIComponent(orderNo)}`),
   createAccountPayment: (amount: string, type: string) => post<PaymentRedirect>('/account/payments', { amount, type }),
   getAccountSubscriptions: () => get<{ data: UserSubscription[] }>('/account/subscriptions'),
-  createAccountSubscription: (planId: string, paymentType: string, autoRenew: boolean) => post<PaymentRedirect>('/account/subscriptions', { plan_id: planId, payment_type: paymentType, auto_renew: autoRenew }),
-  createBalanceSubscription: (planId: string) => post<BalanceSubscriptionResult>('/account/subscriptions/balance', { plan_id: planId }),
+  createAccountSubscription: (tierId: string, billingPeriod: BillingPeriod, paymentType: string, autoRenew: boolean) => post<PaymentRedirect>('/account/subscriptions', { tier_id: tierId, billing_period: billingPeriod, payment_type: paymentType, auto_renew: autoRenew }),
+  createBalanceSubscription: (tierId: string, billingPeriod: BillingPeriod) => post<BalanceSubscriptionResult>('/account/subscriptions/balance', { tier_id: tierId, billing_period: billingPeriod }),
   cancelAccountSubscription: (id: string) => send(`/account/subscriptions/${encodeURIComponent(id)}/cancel`, 'POST'),
   getAccountSubscriptionOrders: () => get<{ data: SubscriptionOrder[] }>('/account/subscription-orders'),
   getAccountSubscriptionOrder: (orderNo: string) => get<SubscriptionOrder>(`/account/subscription-orders/${encodeURIComponent(orderNo)}`),
@@ -1141,7 +1215,7 @@ export const endpoints = {
   createAdminModelMetadata: (form: ModelMetadataForm) => post<{ id: string; model: string }>('/admin/model-metadata', form),
   updateAdminModelMetadata: (id: string, form: ModelMetadataForm) => put<{ id: string; model: string }>(`/admin/model-metadata/${encodeURIComponent(id)}`, form),
   deleteAdminModelMetadata: (id: string) => send(`/admin/model-metadata/${encodeURIComponent(id)}`, 'DELETE'),
-  getPublicSubscriptionPlans: () => cachedPublic('subscription-plans', () => get<{ data: PublicSubscriptionPlan[] }>('/subscription-plans'), 5 * 60 * 1000),
+  getPublicSubscriptionPlans: () => cachedPublic('subscription-plans', () => get<{ data: SubscriptionProduct[] }>('/subscription-plans'), 5 * 60 * 1000),
 
   createRiskContext: (body: RiskContextBody) => post<RiskContextResult>('/auth/risk-context', body),
   getRewardRiskSettings: () => get<RewardRiskSettings>('/admin/reward-risk/settings'),
@@ -1249,6 +1323,9 @@ export const endpoints = {
   updateConversationCacheSettings: (form: ConversationCacheSettings) => put<ConversationCacheSettings>('/admin/conversation-cache/settings', form),
   getConversationLogs: (query = '') => get<Page<ConversationLog>>(`/admin/conversation-cache${query}`),
   getConversationLogDetail: (id: string) => get<ConversationLogDetail>(`/admin/conversation-cache/${encodeURIComponent(id)}`),
+  getSessionAffinity: (query = '') => get<Page<SessionAffinity>>(`/admin/session-affinity${query}`),
+  deleteSessionAffinity: (session: string, userId = '') => api<SessionAffinityPurgeResult>(`/admin/session-affinity/${encodeURIComponent(session)}${userId ? `?user_id=${encodeURIComponent(userId)}` : ''}`, { method: 'DELETE' }),
+  clearSessionAffinity: (userId = '') => api<SessionAffinityPurgeResult>('/admin/session-affinity', { method: 'DELETE', body: JSON.stringify({ user_id: userId }) }),
   getAdminSiteSettings: () => get<AdminSiteSettings>('/admin/site-settings'),
   updateAdminSiteSettings: (form: SiteSettingsForm) => put<AdminSiteSettings>('/admin/site-settings', form),
   getNotifications: () => get<{ data: Notification[] }>('/notifications'),
@@ -1263,12 +1340,12 @@ export const endpoints = {
   createPaymentMethod: (form: PaymentMethodForm) => send('/admin/payment-methods', 'POST', form),
   updatePaymentMethod: (id: string, form: PaymentMethodForm) => send(`/admin/payment-methods/${encodeURIComponent(id)}`, 'PUT', form),
   deletePaymentMethod: (id: string) => send(`/admin/payment-methods/${encodeURIComponent(id)}`, 'DELETE'),
-  getAdminSubscriptionPlans: () => get<{ data: SubscriptionPlan[] }>('/admin/subscription-plans'),
-  createSubscriptionPlan: (form: SubscriptionPlanForm) => send('/admin/subscription-plans', 'POST', form),
-  updateSubscriptionPlan: (id: string, form: SubscriptionPlanForm) => send(`/admin/subscription-plans/${encodeURIComponent(id)}`, 'PUT', form),
-  deleteSubscriptionPlan: (id: string) => send(`/admin/subscription-plans/${encodeURIComponent(id)}`, 'DELETE'),
+  getAdminSubscriptionProducts: () => get<{ data: SubscriptionProduct[] }>('/admin/subscription-products'),
+  createSubscriptionProduct: (form: SubscriptionProductForm) => send('/admin/subscription-products', 'POST', form),
+  updateSubscriptionProduct: (id: string, form: SubscriptionProductForm) => send(`/admin/subscription-products/${encodeURIComponent(id)}`, 'PUT', form),
+  deleteSubscriptionProduct: (id: string, force = false) => send(`/admin/subscription-products/${encodeURIComponent(id)}${force ? '?force=1' : ''}`, 'DELETE'),
   getAdminSubscriptions: () => get<{ data: AdminSubscription[] }>('/admin/subscriptions'),
-  batchExtendSubscriptions: (planId: string, days: number, status: 'active' | 'inactive' | 'all') => post<{ affected: number }>('/admin/subscriptions/extend', { plan_id: planId, days, status }),
+  batchExtendSubscriptions: (tierId: string, days: number, status: 'active' | 'inactive' | 'all') => post<{ affected: number }>('/admin/subscriptions/extend', { tier_id: tierId, days, status }),
   resetActiveSubscriptionQuotas: (status: 'active' | 'inactive' | 'all') => post<{ affected: number; status: string }>('/admin/subscriptions/reset-quotas', { status }),
   resetAdminSubscriptionQuota: (id: string) => post<{ ok: boolean }>(`/admin/subscriptions/${encodeURIComponent(id)}/reset-quotas`),
   getAdminUserSubscriptions: (userId: string) => get<{ data: AdminUserSubscription[] }>(`/admin/users/${encodeURIComponent(userId)}/subscriptions`),

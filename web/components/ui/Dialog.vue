@@ -31,7 +31,7 @@ const { t } = useI18n()
       <DialogContent
         :style="{ zIndex }"
         :class="cn(
-          'animate-pop fixed top-1/2 left-1/2 flex max-h-[88vh] w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2 flex-col',
+          'ui-dialog-content animate-pop fixed top-1/2 left-1/2 flex max-h-[88vh] w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2 flex-col',
           'rounded-card border border-line bg-surface/95 shadow-pop backdrop-blur-xl focus:outline-none',
           WIDTHS[size],
         )"

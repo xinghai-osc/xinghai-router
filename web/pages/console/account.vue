@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { UserRound, Link } from 'lucide-vue-next'
-import { endpoints, type OAuthConnection } from '~/src/api'
+import { endpoints, type DataTransferConsent, type OAuthConnection } from '~/src/api'
 
 definePageMeta({ layout: 'console', middleware: 'console-auth' })
 
@@ -19,6 +19,19 @@ const profileAction = useAction()
 const passwordAction = useAction()
 const preferencesAction = useAction()
 const unlinkAction = useAction()
+const transferConsentAction = useAction()
+const consentAccepted = ref(false)
+const transferConsent = useResource(() => endpoints.getDataTransferConsent(), { terms_version: '', document: '', accepted: false, accepted_at: null as string | null })
+
+async function acceptTransferConsent() {
+  const current: DataTransferConsent = transferConsent.data.value
+  if (!consentAccepted.value || !current.terms_version) return
+  const ok = await transferConsentAction.run(() => endpoints.acceptDataTransferConsent(current.terms_version))
+  if (!ok) { toast.error(t('common.actionFailed')); return }
+  consentAccepted.value = false
+  toast.success(t('console.dataTransferConsentSaved'))
+  await transferConsent.refresh()
+}
 
 const { data: connections, pending: connectionsPending, error: connectionsError, refresh: refreshConnections } = useResource(
   () => endpoints.getOAuthConnections(),
@@ -255,6 +268,20 @@ async function savePreferences() {
           {{ t('common.save') }}
         </UiButton>
         <p v-if="locked" class="mt-2 text-[13px] text-muted">{{ t('console.lockedUntilPasswordChanged') }}</p>
+      </template>
+    </UiCard>
+
+    <UiCard :title="t('console.dataTransferConsentTitle')" :description="t('console.dataTransferConsentHint')" :class="locked && 'order-5'">
+      <div v-if="transferConsent.pending.value" class="py-3"><UiSkeleton :rows="2" /></div>
+      <UiAlert v-else-if="transferConsent.error.value" tone="danger" :title="t('common.loadFailed')">{{ transferConsent.error.value }}</UiAlert>
+      <div v-else class="space-y-3">
+        <p class="text-sm leading-6 text-muted">{{ transferConsent.data.value.document }}</p>
+        <UiBadge v-if="transferConsent.data.value.accepted" tone="success">{{ t('console.dataTransferConsentAccepted') }}</UiBadge>
+        <UiCheckbox v-else v-model="consentAccepted" :label="t('console.dataTransferConsentCheck')" />
+      </div>
+      <template #footer>
+        <UiButton v-if="!transferConsent.data.value.accepted" size="sm" :loading="transferConsentAction.busy.value" :disabled="locked || !consentAccepted" @click="acceptTransferConsent">{{ t('console.dataTransferConsentAccept') }}</UiButton>
+        <UiButton v-if="transferConsent.error.value" variant="secondary" size="sm" @click="transferConsent.refresh">{{ t('common.retry') }}</UiButton>
       </template>
     </UiCard>
 

@@ -45,7 +45,8 @@ const isDisabled = computed(() => props.disabled || props.loading)
     :aria-busy="loading || undefined"
     :aria-disabled="isDisabled || undefined"
     :class="cn(
-      'liquid-button relative isolate inline-flex shrink-0 items-center overflow-hidden rounded-button font-medium whitespace-nowrap transition-[background-color,color,opacity,transform] duration-150 ease-out',
+      `ui-button ui-button-${variant}`,
+       'relative isolate inline-flex shrink-0 items-center overflow-hidden rounded-button font-medium whitespace-nowrap transition-[background-color,color,opacity,transform] duration-150 ease-out',
       'disabled:pointer-events-none disabled:opacity-45 aria-disabled:pointer-events-none aria-disabled:opacity-45',
       VARIANTS[variant],
       SIZES[size],
@@ -60,7 +61,7 @@ const isDisabled = computed(() => props.disabled || props.loading)
 </template>
 
 <style scoped>
-.liquid-button::after {
+.ui-button::after {
   content: '';
   position: absolute;
   z-index: 0;
@@ -76,13 +77,13 @@ const isDisabled = computed(() => props.disabled || props.loading)
   transition: opacity 150ms ease-out, transform 150ms ease-out;
 }
 
-.liquid-button:hover::after {
+.ui-button:hover::after {
   opacity: 0.08;
   transform: translate(-50%, -50%) scale(1);
 }
 
-.liquid-button:disabled::after,
-.liquid-button[aria-disabled='true']::after {
+.ui-button:disabled::after,
+.ui-button[aria-disabled='true']::after {
   display: none;
 }
 </style>

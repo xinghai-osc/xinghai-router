@@ -10,8 +10,8 @@ import (
 )
 
 type keyContext struct {
-	userID, keyID, groupID, workspaceID string
-	dataUsageEnabled                    bool
+	userID, keyID, groupID, workspaceID, subscriptionID string
+	dataUsageEnabled                                    bool
 }
 type contextKey struct{}
 
@@ -43,6 +43,10 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("GET /public/activity", s.account(s.publicActivity))
 	mux.Handle("POST /auth/logout", s.account(s.logout))
 	mux.Handle("POST /auth/reauthenticate", s.account(s.reauthenticate))
+	mux.Handle("GET /account/legal-consent", s.account(s.getLegalConsent))
+	mux.Handle("PUT /account/legal-consent", s.account(s.putLegalConsent))
+	mux.Handle("GET /account/data-transfer-consent", s.account(s.getDataTransferConsent))
+	mux.Handle("PUT /account/data-transfer-consent", s.account(s.putDataTransferConsent))
 	mux.Handle("GET /account/me", s.account(s.accountMe))
 	mux.Handle("PUT /account/profile", s.account(s.updateAccountProfile))
 	mux.Handle("PUT /account/password", s.account(s.changeAccountPassword))
@@ -101,10 +105,10 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("GET /account/invoices", s.account(s.accountInvoices))
 	mux.Handle("GET /account/invoices/{id}/pdf", s.account(s.accountInvoicePDF))
 	mux.Handle("POST /account/invoices/{id}/cancel", s.account(s.accountInvoiceCancel))
-	mux.Handle("GET /admin/subscription-plans", s.permission("system.manage", s.listSubscriptionPlans))
-	mux.Handle("POST /admin/subscription-plans", s.permission("system.manage", s.createSubscriptionPlan))
-	mux.Handle("PUT /admin/subscription-plans/{id}", s.permission("system.manage", s.updateSubscriptionPlan))
-	mux.Handle("DELETE /admin/subscription-plans/{id}", s.permission("system.manage", s.deleteSubscriptionPlan))
+	mux.Handle("GET /admin/subscription-products", s.permission("system.manage", s.listSubscriptionProducts))
+	mux.Handle("POST /admin/subscription-products", s.permission("system.manage", s.createSubscriptionProduct))
+	mux.Handle("PUT /admin/subscription-products/{id}", s.permission("system.manage", s.updateSubscriptionProduct))
+	mux.Handle("DELETE /admin/subscription-products/{id}", s.permission("system.manage", s.deleteSubscriptionProduct))
 	mux.Handle("GET /admin/subscriptions", s.permission("users.read", s.adminListSubscriptions))
 	mux.Handle("POST /admin/subscriptions/extend", s.permission("system.manage", s.batchExtendSubscriptions))
 	mux.Handle("POST /admin/subscriptions/reset-quotas", s.permission("system.manage", s.resetActiveSubscriptionQuotas))
@@ -174,6 +178,9 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("PUT /admin/conversation-cache/settings", s.permission("system.manage", s.updateConversationCacheSettings))
 	mux.Handle("GET /admin/conversation-cache", s.permission("logs.read", s.listConversationCache))
 	mux.Handle("GET /admin/conversation-cache/{id}", s.permission("logs.read", s.getConversationCacheDetail))
+	mux.Handle("GET /admin/session-affinity", s.permission("logs.read", s.listSessionAffinity))
+	mux.Handle("DELETE /admin/session-affinity", s.permission("system.manage", s.clearSessionAffinity))
+	mux.Handle("DELETE /admin/session-affinity/{session}", s.permission("system.manage", s.deleteSessionAffinity))
 	mux.Handle("GET /admin/request-audits", s.permission("logs.read", s.listRequestContentAudits))
 	mux.Handle("GET /admin/content-policy/settings", s.permission("system.manage", s.getContentPolicySettings))
 	mux.Handle("PUT /admin/content-policy/settings", s.permission("system.manage", s.updateContentPolicySettings))
@@ -339,7 +346,7 @@ func (s *Service) loadAPIKeyContext(ctx context.Context, token string) (keyConte
 	if token == "" {
 		return key, errInvalid
 	}
-	err := s.db.QueryRow(ctx, `select k.user_id,k.id,coalesce(k.group_id::text,''),u.data_usage_enabled,k.workspace_id::text from api_keys k join users u on u.id=k.user_id join workspaces ws on ws.id=k.workspace_id and ws.archived_at is null join workspace_members wm on wm.workspace_id=k.workspace_id and wm.user_id=k.user_id where k.secret_hash=$1 and k.revoked_at is null and (k.expires_at is null or k.expires_at>now()) and u.enabled and (k.group_id is null or exists(select 1 from groups g where g.id=k.group_id and g."public") or exists(select 1 from user_groups ug where ug.user_id=k.user_id and ug.group_id=k.group_id))`, hashSecret(token)).Scan(&key.userID, &key.keyID, &key.groupID, &key.dataUsageEnabled, &key.workspaceID)
+	err := s.db.QueryRow(ctx, `select k.user_id,k.id,coalesce(k.group_id::text,''),u.data_usage_enabled,k.workspace_id::text,coalesce(k.subscription_id::text,'') from api_keys k join users u on u.id=k.user_id join workspaces ws on ws.id=k.workspace_id and ws.archived_at is null join workspace_members wm on wm.workspace_id=k.workspace_id and wm.user_id=k.user_id where k.secret_hash=$1 and k.revoked_at is null and (k.expires_at is null or k.expires_at>now()) and u.enabled and (k.group_id is null or exists(select 1 from groups g where g.id=k.group_id and g."public") or exists(select 1 from user_groups ug where ug.user_id=k.user_id and ug.group_id=k.group_id))`, hashSecret(token)).Scan(&key.userID, &key.keyID, &key.groupID, &key.dataUsageEnabled, &key.workspaceID, &key.subscriptionID)
 	return key, err
 }
 
@@ -428,7 +435,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	json.NewEncoder(w).Encode(v)
 }
 func writeError(w http.ResponseWriter, status int, code, msg string) {
-	writeJSON(w, status, map[string]any{"error": map[string]string{"message": msg, "type": code, "code": code}})
+	writeJSON(w, status, map[string]any{"error": map[string]string{"message": msg, "type": code, "code": code, "request_id": w.Header().Get("X-Request-ID")}})
 }
 func decode(r *http.Request, target any) error {
 	d := json.NewDecoder(r.Body)

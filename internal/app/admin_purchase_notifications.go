@@ -31,7 +31,7 @@ func (s *Service) sendPurchaseNotifications(ctx context.Context, kind, orderNo, 
 	}
 	var userEmail string
 	if kind == "subscription" {
-		if err := s.db.QueryRow(ctx, `select u.id::text,u.email,p.name from subscription_orders o join users u on u.id=o.user_id join subscription_plans p on p.id=o.plan_id where o.order_no=$1`, orderNo).Scan(&userID, &userEmail, &planName); err != nil {
+		if err := s.db.QueryRow(ctx, `select u.id::text,u.email,coalesce(o.plan_name,'') from subscription_orders o join users u on u.id=o.user_id where o.order_no=$1`, orderNo).Scan(&userID, &userEmail, &planName); err != nil {
 			return fmt.Errorf("load subscription purchaser: %w", err)
 		}
 	} else if err := s.db.QueryRow(ctx, `select email from users where id=$1`, userID).Scan(&userEmail); err != nil && err != pgx.ErrNoRows {

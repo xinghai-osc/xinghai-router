@@ -58,7 +58,7 @@ func (s *Service) listAdminOrders(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.db.Query(r.Context(), `select o.order_no,o.order_type,o.payment_type,o.amount,o.status,o.provider_trade_no,o.plan_name,o.period_kind,o.paid_at,o.created_at,o.user_id,u.email,u.name from (
 		select po.order_no,'payment' as order_type,po.payment_type,po.amount::text as amount,po.status,coalesce(po.provider_trade_no,'') as provider_trade_no,'' as plan_name,'' as period_kind,po.paid_at,po.created_at,po.user_id from payment_orders po
 		union all
-		select so.order_no,'subscription' as order_type,so.payment_type,so.amount::text as amount,so.status,coalesce(so.provider_trade_no,'') as provider_trade_no,p.name as plan_name,so.period_kind,so.paid_at,so.created_at,so.user_id from subscription_orders so join subscription_plans p on p.id=so.plan_id
+		select so.order_no,'subscription' as order_type,so.payment_type,so.amount::text as amount,so.status,coalesce(so.provider_trade_no,'') as provider_trade_no,coalesce(so.plan_name,'') as plan_name,so.period_kind,so.paid_at,so.created_at,so.user_id from subscription_orders so
 	) o join users u on u.id=o.user_id`+where+` order by o.created_at desc limit $`+strconv.Itoa(len(args)-1)+` offset $`+strconv.Itoa(len(args)), args...)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not load orders")
@@ -88,7 +88,7 @@ func (s *Service) accountOrders(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.db.Query(r.Context(), `select o.order_no,o.order_type,o.payment_type,o.amount,o.status,o.provider_trade_no,o.plan_name,o.period_kind,o.paid_at,o.created_at from (
 		select po.order_no,'payment' as order_type,po.payment_type,po.amount::text as amount,po.status,coalesce(po.provider_trade_no,'') as provider_trade_no,'' as plan_name,'' as period_kind,po.paid_at,po.created_at from payment_orders po where po.user_id=$1
 		union all
-		select so.order_no,'subscription' as order_type,so.payment_type,so.amount::text as amount,so.status,coalesce(so.provider_trade_no,'') as provider_trade_no,p.name as plan_name,so.period_kind,so.paid_at,so.created_at from subscription_orders so join subscription_plans p on p.id=so.plan_id where so.user_id=$1
+		select so.order_no,'subscription' as order_type,so.payment_type,so.amount::text as amount,so.status,coalesce(so.provider_trade_no,'') as provider_trade_no,coalesce(so.plan_name,'') as plan_name,so.period_kind,so.paid_at,so.created_at from subscription_orders so where so.user_id=$1
 	) o order by o.created_at desc limit 100`, account.userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not load orders")

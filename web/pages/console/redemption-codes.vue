@@ -2,15 +2,17 @@
 import { Plus, Ticket, Trash2 } from 'lucide-vue-next'
 import {
   endpoints,
+  type BillingPeriod,
   type Page,
   type RedemptionCode,
   type RedemptionCodeForm,
   type RedemptionCodeRedemption,
   type RedemptionCodeUpdate,
   type RedemptionRewardType,
-  type SubscriptionPlan,
+  type SubscriptionProduct,
 } from '~/src/api'
 import { formatDateTime, formatMoney } from '~/src/format'
+import { periodLabel, tierOptions } from '~/src/subscriptions'
 
 definePageMeta({ layout: 'console', middleware: 'console-auth' })
 
@@ -29,12 +31,10 @@ const { data: codesData, pending, error, refresh } = useResource(
   { data: [] as RedemptionCode[], total: 0, page: 1, page_size: PAGE_SIZE },
 )
 
-const { data: plansData } = useResource(
-  () => endpoints.getAdminSubscriptionPlans(),
-  { data: [] as SubscriptionPlan[] },
+const { data: productsData } = useResource(
+  () => endpoints.getAdminSubscriptionProducts(),
+  { data: [] as SubscriptionProduct[] },
 )
-
-const plans = computed(() => plansData.value.data)
 
 const totalPages = computed(() => Math.max(1, Math.ceil(codesData.value.total / PAGE_SIZE)))
 
@@ -70,7 +70,8 @@ function rewardLabel(type: RedemptionRewardType): string {
 function resetCreate() {
   form.reward_type = 'balance'
   form.amount = ''
-  form.plan_id = ''
+  form.tier_id = ''
+  form.billing_period = 'month'
   form.period_days = ''
   form.max_uses = '1'
   form.quantity = '1'
@@ -82,7 +83,8 @@ function resetCreate() {
 const form = reactive({
   reward_type: 'balance' as RedemptionRewardType,
   amount: '',
-  plan_id: '',
+  tier_id: '',
+  billing_period: 'month' as BillingPeriod,
   period_days: '',
   max_uses: '1',
   quantity: '1',
@@ -96,7 +98,17 @@ const rewardTypeOptions = computed(() => [
   { value: 'subscription', label: t('admin.redemptionFormRewardTypeSubscription') },
 ])
 
-const planOptions = computed(() => plans.value.map(plan => ({ value: plan.id, label: plan.name })))
+const tierChoices = computed(() => tierOptions(productsData.value.data, true))
+const tierSelectOptions = computed(() => tierChoices.value.map(option => ({ value: option.value, label: option.label })))
+const selectedTier = computed(() => tierChoices.value.find(option => option.value === form.tier_id) ?? null)
+const billingPeriodOptions = computed(() =>
+  (selectedTier.value?.periods ?? []).map(period => ({ value: period, label: periodLabel(t, period, 'console') })),
+)
+
+watch(() => form.tier_id, () => {
+  const [first] = selectedTier.value?.periods ?? []
+  if (first) form.billing_period = first
+})
 
 async function submitCreate() {
   createError.value = ''
@@ -116,15 +128,19 @@ async function submitCreate() {
       createError.value = t('admin.redemptionAmount')
       return
     }
-  } else if (!form.plan_id) {
-    createError.value = t('admin.redemptionFormPlan')
+  } else if (!form.tier_id) {
+    createError.value = t('admin.redemptionTierRequired')
+    return
+  } else if (!form.billing_period) {
+    createError.value = t('admin.billingPeriodRequired')
     return
   }
 
   const payload: RedemptionCodeForm = {
     reward_type: form.reward_type,
     amount: form.reward_type === 'balance' ? Number(form.amount).toFixed(2) : '',
-    plan_id: form.reward_type === 'subscription' ? form.plan_id : '',
+    tier_id: form.reward_type === 'subscription' ? form.tier_id : '',
+    billing_period: form.billing_period,
     period_days: form.period_days ? Number(form.period_days) : null,
     max_uses: maxUses,
     quantity,
@@ -251,7 +267,7 @@ function redeemLink(code: string) {
               <th>{{ t('admin.redemptionCode') }}</th>
               <th>{{ t('admin.redemptionRewardType') }}</th>
               <th class="num">{{ t('admin.redemptionAmount') }}</th>
-              <th>{{ t('admin.redemptionPlan') }}</th>
+              <th>{{ t('admin.tier') }}</th>
               <th class="num">{{ t('admin.redemptionUsedCount') }}</th>
               <th>{{ t('admin.redemptionStatus') }}</th>
               <th class="num">{{ t('admin.redemptionExpiresAt') }}</th>
@@ -281,7 +297,7 @@ function redeemLink(code: string) {
                 <span v-if="code.reward_type === 'balance'">{{ formatMoney(code.amount) }}</span>
                 <span v-else class="text-muted">—</span>
               </td>
-              <td class="text-muted">{{ code.plan_name || '—' }}</td>
+              <td class="text-muted">{{ code.tier_name || '—' }}</td>
               <td class="num">{{ code.used_count }} / {{ code.max_uses }}</td>
               <td>
                 <UiBadge :tone="code.enabled ? 'success' : 'neutral'" dot>
@@ -344,8 +360,15 @@ function redeemLink(code: string) {
           </UiField>
 
           <template v-else>
-            <UiField :label="t('admin.redemptionFormPlan')" required>
-              <UiSelect v-model="form.plan_id" :options="planOptions" :placeholder="t('common.selectPlaceholder')" />
+            <UiField :label="t('admin.redemptionTier')" required>
+              <UiSelect v-model="form.tier_id" :options="tierSelectOptions" :placeholder="t('common.selectPlaceholder')" />
+            </UiField>
+            <UiField
+              :label="t('admin.redemptionBillingPeriod')"
+              :hint="t('admin.redemptionBillingPeriodHint')"
+              required
+            >
+              <UiSelect v-model="form.billing_period" :options="billingPeriodOptions" />
             </UiField>
             <UiField :label="t('admin.redemptionPeriodDays')" :hint="t('admin.redemptionPeriodDaysHint')">
               <UiInput v-model="form.period_days" type="number" placeholder="30" />
@@ -472,7 +495,7 @@ function redeemLink(code: string) {
               <tr>
                 <th>{{ t('admin.redemptionRedemptionUser') }}</th>
                 <th class="num">{{ t('admin.redemptionRedemptionAmount') }}</th>
-                <th>{{ t('admin.redemptionRedemptionPlan') }}</th>
+                <th>{{ t('admin.tier') }}</th>
                 <th class="num">{{ t('admin.redemptionRedemptionTime') }}</th>
               </tr>
             </thead>
@@ -483,7 +506,7 @@ function redeemLink(code: string) {
                   <p v-if="item.user_name" class="text-[13px] text-muted">{{ item.user_name }}</p>
                 </td>
                 <td class="num">{{ item.amount ? formatMoney(item.amount) : '—' }}</td>
-                <td class="text-muted">{{ item.plan_name || '—' }}</td>
+                <td class="text-muted">{{ item.tier_name || '—' }}</td>
                 <td class="num text-muted">{{ formatDateTime(item.created_at) }}</td>
               </tr>
             </tbody>

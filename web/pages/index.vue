@@ -2,7 +2,7 @@
 const { settings } = useSiteSettings()
 const { t } = useI18n()
 const { models, loading: catalogLoading, error: catalogError, loadCatalog } = useCatalog()
-const { plans, loading: plansLoading, error: plansError, loadPlans } = usePlans()
+const { products, loading: plansLoading, error: plansError, loadPlans } = usePlans()
 const siteOrigin = useSiteOrigin()
 const { target: catalogTarget, started: catalogStarted } = useDeferredLoad(() => { void loadCatalog() })
 const { target: plansTarget, started: plansStarted } = useDeferredLoad(() => { void loadPlans() })
@@ -43,7 +43,7 @@ usePageSeo({
         </div>
 
         <div class="mt-12">
-          <SitePlanCards :plans="plans" :loading="plansLoading || !plansStarted" :error="plansError" @retry="loadPlans(true)" />
+          <SitePlanCards :products="products" :loading="plansLoading || !plansStarted" :error="plansError" @retry="loadPlans(true)" />
         </div>
       </div>
     </section>

@@ -542,8 +542,8 @@ func (s *Service) accountInvoiceEligibleOrders(w http.ResponseWriter, r *http.Re
     select po.order_no, coalesce(po.provider_trade_no, po.order_no) as inv_no, po.amount::text as amount, po.paid_at, 'payment' as order_type, '' as plan_name
     from payment_orders po where po.user_id=$1 and po.status='paid' and po.paid_at is not null
     union all
-    select so.order_no, coalesce(so.provider_trade_no, so.order_no), so.amount::text, so.paid_at, 'subscription', p.name
-    from subscription_orders so join subscription_plans p on p.id=so.plan_id where so.user_id=$1 and so.status='paid' and so.paid_at is not null
+    select so.order_no, coalesce(so.provider_trade_no, so.order_no), so.amount::text, so.paid_at, 'subscription', coalesce(so.plan_name,'')
+    from subscription_orders so where so.user_id=$1 and so.status='paid' and so.paid_at is not null
   ) o
   where not exists (
     select 1 from invoice_application_orders io
@@ -942,8 +942,8 @@ func (s *Service) resolveInvoiceableOrders(ctx context.Context, userID string, o
 		select po.order_no, coalesce(po.provider_trade_no, po.order_no) as inv_no, po.amount::text as amount, 'payment' as order_type, '' as plan_name from payment_orders po
 		where po.user_id=$1 and po.status='paid' and po.paid_at is not null
 		union all
-		select so.order_no, coalesce(so.provider_trade_no, so.order_no), so.amount::text, 'subscription', p.name from subscription_orders so
-		join subscription_plans p on p.id=so.plan_id where so.user_id=$1 and so.status='paid' and so.paid_at is not null
+		select so.order_no, coalesce(so.provider_trade_no, so.order_no), so.amount::text, 'subscription', coalesce(so.plan_name,'') from subscription_orders so
+		where so.user_id=$1 and so.status='paid' and so.paid_at is not null
 	) o where o.inv_no = any($2)`, userID, orderNos)
 	if err != nil {
 		return nil, "", err

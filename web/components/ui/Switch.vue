@@ -21,7 +21,7 @@ const invalid = computed(() => Boolean(field?.invalid.value))
     :aria-describedby="describedBy"
     :aria-invalid="invalid || undefined"
     :aria-required="field?.required.value || undefined"
-    class="inline-flex h-[22px] w-[38px] shrink-0 cursor-pointer items-center rounded-full border border-transparent bg-line-strong p-0.5 transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-clay disabled:cursor-not-allowed disabled:opacity-45 data-[state=checked]:bg-clay"
+    class="ui-switch inline-flex h-[22px] w-[38px] shrink-0 cursor-pointer items-center rounded-full border border-transparent bg-line-strong p-0.5 transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-clay disabled:cursor-not-allowed disabled:opacity-45 data-[state=checked]:bg-clay"
   >
     <!-- The thumb sits on clay or line-strong in every theme, so plain white is
          the one colour that stays legible; it is not a missing token. -->

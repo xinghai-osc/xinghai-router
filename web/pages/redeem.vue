@@ -126,7 +126,9 @@ async function submit() {
               </UiInput>
             </UiField>
 
-            <UiAlert v-if="result" tone="success" :title="resultText" />
+            <UiAlert v-if="result" tone="success" :title="resultText">
+              <p v-if="result.tier_name" class="truncate">{{ result.tier_name }}</p>
+            </UiAlert>
 
             <UiButton type="submit" size="lg" block :loading="busy">
               {{ t('site.redeemSubmit') }}

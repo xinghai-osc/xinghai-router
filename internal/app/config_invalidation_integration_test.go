@@ -41,7 +41,7 @@ func TestIntegrationConfigInvalidationTransactions(t *testing.T) {
 	defer db.Close()
 	resetIntegrationDatabase(t, db)
 	ctx := context.Background()
-	migration, err := migrations.ReadFile("migrations/098_config_invalidation.sql")
+	migration, err := migrations.ReadFile("migrations/115_subscription_invalidation.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,8 +93,8 @@ func TestIntegrationConfigInvalidationTransactions(t *testing.T) {
 	for _, table := range []string{
 		"pricing_rules", "pricing_tiers", "pricing_time_rules", "exchange_rates", "groups",
 		"channel_groups", "user_groups", "model_routes", "model_providers", "site_settings",
-		"content_policy_rules", "quota_limits", "channel_quota_limits", "subscription_plans",
-		"subscription_plan_model_quotas", "channels", "channel_api_keys", "users", "user_subscriptions",
+		"content_policy_rules", "quota_limits", "channel_quota_limits",
+		"subscriptions", "subscription_tiers", "subscription_tier_prices", "subscription_tier_model_quotas", "channels", "channel_api_keys", "users", "user_subscriptions",
 	} {
 		var count int
 		if err := db.QueryRow(ctx, `select count(*) from pg_trigger where tgrelid=$1::regclass and not tgisinternal and tgname like 'config_invalidation%'`, table).Scan(&count); err != nil {
@@ -116,14 +116,17 @@ func TestIntegrationConfigInvalidationIgnoresRuntimeUpdates(t *testing.T) {
 	if err := db.QueryRow(ctx, `insert into channels(name,base_url,api_key) values('invalidation','https://example.invalid','fake-key') returning id`).Scan(&channelID); err != nil {
 		t.Fatal(err)
 	}
-	var keyID, planID, subscriptionID string
+	var keyID, productID, tierID, subscriptionID string
 	if err := db.QueryRow(ctx, `insert into channel_api_keys(channel_id,key_encrypted) values($1,'fake-key') returning id`, channelID).Scan(&keyID); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.QueryRow(ctx, `insert into subscription_plans(id,name,billing_period) values(gen_random_uuid(),'invalidation','month') returning id`).Scan(&planID); err != nil {
+	if err := db.QueryRow(ctx, `insert into subscriptions(id,name) values(gen_random_uuid(),'invalidation') returning id::text`).Scan(&productID); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.QueryRow(ctx, `insert into user_subscriptions(id,user_id,plan_id,status,remaining_requests) values(gen_random_uuid(),$1,$2,'active',100) returning id`, userID, planID).Scan(&subscriptionID); err != nil {
+	if err := db.QueryRow(ctx, `insert into subscription_tiers(id,subscription_id,level,name) values(gen_random_uuid(),$1,1,'') returning id::text`, productID).Scan(&tierID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(ctx, `insert into user_subscriptions(id,user_id,tier_id,status,remaining_requests,billing_period) values(gen_random_uuid(),$1,$2,'active',100,'month') returning id::text`, userID, tierID).Scan(&subscriptionID); err != nil {
 		t.Fatal(err)
 	}
 	conn, err := pgx.ConnectConfig(ctx, db.Config().ConnConfig.Copy())

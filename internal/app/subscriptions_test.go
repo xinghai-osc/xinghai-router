@@ -60,54 +60,100 @@ func TestFormatCredit(t *testing.T) {
 	}
 }
 
-func TestReadSubscriptionPlanInputValid(t *testing.T) {
-	body := `{"name":"Pro","description":"desc","price":"10.00","billing_period":"month","credit_amount":"5","model_whitelist":["gpt-4"],"sort_order":1}`
-	req := httptest.NewRequest(http.MethodPost, "/admin/subscription-plans", strings.NewReader(body))
-	plan, err := readSubscriptionPlanInput(req, &Service{}, "")
-	if err != nil {
-		t.Fatal(err)
+func TestSubscriptionDisplayName(t *testing.T) {
+	if got := subscriptionDisplayName("Pro", ""); got != "Pro" {
+		t.Fatalf("single tier display = %q, want Pro", got)
 	}
-	if plan.Name != "Pro" || plan.BillingPeriod != "month" || plan.Price != "10.00" || plan.CreditAmount != "5" || plan.Currency != "CNY" {
-		t.Fatalf("unexpected plan: %+v", plan)
+	if got := subscriptionDisplayName("Pro", "Flagship"); got != "Pro · Flagship" {
+		t.Fatalf("multi tier display = %q, want Pro · Flagship", got)
 	}
-	if len(plan.ModelWhitelist) != 1 || plan.ModelWhitelist[0] != "gpt-4" || !plan.Enabled {
-		t.Fatalf("unexpected whitelist/enabled: %+v", plan)
+	if got := subscriptionDisplayName("Pro", "Pro"); got != "Pro" {
+		t.Fatalf("duplicate display = %q, want Pro", got)
 	}
 }
 
-func TestReadSubscriptionPlanInputRejectsInvalid(t *testing.T) {
+func TestReadSubscriptionProductInputValid(t *testing.T) {
+	body := `{"name":"Pro","description":"desc","sort_order":1,"tiers":[{"level":1,"credit_amount":"5","model_whitelist":["gpt-4"],"max_requests_per_period":100,"max_credit_per_period":50,"prices":[{"billing_period":"month","price":"10.00","currency":"cny","credit_amount":"2"},{"billing_period":"year","price":"100.00","max_requests_per_period":1200}]}]}`
+	req := httptest.NewRequest(http.MethodPost, "/admin/subscription-products", strings.NewReader(body))
+	product, err := readSubscriptionProductInput(req, &Service{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if product.Name != "Pro" || !product.Enabled || len(product.Tiers) != 1 {
+		t.Fatalf("unexpected product: %+v", product)
+	}
+	tier := product.Tiers[0]
+	if tier.Level != 1 || tier.CreditAmount != "5" || tier.MaxRequests == nil || *tier.MaxRequests != 100 {
+		t.Fatalf("unexpected tier: %+v", tier)
+	}
+	if len(tier.Prices) != 2 {
+		t.Fatalf("prices = %+v, want 2 entries", tier.Prices)
+	}
+	if tier.Prices[0].BillingPeriod != "month" || tier.Prices[0].Price != "10.00" || tier.Prices[0].Currency != "CNY" || tier.Prices[0].CreditAmount != "2" {
+		t.Fatalf("unexpected monthly price: %+v", tier.Prices[0])
+	}
+	if tier.Prices[1].MaxRequests == nil || *tier.Prices[1].MaxRequests != 1200 || tier.Prices[1].CreditAmount != "" {
+		t.Fatalf("unexpected yearly override: %+v", tier.Prices[1])
+	}
+}
+
+func TestReadSubscriptionProductInputDefaults(t *testing.T) {
+	body := `{"name":"Pro","tiers":[{"level":1,"prices":[{"billing_period":"month","price":"10"}]}]}`
+	req := httptest.NewRequest(http.MethodPost, "/admin/subscription-products", strings.NewReader(body))
+	product, err := readSubscriptionProductInput(req, &Service{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(product.Tiers) != 1 || product.Tiers[0].CreditAmount != "" {
+		t.Fatalf("unexpected product: %+v", product)
+	}
+	if product.Tiers[0].OveragePolicy != "allow_wallet" {
+		t.Fatalf("overage policy = %q, want default allow_wallet", product.Tiers[0].OveragePolicy)
+	}
+}
+
+func TestReadSubscriptionProductInputRejectsInvalid(t *testing.T) {
 	cases := []string{
 		`{}`,
-		`{"name":"","price":"1","billing_period":"month","credit_amount":"0"}`,
-		`{"name":"Plan","price":"1","billing_period":"fortnight","credit_amount":"0"}`,
-		`{"name":"Plan","price":"-1","billing_period":"month","credit_amount":"0"}`,
-		`{"name":"Plan","price":"1","billing_period":"month","credit_amount":"abc"}`,
-		`{"name":"Plan","price":"1","billing_period":"month","credit_amount":"0","currency":"TOOLONGCODE"}`,
-		`{"name":"Plan","price":"1","billing_period":"month","credit_amount":"0","model_whitelist":[""]}`,
-		`{"name":"Plan","price":"100000.01","billing_period":"month","credit_amount":"0"}`,
-		`{"name":"Plan","price":"1","billing_period":"month","credit_amount":"1000000.01"}`,
-		`{"name":"Plan","price":"1","billing_period":"month","credit_amount":"0","sort_order":10001}`,
-		`{"name":"Plan","price":"1","billing_period":"month","credit_amount":"0","max_requests_per_period":-1}`,
-		`{"name":"Plan","price":"1","billing_period":"month","credit_amount":"0","description":"` + strings.Repeat("d", 2001) + `"}`,
+		`{"name":""}`,
+		`{"name":"` + strings.Repeat("n", 101) + `"}`,
+		`{"name":"Pro","sort_order":10001}`,
+		`{"name":"Pro","tiers":[{"level":0}]}`,
+		`{"name":"Pro","tiers":[{"level":1},{"level":1}]}`,
+		`{"name":"Pro","tiers":[{"level":1,"name":"a"},{"level":2,"name":"a"}]}`,
+		`{"name":"Pro","tiers":[{"level":1,"name":"a","prices":[{"billing_period":"month","price":"1"}]},{"level":2}]}`,
+		`{"name":"Pro","tiers":[{"level":1,"prices":[{"billing_period":"fortnight","price":"1"}]}]}`,
+		`{"name":"Pro","tiers":[{"level":1,"prices":[{"billing_period":"month","price":"-1"}]}]}`,
+		`{"name":"Pro","tiers":[{"level":1,"prices":[{"billing_period":"month","price":"100000.01"}]}]}`,
+		`{"name":"Pro","tiers":[{"level":1,"prices":[{"billing_period":"month","price":"1","currency":"TOOLONGCODE"}]}]}`,
+		`{"name":"Pro","tiers":[{"level":1,"prices":[{"billing_period":"month","price":"1"},{"billing_period":"month","price":"2"}]}]}`,
+		`{"name":"Pro","tiers":[{"level":1,"credit_amount":"1000000.01"}]}`,
+		`{"name":"Pro","tiers":[{"level":1,"overage_policy":"refund"}]}`,
+		`{"name":"Pro","tiers":[{"level":1,"model_whitelist":[""]}]}`,
+		`{"name":"Pro","tiers":[{"level":1,"max_requests_per_period":-1}]}`,
+		`{"name":"Pro","tiers":[{"level":1,"model_quotas":[{"model":"gpt-4o"}]}]}`,
+		`{"name":"Pro","tiers":[{"level":1,"model_quotas":[{"model":""}]}]}`,
+		`{"name":"Pro","tiers":[{"level":1,"model_quotas":[{"model":"gpt-4o","max_requests_per_period":1},{"model":"gpt-4o","max_requests_per_period":2}]}]}`,
+		`{"name":"Pro","description":"` + strings.Repeat("d", 2001) + `"}`,
 		`not-json`,
 	}
 	for _, body := range cases {
-		req := httptest.NewRequest(http.MethodPost, "/admin/subscription-plans", strings.NewReader(body))
-		if _, err := readSubscriptionPlanInput(req, &Service{}, ""); err == nil {
+		req := httptest.NewRequest(http.MethodPost, "/admin/subscription-products", strings.NewReader(body))
+		if _, err := readSubscriptionProductInput(req, &Service{}); err == nil {
 			t.Fatalf("expected rejection for body %s", body)
 		}
 	}
 }
 
-func TestCreateSubscriptionPlanRejectsInvalidBeforeDatabase(t *testing.T) {
+func TestCreateSubscriptionProductRejectsInvalidBeforeDatabase(t *testing.T) {
 	for _, body := range []string{
 		`{}`,
-		`{"name":"x","price":"1","billing_period":"fortnight","credit_amount":"0"}`,
-		`{"name":"x","price":"bad","billing_period":"month","credit_amount":"0"}`,
+		`{"name":"x","tiers":[{"level":1,"prices":[{"billing_period":"fortnight","price":"1"}]}]}`,
+		`{"name":"x","tiers":[{"level":1,"prices":[{"billing_period":"month","price":"bad"}]}]}`,
 	} {
 		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPost, "/admin/subscription-plans", strings.NewReader(body))
-		(&Service{}).createSubscriptionPlan(rec, req)
+		req := httptest.NewRequest(http.MethodPost, "/admin/subscription-products", strings.NewReader(body))
+		(&Service{}).createSubscriptionProduct(rec, req)
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("body %s status = %d, want %d", body, rec.Code, http.StatusBadRequest)
 		}
@@ -132,73 +178,31 @@ func TestNullableCredit(t *testing.T) {
 	}
 }
 
-func TestReadSubscriptionPlanInputUnlimitedCredit(t *testing.T) {
-	body := `{"name":"Pro","price":"10.00","billing_period":"month"}`
-	req := httptest.NewRequest(http.MethodPost, "/admin/subscription-plans", strings.NewReader(body))
-	plan, err := readSubscriptionPlanInput(req, &Service{}, "")
+func TestReadSubscriptionProductInputUnlimitedCredit(t *testing.T) {
+	body := `{"name":"Pro","tiers":[{"level":1,"prices":[{"billing_period":"month","price":"10.00"}]}]}`
+	req := httptest.NewRequest(http.MethodPost, "/admin/subscription-products", strings.NewReader(body))
+	product, err := readSubscriptionProductInput(req, &Service{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.CreditAmount != "" {
-		t.Fatalf("credit amount = %q, want empty for unlimited", plan.CreditAmount)
-	}
-	if plan.OveragePolicy != "allow_wallet" {
-		t.Fatalf("overage policy = %q, want default allow_wallet", plan.OveragePolicy)
+	if product.Tiers[0].CreditAmount != "" {
+		t.Fatalf("credit amount = %q, want empty for unlimited", product.Tiers[0].CreditAmount)
 	}
 }
 
-func TestReadSubscriptionPlanInputOveragePolicy(t *testing.T) {
-	body := `{"name":"Pro","price":"10.00","billing_period":"month","overage_policy":"block"}`
-	req := httptest.NewRequest(http.MethodPost, "/admin/subscription-plans", strings.NewReader(body))
-	plan, err := readSubscriptionPlanInput(req, &Service{}, "")
+func TestReadSubscriptionProductInputModelQuotas(t *testing.T) {
+	body := `{"name":"Pro","tiers":[{"level":1,"model_quotas":[{"model":"gpt-4o","max_requests_per_period":100,"max_credit_per_period":100000}]}]}`
+	req := httptest.NewRequest(http.MethodPost, "/admin/subscription-products", strings.NewReader(body))
+	product, err := readSubscriptionProductInput(req, &Service{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.OveragePolicy != "block" {
-		t.Fatalf("overage policy = %q, want block", plan.OveragePolicy)
+	quotas := product.Tiers[0].ModelQuotas
+	if len(quotas) != 1 {
+		t.Fatalf("model quotas = %+v, want 1 entry", quotas)
 	}
-	invalid := `{"name":"Pro","price":"10.00","billing_period":"month","overage_policy":"refund"}`
-	req = httptest.NewRequest(http.MethodPost, "/admin/subscription-plans", strings.NewReader(invalid))
-	if _, err := readSubscriptionPlanInput(req, &Service{}, ""); err == nil {
-		t.Fatal("expected rejection for invalid overage_policy")
-	}
-}
-
-func TestReadSubscriptionPlanInputModelQuotas(t *testing.T) {
-	body := `{"name":"Pro","price":"10.00","billing_period":"month","model_quotas":[{"model":"gpt-4o","max_requests_per_period":100,"max_credit_per_period":100000}]}`
-	req := httptest.NewRequest(http.MethodPost, "/admin/subscription-plans", strings.NewReader(body))
-	plan, err := readSubscriptionPlanInput(req, &Service{}, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(plan.ModelQuotas) != 1 {
-		t.Fatalf("model quotas = %+v, want 1 entry", plan.ModelQuotas)
-	}
-	if plan.ModelQuotas[0].Model != "gpt-4o" || plan.ModelQuotas[0].MaxRequestsPerRule == nil || *plan.ModelQuotas[0].MaxRequestsPerRule != 100 {
-		t.Fatalf("unexpected model quota: %+v", plan.ModelQuotas[0])
-	}
-	for _, body := range []string{
-		`{"name":"Pro","price":"10.00","billing_period":"month","model_quotas":[{"model":"","max_requests_per_period":100}]}`,
-		`{"name":"Pro","price":"10.00","billing_period":"month","model_quotas":[{"model":"gpt-4o","max_requests_per_period":100},{"model":"gpt-4o","max_requests_per_period":200}]}`,
-		`{"name":"Pro","price":"10.00","billing_period":"month","model_quotas":[{"model":"gpt-4o","max_requests_per_period":-1}]}`,
-		`{"name":"Pro","price":"10.00","billing_period":"month","model_quotas":[{"model":"gpt-4o"}]}`,
-	} {
-		req := httptest.NewRequest(http.MethodPost, "/admin/subscription-plans", strings.NewReader(body))
-		if _, err := readSubscriptionPlanInput(req, &Service{}, ""); err == nil {
-			t.Fatalf("expected rejection for body %s", body)
-		}
-	}
-}
-
-func TestReadSubscriptionPlanInputMaxCredit(t *testing.T) {
-	body := `{"name":"Pro","price":"10.00","billing_period":"month","credit_amount":"1000000"}`
-	req := httptest.NewRequest(http.MethodPost, "/admin/subscription-plans", strings.NewReader(body))
-	plan, err := readSubscriptionPlanInput(req, &Service{}, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if plan.CreditAmount != "1000000" {
-		t.Fatalf("credit amount = %q, want 1000000", plan.CreditAmount)
+	if quotas[0].Model != "gpt-4o" || quotas[0].MaxRequestsPerRule == nil || *quotas[0].MaxRequestsPerRule != 100 {
+		t.Fatalf("unexpected model quota: %+v", quotas[0])
 	}
 }
 
@@ -221,13 +225,32 @@ func TestSubscriptionPeriodEnd(t *testing.T) {
 	}
 }
 
+func TestSubscriptionStatusClause(t *testing.T) {
+	for _, tc := range []struct {
+		status string
+		want   string
+		ok     bool
+	}{
+		{"", "status='active'", true},
+		{"active", "status='active'", true},
+		{"inactive", "status in ('pending','expired','cancelled')", true},
+		{"all", "status in ('pending','active','expired','cancelled')", true},
+		{"paused", "", false},
+	} {
+		got, ok := subscriptionStatusClause(tc.status)
+		if ok != tc.ok || got != tc.want {
+			t.Fatalf("subscriptionStatusClause(%q) = (%q, %v), want (%q, %v)", tc.status, got, ok, tc.want, tc.ok)
+		}
+	}
+}
+
 func TestBatchExtendSubscriptionsRejectsInvalidDaysBeforeDatabase(t *testing.T) {
 	for _, body := range []string{
 		`not-json`,
-		`{"plan_id":"p1","days":0}`,
-		`{"plan_id":"p1","days":-3651}`,
-		`{"plan_id":"p1","days":3651}`,
-		`{"plan_id":"p1","days":30,"status":"paused"}`,
+		`{"tier_id":"t1","days":0}`,
+		`{"tier_id":"t1","days":-3651}`,
+		`{"tier_id":"t1","days":3651}`,
+		`{"tier_id":"t1","days":30,"status":"paused"}`,
 	} {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, "/admin/subscriptions/extend", strings.NewReader(body))

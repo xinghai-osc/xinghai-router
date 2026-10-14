@@ -27,7 +27,7 @@ const DOTS: Record<Tone, string> = {
 <template>
   <span
     :class="cn(
-      'inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-2xs font-medium whitespace-nowrap',
+      'ui-badge inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-2xs font-medium whitespace-nowrap',
       TONES[tone],
     )"
   >

@@ -42,6 +42,7 @@ export default {
   error: '出错了',
   retry: '重试',
   requestFailed: '请求失败',
+  requestId: '请求编号：{id}',
   loadFailed: '加载失败',
   actionFailed: '操作失败',
   sessionExpired: '登录状态已失效',

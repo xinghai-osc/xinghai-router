@@ -32,6 +32,8 @@ services:
       SMTP_FROM: ${SMTP_FROM:-}
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
       CONVERSATION_CACHE_DIR: ${CONVERSATION_CACHE_DIR:-/tmp/conversations}
+      SESSION_AFFINITY_DIR: ${SESSION_AFFINITY_DIR:-/tmp/sessions}
+      SESSION_AFFINITY_TTL: ${SESSION_AFFINITY_TTL:-168h}
     depends_on:
       postgres:
         condition: service_healthy
