@@ -164,6 +164,13 @@ function copyModel() {
       </div>
     </div>
 
+    <button
+      type="button"
+      class="mx-5 mt-3 w-fit rounded-sm text-2xs font-medium text-clay transition-opacity duration-150 hover:opacity-70 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-clay"
+      @click.stop="selectModel"
+      @keydown.stop
+    >{{ t('site.sqViewPerformance') }}</button>
+
     <footer class="mt-auto flex items-center justify-between gap-2 px-5 py-4">
       <span class="truncate text-2xs text-faint">
         {{ displayGroup?.name ?? t('common.none') }} · {{ t('site.sqGroupCount', { count: model.groups.length }) }}

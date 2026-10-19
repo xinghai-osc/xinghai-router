@@ -149,12 +149,15 @@ func (s *Service) clearSessionAffinity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		UserID string `json:"user_id"`
+		UserID int64 `json:"user_id"`
 	}
 	if r.Body != nil {
 		_ = decode(r, &in)
 	}
-	userID := strings.TrimSpace(in.UserID)
+	userID := ""
+	if in.UserID > 0 {
+		userID = strconv.FormatInt(in.UserID, 10)
+	}
 	removed := 0
 	if userID == "" {
 		removed = s.sessionAffinity.clear()

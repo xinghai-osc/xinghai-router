@@ -250,9 +250,12 @@ type pricingRule struct {
 	tiers                                                []pricingTier
 	timeRules                                            []pricingTimeRule
 	dimensions                                           DimensionPrices
+	serviceTiers                                         map[string]ServiceTierPrice
 	pricedAt                                             time.Time
 	version                                              string
 	billingMode                                          string
+	thinkingLevel                                        string
+	serviceTier                                          string
 	found                                                bool
 }
 
@@ -272,6 +275,7 @@ func (s *Service) pricingFor(ctx context.Context, model string) pricingRule {
 		if err != nil {
 			return pricingRule{}, err
 		}
+		rule.serviceTiers = rule.dimensions.ServiceTiers
 		if rule.currency == "" {
 			rule.currency = "CNY"
 		}

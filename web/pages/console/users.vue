@@ -50,7 +50,7 @@ function pageQuery(): string {
 
 const users = useResource(() => endpoints.getAdminUsers(pageQuery()), { data: [] as User[], total: 0, page: 1, page_size: 50 })
 
-const selected = ref<Set<string>>(new Set())
+const selected = ref<Set<number>>(new Set())
 
 function clearSelection() {
   selected.value = new Set()
@@ -189,14 +189,14 @@ function buildUpdate(): UserUpdate | null {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { formError.value = t('admin.emailRequired'); return null }
   if (form.password && form.password.length < 8) { formError.value = t('admin.passwordTooShort'); return null }
 
-  const rawConcurrency = form.maxConcurrency.trim()
+  const rawConcurrency = String(form.maxConcurrency ?? '').trim()
   const maxConcurrency = rawConcurrency === '' ? null : Number(rawConcurrency)
   if (maxConcurrency !== null && (!Number.isInteger(maxConcurrency) || maxConcurrency < 1 || maxConcurrency > 10000)) {
     formError.value = t('admin.userConcurrencyInvalid')
     return null
   }
 
-  const rawInviterId = form.inviterId.trim()
+  const rawInviterId = String(form.inviterId ?? '').trim()
   const inviterId = rawInviterId === '' ? null : Number(rawInviterId)
   if (inviterId !== null && (!Number.isSafeInteger(inviterId) || inviterId <= 0)) {
     formError.value = t('admin.inviterInvalid')
@@ -343,7 +343,7 @@ async function runBatch() {
     update.leaderboard_mask_name = batchForm.leaderboardOptIn && batchForm.leaderboardMaskName
   }
   if (batchForm.applyConcurrency) {
-    const raw = batchForm.maxConcurrency.trim()
+    const raw = String(batchForm.maxConcurrency ?? '').trim()
     const value = raw === '' ? null : Number(raw)
     if (value !== null && (!Number.isInteger(value) || value < 1 || value > 10000)) {
       batchError.value = t('admin.userConcurrencyInvalid')
@@ -379,7 +379,7 @@ function openAdjustBalance(user: User) {
 }
 
 const parsedAmount = computed(() => {
-  const raw = balanceForm.amount.trim()
+  const raw = String(balanceForm.amount ?? '').trim()
   if (!raw) return null
   const value = Number(raw)
   if (!Number.isFinite(value) || value === 0 || Math.abs(value) > 1_000_000_000) return null
@@ -659,7 +659,7 @@ async function issueResetCards() {
   const target = issueCardTarget.value
   if (!target) return
   issueCardError.value = ''
-  const quantity = Number(issueCardForm.quantity.trim())
+  const quantity = Number(String(issueCardForm.quantity ?? '').trim())
   if (!Number.isInteger(quantity) || quantity < 1 || quantity > 1000) {
     issueCardError.value = t('admin.resetCardQuantityHint')
     return

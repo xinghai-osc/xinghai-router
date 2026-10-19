@@ -25,6 +25,7 @@ type reliabilitySettings struct {
 	AutoDisableSlowSeconds     int    `json:"auto_disable_slow_seconds"`
 	AutoDisableStatusCodes     string `json:"auto_disable_status_codes"`
 	AutoDisableKeywords        string `json:"auto_disable_keywords"`
+	RequestBodyTimeoutSeconds  int    `json:"request_body_timeout_seconds"`
 	parsedRetryCodes           *statusMatcher
 	parsedDisableCodes         *statusMatcher
 	parsedKeywords             []string
@@ -42,6 +43,7 @@ func defaultReliabilitySettings() reliabilitySettings {
 		AutoDisableOnTestFailure:   false,
 		AutoDisableSlowSeconds:     0,
 		AutoDisableStatusCodes:     "401,429,503",
+		RequestBodyTimeoutSeconds:  30,
 		AutoDisableKeywords: strings.Join([]string{
 			"Your credit balance is too low",
 			"This organization has been disabled.",
@@ -211,10 +213,10 @@ func (s *Service) loadReliabilitySettings(ctx context.Context) (reliabilitySetti
 	if s.db == nil {
 		return settings, errors.New("database is unavailable")
 	}
-	var retryCount, interval, slowSeconds int
+	var retryCount, interval, slowSeconds, requestBodyTimeoutSeconds int
 	var retryCodes, mode, channelIDs, disableCodes, keywords string
 	var autoRecover, autoDisableOnFailure bool
-	err := s.db.QueryRow(ctx, `select retry_count,retry_status_codes,health_check_mode,health_check_interval_minutes,health_check_auto_recover,health_check_channel_ids,auto_disable_on_test_failure,auto_disable_slow_seconds,auto_disable_status_codes,auto_disable_keywords from site_settings where id=true`).Scan(&retryCount, &retryCodes, &mode, &interval, &autoRecover, &channelIDs, &autoDisableOnFailure, &slowSeconds, &disableCodes, &keywords)
+	err := s.db.QueryRow(ctx, `select retry_count,retry_status_codes,health_check_mode,health_check_interval_minutes,health_check_auto_recover,health_check_channel_ids,auto_disable_on_test_failure,auto_disable_slow_seconds,auto_disable_status_codes,auto_disable_keywords,request_body_timeout_seconds from site_settings where id=true`).Scan(&retryCount, &retryCodes, &mode, &interval, &autoRecover, &channelIDs, &autoDisableOnFailure, &slowSeconds, &disableCodes, &keywords, &requestBodyTimeoutSeconds)
 	if err != nil {
 		return settings, err
 	}
@@ -228,6 +230,7 @@ func (s *Service) loadReliabilitySettings(ctx context.Context) (reliabilitySetti
 	settings.AutoDisableSlowSeconds = slowSeconds
 	settings.AutoDisableStatusCodes = disableCodes
 	settings.AutoDisableKeywords = keywords
+	settings.RequestBodyTimeoutSeconds = requestBodyTimeoutSeconds
 	settings.compile()
 	return settings, nil
 }
@@ -254,6 +257,7 @@ func (s *Service) updateReliabilitySettings(w http.ResponseWriter, r *http.Reque
 		AutoDisableSlowSeconds     *int    `json:"auto_disable_slow_seconds"`
 		AutoDisableStatusCodes     *string `json:"auto_disable_status_codes"`
 		AutoDisableKeywords        *string `json:"auto_disable_keywords"`
+		RequestBodyTimeoutSeconds  *int    `json:"request_body_timeout_seconds"`
 	}
 	if decode(r, &in) != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", "invalid reliability settings")
@@ -277,6 +281,10 @@ func (s *Service) updateReliabilitySettings(w http.ResponseWriter, r *http.Reque
 	}
 	if in.AutoDisableSlowSeconds != nil && (*in.AutoDisableSlowSeconds < 0 || *in.AutoDisableSlowSeconds > 600) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "auto_disable_slow_seconds must be between 0 and 600")
+		return
+	}
+	if in.RequestBodyTimeoutSeconds != nil && (*in.RequestBodyTimeoutSeconds < 0 || *in.RequestBodyTimeoutSeconds > 3600) {
+		writeError(w, http.StatusBadRequest, "invalid_request", "request_body_timeout_seconds must be between 0 and 3600; 0 means unlimited")
 		return
 	}
 	if in.AutoDisableStatusCodes != nil && !validStatusCodeSpec(*in.AutoDisableStatusCodes) {
@@ -318,7 +326,10 @@ func (s *Service) updateReliabilitySettings(w http.ResponseWriter, r *http.Reque
 	if in.AutoDisableKeywords != nil {
 		current.AutoDisableKeywords = strings.TrimRight(*in.AutoDisableKeywords, "\n")
 	}
-	_, err = s.db.Exec(r.Context(), `update site_settings set retry_count=$1,retry_status_codes=$2,health_check_mode=$3,health_check_interval_minutes=$4,health_check_auto_recover=$5,health_check_channel_ids=$6,auto_disable_on_test_failure=$7,auto_disable_slow_seconds=$8,auto_disable_status_codes=$9,auto_disable_keywords=$10,updated_at=now() where id=true`, current.RetryCount, current.RetryStatusCodes, current.HealthCheckMode, current.HealthCheckIntervalMinutes, current.HealthCheckAutoRecover, current.HealthCheckChannelIDs, current.AutoDisableOnTestFailure, current.AutoDisableSlowSeconds, current.AutoDisableStatusCodes, current.AutoDisableKeywords)
+	if in.RequestBodyTimeoutSeconds != nil {
+		current.RequestBodyTimeoutSeconds = *in.RequestBodyTimeoutSeconds
+	}
+	_, err = s.db.Exec(r.Context(), `update site_settings set retry_count=$1,retry_status_codes=$2,health_check_mode=$3,health_check_interval_minutes=$4,health_check_auto_recover=$5,health_check_channel_ids=$6,auto_disable_on_test_failure=$7,auto_disable_slow_seconds=$8,auto_disable_status_codes=$9,auto_disable_keywords=$10,request_body_timeout_seconds=$11,updated_at=now() where id=true`, current.RetryCount, current.RetryStatusCodes, current.HealthCheckMode, current.HealthCheckIntervalMinutes, current.HealthCheckAutoRecover, current.HealthCheckChannelIDs, current.AutoDisableOnTestFailure, current.AutoDisableSlowSeconds, current.AutoDisableStatusCodes, current.AutoDisableKeywords, current.RequestBodyTimeoutSeconds)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not save reliability settings")
 		return

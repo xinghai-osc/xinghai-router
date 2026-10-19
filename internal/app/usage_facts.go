@@ -28,6 +28,7 @@ type UsageFacts struct {
 	PricingVersion     string  `json:"pricing_version"`
 	ImageSize          string  `json:"image_size"`
 	ImageQuality       string  `json:"image_quality"`
+	ThinkingLevel      string  `json:"thinking_level,omitempty"`
 	present            bool
 	promptPresent      bool
 	outputPresent      bool

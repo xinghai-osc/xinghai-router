@@ -297,7 +297,7 @@ func rewriteResponsesBody(body []byte, upstreamModel, requestedModel string) []b
 func rewriteOpenAIBody(body []byte, upstreamModel, requestedModel string, stream bool) []byte {
 	needStream := stream
 	needModel := upstreamModel != "" && upstreamModel != requestedModel
-	if !needStream && !needModel && !bytes.Contains(body, gatewayExtensionKeyBytes) {
+	if !needStream && !needModel && !bytes.Contains(body, gatewayExtensionKeyBytes) && !bytes.Contains(body, []byte(`"service_tier"`)) {
 		return body
 	}
 	var payload map[string]any
@@ -376,7 +376,7 @@ func (s *Service) models(w http.ResponseWriter, r *http.Request) {
 	// bound group when set, otherwise the groups the user belongs to, plus any
 	// channel restricted to the caller alone. Public and ungrouped channels are
 	// not exposed to callers.
-	rows, err := s.db.Query(r.Context(), `select available.model,coalesce(metadata.name,''),coalesce(metadata.owned_by,''),metadata.context_window,metadata.max_output_tokens,coalesce(metadata.input_modalities,'{}'),coalesce(metadata.output_modalities,'{}'),metadata.reasoning_efforts,metadata.api_capabilities,metadata.requires_data_transfer_consent from (
+	rows, err := s.db.Query(r.Context(), `select available.model,coalesce(metadata.name,''),coalesce(metadata.owned_by,''),metadata.context_window,metadata.max_output_tokens,coalesce(metadata.input_modalities,'{}'),coalesce(metadata.output_modalities,'{}'),metadata.reasoning_efforts,metadata.api_capabilities,coalesce(metadata.requires_data_transfer_consent,false) from (
 		select jsonb_array_elements_text(c.models) as model from channels c where c.enabled and not c.auto_disabled and (not c.shared_data_only or $3) and (c.api_key <> '' or exists(select 1 from channel_api_keys ak where ak.channel_id=c.id and ak.enabled and ak.key_encrypted <> '')) and (
 			($2<>'' and (exists(select 1 from channel_groups cg where cg.channel_id=c.id and cg.group_id=nullif($2,'')::uuid) or c.user_id=$1))
 			or ($2='' and (exists(select 1 from channel_groups cg join user_groups ug on ug.group_id=cg.group_id where cg.channel_id=c.id and ug.user_id=$1) or c.user_id=$1))
@@ -447,7 +447,7 @@ func (s *Service) models(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) readGatewayBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
-	return readRequestBody(w, r, s.cfg.RequestBodyTimeout)
+	return readRequestBody(w, r, s.requestBodyTimeout(r.Context()))
 }
 
 func (s *Service) chatCompletions(w http.ResponseWriter, r *http.Request) {
@@ -487,6 +487,46 @@ func (s *Service) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	r = r.WithContext(policyCtx)
 	s.proxyChatCompletions(w, r, body, request.Model, request.Stream, request.MaxTokens, nil, nil, nil, nil, nil, nil)
+}
+
+func requestServiceTier(body []byte) string {
+	var request struct {
+		ServiceTier string `json:"service_tier"`
+	}
+	if json.Unmarshal(body, &request) != nil {
+		return ""
+	}
+	tier := strings.ToLower(strings.TrimSpace(request.ServiceTier))
+	if tier == "auto" || tier == "default" || tier == "" {
+		return ""
+	}
+	return tier
+}
+
+func requestThinkingLevel(body []byte) string {
+	var request struct {
+		ReasoningEffort json.RawMessage `json:"reasoning_effort"`
+		Reasoning       struct {
+			Effort string `json:"effort"`
+		} `json:"reasoning"`
+		Thinking struct {
+			Level string `json:"level"`
+			Type  string `json:"type"`
+		} `json:"thinking"`
+	}
+	if json.Unmarshal(body, &request) != nil {
+		return ""
+	}
+	var effort string
+	if len(request.ReasoningEffort) > 0 {
+		_ = json.Unmarshal(request.ReasoningEffort, &effort)
+	}
+	for _, value := range []string{effort, request.Reasoning.Effort, request.Thinking.Level, request.Thinking.Type} {
+		if value = strings.ToLower(strings.TrimSpace(value)); value != "" && value != "none" && value != "off" {
+			return value
+		}
+	}
+	return ""
 }
 
 type responseTransform func([]byte) ([]byte, error)
@@ -608,6 +648,13 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 	// Pricing and the group multiplier are read once and reused by reservation and
 	// settlement, which previously repeated the same two lookups.
 	pricing := freezePricing(s.pricingFor(ctx, model), started)
+	pricing.thinkingLevel = requestThinkingLevel(body)
+	pricing.serviceTier = requestServiceTier(body)
+	if pricing.serviceTier != "" && !strings.HasPrefix(strings.ToLower(model), "gpt-") {
+		s.logReject(ctx, model, http.StatusBadRequest, "invalid_service_tier", started)
+		writeError(w, http.StatusBadRequest, "invalid_service_tier", "fast service tier is only supported for GPT models")
+		return
+	}
 	if _, err := calculateBill(UsageFacts{}, pricing, 1); err != nil {
 		s.logReject(ctx, model, 402, "pricing_unavailable", started)
 		writeError(w, 402, "pricing_unavailable", "no enabled pricing rule for this model")

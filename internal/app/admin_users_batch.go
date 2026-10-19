@@ -12,7 +12,7 @@ import (
 )
 
 type batchUserUpdateInput struct {
-	UserIDs             []string        `json:"user_ids"`
+	UserIDs             []int64         `json:"user_ids"`
 	Enabled             *bool           `json:"enabled"`
 	Role                *string         `json:"role"`
 	Permissions         *[]string       `json:"permissions"`
@@ -48,9 +48,8 @@ func normalizeBatchUserUpdate(in batchUserUpdateInput) (normalizedBatchUserUpdat
 
 	ids := make([]string, 0, len(in.UserIDs))
 	seenIDs := make(map[string]bool, len(in.UserIDs))
-	for _, raw := range in.UserIDs {
-		value, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
-		if err != nil || value <= 0 || value > maxEditableUserID {
+	for _, value := range in.UserIDs {
+		if value <= 0 || value > maxEditableUserID {
 			return normalizedBatchUserUpdate{}, errors.New("every user id must be a positive integer up to 9007199254740991")
 		}
 		id := strconv.FormatInt(value, 10)
@@ -115,7 +114,7 @@ func normalizeBatchUserUpdate(in batchUserUpdateInput) (normalizedBatchUserUpdat
 }
 
 func (s *Service) batchUpdateUsers(w http.ResponseWriter, r *http.Request) {
-	body, err := readRequestBody(w, r, s.cfg.RequestBodyTimeout)
+	body, err := readRequestBody(w, r, s.requestBodyTimeout(r.Context()))
 	if err != nil {
 		status, code, message := requestBodyError(err)
 		writeError(w, status, code, message)

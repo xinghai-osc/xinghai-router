@@ -164,6 +164,20 @@ func TestResponsesAdditionalToolsAreReturned(t *testing.T) {
 	}
 }
 
+func TestResponsesServiceTierIsForwarded(t *testing.T) {
+	out, _, err := responsesRequestToChatCompletions([]byte(`{"model":"gpt-5.6-sol","input":"hi","service_tier":"fast"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(out, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["service_tier"] != "fast" {
+		t.Fatalf("service_tier = %#v, want fast", payload["service_tier"])
+	}
+}
+
 func TestResponsesReasoningEffortIsForwarded(t *testing.T) {
 	out, _, err := responsesRequestToChatCompletions([]byte(`{"model":"m","input":"hi","reasoning":{"effort":"high"}}`))
 	if err != nil {

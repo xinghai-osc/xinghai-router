@@ -238,9 +238,9 @@ func TestBatchUpdateUsersRejectsInvalidBeforeDatabaseAccess(t *testing.T) {
 		}
 	}
 
-	var ids []string
+	var ids []int
 	for i := 0; i < 101; i++ {
-		ids = append(ids, strconv.Itoa(i+1))
+		ids = append(ids, i+1)
 	}
 	body, _ := json.Marshal(map[string]any{"user_ids": ids, "enabled": true})
 	recorder := httptest.NewRecorder()
@@ -254,7 +254,7 @@ func TestBatchUpdateUsersRejectsInvalidBeforeDatabaseAccess(t *testing.T) {
 func TestNormalizeBatchUserUpdateCanonicalizesIDsAndNullableConcurrency(t *testing.T) {
 	role := "operator"
 	update, err := normalizeBatchUserUpdate(batchUserUpdateInput{
-		UserIDs:        []string{"003", "1"},
+		UserIDs:        []int64{3, 1},
 		Role:           &role,
 		Groups:         &[]string{" vip ", "vip"},
 		MaxConcurrency: json.RawMessage("null"),
@@ -272,7 +272,7 @@ func TestNormalizeBatchUserUpdateCanonicalizesIDsAndNullableConcurrency(t *testi
 		t.Fatalf("max concurrency = %#v, set = %v", update.maxConcurrency, update.maxConcurrencySet)
 	}
 	permissions := []string{"users.read", "logs.read"}
-	update, err = normalizeBatchUserUpdate(batchUserUpdateInput{UserIDs: []string{"1"}, Permissions: &permissions})
+	update, err = normalizeBatchUserUpdate(batchUserUpdateInput{UserIDs: []int64{1}, Permissions: &permissions})
 	if err != nil || !update.permissionsSet || len(update.permissions) != 2 {
 		t.Fatalf("permissions = %#v, set = %v, err = %v", update.permissions, update.permissionsSet, err)
 	}

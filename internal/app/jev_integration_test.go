@@ -93,10 +93,19 @@ func TestIntegrationJEVProviderConfiguration(t *testing.T) {
 	if err := db.QueryRow(context.Background(), `select provider,upstream_format from channels where id=$1`, created.ID).Scan(&provider, &format); err != nil || provider != "jev" || format != "" {
 		t.Fatalf("stored provider=%s format=%s err=%v", provider, format, err)
 	}
-	for _, config := range []struct{ provider, format string }{{"jev", ""}, {"custom", "jev"}, {"jev", ""}} {
+	for _, config := range []struct {
+		provider, format string
+		maxConcurrency   any
+		wantConcurrency  int
+	}{
+		{"jev", "", 3, 3},
+		{"custom", "jev", nil, -1},
+		{"jev", "", 0, -1},
+	} {
 		updateBody, err := json.Marshal(map[string]any{
 			"name": "direct-jev", "base_url": upstream.URL, "provider": config.provider,
 			"upstream_format": config.format, "models": []string{"jev-latest"},
+			"max_concurrency": config.maxConcurrency,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -105,8 +114,19 @@ func TestIntegrationJEVProviderConfiguration(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPut, "/admin/channels/"+created.ID, strings.NewReader(string(updateBody)))
 		req.SetPathValue("id", created.ID)
 		s.updateChannel(update, req)
-		if update.Code != http.StatusOK {
+		if update.Code != http.StatusNoContent {
 			t.Fatalf("update status=%d body=%s", update.Code, update.Body.String())
+		}
+		gotConcurrency := -1
+		var storedConcurrency *int
+		if err := db.QueryRow(context.Background(), `select max_concurrency from channels where id=$1`, created.ID).Scan(&storedConcurrency); err != nil {
+			t.Fatal(err)
+		}
+		if storedConcurrency != nil {
+			gotConcurrency = *storedConcurrency
+		}
+		if gotConcurrency != config.wantConcurrency {
+			t.Fatalf("max_concurrency=%d, want %d", gotConcurrency, config.wantConcurrency)
 		}
 		rec = jevIntegrationCall(s, secret, "/v1/systemone", jevIntegrationBody)
 		if rec.Code != http.StatusOK || rec.Body.String() != jevIntegrationResponse {

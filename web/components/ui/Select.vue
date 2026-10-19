@@ -67,6 +67,7 @@ const selection = computed({
     <SelectPortal>
       <SelectContent
         position="popper"
+        :body-lock="false"
         :side-offset="6"
         class="animate-pop z-50 max-h-[min(18rem,var(--reka-select-content-available-height))] min-w-[var(--reka-select-trigger-width)] max-w-[calc(100vw-2rem)] overflow-hidden rounded-control border border-line bg-surface shadow-pop motion-reduce:animate-none"
       >

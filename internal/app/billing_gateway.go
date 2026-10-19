@@ -13,6 +13,13 @@ func reservationAmount(bodyLen, maxTokens int, pricing pricingRule, groupMultipl
 		pricing = freezePricing(pricing, time.Now())
 	}
 	input, cached, output := pricing.input, pricing.cachedInput, pricing.output
+	if pricing.serviceTier != "" && pricing.serviceTier != "default" && pricing.serviceTier != "auto" {
+		servicePrice, ok := pricing.serviceTiers[pricing.serviceTier]
+		if !ok {
+			return 0, errPricingUnavailable
+		}
+		input, cached, output = servicePrice.InputPerMillion, servicePrice.CachedInputPerMillion, servicePrice.OutputPerMillion
+	}
 	for _, tier := range pricing.tiers {
 		input = math.Max(input, tier.input)
 		cached = math.Max(cached, tier.cachedInput)

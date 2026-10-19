@@ -13,6 +13,22 @@ import (
 	"time"
 )
 
+func TestRequestServiceTier(t *testing.T) {
+	for _, test := range []struct{ body, want string }{
+		{`{"service_tier":"fast"}`, "fast"},
+		{`{"service_tier":" FAST "}`, "fast"},
+		{`{"service_tier":"auto"}`, ""},
+		{`{"service_tier":"default"}`, ""},
+		{`{"service_tier":""}`, ""},
+		{`{}`, ""},
+		{`invalid`, ""},
+	} {
+		if got := requestServiceTier([]byte(test.body)); got != test.want {
+			t.Fatalf("requestServiceTier(%s) = %q, want %q", test.body, got, test.want)
+		}
+	}
+}
+
 func TestGatewayReasoningEfforts(t *testing.T) {
 	configured, ok := gatewayReasoningEfforts("any-model", []byte(`{"supported_levels":["low","high"],"default_level":"high"}`))
 	if !ok || configured["default_level"] != "high" {

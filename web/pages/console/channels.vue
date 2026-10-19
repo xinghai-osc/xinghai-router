@@ -583,7 +583,7 @@ async function save() {
     return
   }
 
-  const rawConcurrency = form.max_concurrency.trim()
+  const rawConcurrency = String(form.max_concurrency ?? '').trim()
   const maxConcurrency = rawConcurrency === '' ? null : Number(rawConcurrency)
   if (maxConcurrency !== null && (!Number.isInteger(maxConcurrency) || maxConcurrency < 0 || maxConcurrency > 10000)) {
     formError.value = t('admin.channelConcurrencyInvalid')

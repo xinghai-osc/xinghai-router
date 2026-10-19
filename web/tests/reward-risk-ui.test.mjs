@@ -62,9 +62,9 @@ function fixture(permissions = [], name = 'console/admin-reward-risk') {
   Object.assign(context, evaluate(resourceSource, context), evaluate(rewardSource, context))
   context.require = path => {
     if (path === 'vue') return vue
-    if (path === '~/src/api') return { endpoints, ApiError }
-    if (path === '~/src/risk-context') return collector
-    if (path === '~/src/format') return { formatDateTime: value => value, formatDate: value => value, formatMoney: value => `$${value}` }
+    if (path === '~/src/api' || path === '../src/api') return { endpoints, ApiError }
+    if (path === '~/src/risk-context' || path === '../src/risk-context') return collector
+    if (path === '~/src/format' || path === '../src/format') return { formatDateTime: value => value, formatDate: value => value, formatMoney: value => `$${value}` }
     if (path === 'lucide-vue-next') return { ShieldAlert: {}, CalendarCheck: {}, Copy: {}, UserPlus: {} }
     if (path === '@vueuse/core') return { useClipboard: () => ({ copy: () => {} }) }
     if (path.startsWith('~/composables/use')) return {}
@@ -80,7 +80,7 @@ function fixture(permissions = [], name = 'console/admin-reward-risk') {
     app.component('UiAlert', { props: ['title'], setup: (props, { slots }) => () => vue.h('div', { role: 'alert' }, [props.title, slots.default?.()]) })
     app.component('UiEmptyState', { props: ['title'], setup: props => () => vue.h('div', { 'data-empty': '' }, props.title) })
     app.component('UiSkeleton', { render: () => vue.h('div', { 'data-loading': '' }) })
-    for (const tag of ['UiTabs', 'UiSelect', 'UiSwitch']) app.component(tag, { render: () => vue.h('div') })
+    for (const tag of ['UiTabs', 'UiSelect', 'UiSwitch', 'UiCheckbox']) app.component(tag, { render: () => vue.h('div') })
     for (const tag of ['UiInput', 'UiTextarea']) app.component(tag, { render: () => vue.h('input') })
     app.component('NuxtLink', container)
     app.component('UiDialog', { props: ['open'], setup: (props, { slots }) => () => props.open ? vue.h('div', slots.default?.()) : null })
@@ -185,7 +185,46 @@ test('settings exclude the readonly version and validate backend bounds and STUN
   assert.deepEqual(body.stun_urls, [])
 })
 
-test('pending check-ins submit context and never show a credited-money toast', async () => {
+test('batch reward actions process selected claims sequentially and retain unprocessed rows on failure', async () => {
+  const f = fixture(['users.read', 'wallets.manage'])
+  await f.mount()
+  f.state.toggleSelected('claim-1', true)
+  f.state.toggleSelected('claim-2', true)
+  f.state.openBulkAction('approve')
+  await f.state.submitBulkAction()
+  assert.deepEqual(f.calls.filter(call => call.method === 'approveRewardRiskClaim').map(call => call.args[0]), ['claim-1', 'claim-2'])
+  assert.deepEqual(plain(f.state.selectedIds.value), [])
+  assert.equal(f.messages.at(-1)[1], 'admin.rewardRiskBulkSaved')
+
+  f.state.toggleSelected('claim-1', true)
+  f.state.toggleSelected('claim-2', true)
+  f.state.openBulkAction('reject')
+  let attempts = 0
+  f.respond(method => {
+    if (method === 'rejectRewardRiskClaim' && ++attempts === 2) throw new Error('Already processed')
+    return { ok: true }
+  })
+  await f.state.submitBulkAction()
+  assert.deepEqual(plain(f.state.selectedIds.value), ['claim-2'])
+  assert.match(f.state.bulkError.value, /admin.rewardRiskBulkPartial/)
+})
+
+test('batch restriction release requires a reason and submits every selected case', async () => {
+  const f = fixture(['users.read', 'users.manage'])
+  await f.mount()
+  f.state.tab.value = 'bans'
+  await vue.nextTick()
+  await f.state.refresh()
+  f.state.toggleSelected('case-1', true)
+  f.state.openBulkAction('unban')
+  await f.state.submitBulkAction()
+  assert.equal(f.state.bulkError.value, 'admin.rewardRiskReasonRequired')
+  f.state.bulkReason.value = 'Verified manually'
+  await f.state.submitBulkAction()
+  assert.deepEqual(f.calls.find(call => call.method === 'unbanRewardRiskUser').args, ['user-1', 'case-1', 'Verified manually'])
+})
+
+ test('pending check-ins submit context and never show a credited-money toast', async () => {
   const f = fixture([], 'console/checkin')
   await f.mount()
   await f.state.submit()

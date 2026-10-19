@@ -92,8 +92,8 @@ function parseModalities(value: string) {
   return [...new Set(value.split(',').map(item => item.trim().toLowerCase()).filter(Boolean))]
 }
 
-function parseContext(value: string): number | null {
-  const raw = value.trim()
+function parseContext(value: string | number): number | null {
+  const raw = String(value ?? '').trim()
   if (!/^\d+$/.test(raw)) return null
   const parsed = Number(raw)
   return Number.isSafeInteger(parsed) && parsed > 0 && parsed <= MAX_CONTEXT_WINDOW ? parsed : null
@@ -104,13 +104,15 @@ async function save() {
     toast.error(t('admin.modelMetadataModelRequired'))
     return
   }
-  if (contextWindow.value.trim() && parseContext(contextWindow.value) == null) {
+  const rawContextWindow = String(contextWindow.value ?? '').trim()
+  if (rawContextWindow && parseContext(rawContextWindow) == null) {
     toast.error(t('admin.modelMetadataContextInvalid'))
     return
   }
   const context = parseContext(contextWindow.value)
   const maxOutput = parseContext(maxOutputTokens.value)
-  if (maxOutputTokens.value.trim() && maxOutput == null) {
+  const rawMaxOutputTokens = String(maxOutputTokens.value ?? '').trim()
+  if (rawMaxOutputTokens && maxOutput == null) {
     toast.error(t('admin.modelMetadataMaxOutputInvalid'))
     return
   }

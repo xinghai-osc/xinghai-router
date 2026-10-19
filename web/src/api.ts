@@ -1,7 +1,7 @@
 export interface User { id: number; email: string; name: string; role: string; enabled: boolean; leaderboard_opt_in: boolean; leaderboard_mask_name: boolean; data_usage_enabled: boolean; max_concurrency: number | null; balance: number; reserved: number; permissions: string[]; groups: string[]; inviter_id: number | null; inviter_email: string | null; inviter_name: string | null; created_at: string }
 export interface Page<T> { data: T[]; total: number; page: number; page_size: number }
 export type WorkspaceRole = 'owner' | 'admin' | 'member'
-export interface Workspace { id: string; name: string; slug: string; owner_id: string; role: WorkspaceRole; is_personal: boolean; created_at: string; updated_at: string }
+export interface Workspace { id: string; name: string; slug: string; owner_id: number; role: WorkspaceRole; is_personal: boolean; created_at: string; updated_at: string }
 export interface WorkspaceForm { name: string; slug: string }
 export interface WorkspaceMember { user_id: number; email: string; name: string; role: WorkspaceRole; created_at: string }
 export interface WorkspaceMemberForm { email: string; role: 'admin' | 'member' }
@@ -45,6 +45,7 @@ export interface GroupUpdate { id: string; multiplier: number; max_concurrency: 
 export interface RequestLog { request_id: string; user_id: number | null; user_name: string; api_key_id: string | null; key_name: string; channel_id: string | null; channel_name: string; channel_key_id: string | null; channel_key_name: string; group_id: string | null; group_name: string; model: string; status_code: number; prompt_tokens: number | null; completion_tokens: number | null; total_tokens: number | null; duration_ms: number; first_token_ms: number | null; error_code: string | null; error_detail: string; client_ip: string; user_agent: string; created_at: string }
 export interface Account { id: number; email: string; name: string; role: string; avatar_url: string; permissions: string[]; balance: number; reserved: number; pending_settlement: number; leaderboard_opt_in: boolean; leaderboard_mask_name: boolean; data_usage_enabled: boolean; must_change_password?: boolean }
 export interface ImagePrice { size: string; quality: string; price: number }
+export interface ThinkingPrice { input_per_million: number; cached_input_per_million: number; output_per_million: number }
 export interface DimensionPrices {
   cache_write_per_million?: number | null
   cache_write_5m_per_million?: number | null
@@ -57,6 +58,7 @@ export interface DimensionPrices {
   video_per_second?: number | null
   tool_per_call?: number | null
   images?: ImagePrice[]
+  thinking_prices?: Record<string, ThinkingPrice>
 }
 export interface UsageFacts {
   input_tokens?: number
@@ -77,6 +79,7 @@ export interface UsageFacts {
   pricing_version?: string
   image_size?: string
   image_quality?: string
+  thinking_level?: string
 }
 export interface BillingSnapshot {
   usage: UsageFacts
@@ -182,13 +185,15 @@ export interface ModelMetadata {
 }
 export type ModelMetadataForm = Omit<ModelMetadata, 'id' | 'created_at' | 'updated_at'>
 export interface ModelPerformanceGroup { group_id: string; group_name: string; requests: number; tps: number; avg_latency_ms: number; avg_first_token_ms: number | null; success_rate: number }
-export interface ModelPerformance { model: string; window_hours: number; groups: ModelPerformanceGroup[]; updated_at: string }
+export interface ModelPerformancePoint { timestamp: string; requests: number; failed_requests: number; tps: number; avg_latency_ms: number | null; avg_first_token_ms: number | null; success_rate: number | null }
+export interface ModelPerformanceSeries { group_id: string; points: ModelPerformancePoint[] }
+export interface ModelPerformance { model: string; window_hours: number; window_start: string; bucket_minutes: number; groups: ModelPerformanceGroup[]; series: ModelPerformanceSeries[]; updated_at: string }
 export interface ModelProvider { id: string; name: string; slug: string; prefixes: string[]; priority: number }
 export interface UsageRecord { request_id: string; model: string; prompt_tokens: number; cached_prompt_tokens: number; completion_tokens: number; cost: string; status: string; created_at: string; client_ip: string; user_agent: string; error: string; key_name: string; subscription: boolean; duration_ms: number; first_token_ms: number | null; group_name: string; usage_facts: UsageFacts | null; billing_snapshot: Partial<BillingSnapshot> | null }
 
 export interface AccountUsageSummary { requests: number; tokens: number; cost: string }
 export interface DailyUsageRecord { day: string; requests: number; prompt_tokens: number; completion_tokens: number }
-export interface ActivityLog { id: string; type: 'request' | 'login' | 'register' | 'logout' | 'topup' | 'operation'; action: string; user_id: number; user_name: string; model: string; group_id: string; group_name: string; status_code: number | null; duration_ms: number | null; first_token_ms: number | null; prompt_tokens: number; completion_tokens: number; total_tokens: number; cost: number; details: Record<string, unknown>; created_at: string }
+export interface ActivityLog { id: string; type: 'request' | 'login' | 'register' | 'logout' | 'topup' | 'operation'; action: string; user_id: number | null; user_name: string; model: string; group_id: string; group_name: string; status_code: number | null; duration_ms: number | null; first_token_ms: number | null; prompt_tokens: number; completion_tokens: number; total_tokens: number; cost: number; details: Record<string, unknown>; created_at: string }
 export interface LedgerEntry { id: string; amount: string; balance_after: string; kind: string; request_id: string | null; note: string | null; created_at: string; settlement_status: 'not_applicable' | 'pending' | 'processing' | 'settled' | 'failed'; settlement_date: string | null; settled_at: string | null; settlement_error?: string; daily?: boolean; business_date?: string | null; call_count?: number }
 export interface AdminLedgerEntry extends LedgerEntry { user_id: number; user_email: string; user_name: string }
 
@@ -217,7 +222,7 @@ export interface RewardRiskSettings {
 export type RewardRiskSettingsForm = Omit<RewardRiskSettings, 'version'>
 export interface RewardRiskClaim { id: string; user_id: number; user_name: string; email: string; origin_user_id: number; source: 'invitation' | 'checkin'; source_id: string; amount: string; status: RewardStatus; reasons: string[]; created_at: string; updated_at: string }
 export interface RewardRiskEvent { id: string; user_id: number; user_name: string; email: string; action: string; decision: 'allow' | 'review' | 'ban'; reasons: string[]; details: Record<string, unknown>; created_at: string }
-export interface RewardRiskBan { id: string; user_id: number; user_name: string; email: string; rule_version: number; details: Record<string, unknown>; observation_id: string | null; banned_at: string; released_at: string | null; released_by: string | null; release_reason: string }
+export interface RewardRiskBan { id: string; user_id: number; user_name: string; email: string; rule_version: number; details: Record<string, unknown>; observation_id: string | null; banned_at: string; released_at: string | null; released_by: number | null; release_reason: string }
 export interface CheckinResult { checked_in: boolean; already_checked_in: boolean; checkin_date: string; streak?: number; reward?: number; reward_status: RewardStatus; scheduled_reward?: number }
 export interface CheckinEntry { checkin_date: string; streak: number; reward: string; reward_status: RewardStatus; created_at: string }
 export interface CheckinStatus { checked_in: boolean; data: CheckinEntry[] }
@@ -234,24 +239,24 @@ export interface Rankings { period: string; models: ModelRanking[]; vendors: Ven
 export type FeaturedLocale = 'zh' | 'zh-Hant' | 'en'
 export type FeaturedCopyField = 'badge' | 'title' | 'body' | 'cta'
 export type FeaturedCopy = Record<FeaturedLocale, Record<FeaturedCopyField, string>>
-export interface SiteSettings { name: string; icon_url: string; announcement: string; contact_email?: string; auto_disable_failed_channels: boolean; invitations_enabled?: boolean; registration_email_whitelist_enabled?: boolean; registration_email_alias_blocked?: boolean; featured_enabled: boolean; featured_model: string; featured_copy: FeaturedCopy; captcha_provider?: string; geetest_enabled?: boolean; geetest_captcha_id?: string; corptcha_site_id?: string; email_verification_enabled?: boolean; oauth_providers?: string[]; risk_probe?: RiskProbeSettings }
-export interface AdminSiteSettings { name: string; icon_url: string; announcement: string; contact_email: string; auto_disable_failed_channels: boolean; featured_enabled: boolean; featured_model: string; featured_copy: FeaturedCopy; captcha_provider: string; geetest_captcha_id: string; has_geetest_captcha_key: boolean; corptcha_site_id: string; has_corptcha_secret: boolean; smtp_host: string; smtp_port: string; smtp_username: string; has_smtp_password: boolean; smtp_from: string; public_base_url: string; invitations_enabled: boolean; inviter_reward: string; invitee_reward: string; checkin_base_reward: string; checkin_streak_bonus: string; checkin_max_bonus_days: number; registration_email_whitelist_enabled: boolean; registration_email_whitelist: string[]; registration_email_alias_blocked: boolean }
+export interface SiteSettings { name: string; icon_url: string; announcement: string; contact_email?: string; api_base_urls: string[]; auto_disable_failed_channels: boolean; invitations_enabled?: boolean; registration_email_whitelist_enabled?: boolean; registration_email_alias_blocked?: boolean; featured_enabled: boolean; featured_model: string; featured_copy: FeaturedCopy; captcha_provider?: string; geetest_enabled?: boolean; geetest_captcha_id?: string; corptcha_site_id?: string; email_verification_enabled?: boolean; oauth_providers?: string[]; risk_probe?: RiskProbeSettings }
+export interface AdminSiteSettings { name: string; icon_url: string; announcement: string; contact_email: string; api_base_urls: string[]; auto_disable_failed_channels: boolean; featured_enabled: boolean; featured_model: string; featured_copy: FeaturedCopy; captcha_provider: string; geetest_captcha_id: string; has_geetest_captcha_key: boolean; corptcha_site_id: string; has_corptcha_secret: boolean; smtp_host: string; smtp_port: string; smtp_username: string; has_smtp_password: boolean; smtp_from: string; public_base_url: string; invitations_enabled: boolean; inviter_reward: string; invitee_reward: string; checkin_base_reward: string; checkin_streak_bonus: string; checkin_max_bonus_days: number; registration_email_whitelist_enabled: boolean; registration_email_whitelist: string[]; registration_email_alias_blocked: boolean }
 export interface Notification { id: string; title: string; content: string; enabled: boolean; sort_order: number; created_at: string; updated_at: string }
 export interface NotificationForm { title: string; content: string; enabled: boolean; sort_order: number }
 export interface Invitation { id: string; name: string; email: string; reward: string; inviter_reward_status: string; invitee_reward_status: string; created_at: string }
 export interface InvitationSummary { enabled: boolean; code: string; inviter_reward: string; invitee_reward: string; data: Invitation[] }
-export interface ReliabilitySettings { retry_count: number; retry_status_codes: string; health_check_mode: 'off' | 'scheduled_all' | 'passive_recovery'; health_check_interval_minutes: number; health_check_auto_recover: boolean; health_check_channel_ids: string; auto_disable_on_test_failure: boolean; auto_disable_slow_seconds: number; auto_disable_status_codes: string; auto_disable_keywords: string }
+export interface ReliabilitySettings { retry_count: number; retry_status_codes: string; health_check_mode: 'off' | 'scheduled_all' | 'passive_recovery'; health_check_interval_minutes: number; health_check_auto_recover: boolean; health_check_channel_ids: string; auto_disable_on_test_failure: boolean; auto_disable_slow_seconds: number; auto_disable_status_codes: string; auto_disable_keywords: string; request_body_timeout_seconds: number }
 export interface ContentPolicySettings { request_audit_enabled: boolean; request_audit_store_mode: 'none' | 'hash' | 'excerpt'; request_audit_retention_days: number; content_policy_mode: 'off' | 'audit' | 'block' }
 export interface ContentPolicyRule { id: string; name: string; term: string; action: 'block' | 'audit'; case_sensitive: boolean; enabled: boolean; priority: number; created_at: string; updated_at: string }
 export interface ContentPolicyBatchResult { created: number; skipped: number }
-export interface RequestContentAudit { id: string; request_id: string; user_id: number; api_key_id: string; model: string; endpoint: string; decision: 'allow' | 'audit' | 'block'; matched_rule_ids: string[]; request_bytes: number; content_length: number; content_hash: string; excerpt: string; created_at: string }
+export interface RequestContentAudit { id: string; request_id: string; user_id: number | null; api_key_id: string; model: string; endpoint: string; decision: 'allow' | 'audit' | 'block'; matched_rule_ids: string[]; request_bytes: number; content_length: number; content_hash: string; excerpt: string; created_at: string }
 
 export interface ConversationCacheSettings { conversation_cache_enabled: boolean }
 
 export interface ConversationLog {
   id: string
   request_id: string
-  user_id: string
+  user_id: number
   api_key_id: string
   model: string
   status_code: number
@@ -270,7 +275,7 @@ export interface SessionAffinity {
   session: string
   session_prefix: string
   session_length: number
-  user_id: string
+  user_id: number
   user_name: string
   group_id: string
   group_name: string
@@ -454,7 +459,7 @@ export interface SubscriptionProduct {
 
 export interface UserSubscription {
   id: string
-  user_id: string
+  user_id: number
   subscription_id: string
   product_name: string
   tier_id: string
@@ -516,7 +521,7 @@ export interface OrderRecord {
 }
 
 export interface AdminOrder extends OrderRecord {
-  user_id: string
+  user_id: number
   user_email: string
   user_name: string
 }
@@ -540,7 +545,7 @@ export interface RedemptionCode {
   expires_at: string | null
   enabled: boolean
   note: string
-  redeemed_by: string | null
+  redeemed_by: number | null
   redeemed_at: string | null
   created_at: string
   updated_at: string
@@ -550,7 +555,7 @@ export interface RedemptionCodeRedemption {
   id: string
   code_id: string
   code: string
-  user_id: string
+  user_id: number
   user_email: string
   user_name: string
   amount: string
@@ -591,7 +596,7 @@ export interface ResetCard {
   id: string
   batch_id: string
   subscription_id: string
-  user_id: string
+  user_id: number
   user_email: string
   user_name: string
   tier_id: string
@@ -599,7 +604,7 @@ export interface ResetCard {
   enabled: boolean
   expires_at: string | null
   note: string
-  used_by: string | null
+  used_by: number | null
   used_at: string | null
   created_at: string
   updated_at: string
@@ -676,7 +681,7 @@ export interface InvoiceTaxStatus { paid: boolean }
 
 export interface AdminSubscription {
   id: string
-  user_id: string
+  user_id: number
   email: string
   user_name: string
   tier_id: string
@@ -813,7 +818,7 @@ export interface Cluster {
   description: string
   endpoint: string
   enabled: boolean
-  manager_id: string | number | null
+  manager_id: number | null
   instance_count: number
   created_at: string
   updated_at: string
@@ -1101,7 +1106,7 @@ export interface SessionResult { expires_at: string }
 
 export interface LoginBody { email: string; password: string; code?: string; captcha_id?: string; lot_number?: string; captcha_output?: string; pass_token?: string; gen_time?: string; captcha_token?: string; captcha_purpose?: string }
 export interface RegisterBody { risk_context_id?: string; name: string; email: string; password: string; code?: string; invitation_code?: string; captcha_id?: string; lot_number?: string; captcha_output?: string; pass_token?: string; gen_time?: string; captcha_token?: string; captcha_purpose?: string }
-export interface KeyForm { user_id?: string; name: string; expires_at: string; group_id: string; subscription_id: string }
+export interface KeyForm { user_id?: number; name: string; expires_at: string; group_id: string; subscription_id: string }
 export interface AccountKeyForm { name: string; expires_at: string; group_id: string; subscription_id: string }
 export interface ChannelForm { name: string; provider: string; base_url: string; key_type: 'single' | 'multi'; api_keys: string; models: string[]; test_model?: string; priority: number; groups: string[]; upstream_path?: string; upstream_format?: string; model_routes?: ModelRouteForm[]; auto_disable: boolean; request_overrides?: RequestOverrides; ua_pool?: string[]; user_email?: string; max_concurrency?: number | null; shared_data_only: boolean }
 export interface ProviderForm { name: string; slug: string; prefixes: string[]; priority: number; id?: string }
@@ -1160,8 +1165,8 @@ export const endpoints = {
   selectWorkspace: (id: string) => post<{ workspace_id: string }>(`/account/workspaces/${encodeURIComponent(id)}/select`),
   getWorkspaceMembers: (id: string) => get<{ data: WorkspaceMember[] }>(`/account/workspaces/${encodeURIComponent(id)}/members`),
   addWorkspaceMember: (id: string, form: WorkspaceMemberForm) => post<WorkspaceMember>(`/account/workspaces/${encodeURIComponent(id)}/members`, form),
-  updateWorkspaceMember: (id: string, userId: string, role: 'admin' | 'member') => put<WorkspaceMember>(`/account/workspaces/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`, { role }),
-  removeWorkspaceMember: (id: string, userId: string) => send(`/account/workspaces/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`, 'DELETE'),
+  updateWorkspaceMember: (id: string, userId: number, role: 'admin' | 'member') => put<WorkspaceMember>(`/account/workspaces/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`, { role }),
+  removeWorkspaceMember: (id: string, userId: number) => send(`/account/workspaces/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`, 'DELETE'),
   getAccountKeys: () => get<{ data: ApiKey[] }>('/account/keys'),
   getAccountUsage: (query = '') => get<{ data: UsageRecord[] }>(`/account/usage${query}`),
   getAccountUsageDaily: (days: number, offsetMinutes: number) => get<{ data: DailyUsageRecord[] }>(`/account/usage/daily?days=${days}&offset=${offsetMinutes}`),
@@ -1225,7 +1230,7 @@ export const endpoints = {
   getRewardRiskBans: (query = '') => get<Page<RewardRiskBan>>(`/admin/reward-risk/bans${query}`),
   approveRewardRiskClaim: (id: string, reason?: string) => post<{ id: string; status: RewardStatus }>(`/admin/reward-risk/claims/${encodeURIComponent(id)}/approve`, { reason }),
   rejectRewardRiskClaim: (id: string, reason?: string) => post<{ id: string; status: RewardStatus }>(`/admin/reward-risk/claims/${encodeURIComponent(id)}/reject`, { reason }),
-  unbanRewardRiskUser: (id: string, caseId: string, reason: string) => post<{ ok: true }>(`/admin/reward-risk/users/${encodeURIComponent(id)}/unban`, { case_id: caseId, reason }),
+  unbanRewardRiskUser: (id: number, caseId: string, reason: string) => post<{ ok: true }>(`/admin/reward-risk/users/${encodeURIComponent(id)}/unban`, { case_id: caseId, reason }),
   login: (body: LoginBody) => post<SessionResult>('/auth/login', body),
   register: (body: RegisterBody) => post<SessionResult>('/auth/register', body),
   reauthenticate: (password: string, signal?: AbortSignal) => {
@@ -1263,10 +1268,10 @@ export const endpoints = {
 
   getAdminUsers: (query = '') => get<Page<User>>(`/admin/users${query}`),
   getAdminCheckins: (query = '') => get<Page<AdminCheckin>>(`/admin/checkins${query}`),
-  withdrawAdminCheckin: (userId: string, date: string) => post<{ withdrawn: boolean; reward: number }>(`/admin/users/${encodeURIComponent(userId)}/checkins/${encodeURIComponent(date)}/withdraw`),
-  createUser: (form: UserCreate) => post<{ id: string }>('/admin/users', form),
-  updateUser: (id: string, update: UserUpdate) => send(`/admin/users/${encodeURIComponent(id)}`, 'PUT', update),
-  batchUpdateUsers: (userIds: string[], update: UserBatchUpdateForm) => post<{ affected: number; user_ids: string[] }>('/admin/users/batch-update', { user_ids: userIds, ...update }),
+  withdrawAdminCheckin: (userId: number, date: string) => post<{ withdrawn: boolean; reward: number }>(`/admin/users/${encodeURIComponent(userId)}/checkins/${encodeURIComponent(date)}/withdraw`),
+  createUser: (form: UserCreate) => post<{ id: number }>('/admin/users', form),
+  updateUser: (id: number, update: UserUpdate) => send(`/admin/users/${encodeURIComponent(id)}`, 'PUT', update),
+  batchUpdateUsers: (userIds: number[], update: UserBatchUpdateForm) => post<{ affected: number; user_ids: number[] }>('/admin/users/batch-update', { user_ids: userIds, ...update }),
   getAdminGroups: (query = '') => get<Page<Group>>(`/admin/groups${query}`),
   createGroup: (name: string, multiplier: number, maxConcurrency: number | null, publicGroup: boolean, displayName = '', description = '') => send('/admin/groups', 'POST', { name, multiplier, max_concurrency: maxConcurrency, public: publicGroup, display_name: displayName, description }),
   updateGroup: (id: string, multiplier: number, maxConcurrency: number | null, publicGroup: boolean, displayName = '', description = '') => send(`/admin/groups/${encodeURIComponent(id)}`, 'PUT', { multiplier, max_concurrency: maxConcurrency, public: publicGroup, display_name: displayName, description }),
@@ -1324,8 +1329,8 @@ export const endpoints = {
   getConversationLogs: (query = '') => get<Page<ConversationLog>>(`/admin/conversation-cache${query}`),
   getConversationLogDetail: (id: string) => get<ConversationLogDetail>(`/admin/conversation-cache/${encodeURIComponent(id)}`),
   getSessionAffinity: (query = '') => get<Page<SessionAffinity>>(`/admin/session-affinity${query}`),
-  deleteSessionAffinity: (session: string, userId = '') => api<SessionAffinityPurgeResult>(`/admin/session-affinity/${encodeURIComponent(session)}${userId ? `?user_id=${encodeURIComponent(userId)}` : ''}`, { method: 'DELETE' }),
-  clearSessionAffinity: (userId = '') => api<SessionAffinityPurgeResult>('/admin/session-affinity', { method: 'DELETE', body: JSON.stringify({ user_id: userId }) }),
+  deleteSessionAffinity: (session: string, userId = 0) => api<SessionAffinityPurgeResult>(`/admin/session-affinity/${encodeURIComponent(session)}${userId ? `?user_id=${encodeURIComponent(userId)}` : ''}`, { method: 'DELETE' }),
+  clearSessionAffinity: (userId = 0) => api<SessionAffinityPurgeResult>('/admin/session-affinity', { method: 'DELETE', body: JSON.stringify({ user_id: userId }) }),
   getAdminSiteSettings: () => get<AdminSiteSettings>('/admin/site-settings'),
   updateAdminSiteSettings: (form: SiteSettingsForm) => put<AdminSiteSettings>('/admin/site-settings', form),
   getNotifications: () => get<{ data: Notification[] }>('/notifications'),
@@ -1348,8 +1353,8 @@ export const endpoints = {
   batchExtendSubscriptions: (tierId: string, days: number, status: 'active' | 'inactive' | 'all') => post<{ affected: number }>('/admin/subscriptions/extend', { tier_id: tierId, days, status }),
   resetActiveSubscriptionQuotas: (status: 'active' | 'inactive' | 'all') => post<{ affected: number; status: string }>('/admin/subscriptions/reset-quotas', { status }),
   resetAdminSubscriptionQuota: (id: string) => post<{ ok: boolean }>(`/admin/subscriptions/${encodeURIComponent(id)}/reset-quotas`),
-  getAdminUserSubscriptions: (userId: string) => get<{ data: AdminUserSubscription[] }>(`/admin/users/${encodeURIComponent(userId)}/subscriptions`),
-  createAdminUserSubscription: (userId: string, form: AdminCreateSubscriptionForm) => post<{ id: string }>(`/admin/users/${encodeURIComponent(userId)}/subscriptions`, form),
+  getAdminUserSubscriptions: (userId: number) => get<{ data: AdminUserSubscription[] }>(`/admin/users/${encodeURIComponent(userId)}/subscriptions`),
+  createAdminUserSubscription: (userId: number, form: AdminCreateSubscriptionForm) => post<{ id: string }>(`/admin/users/${encodeURIComponent(userId)}/subscriptions`, form),
   updateAdminSubscription: (id: string, form: AdminUpdateSubscriptionForm) => send(`/admin/subscriptions/${encodeURIComponent(id)}`, 'PUT', form),
   voidAdminSubscription: (id: string) => send(`/admin/subscriptions/${encodeURIComponent(id)}/void`, 'POST'),
   deleteAdminSubscription: (id: string) => send(`/admin/subscriptions/${encodeURIComponent(id)}`, 'DELETE'),
@@ -1378,10 +1383,10 @@ export const endpoints = {
   getGroupNames: () => get<{ data: string[] }>('/group'),
   setAccountKeyGroup: (id: string, groupId: string) => send(`/account/keys/${encodeURIComponent(id)}/group`, 'PUT', { group_id: groupId }),
   setKeyGroup: (id: string, groupId: string) => send(`/admin/keys/${encodeURIComponent(id)}/group`, 'PUT', { group_id: groupId }),
-  setUserRole: (id: string, role: string) => send(`/admin/users/${encodeURIComponent(id)}/role`, 'POST', { role }),
-  setUserPermissions: (id: string, permissions: string[]) => send(`/admin/users/${encodeURIComponent(id)}/permissions`, 'PUT', { permissions }),
-  setUserGroups: (id: string, groups: string[]) => send(`/admin/users/${encodeURIComponent(id)}/groups`, 'PUT', { groups }),
-  adjustBalance: (userId: string, amount: number, note: string) => send('/admin/wallets/adjustments', 'POST', { user_id: userId, amount, note }),
+  setUserRole: (id: number, role: string) => send(`/admin/users/${encodeURIComponent(id)}/role`, 'POST', { role }),
+  setUserPermissions: (id: number, permissions: string[]) => send(`/admin/users/${encodeURIComponent(id)}/permissions`, 'PUT', { permissions }),
+  setUserGroups: (id: number, groups: string[]) => send(`/admin/users/${encodeURIComponent(id)}/groups`, 'PUT', { groups }),
+  adjustBalance: (userId: number, amount: number, note: string) => send('/admin/wallets/adjustments', 'POST', { user_id: userId, amount, note }),
   getRedemptionCodes: (query = '') => get<Page<RedemptionCode>>(`/admin/redemption-codes${query}`),
   createRedemptionCodes: (form: RedemptionCodeForm) => post<{ batch_id: string; codes: string[] }>('/admin/redemption-codes', form),
   updateRedemptionCode: (id: string, form: RedemptionCodeUpdate) => send(`/admin/redemption-codes/${encodeURIComponent(id)}`, 'PUT', form),
@@ -1393,7 +1398,7 @@ export const endpoints = {
   createResetCardsAll: (form: ResetCardAllForm) => post<{ batch_id: string; subscriptions: number; quantity: number }>('/admin/reset-cards/all', form),
   updateResetCard: (id: string, form: ResetCardUpdate) => send(`/admin/reset-cards/${encodeURIComponent(id)}`, 'PUT', form),
   deleteResetCard: (id: string) => send(`/admin/reset-cards/${encodeURIComponent(id)}`, 'DELETE'),
-  resetAdminUserQuota: (userId: string) => post<{ reset_subscriptions: number }>(`/admin/users/${encodeURIComponent(userId)}/reset-quotas`),
+  resetAdminUserQuota: (userId: number) => post<{ reset_subscriptions: number }>(`/admin/users/${encodeURIComponent(userId)}/reset-quotas`),
   getMigrationRequests: () => get<{ data: MigrationRequest[] }>('/admin/migrate/requests'),
 
   getOAuthProviders: () => get<{ data: OAuthProvider[] }>('/admin/oauth/providers'),

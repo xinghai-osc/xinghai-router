@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"math/big"
 	"strconv"
@@ -24,18 +25,32 @@ type ImagePrice struct {
 	Price   float64 `json:"price"`
 }
 
+type ServiceTierPrice struct {
+	InputPerMillion       float64 `json:"input_per_million"`
+	CachedInputPerMillion float64 `json:"cached_input_per_million"`
+	OutputPerMillion      float64 `json:"output_per_million"`
+}
+
+type ThinkingPrice struct {
+	InputPerMillion       float64 `json:"input_per_million"`
+	CachedInputPerMillion float64 `json:"cached_input_per_million"`
+	OutputPerMillion      float64 `json:"output_per_million"`
+}
+
 type DimensionPrices struct {
-	CacheWritePerMillion   *float64     `json:"cache_write_per_million,omitempty"`
-	CacheWrite5mPerMillion *float64     `json:"cache_write_5m_per_million,omitempty"`
-	CacheWrite1hPerMillion *float64     `json:"cache_write_1h_per_million,omitempty"`
-	AudioInputPerMillion   *float64     `json:"audio_input_per_million,omitempty"`
-	AudioOutputPerMillion  *float64     `json:"audio_output_per_million,omitempty"`
-	ImageInputPerMillion   *float64     `json:"image_input_per_million,omitempty"`
-	ImageOutputPerMillion  *float64     `json:"image_output_per_million,omitempty"`
-	AudioPerSecond         *float64     `json:"audio_per_second,omitempty"`
-	VideoPerSecond         *float64     `json:"video_per_second,omitempty"`
-	ToolPerCall            *float64     `json:"tool_per_call,omitempty"`
-	Images                 []ImagePrice `json:"images,omitempty"`
+	CacheWritePerMillion   *float64                    `json:"cache_write_per_million,omitempty"`
+	CacheWrite5mPerMillion *float64                    `json:"cache_write_5m_per_million,omitempty"`
+	CacheWrite1hPerMillion *float64                    `json:"cache_write_1h_per_million,omitempty"`
+	AudioInputPerMillion   *float64                    `json:"audio_input_per_million,omitempty"`
+	AudioOutputPerMillion  *float64                    `json:"audio_output_per_million,omitempty"`
+	ImageInputPerMillion   *float64                    `json:"image_input_per_million,omitempty"`
+	ImageOutputPerMillion  *float64                    `json:"image_output_per_million,omitempty"`
+	AudioPerSecond         *float64                    `json:"audio_per_second,omitempty"`
+	VideoPerSecond         *float64                    `json:"video_per_second,omitempty"`
+	ToolPerCall            *float64                    `json:"tool_per_call,omitempty"`
+	Images                 []ImagePrice                `json:"images,omitempty"`
+	ServiceTiers           map[string]ServiceTierPrice `json:"service_tiers,omitempty"`
+	ThinkingPrices         map[string]ThinkingPrice    `json:"thinking_prices,omitempty"`
 }
 
 type BillingPricing struct {
@@ -43,6 +58,8 @@ type BillingPricing struct {
 	PricedAt              time.Time       `json:"priced_at"`
 	BillingMode           string          `json:"billing_mode"`
 	Currency              string          `json:"currency"`
+	ThinkingLevel         string          `json:"thinking_level,omitempty"`
+	ServiceTier           string          `json:"service_tier,omitempty"`
 	InputPerMillion       float64         `json:"input_per_million"`
 	CachedInputPerMillion float64         `json:"cached_input_per_million"`
 	OutputPerMillion      float64         `json:"output_per_million"`
@@ -115,6 +132,11 @@ func parseDimensionPrices(raw json.RawMessage) (DimensionPrices, error) {
 }
 
 func validateDimensionPrices(prices DimensionPrices) error {
+	for tier, price := range prices.ServiceTiers {
+		if tier != "fast" || !validPricingRate(price.InputPerMillion) || !validPricingRate(price.CachedInputPerMillion) || !validPricingRate(price.OutputPerMillion) {
+			return fmt.Errorf("invalid service tier price %q", tier)
+		}
+	}
 	rates := []struct {
 		name  string
 		value *float64
@@ -148,6 +170,14 @@ func validateDimensionPrices(prices DimensionPrices) error {
 			return fmt.Errorf("duplicate image price for size %q and quality %q", price.Size, price.Quality)
 		}
 		seen[key] = true
+	}
+	if len(prices.ThinkingPrices) > 32 {
+		return fmt.Errorf("too many thinking prices")
+	}
+	for level, price := range prices.ThinkingPrices {
+		if level == "" || len(level) > 32 || strings.TrimSpace(level) != level || !validPricingRate(price.InputPerMillion) || !validPricingRate(price.CachedInputPerMillion) || !validPricingRate(price.OutputPerMillion) {
+			return fmt.Errorf("invalid thinking price for level %q", level)
+		}
 	}
 	return nil
 }
@@ -210,9 +240,34 @@ func cloneDimensionPrices(prices DimensionPrices) DimensionPrices {
 	prices.VideoPerSecond = clone(prices.VideoPerSecond)
 	prices.ToolPerCall = clone(prices.ToolPerCall)
 	prices.Images = append([]ImagePrice(nil), prices.Images...)
+	if prices.ServiceTiers != nil {
+		prices.ServiceTiers = maps.Clone(prices.ServiceTiers)
+	}
+	if prices.ThinkingPrices != nil {
+		prices.ThinkingPrices = maps.Clone(prices.ThinkingPrices)
+	}
 	return prices
 }
 
+func resolveThinkingPrices(prices DimensionPrices, level string, input, cached, output float64) (float64, float64, float64) {
+	level = strings.ToLower(strings.TrimSpace(level))
+	if level == "" || prices.ThinkingPrices == nil {
+		return input, cached, output
+	}
+	selected, ok := prices.ThinkingPrices[level]
+	if !ok {
+		for configured, candidate := range prices.ThinkingPrices {
+			if strings.EqualFold(configured, level) {
+				selected, ok = candidate, true
+				break
+			}
+		}
+	}
+	if !ok {
+		return input, cached, output
+	}
+	return selected.InputPerMillion, selected.CachedInputPerMillion, selected.OutputPerMillion
+}
 func effectiveDimensionPrices(prices DimensionPrices, input, output float64) DimensionPrices {
 	prices = cloneDimensionPrices(prices)
 	fallback := func(value *float64, otherwise float64) *float64 {
@@ -258,7 +313,7 @@ func calculateBill(facts UsageFacts, pricing pricingRule, groupMultiplier float6
 	snapshot := BillingSnapshot{
 		Usage: facts, Status: "unpriced", Amount: "0.00000000", ComputedAmount: "0.00000000",
 		Pricing: BillingPricing{
-			Version: pricing.version, PricedAt: pricing.pricedAt, BillingMode: pricing.billingMode, Currency: currency,
+			Version: pricing.version, PricedAt: pricing.pricedAt, BillingMode: pricing.billingMode, Currency: currency, ThinkingLevel: pricing.thinkingLevel, ServiceTier: pricing.serviceTier,
 			InputPerMillion: pricing.input, CachedInputPerMillion: pricing.cachedInput, OutputPerMillion: pricing.output,
 			DimensionPrices: cloneDimensionPrices(pricing.dimensions),
 		},
@@ -278,7 +333,18 @@ func calculateBill(facts UsageFacts, pricing pricingRule, groupMultiplier float6
 		return fail(err)
 	}
 	input, cached, output := pricing.resolveTier(tokens, pricing.input, pricing.cachedInput, pricing.output)
+	serviceTier := strings.ToLower(strings.TrimSpace(pricing.serviceTier))
+	if serviceTier != "" && serviceTier != "default" && serviceTier != "auto" {
+		servicePrice, ok := pricing.serviceTiers[serviceTier]
+		if !ok {
+			return fail(fmt.Errorf("service tier %q is not priced", serviceTier))
+		}
+		input, cached, output = servicePrice.InputPerMillion, servicePrice.CachedInputPerMillion, servicePrice.OutputPerMillion
+	}
+	input, cached, output = resolveThinkingPrices(pricing.dimensions, pricing.thinkingLevel, input, cached, output)
 	snapshot.Pricing.InputPerMillion, snapshot.Pricing.CachedInputPerMillion, snapshot.Pricing.OutputPerMillion = input, cached, output
+	snapshot.Pricing.ServiceTier = serviceTier
+	snapshot.Usage.ThinkingLevel = pricing.thinkingLevel
 	snapshot.Pricing.DimensionPrices = effectiveDimensionPrices(pricing.dimensions, input, output)
 	if err := snapshot.validatePricing(); err != nil {
 		return fail(err)

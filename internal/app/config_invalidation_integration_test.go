@@ -41,7 +41,7 @@ func TestIntegrationConfigInvalidationTransactions(t *testing.T) {
 	defer db.Close()
 	resetIntegrationDatabase(t, db)
 	ctx := context.Background()
-	migration, err := migrations.ReadFile("migrations/115_subscription_invalidation.sql")
+	migration, err := migrations.ReadFile("migrations/125_subscription_invalidation.sql")
 	if err != nil {
 		t.Fatal(err)
 	}

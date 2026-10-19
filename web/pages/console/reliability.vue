@@ -13,6 +13,7 @@ useHead({ title: () => `${t('system.reliabilityTitle')} · ${site.value.name}` }
 const DEFAULTS: ReliabilitySettings = {
   retry_count: 3,
   retry_status_codes: '100-199,300-407,409-503,505-523,525-599',
+  request_body_timeout_seconds: 30,
   health_check_mode: 'off',
   health_check_interval_minutes: 5,
   health_check_auto_recover: true,
@@ -31,6 +32,7 @@ const { data, pending, error, refresh } = useResource(
 const form = reactive<ReliabilitySettings>({ ...DEFAULTS })
 const mode = ref<string>(DEFAULTS.health_check_mode)
 const retryCount = ref(String(DEFAULTS.retry_count))
+const bodyTimeout = ref(String(DEFAULTS.request_body_timeout_seconds))
 const interval = ref(String(DEFAULTS.health_check_interval_minutes))
 const slowSeconds = ref(String(DEFAULTS.auto_disable_slow_seconds))
 
@@ -38,6 +40,7 @@ watch(data, (next) => {
   Object.assign(form, next)
   mode.value = next.health_check_mode || 'off'
   retryCount.value = String(next.retry_count ?? DEFAULTS.retry_count)
+  bodyTimeout.value = String(next.request_body_timeout_seconds ?? DEFAULTS.request_body_timeout_seconds)
   interval.value = String(next.health_check_interval_minutes ?? DEFAULTS.health_check_interval_minutes)
   slowSeconds.value = String(next.auto_disable_slow_seconds ?? 0)
 }, { immediate: true })
@@ -60,6 +63,7 @@ async function save() {
     ...form,
     health_check_mode: mode.value as ReliabilitySettings['health_check_mode'],
     retry_count: toInt(retryCount.value, DEFAULTS.retry_count, 0, 10),
+    request_body_timeout_seconds: toInt(bodyTimeout.value, DEFAULTS.request_body_timeout_seconds, 0, 3600),
     health_check_interval_minutes: toInt(interval.value, DEFAULTS.health_check_interval_minutes, 1, 1440),
     auto_disable_slow_seconds: toInt(slowSeconds.value, DEFAULTS.auto_disable_slow_seconds, 0, 600),
   }
@@ -105,6 +109,10 @@ async function save() {
               for="retry-codes"
             >
               <UiInput id="retry-codes" v-model="form.retry_status_codes" mono />
+            </UiField>
+
+            <UiField :label="t('system.requestBodyTimeout')" :hint="t('system.requestBodyTimeoutHint')" for="request-body-timeout">
+              <UiInput id="request-body-timeout" v-model="bodyTimeout" />
             </UiField>
           </div>
         </UiCard>

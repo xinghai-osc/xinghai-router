@@ -725,7 +725,7 @@ func (s *Service) createUser(w http.ResponseWriter, r *http.Request) {
 	if in.Enabled != nil {
 		enabled = *in.Enabled
 	}
-	var id string
+	var id int64
 	if err = tx.QueryRow(ctx, `insert into users(email,name,role,password_hash,enabled) values($1,$2,$3,$4,$5) returning id`, in.Email, in.Name, in.Role, passwordHash, enabled).Scan(&id); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -760,7 +760,7 @@ func (s *Service) createUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "internal_error", "could not create user")
 		return
 	}
-	s.audit(r, "user.created", "user", id, map[string]any{"email": in.Email, "name": in.Name, "role": in.Role})
+	s.audit(r, "user.created", "user", strconv.FormatInt(id, 10), map[string]any{"email": in.Email, "name": in.Name, "role": in.Role})
 	writeJSON(w, 201, map[string]any{"id": id})
 }
 
@@ -791,14 +791,16 @@ func (s *Service) listUsers(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	out := []map[string]any{}
 	for rows.Next() {
-		var id, email, name, role string
+		var id int64
+		var email, name, role string
 		var enabled bool
 		var leaderboardOptIn, leaderboardMaskName, dataUsageEnabled bool
 		var maxConcurrency, created any
 		var balance, reserved any
 		var permissions []string
 		var groups []string
-		var inviterID, inviterEmail, inviterName *string
+		var inviterID *int64
+		var inviterEmail, inviterName *string
 		if rows.Scan(&id, &email, &name, &role, &enabled, &leaderboardOptIn, &leaderboardMaskName, &dataUsageEnabled, &maxConcurrency, &created, &balance, &reserved, &permissions, &groups, &inviterID, &inviterEmail, &inviterName) != nil {
 			continue
 		}
@@ -1196,7 +1198,7 @@ func (s *Service) updateUser(w http.ResponseWriter, r *http.Request) {
 	if _, ok := changed["groups"]; ok {
 		s.invalidateChannels()
 	}
-	writeJSON(w, 200, map[string]any{"id": userID, "updated": changed})
+	writeJSON(w, 200, map[string]any{"id": userIDNumber(userID), "updated": changed})
 }
 
 func (s *Service) listGroups(w http.ResponseWriter, r *http.Request) {
@@ -1566,7 +1568,7 @@ func (s *Service) modelCatalog(w http.ResponseWriter, r *http.Request) {
 			)
 			select c.model,c.group_id,c.group_name,c.group_multiplier,c.group_public,
 				p.input_per_million,p.cached_input_per_million,p.output_per_million,p.multiplier,coalesce(p.currency,'CNY'),
-				coalesce(m.description,''),coalesce(m.input_modalities,'{}'),coalesce(m.output_modalities,'{}'),m.context_window,m.requires_data_transfer_consent,
+				coalesce(m.description,''),coalesce(m.input_modalities,'{}'),coalesce(m.output_modalities,'{}'),m.context_window,coalesce(m.requires_data_transfer_consent,false),
 				perf.requests,perf.success_rate,perf.avg_latency_ms,perf.avg_first_token_ms
 			from catalog c
 			left join pricing_rules p on p.model=c.model and p.enabled
@@ -2106,16 +2108,17 @@ func (s *Service) setUserPermissions(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Service) createKey(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		UserID         string `json:"user_id"`
+		UserID         int64  `json:"user_id"`
 		Name           string `json:"name"`
 		ExpiresAt      string `json:"expires_at"`
 		GroupID        string `json:"group_id"`
 		SubscriptionID string `json:"subscription_id"`
 	}
-	if decode(r, &in) != nil || strings.TrimSpace(in.UserID) == "" {
+	if decode(r, &in) != nil || in.UserID <= 0 {
 		writeError(w, 400, "invalid_request", "user_id and name are required")
 		return
 	}
+	userID := strconv.FormatInt(in.UserID, 10)
 	name := strings.TrimSpace(in.Name)
 	if !validAPIKeyName(name) {
 		writeError(w, 400, "invalid_request", "name must be 1-100 characters")
@@ -2132,12 +2135,12 @@ func (s *Service) createKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, _ := randomID()
-	groupID, err := s.validKeyGroup(r.Context(), in.UserID, in.GroupID)
+	groupID, err := s.validKeyGroup(r.Context(), userID, in.GroupID)
 	if err != nil {
 		writeError(w, 400, "invalid_request", "group must belong to user")
 		return
 	}
-	subscriptionID, err := s.validKeySubscription(r.Context(), in.UserID, in.SubscriptionID)
+	subscriptionID, err := s.validKeySubscription(r.Context(), userID, in.SubscriptionID)
 	if err != nil {
 		writeError(w, 400, "invalid_request", "subscription instance must be active and belong to the user")
 		return
@@ -2153,11 +2156,11 @@ func (s *Service) createKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(r.Context())
-	if err = lockAPIKeyCreation(r.Context(), tx, accountFromContext(r), in.UserID, true); err != nil {
+	if err = lockAPIKeyCreation(r.Context(), tx, accountFromContext(r), userID, true); err != nil {
 		writeUserMutationError(w, err)
 		return
 	}
-	_, err = tx.Exec(r.Context(), `insert into api_keys(id,user_id,name,key_prefix,secret_hash,secret_encrypted,expires_at,group_id,subscription_id) values($1,$2,$3,$4,$5,$6,$7,$8,$9)`, id, in.UserID, name, secret[:12], hashSecret(secret), encryptedSecret, expires, groupID, subscriptionID)
+	_, err = tx.Exec(r.Context(), `insert into api_keys(id,user_id,name,key_prefix,secret_hash,secret_encrypted,expires_at,group_id,subscription_id) values($1,$2,$3,$4,$5,$6,$7,$8,$9)`, id, userID, name, secret[:12], hashSecret(secret), encryptedSecret, expires, groupID, subscriptionID)
 	if err != nil {
 		writeError(w, 400, "invalid_request", "unknown user")
 		return
@@ -2166,7 +2169,7 @@ func (s *Service) createKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "internal_error", "could not create API key")
 		return
 	}
-	s.audit(r, "api_key.created", "api_key", id, map[string]any{"user_id": in.UserID, "name": name, "subscription_id": subscriptionID})
+	s.audit(r, "api_key.created", "api_key", id, map[string]any{"user_id": userID, "name": name, "subscription_id": subscriptionID})
 	writeJSON(w, 201, map[string]any{"id": id, "name": name, "key": secret, "expires_at": expires, "group_id": groupID, "subscription_id": subscriptionID})
 }
 func (s *Service) listKeys(w http.ResponseWriter, r *http.Request) {
@@ -3467,7 +3470,7 @@ func (s *Service) migrateChannelKeys(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) adjustBalance(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		UserID string  `json:"user_id"`
+		UserID int64   `json:"user_id"`
 		Amount float64 `json:"amount"`
 		Note   string  `json:"note"`
 	}
@@ -3476,7 +3479,7 @@ func (s *Service) adjustBalance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.Note = strings.TrimSpace(in.Note)
-	if in.UserID == "" || !validWalletAdjustAmount(in.Amount) || in.Note == "" || len(in.Note) > maxWalletNoteLength {
+	if in.UserID <= 0 || !validWalletAdjustAmount(in.Amount) || in.Note == "" || len(in.Note) > maxWalletNoteLength {
 		writeError(w, 400, "invalid_request", "user_id, non-zero finite amount within ±1e9, and note (1-500 chars) are required")
 		return
 	}
@@ -3512,7 +3515,7 @@ func (s *Service) adjustBalance(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "internal_error", "could not adjust balance")
 		return
 	}
-	s.audit(r, "wallet.adjusted", "user", in.UserID, map[string]any{"amount": in.Amount, "note": in.Note})
+	s.audit(r, "wallet.adjusted", "user", strconv.FormatInt(in.UserID, 10), map[string]any{"amount": in.Amount, "note": in.Note})
 	writeJSON(w, 200, map[string]any{"balance": balance + in.Amount})
 }
 
@@ -3809,7 +3812,7 @@ func (s *Service) deleteChannelRoute(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) upsertQuota(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		UserID      string   `json:"user_id"`
+		UserID      int64    `json:"user_id"`
 		APIKeyID    string   `json:"api_key_id"`
 		Model       string   `json:"model"`
 		Window      string   `json:"window"`
@@ -3817,7 +3820,7 @@ func (s *Service) upsertQuota(w http.ResponseWriter, r *http.Request) {
 		MaxTokens   *int64   `json:"max_tokens"`
 		MaxCost     *float64 `json:"max_cost"`
 	}
-	if decode(r, &in) != nil || (in.UserID == "" && in.APIKeyID == "") || (in.Window != "minute" && in.Window != "day" && in.Window != "month" && in.Window != "total") || (in.MaxRequests == nil && in.MaxTokens == nil && in.MaxCost == nil) {
+	if decode(r, &in) != nil || (in.UserID == 0 && in.APIKeyID == "") || (in.Window != "minute" && in.Window != "day" && in.Window != "month" && in.Window != "total") || (in.MaxRequests == nil && in.MaxTokens == nil && in.MaxCost == nil) {
 		writeError(w, 400, "invalid_request", "scope, window, and a limit are required")
 		return
 	}
@@ -3830,13 +3833,17 @@ func (s *Service) upsertQuota(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_request", "limits must be between 0 and 1e12")
 		return
 	}
+	userID := ""
+	if in.UserID > 0 {
+		userID = strconv.FormatInt(in.UserID, 10)
+	}
 	id, _ := randomID()
-	_, err := s.db.Exec(r.Context(), `insert into quota_limits(id,user_id,api_key_id,model,"window",max_requests,max_tokens,max_cost) values($1,nullif($2,'')::bigint,nullif($3,'')::uuid,nullif($4,''),$5,$6,$7,$8) on conflict (coalesce(user_id, 0), coalesce(api_key_id, '00000000-0000-0000-0000-000000000000'::uuid), coalesce(model, ''), "window") do update set max_requests=excluded.max_requests,max_tokens=excluded.max_tokens,max_cost=excluded.max_cost`, id, in.UserID, in.APIKeyID, in.Model, in.Window, in.MaxRequests, in.MaxTokens, in.MaxCost)
+	_, err := s.db.Exec(r.Context(), `insert into quota_limits(id,user_id,api_key_id,model,"window",max_requests,max_tokens,max_cost) values($1,nullif($2,'')::bigint,nullif($3,'')::uuid,nullif($4,''),$5,$6,$7,$8) on conflict (coalesce(user_id, 0), coalesce(api_key_id, '00000000-0000-0000-0000-000000000000'::uuid), coalesce(model, ''), "window") do update set max_requests=excluded.max_requests,max_tokens=excluded.max_tokens,max_cost=excluded.max_cost`, id, userID, in.APIKeyID, in.Model, in.Window, in.MaxRequests, in.MaxTokens, in.MaxCost)
 	if err != nil {
 		writeError(w, 400, "invalid_request", "could not save quota")
 		return
 	}
-	s.audit(r, "quota.updated", "quota", id, map[string]any{"user_id": in.UserID, "api_key_id": in.APIKeyID, "model": in.Model, "window": in.Window})
+	s.audit(r, "quota.updated", "quota", id, map[string]any{"user_id": userID, "api_key_id": in.APIKeyID, "model": in.Model, "window": in.Window})
 	s.invalidateQuotaAbsence()
 	writeJSON(w, 200, map[string]any{"id": id})
 }

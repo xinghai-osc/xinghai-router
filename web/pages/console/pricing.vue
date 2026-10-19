@@ -33,6 +33,7 @@ const form = reactive({
   output_per_million: '0',
   multiplier: '1',
   currency: 'CNY',
+  thinking_prices: '',
 })
 
 function openCreate() {
@@ -44,6 +45,7 @@ function openCreate() {
   form.output_per_million = '0'
   form.multiplier = '1'
   form.currency = 'CNY'
+  form.thinking_prices = ''
   dialogOpen.value = true
 }
 
@@ -56,6 +58,7 @@ function openEdit(rule: Pricing) {
   form.output_per_million = String(rule.output_per_million)
   form.multiplier = String(rule.multiplier)
   form.currency = rule.currency || 'CNY'
+  form.thinking_prices = rule.dimension_prices?.thinking_prices ? JSON.stringify(rule.dimension_prices.thinking_prices, null, 2) : ''
   dialogOpen.value = true
 }
 
@@ -84,6 +87,19 @@ async function save() {
     return
   }
 
+  const thinkingPrices = form.thinking_prices.trim()
+  let dimension_prices: PricingForm['dimension_prices'] | undefined
+  if (thinkingPrices) {
+    try {
+      const parsed: unknown = JSON.parse(thinkingPrices)
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('invalid')
+      dimension_prices = { thinking_prices: parsed as NonNullable<PricingForm['dimension_prices']>['thinking_prices'] }
+    } catch {
+      formError.value = t('admin.thinkingPricesInvalid')
+      return
+    }
+  }
+
   const payload: PricingForm = {
     model,
     input_per_million: input,
@@ -91,6 +107,7 @@ async function save() {
     output_per_million: output,
     multiplier,
     currency: form.currency.trim().toUpperCase(),
+    dimension_prices,
   }
 
   const ok = await run(() => endpoints.savePricing(payload))
@@ -158,6 +175,9 @@ const tierForm = reactive({
 const editingTier = ref(false)
 const tierModelCurrency = ref('CNY')
 
+function thinkingPriceEntries(rule: Pricing): string[] {
+  return Object.keys(rule.dimension_prices?.thinking_prices ?? {}).sort()
+}
 function formatPricingRate(value: number | string | null, currency: string): string {
   const numeric = Number(value)
   if (!Number.isFinite(numeric)) return '—'
@@ -430,6 +450,7 @@ async function deleteTimeRule(rule: PricingTimeRule) {
             <th class="num">{{ t('admin.inputPerMillion') }}</th>
             <th class="num">{{ t('admin.cachedInputPerMillion') }}</th>
             <th class="num">{{ t('admin.outputPerMillion') }}</th>
+            <th>{{ t('admin.thinkingPrices') }}</th>
             <th class="num">{{ t('admin.multiplier') }}</th>
             <th>{{ t('common.status') }}</th>
             <th>{{ t('common.updatedAt') }}</th>
@@ -443,6 +464,12 @@ async function deleteTimeRule(rule: PricingTimeRule) {
             <td class="num">{{ (rule.currency || 'CNY') }} {{ Number(rule.input_per_million).toFixed(4) }}</td>
             <td class="num">{{ (rule.currency || 'CNY') }} {{ Number(rule.cached_input_per_million).toFixed(4) }}</td>
             <td class="num">{{ (rule.currency || 'CNY') }} {{ Number(rule.output_per_million).toFixed(4) }}</td>
+            <td>
+              <div v-if="thinkingPriceEntries(rule).length" class="flex flex-wrap gap-1">
+                <UiBadge v-for="level in thinkingPriceEntries(rule)" :key="level" tone="neutral">{{ level }}</UiBadge>
+              </div>
+              <span v-else class="text-faint">—</span>
+            </td>
             <td class="num">{{ rule.multiplier }}</td>
             <td>
               <UiBadge :tone="rule.enabled ? 'success' : 'neutral'" dot>
@@ -485,8 +512,8 @@ async function deleteTimeRule(rule: PricingTimeRule) {
           <UiField :label="t('admin.outputPerMillion')" required>
             <UiInput v-model="form.output_per_million" type="number" mono />
           </UiField>
-          <UiField :label="t('admin.multiplier')" required>
-            <UiInput v-model="form.multiplier" type="number" mono />
+          <UiField :label="t('admin.thinkingPrices')" :hint="t('admin.thinkingPricesHint')">
+            <UiTextarea v-model="form.thinking_prices" :placeholder="t('admin.thinkingPricesPlaceholder')" :rows="5" mono />
           </UiField>
         </div>
       </div>

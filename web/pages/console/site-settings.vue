@@ -24,8 +24,8 @@ const EMPTY: AdminSiteSettings = {
   icon_url: '',
   announcement: '',
   contact_email: '',
+  api_base_urls: [],
   auto_disable_failed_channels: false,
-  featured_enabled: true,
   featured_model: '',
   featured_copy: emptyFeaturedCopy(),
   captcha_provider: '',
@@ -62,6 +62,7 @@ const form = reactive({
   announcement: '',
   contact_email: '',
   auto_disable_failed_channels: false,
+  api_base_urls: '',
   captcha_provider: '',
   geetest_captcha_id: '',
   corptcha_site_id: '',
@@ -104,6 +105,7 @@ watch(data, (next) => {
   form.icon_url = next.icon_url
   form.announcement = next.announcement
   form.contact_email = next.contact_email
+  form.api_base_urls = (next.api_base_urls ?? []).join('\n')
   form.auto_disable_failed_channels = next.auto_disable_failed_channels
   form.captcha_provider = next.captcha_provider
   form.geetest_captcha_id = next.geetest_captcha_id
@@ -144,6 +146,7 @@ async function save() {
     icon_url: form.icon_url.trim(),
     announcement: form.announcement.trim(),
     contact_email: form.contact_email.trim(),
+    api_base_urls: form.api_base_urls.split(/\r?\n/),
     auto_disable_failed_channels: form.auto_disable_failed_channels,
     captcha_provider: form.captcha_provider,
     geetest_captcha_id: form.geetest_captcha_id.trim(),
@@ -263,6 +266,14 @@ const featuredModelOptions = computed(() => [
                 v-model="form.auto_disable_failed_channels"
                 :label="t('system.autoDisableFailedChannels')"
               />
+            </UiField>
+
+            <UiField
+              :label="t('system.apiBaseUrls')"
+              :hint="t('system.apiBaseUrlsHint')"
+              for="api-base-urls"
+            >
+              <UiTextarea id="api-base-urls" v-model="form.api_base_urls" mono :rows="3" :placeholder="t('system.apiBaseUrlsPlaceholder')" />
             </UiField>
 
             <UiField

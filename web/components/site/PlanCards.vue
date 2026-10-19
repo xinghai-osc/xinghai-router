@@ -59,13 +59,11 @@ function tierSelectOptions(product: SubscriptionProduct) {
   return purchasableTiers(product).map(tier => ({ value: tier.id, label: tier.name }))
 }
 
-function onTierChange(product: SubscriptionProduct) {
-  return (tierId: string) => selectTier(product, tierId)
-}
-
 function selectTier(product: SubscriptionProduct, tierId: string) {
   const tier = purchasableTiers(product).find(item => item.id === tierId)
-  const period = tier ? tierPrices(tier)[0]?.billing_period : undefined
+  const prices = tier ? tierPrices(tier) : []
+  const currentPeriod = selection.value[product.id]?.period
+  const period = prices.find(price => price.billing_period === currentPeriod)?.billing_period ?? prices[0]?.billing_period
   if (period) selection.value[product.id] = { tierId, period }
 }
 
@@ -167,7 +165,7 @@ function signupTo(product: SubscriptionProduct): string {
           size="sm"
           :model-value="currentTier(product)?.id ?? ''"
           :options="tierSelectOptions(product)"
-          @update:model-value="onTierChange(product)"
+          @update:model-value="selectTier(product, $event)"
         />
       </div>
 

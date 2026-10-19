@@ -334,14 +334,12 @@ func boundSessionText(text string) string {
 	return text
 }
 
-// applySessionAffinity orders the candidate channels by the session's affinity
-// and restores the credential the session was pinned with, so a conversation is
-// retried against the upstream that cached its prompt prefix before any channel
-// without affinity for it. The bound channel is promoted to the front even when
-// a higher-priority channel exists: the affinity is worth more than the priority
-// order, because the upstream prefix cache it protects is what lowers latency
-// and the cached-input price, and the remaining channels stay behind it in their
-// natural order as the fallback.
+// applySessionAffinity orders the candidate channels so the channel a session is
+// pinned to is attempted first and restores the credential the session was
+// pinned with. If that channel fails, the retry loop proceeds through every
+// other candidate in its original routing order, preserving the normal priority
+// and weight decisions. The bound channel can therefore precede a higher-priority
+// channel, but affinity never reorders the fallback candidates among themselves.
 //
 // A session that has no assignment yet picks one, weighted by channel weight and
 // seeded by the session id, so every request of that session makes the same
@@ -384,7 +382,9 @@ func (s *Service) applySessionAffinity(key sessionAffinityKey, channels []channe
 		ch.keyID = ch.keys[index].id
 	}
 	if target != 0 {
-		channels[0], channels[target] = channels[target], channels[0]
+		affinityChannel := channels[target]
+		copy(channels[1:target+1], channels[:target])
+		channels[0] = affinityChannel
 	}
 	return channels
 }

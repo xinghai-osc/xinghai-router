@@ -1,7 +1,7 @@
 import { endpoints, setWorkspaceRequestScope, type Account, type Workspace } from '~/src/api'
 
 interface WorkspaceState {
-  userId: string
+  userId: number
   workspaces: Workspace[]
   currentId: string
   ready: boolean
@@ -16,7 +16,7 @@ export function useWorkspace() {
   const { toast } = useToast()
   const account = useState<Account | null>('account', () => null)
   const state = useState<WorkspaceState>('workspace', () => ({
-    userId: '', workspaces: [], currentId: '', ready: false, loading: false, error: '', revision: 0, requestId: 0,
+    userId: 0, workspaces: [], currentId: '', ready: false, loading: false, error: '', revision: 0, requestId: 0,
   }))
   const ready = computed(() => state.value.ready && state.value.userId === account.value?.id)
   const current = computed(() => ready.value ? state.value.workspaces.find(workspace => workspace.id === state.value.currentId) ?? null : null)
@@ -26,16 +26,16 @@ export function useWorkspace() {
     if (!import.meta.client) return
     setWorkspaceRequestScope(null)
     state.value = {
-      userId: '', workspaces: [], currentId: '', ready: false, loading: false, error: '',
+      userId: 0, workspaces: [], currentId: '', ready: false, loading: false, error: '',
       revision: state.value.revision + 1, requestId: state.value.requestId + 1,
     }
   }
 
-  function storedSelection(userId: string): string {
+  function storedSelection(userId: number): string {
     try { return localStorage.getItem(`xinghai.workspace:${userId}`) ?? '' } catch { return '' }
   }
 
-  function rememberSelection(userId: string, id: string) {
+  function rememberSelection(userId: number, id: string) {
     try { localStorage.setItem(`xinghai.workspace:${userId}`, id) } catch { return }
   }
 

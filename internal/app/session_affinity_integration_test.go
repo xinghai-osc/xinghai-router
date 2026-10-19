@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -319,7 +320,7 @@ func TestIntegrationSessionAffinityAdminSurface(t *testing.T) {
 	var page struct {
 		Data []struct {
 			Session     string    `json:"session"`
-			UserID      string    `json:"user_id"`
+			UserID      int64     `json:"user_id"`
 			Model       string    `json:"model"`
 			ChannelID   int64     `json:"channel_id"`
 			ChannelName string    `json:"channel_name"`
@@ -334,7 +335,7 @@ func TestIntegrationSessionAffinityAdminSurface(t *testing.T) {
 		t.Fatalf("list = %d rows total %d, want the pinned conversation", len(page.Data), page.Total)
 	}
 	row := page.Data[0]
-	if row.Session != session || row.UserID != userID || row.Model != "affinity-model" || row.ChannelName != "affinity-admin" || row.ChannelID == 0 || row.ExpiresAt.Before(time.Now()) {
+	if row.Session != session || row.UserID <= 0 || strconv.FormatInt(row.UserID, 10) != userID || row.Model != "affinity-model" || row.ChannelName != "affinity-admin" || row.ChannelID == 0 || row.ExpiresAt.Before(time.Now()) {
 		t.Fatalf("listed assignment = %#v", row)
 	}
 

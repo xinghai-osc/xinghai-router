@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -429,10 +430,66 @@ func bearer(r *http.Request) string {
 	}
 	return strings.TrimSpace(r.Header.Get("X-API-Key"))
 }
+func userIDNumber(value string) any {
+	id, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || id <= 0 {
+		return nil
+	}
+	return id
+}
+
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
+	data, err := json.Marshal(v)
+	if err != nil {
+		_, _ = w.Write([]byte("null\n"))
+		return
+	}
+	decoder := json.NewDecoder(strings.NewReader(string(data)))
+	decoder.UseNumber()
+	var payload any
+	if decoder.Decode(&payload) != nil {
+		_, _ = w.Write(append(data, '\n'))
+		return
+	}
+	writeNumericUserIDs(payload)
+	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func writeNumericUserIDs(value any) {
+	switch v := value.(type) {
+	case map[string]any:
+		for key, item := range v {
+			if key == "user_id" || key == "inviter_id" || key == "origin_user_id" || key == "released_by" || key == "owner_id" || key == "manager_id" || key == "redeemed_by" || key == "used_by" || key == "reviewed_by" || key == "created_by" || key == "updated_by" {
+				if text, ok := item.(string); ok {
+					if text == "" {
+						v[key] = nil
+					} else if id, err := strconv.ParseInt(text, 10, 64); err == nil {
+						v[key] = json.Number(strconv.FormatInt(id, 10))
+					} else {
+						v[key] = nil
+					}
+				}
+			} else if key == "user_ids" {
+				if ids, ok := item.([]any); ok {
+					for i, id := range ids {
+						if text, ok := id.(string); ok {
+							if parsed, err := strconv.ParseInt(text, 10, 64); err == nil {
+								ids[i] = json.Number(strconv.FormatInt(parsed, 10))
+							}
+						}
+					}
+				}
+			} else {
+				writeNumericUserIDs(item)
+			}
+		}
+	case []any:
+		for _, item := range v {
+			writeNumericUserIDs(item)
+		}
+	}
 }
 func writeError(w http.ResponseWriter, status int, code, msg string) {
 	writeJSON(w, status, map[string]any{"error": map[string]string{"message": msg, "type": code, "code": code, "request_id": w.Header().Get("X-Request-ID")}})

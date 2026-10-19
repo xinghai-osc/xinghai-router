@@ -32,6 +32,57 @@ const filterSource = ref('')
 const filterDecision = ref('')
 const filterBanStatus = ref('active')
 const mutationError = ref('')
+const selectedIds = ref<string[]>([])
+const bulkTarget = ref<'approve' | 'reject' | 'unban' | null>(null)
+const bulkReason = ref('')
+const bulkError = ref('')
+const selectableRows = computed(() => tab.value === 'claims'
+  ? claims.data.value.data.filter(claim => claim.status === 'pending')
+  : tab.value === 'bans' ? bans.data.value.data.filter(ban => !ban.released_at) : [])
+const allSelected = computed(() => selectableRows.value.length > 0 && selectableRows.value.every(row => selectedIds.value.includes(row.id)))
+function toggleSelected(id: string, checked: boolean) {
+  selectedIds.value = checked ? [...new Set([...selectedIds.value, id])] : selectedIds.value.filter(value => value !== id)
+}
+function toggleAllSelected(checked: boolean) {
+  selectedIds.value = checked ? selectableRows.value.map(row => row.id) : []
+}
+function openBulkAction(kind: 'approve' | 'reject' | 'unban') {
+  if (!selectedIds.value.length || busy.value || (kind === 'unban' ? !can('users.manage') : !can('wallets.manage'))) return
+  bulkTarget.value = kind
+  bulkReason.value = ''
+  bulkError.value = ''
+}
+const bulkTitle = computed(() => bulkTarget.value === 'approve' ? t('admin.rewardRiskBulkApprove') : bulkTarget.value === 'reject' ? t('admin.rewardRiskBulkReject') : t('admin.rewardRiskBulkUnban'))
+async function submitBulkAction() {
+  const kind = bulkTarget.value
+  if (!kind || busy.value) return
+  const ids = [...selectedIds.value]
+  const note = bulkReason.value.trim()
+  if (kind === 'unban' && !note) { bulkError.value = t('admin.rewardRiskReasonRequired'); return }
+  bulkError.value = ''
+  let completed = 0
+  const ok = await run(async () => {
+    for (const id of ids) {
+      if (kind === 'unban') {
+        const ban = bans.data.value.data.find(item => item.id === id)
+        if (!ban) throw new Error(t('common.actionFailed'))
+        await endpoints.unbanRewardRiskUser(ban.user_id, ban.id, note)
+      } else if (kind === 'approve') await endpoints.approveRewardRiskClaim(id, note || undefined)
+      else await endpoints.rejectRewardRiskClaim(id, note || undefined)
+      completed++
+    }
+  })
+  if (!ok) {
+    bulkError.value = completed ? t('admin.rewardRiskBulkPartial', { completed, total: ids.length, error: actionError.value }) : actionError.value
+    selectedIds.value = ids.slice(completed)
+    await refresh()
+    return
+  }
+  selectedIds.value = []
+  bulkTarget.value = null
+  toast.success(t('admin.rewardRiskBulkSaved', { count: completed }))
+  await refresh()
+}
 
 useHead({ title: () => `${t('admin.rewardRiskTitle')} · ${site.value.name}` })
 
@@ -105,6 +156,7 @@ onMounted(refresh)
 watch(tabs, (items) => { if (!items.some(item => item.value === tab.value)) tab.value = items[0]?.value ?? '' })
 watch(tab, () => {
   page.value = 1
+  selectedIds.value = []
   target.value = null
   evidence.value = null
   mutationError.value = ''
@@ -118,11 +170,13 @@ function applyFilters() {
   decision.value = filterDecision.value
   banStatus.value = filterBanStatus.value
   page.value = 1
+  selectedIds.value = []
   void refresh()
 }
 function changePage(delta: number) {
   if (pending.value) return
   page.value = Math.max(1, page.value + delta)
+  selectedIds.value = []
   void refresh()
 }
 
@@ -223,12 +277,21 @@ async function saveSettings() {
       </UiCard>
     </template>
     <template v-else-if="tab !== 'settings'">
+      <div v-if="tab === 'bans' && can('users.manage') && selectedIds.length" class="flex flex-wrap items-center gap-2">
+        <span class="text-sm text-muted">{{ t('admin.rewardRiskSelected', { count: selectedIds.length }) }}</span>
+        <UiButton size="sm" :disabled="busy" @click="openBulkAction('unban')">{{ t('admin.rewardRiskBulkUnban') }}</UiButton>
+      </div>
+      <div v-if="tab === 'claims' && can('wallets.manage') && selectedIds.length" class="flex flex-wrap items-center gap-2">
+        <span class="text-sm text-muted">{{ t('admin.rewardRiskSelected', { count: selectedIds.length }) }}</span>
+        <UiButton size="sm" :disabled="busy" @click="openBulkAction('approve')">{{ t('admin.rewardRiskBulkApprove') }}</UiButton>
+        <UiButton size="sm" variant="danger" :disabled="busy" @click="openBulkAction('reject')">{{ t('admin.rewardRiskBulkReject') }}</UiButton>
+      </div>
       <UiEmptyState v-if="empty" :icon="ShieldAlert" :title="t('admin.rewardRiskEmpty')" :description="t('admin.rewardRiskEmptyHint')" />
       <UiCard v-else flush>
         <UiTable v-if="tab === 'claims' && can('users.read')">
-          <thead><tr><th>{{ t('common.name') }}</th><th>{{ t('admin.rewardRiskSource') }}</th><th class="num">{{ t('console.checkinReward') }}</th><th>{{ t('common.status') }}</th><th>{{ t('admin.rewardRiskReasons') }}</th><th>{{ t('common.createdAt') }}</th><th>{{ t('common.actions') }}</th></tr></thead>
+          <thead><tr><th v-if="can('wallets.manage')"><UiCheckbox :model-value="allSelected" :disabled="busy || !selectableRows.length" :label="t('admin.rewardRiskSelectPage')" @update:model-value="toggleAllSelected" /></th><th>{{ t('common.name') }}</th><th>{{ t('admin.rewardRiskSource') }}</th><th class="num">{{ t('console.checkinReward') }}</th><th>{{ t('common.status') }}</th><th>{{ t('admin.rewardRiskReasons') }}</th><th>{{ t('common.createdAt') }}</th><th>{{ t('common.actions') }}</th></tr></thead>
           <tbody><tr v-for="claim in claims.data.value.data" :key="claim.id">
-            <td><p class="font-medium text-ink">{{ claim.user_name }}</p><p class="text-xs text-muted">{{ claim.email }}</p><p class="numeric text-xs text-faint">{{ claim.user_id }}</p></td>
+            <td v-if="can('wallets.manage')"><UiCheckbox :model-value="selectedIds.includes(claim.id)" :disabled="claim.status !== 'pending' || busy" :label="t('admin.rewardRiskSelectRecord')" @update:model-value="value => toggleSelected(claim.id, value)" /></td><td><p class="font-medium text-ink">{{ claim.user_name }}</p><p class="text-xs text-muted">{{ claim.email }}</p><p class="numeric text-xs text-faint">{{ claim.user_id }}</p></td>
             <td>{{ sourceLabel(claim.source) }}<p class="text-xs text-muted">{{ t('admin.rewardRiskOriginUser') }}: {{ claim.origin_user_id }}</p><p class="text-xs text-muted">{{ t('admin.rewardRiskSourceId') }}: {{ claim.source_id }}</p></td>
             <td class="num">{{ formatMoney(claim.amount, 4) }}</td><td><UiBadge :tone="rewardTone(claim.status)">{{ rewardLabel(claim.status) }}</UiBadge></td>
             <td><ul class="space-y-1 text-xs text-muted"><li v-for="item in claim.reasons" :key="item">{{ reasonLabel(item) }}</li></ul></td><td class="whitespace-nowrap text-muted">{{ formatDateTime(claim.created_at) }}</td>
@@ -243,9 +306,9 @@ async function saveSettings() {
           </tr></tbody>
         </UiTable>
         <UiTable v-else-if="tab === 'bans' && can('users.read')">
-          <thead><tr><th>{{ t('common.name') }}</th><th>{{ t('common.status') }}</th><th>{{ t('system.rewardRiskVersion') }}</th><th>{{ t('admin.rewardRiskBannedAt') }}</th><th>{{ t('admin.rewardRiskReleasedAt') }}</th><th>{{ t('common.actions') }}</th></tr></thead>
+          <thead><tr><th v-if="can('users.manage')"><UiCheckbox :model-value="allSelected" :disabled="busy || !selectableRows.length" :label="t('admin.rewardRiskSelectPage')" @update:model-value="toggleAllSelected" /></th><th>{{ t('common.name') }}</th><th>{{ t('common.status') }}</th><th>{{ t('system.rewardRiskVersion') }}</th><th>{{ t('admin.rewardRiskBannedAt') }}</th><th>{{ t('admin.rewardRiskReleasedAt') }}</th><th>{{ t('common.actions') }}</th></tr></thead>
           <tbody><tr v-for="ban in bans.data.value.data" :key="ban.id">
-            <td><p>{{ ban.user_name }}</p><p class="text-xs text-muted">{{ ban.email }}</p><p class="numeric text-xs text-faint">{{ ban.user_id }}</p></td><td><UiBadge :tone="ban.released_at ? 'neutral' : 'danger'">{{ ban.released_at ? t('admin.rewardRiskReleased') : t('admin.rewardRiskActive') }}</UiBadge></td><td class="num">{{ ban.rule_version }}</td><td class="whitespace-nowrap text-muted">{{ formatDateTime(ban.banned_at) }}</td><td class="text-muted"><template v-if="ban.released_at">{{ formatDateTime(ban.released_at) }}<p class="text-xs">{{ t('admin.rewardRiskReleasedBy') }}: {{ ban.released_by }}</p><p class="text-xs">{{ ban.release_reason }}</p></template></td>
+            <td v-if="can('users.manage')"><UiCheckbox :model-value="selectedIds.includes(ban.id)" :disabled="!!ban.released_at || busy" :label="t('admin.rewardRiskSelectRecord')" @update:model-value="value => toggleSelected(ban.id, value)" /></td><td><p>{{ ban.user_name }}</p><p class="text-xs text-muted">{{ ban.email }}</p><p class="numeric text-xs text-faint">{{ ban.user_id }}</p></td><td><UiBadge :tone="ban.released_at ? 'neutral' : 'danger'">{{ ban.released_at ? t('admin.rewardRiskReleased') : t('admin.rewardRiskActive') }}</UiBadge></td><td class="num">{{ ban.rule_version }}</td><td class="whitespace-nowrap text-muted">{{ formatDateTime(ban.banned_at) }}</td><td class="text-muted"><template v-if="ban.released_at">{{ formatDateTime(ban.released_at) }}<p class="text-xs">{{ t('admin.rewardRiskReleasedBy') }}: {{ ban.released_by }}</p><p class="text-xs">{{ ban.release_reason }}</p></template></td>
             <td><div class="flex gap-2"><UiButton v-if="can('audit.read')" size="sm" variant="secondary" @click="evidence = ban">{{ t('common.detail') }}</UiButton><UiButton v-if="!ban.released_at && can('users.manage')" size="sm" :disabled="busy" @click="openUnban(ban)">{{ t('admin.rewardRiskUnban') }}</UiButton></div></td>
           </tr></tbody>
         </UiTable>
@@ -255,6 +318,14 @@ async function saveSettings() {
         <div class="flex gap-2"><UiButton variant="secondary" size="sm" :disabled="page <= 1 || pending" @click="changePage(-1)">{{ t('common.prev') }}</UiButton><UiButton variant="secondary" size="sm" :disabled="!hasNext || pending" @click="changePage(1)">{{ t('common.next') }}</UiButton></div>
       </div>
     </template>
+    <UiDialog :open="bulkTarget !== null" :title="bulkTitle" :description="t('admin.rewardRiskBulkHint', { count: selectedIds.length })" @update:open="value => { if (!value && !busy) bulkTarget = null }">
+      <div class="space-y-4">
+        <p class="text-sm text-ink">{{ t('admin.rewardRiskSelected', { count: selectedIds.length }) }}</p>
+        <UiField :label="t('admin.rewardRiskReason')" :hint="t('admin.rewardRiskReasonHint')" :required="bulkTarget === 'unban'"><UiTextarea v-model="bulkReason" :rows="3" :disabled="busy" /></UiField>
+        <UiAlert v-if="bulkError" tone="danger">{{ bulkError }}</UiAlert>
+      </div>
+      <template #footer><UiButton variant="secondary" :disabled="busy" @click="bulkTarget = null">{{ t('common.cancel') }}</UiButton><UiButton :variant="bulkTarget === 'reject' ? 'danger' : 'primary'" :loading="busy" @click="submitBulkAction">{{ bulkTitle }}</UiButton></template>
+    </UiDialog>
     <UiDialog :open="target !== null" :title="actionTitle" :description="actionHint" @update:open="value => { if (!value && !busy) target = null }">
       <div v-if="target" class="space-y-4">
         <p class="text-sm text-ink">{{ target.kind === 'unban' ? target.ban.email : target.claim.email }}</p>

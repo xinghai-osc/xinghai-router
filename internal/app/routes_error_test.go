@@ -6,6 +6,37 @@ import (
 	"testing"
 )
 
+func TestWriteJSONEncodesUserIDsAsNumbers(t *testing.T) {
+	rec := httptest.NewRecorder()
+	writeJSON(rec, 200, map[string]any{
+		"user_id":        "42",
+		"inviter_id":     "7",
+		"origin_user_id": "9",
+		"released_by":    nil,
+		"user_ids":       []string{"42", "7"},
+		"activity":       map[string]any{"user_id": "system"},
+		"id":             "resource-uuid",
+	})
+
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["user_id"] != float64(42) || body["inviter_id"] != float64(7) || body["origin_user_id"] != float64(9) {
+		t.Fatalf("user IDs were not numeric: %#v", body)
+	}
+	if body["id"] != "resource-uuid" {
+		t.Fatalf("non-user id was changed: %#v", body["id"])
+	}
+	if activity := body["activity"].(map[string]any); activity["user_id"] != nil {
+		t.Fatalf("non-numeric user_id was not cleared: %#v", activity)
+	}
+	ids := body["user_ids"].([]any)
+	if ids[0] != float64(42) || ids[1] != float64(7) {
+		t.Fatalf("user_ids were not numeric: %#v", ids)
+	}
+}
+
 func TestWriteErrorIncludesRequestID(t *testing.T) {
 	rec := httptest.NewRecorder()
 	rec.Header().Set("X-Request-ID", "req-test-123")

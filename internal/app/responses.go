@@ -166,6 +166,9 @@ func responsesRequestToChatCompletions(body []byte) ([]byte, responsesEcho, erro
 	if stop, ok := in["stop"]; ok {
 		out["stop"] = stop
 	}
+	if serviceTier, ok := in["service_tier"].(string); ok && serviceTier != "" {
+		out["service_tier"] = serviceTier
+	}
 	if parallel, ok := in["parallel_tool_calls"].(bool); ok {
 		out["parallel_tool_calls"] = parallel
 		echo.parallelToolCalls = parallel

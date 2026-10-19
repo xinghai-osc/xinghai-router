@@ -175,7 +175,7 @@ async function loadOpenCodeConfig() {
 }
 
 function buildOpenCodeConfig(): string {
-  const baseURL = `${useRequestURL().origin}/api/v1`
+  const baseURL = `${(useSiteSettings().settings.value.api_base_urls?.[0] || useRequestURL().origin).replace(/\/+$/, '')}/api/v1`
   const providerId = 'xinghai'
   const models: Record<string, { name: string; options?: { reasoningEffort: string } }> = {}
   for (const model of opencodeCatalog.value) {
@@ -199,7 +199,7 @@ function buildOpenCodeConfig(): string {
 }
 
 function buildCodeXConfig(): string {
-  const baseURL = `${useRequestURL().origin}/api/v1`
+  const baseURL = `${(useSiteSettings().settings.value.api_base_urls?.[0] || useRequestURL().origin).replace(/\/+$/, '')}/api/v1`
   const providerId = 'xinghai'
   const model = opencodeCatalog.value[0]?.model ?? ''
   const effort = opencodeThinking.value

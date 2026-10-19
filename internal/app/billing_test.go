@@ -56,6 +56,24 @@ func TestCalculateBillDimensions(t *testing.T) {
 	}
 }
 
+func TestCalculateBillThinkingPrices(t *testing.T) {
+	pricing := billingTestPricing()
+	pricing.thinkingLevel = "high"
+	pricing.dimensions.ThinkingPrices = map[string]ThinkingPrice{
+		"low":  {InputPerMillion: 1, CachedInputPerMillion: 0.25, OutputPerMillion: 2},
+		"high": {InputPerMillion: 3, CachedInputPerMillion: 1.5, OutputPerMillion: 8},
+	}
+	snapshot, err := calculateBill(UsageFacts{InputTokens: 1_000_000, CacheReadTokens: 1_000_000, OutputTokens: 1_000_000}, pricing, 1)
+	if err != nil || snapshot.Amount != "12.50000000" || snapshot.Pricing.ThinkingLevel != "high" {
+		t.Fatalf("high thinking bill = %+v, %v", snapshot, err)
+	}
+	pricing.thinkingLevel = "unknown"
+	snapshot, err = calculateBill(UsageFacts{InputTokens: 1_000_000}, pricing, 1)
+	if err != nil || snapshot.Amount != "2.00000000" {
+		t.Fatalf("unknown thinking level should use base price: %+v, %v", snapshot, err)
+	}
+}
+
 func TestCalculateBillTokenFallbacks(t *testing.T) {
 	facts := UsageFacts{InputTokens: 1, OutputTokens: 2, CacheReadTokens: 3, CacheWriteTokens: 10, CacheWrite5mTokens: 3, CacheWrite1hTokens: 4, AudioInputTokens: 5, AudioOutputTokens: 6, ImageInputTokens: 7, ImageOutputTokens: 8}
 	snapshot, err := calculateBill(facts, billingTestPricing(), 1)
@@ -255,6 +273,36 @@ func TestCalculateBillInvalidFactsAndRates(t *testing.T) {
 	}
 }
 
+func TestCalculateBillServiceTierPrices(t *testing.T) {
+	pricing := billingTestPricing()
+	pricing.serviceTiers = map[string]ServiceTierPrice{
+		"fast": {InputPerMillion: 5, CachedInputPerMillion: 1, OutputPerMillion: 10},
+	}
+	facts := UsageFacts{InputTokens: 1_000_000, CacheReadTokens: 1_000_000, OutputTokens: 1_000_000}
+
+	pricing.serviceTier = "fast"
+	snapshot, err := calculateBill(facts, pricing, 1)
+	if err != nil || snapshot.Amount != "16.00000000" || snapshot.Pricing.ServiceTier != "fast" || snapshot.Pricing.InputPerMillion != 5 {
+		t.Fatalf("fast tier bill = %+v, %v", snapshot, err)
+	}
+	recomputed, err := snapshot.Recompute()
+	if err != nil || recomputed != snapshot.Amount {
+		t.Fatalf("fast tier recompute = %q, %v", recomputed, err)
+	}
+
+	pricing.serviceTier = ""
+	snapshot, err = calculateBill(facts, pricing, 1)
+	if err != nil || snapshot.Amount != "6.50000000" || snapshot.Pricing.ServiceTier != "" {
+		t.Fatalf("default tier bill = %+v, %v", snapshot, err)
+	}
+
+	pricing.serviceTier = "fast"
+	pricing.serviceTiers = nil
+	if _, err := calculateBill(facts, pricing, 1); err == nil {
+		t.Fatal("unpriced fast service tier was accepted")
+	}
+}
+
 func TestParseDimensionPricesValidation(t *testing.T) {
 	for _, raw := range []string{
 		`null`, `[]`, `{} {}`, `{"unknown":1}`, `{"tool_per_call":-1}`,
@@ -262,6 +310,8 @@ func TestParseDimensionPricesValidation(t *testing.T) {
 		`{"images":[{"size":"*","quality":"*"}]}`,
 		`{"images":[{"size":"*","quality":"*","price":null}]}`,
 		`{"images":[{"size":"*","quality":"*","price":1},{"size":"*","quality":"*","price":2}]}`,
+		`{"service_tiers":{"priority":{"input_per_million":1,"cached_input_per_million":0.5,"output_per_million":2}}}`,
+		`{"service_tiers":{"fast":{"input_per_million":1,"cached_input_per_million":0.5,"output_per_million":-1}}}`,
 	} {
 		if _, err := parseDimensionPrices(json.RawMessage(raw)); err == nil {
 			t.Fatalf("accepted %s", raw)

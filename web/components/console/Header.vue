@@ -16,10 +16,10 @@ const heading = computed(() => {
 </script>
 
 <template>
-  <header class="sticky top-0 z-30 flex min-h-16 items-center gap-2 border-b border-line bg-surface/95 px-3 py-2 backdrop-blur-md sm:gap-3 sm:px-6 lg:top-3 lg:rounded-t-[1.75rem] lg:px-8 xl:px-10">
+  <header class="console-header sticky top-2 z-30 mx-2 mt-2 flex min-h-16 items-center gap-2 rounded-[1.5rem] border px-3 py-2 sm:top-3 sm:mx-3 sm:mt-3 sm:gap-3 sm:px-4 lg:top-6 lg:rounded-[1.75rem] lg:px-5">
     <button
       type="button"
-      class="inline-flex size-9 shrink-0 items-center justify-center rounded-control text-muted transition-colors duration-150 ease-out hover:bg-sunken hover:text-ink lg:hidden"
+      class="inline-flex size-9 shrink-0 items-center justify-center rounded-full text-muted transition-colors duration-150 ease-out hover:bg-sunken hover:text-ink lg:hidden"
       :aria-label="t('common.openNav')"
       aria-haspopup="dialog"
       @click="$emit('open-nav')"
@@ -36,9 +36,9 @@ const heading = computed(() => {
       <p v-if="workspace" class="truncate text-2xs text-muted">{{ workspace.is_personal ? t('console.workspacePersonal') : workspace.name }}</p>
     </div>
 
-    <div class="ml-auto flex shrink-0 items-center gap-0.5 sm:gap-1">
+    <div class="ml-auto flex shrink-0 items-center gap-0.5 rounded-full border border-line/50 bg-surface/25 p-1 sm:gap-1">
       <slot name="actions" />
-      <NuxtLink to="/models" class="mr-2 hidden items-center gap-2 rounded-control px-3 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:bg-sunken hover:text-ink xl:inline-flex">
+      <NuxtLink to="/models" class="mr-2 hidden items-center gap-2 rounded-full px-3 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:bg-sunken hover:text-ink xl:inline-flex">
         <LayoutGrid class="size-4" aria-hidden="true" />
         {{ t('nav.models') }}
       </NuxtLink>
@@ -52,6 +52,45 @@ const heading = computed(() => {
 </template>
 
 <style scoped>
+.console-header {
+  isolation: isolate;
+  border-color: color-mix(in srgb, var(--line) 65%, transparent);
+  background:
+    radial-gradient(ellipse at 0% 0%, color-mix(in srgb, var(--clay) 7%, transparent), transparent 65%),
+    linear-gradient(125deg, color-mix(in srgb, var(--surface) 55%, transparent), color-mix(in srgb, var(--surface) 20%, transparent));
+  -webkit-backdrop-filter: blur(24px) saturate(150%);
+  backdrop-filter: blur(24px) saturate(150%);
+}
+
+.console-header::before {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  padding: 1px;
+  border-radius: inherit;
+  background: linear-gradient(135deg, var(--shimmer-highlight), transparent 40%, color-mix(in srgb, var(--surface) 35%, transparent));
+  content: '';
+  pointer-events: none;
+  -webkit-mask: linear-gradient(var(--ink) 0 0) content-box, linear-gradient(var(--ink) 0 0);
+  mask: linear-gradient(var(--ink) 0 0) content-box, linear-gradient(var(--ink) 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .console-header {
+    background: color-mix(in srgb, var(--surface) 95%, transparent);
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .console-header {
+    background: var(--surface);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
 @media (prefers-reduced-motion: no-preference) {
   .header-heading {
     animation: rise 150ms ease-out;

@@ -274,7 +274,8 @@ func (s *Service) accountMe(w http.ResponseWriter, r *http.Request) {
 		permissions = append(permissions, permission)
 	}
 	sort.Strings(permissions)
-	writeJSON(w, http.StatusOK, map[string]any{"id": account.userID, "email": email, "name": name, "role": role, "avatar_url": avatarURL, "permissions": permissions, "balance": balance, "reserved": reserved, "pending_settlement": pendingSettlement, "leaderboard_opt_in": leaderboardOptIn, "leaderboard_mask_name": leaderboardMaskName, "data_usage_enabled": dataUsageEnabled, "must_change_password": mustChangePassword})
+	userID := userIDNumber(account.userID)
+	writeJSON(w, http.StatusOK, map[string]any{"id": userID, "email": email, "name": name, "role": role, "avatar_url": avatarURL, "permissions": permissions, "balance": balance, "reserved": reserved, "pending_settlement": pendingSettlement, "leaderboard_opt_in": leaderboardOptIn, "leaderboard_mask_name": leaderboardMaskName, "data_usage_enabled": dataUsageEnabled, "must_change_password": mustChangePassword})
 }
 
 func (s *Service) updateAccountPreferences(w http.ResponseWriter, r *http.Request) {

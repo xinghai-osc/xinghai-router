@@ -8,6 +8,7 @@ import (
 )
 
 const performanceWindow = 24 * time.Hour
+const performanceBucket = time.Hour
 
 type modelPerformanceGroup struct {
 	GroupID         string   `json:"group_id"`
@@ -19,11 +20,40 @@ type modelPerformanceGroup struct {
 	SuccessRate     float64  `json:"success_rate"`
 }
 
+type modelPerformancePoint struct {
+	Timestamp       time.Time `json:"timestamp"`
+	Requests        int64     `json:"requests"`
+	FailedRequests  int64     `json:"failed_requests"`
+	TPS             float64   `json:"tps"`
+	AvgLatencyMs    *float64  `json:"avg_latency_ms"`
+	AvgFirstTokenMs *float64  `json:"avg_first_token_ms"`
+	SuccessRate     *float64  `json:"success_rate"`
+}
+
+type modelPerformanceSeries struct {
+	GroupID string                  `json:"group_id"`
+	Points  []modelPerformancePoint `json:"points"`
+}
+
 type modelPerformancePayload struct {
-	Model       string                  `json:"model"`
-	WindowHours int                     `json:"window_hours"`
-	Groups      []modelPerformanceGroup `json:"groups"`
-	UpdatedAt   time.Time               `json:"updated_at"`
+	Model         string                   `json:"model"`
+	WindowHours   int                      `json:"window_hours"`
+	WindowStart   time.Time                `json:"window_start"`
+	BucketMinutes int                      `json:"bucket_minutes"`
+	Groups        []modelPerformanceGroup  `json:"groups"`
+	Series        []modelPerformanceSeries `json:"series"`
+	UpdatedAt     time.Time                `json:"updated_at"`
+}
+
+type modelPerformanceBucket struct {
+	GroupID         string
+	GroupName       string
+	Index           int
+	Requests        int64
+	Success         int64
+	LatencyMs       int64
+	FirstTokenMs    int64
+	FirstTokenCount int64
 }
 
 // modelPerformance serves public per-group performance (requests/second,
@@ -83,7 +113,11 @@ func (s *Service) modelPerformanceAccessible(ctx context.Context, model string) 
 }
 
 func (s *Service) computeModelPerformance(ctx context.Context, model string) (modelPerformancePayload, error) {
-	start := time.Now().UTC().Add(-performanceWindow)
+	return s.computeModelPerformanceAt(ctx, model, time.Now().UTC().Truncate(time.Microsecond))
+}
+
+func (s *Service) computeModelPerformanceAt(ctx context.Context, model string, now time.Time) (modelPerformancePayload, error) {
+	start := now.Add(-performanceWindow)
 	rows, err := s.db.Query(ctx, `
 		with visible_channels as (
 			select c.id
@@ -103,53 +137,95 @@ func (s *Service) computeModelPerformance(ctx context.Context, model string) (mo
 			from groups g
 			where g."public"
 		)
-			select coalesce(rl.group_id::text, '__public'),
-				coalesce(g.display_name, g.name, '公共'),
-				count(*),
+		select coalesce(rl.group_id::text, '__public'),
+			coalesce(g.display_name, g.name, '公共'),
+			floor(extract(epoch from (rl.created_at - $2::timestamptz)) / $4)::integer,
+			count(*),
 			count(*) filter (where rl.status_code >= 200 and rl.status_code < 400),
-			coalesce(avg(rl.duration_ms), 0),
-			avg(rl.first_token_ms)
+			sum(rl.duration_ms),
+			coalesce(sum(rl.first_token_ms), 0),
+			count(rl.first_token_ms)
 		from request_logs rl
 		join visible_channels vc on vc.id=rl.channel_id
 		left join groups g on g.id = rl.group_id
-		where trim(rl.model) = $1 and rl.created_at >= $2
+		where trim(rl.model) = $1 and rl.created_at >= $2 and rl.created_at < $3
 			and (rl.group_id is null or exists(select 1 from visible_groups vg where vg.id=rl.group_id))
-			group by rl.group_id, g.id, g.display_name, g.name
-			order by coalesce(g.display_name, g.name, '公共')`, model, start)
+		group by rl.group_id, g.id, g.display_name, g.name, 3
+		order by coalesce(g.display_name, g.name, '公共'), rl.group_id, 3`, model, start, now, performanceBucket.Seconds())
 	if err != nil {
 		return modelPerformancePayload{}, err
 	}
 	defer rows.Close()
-	groups := []modelPerformanceGroup{}
+	buckets := []modelPerformanceBucket{}
 	for rows.Next() {
-		var groupID, groupName string
-		var requests, success int64
-		var avgLatency float64
-		var avgFirstTokenMs *float64
-		if err := rows.Scan(&groupID, &groupName, &requests, &success, &avgLatency, &avgFirstTokenMs); err != nil {
+		var bucket modelPerformanceBucket
+		if err := rows.Scan(&bucket.GroupID, &bucket.GroupName, &bucket.Index, &bucket.Requests, &bucket.Success, &bucket.LatencyMs, &bucket.FirstTokenMs, &bucket.FirstTokenCount); err != nil {
 			return modelPerformancePayload{}, err
 		}
-		successRate := 0.0
-		if requests > 0 {
-			successRate = float64(success) / float64(requests)
-		}
-		groups = append(groups, modelPerformanceGroup{
-			GroupID:         groupID,
-			GroupName:       groupName,
-			Requests:        requests,
-			TPS:             float64(requests) / performanceWindow.Seconds(),
-			AvgLatencyMs:    avgLatency,
-			AvgFirstTokenMs: avgFirstTokenMs,
-			SuccessRate:     successRate,
-		})
+		buckets = append(buckets, bucket)
 	}
 	if rows.Err() != nil {
 		return modelPerformancePayload{}, rows.Err()
 	}
-	return modelPerformancePayload{
-		Model:       model,
-		WindowHours: int(performanceWindow.Hours()),
-		Groups:      groups,
-		UpdatedAt:   time.Now().UTC(),
-	}, nil
+	return buildModelPerformancePayload(model, now, buckets), nil
+}
+
+func buildModelPerformancePayload(model string, now time.Time, buckets []modelPerformanceBucket) modelPerformancePayload {
+	payload := modelPerformancePayload{
+		Model:         model,
+		WindowHours:   int(performanceWindow.Hours()),
+		WindowStart:   now.Add(-performanceWindow),
+		BucketMinutes: int(performanceBucket.Minutes()),
+		Groups:        []modelPerformanceGroup{},
+		Series:        []modelPerformanceSeries{},
+		UpdatedAt:     now,
+	}
+	indices := make(map[string]int)
+	totals := []modelPerformanceBucket{}
+	for _, bucket := range buckets {
+		index, ok := indices[bucket.GroupID]
+		if !ok {
+			index = len(payload.Groups)
+			indices[bucket.GroupID] = index
+			payload.Groups = append(payload.Groups, modelPerformanceGroup{GroupID: bucket.GroupID, GroupName: bucket.GroupName})
+			points := make([]modelPerformancePoint, int(performanceWindow/performanceBucket))
+			for i := range points {
+				points[i].Timestamp = payload.WindowStart.Add(time.Duration(i) * performanceBucket)
+			}
+			payload.Series = append(payload.Series, modelPerformanceSeries{GroupID: bucket.GroupID, Points: points})
+			totals = append(totals, modelPerformanceBucket{})
+		}
+		point := &payload.Series[index].Points[bucket.Index]
+		point.Requests = bucket.Requests
+		point.FailedRequests = bucket.Requests - bucket.Success
+		point.TPS = float64(bucket.Requests) / performanceBucket.Seconds()
+		point.AvgLatencyMs = performanceAverage(bucket.LatencyMs, bucket.Requests)
+		point.AvgFirstTokenMs = performanceAverage(bucket.FirstTokenMs, bucket.FirstTokenCount)
+		point.SuccessRate = performanceAverage(bucket.Success, bucket.Requests)
+		total := &totals[index]
+		total.Requests += bucket.Requests
+		total.Success += bucket.Success
+		total.LatencyMs += bucket.LatencyMs
+		total.FirstTokenMs += bucket.FirstTokenMs
+		total.FirstTokenCount += bucket.FirstTokenCount
+	}
+	for i, total := range totals {
+		group := &payload.Groups[i]
+		group.Requests = total.Requests
+		group.TPS = float64(total.Requests) / performanceWindow.Seconds()
+		if total.Requests > 0 {
+			group.AvgLatencyMs = float64(total.LatencyMs) / float64(total.Requests)
+			group.SuccessRate = float64(total.Success) / float64(total.Requests)
+		}
+		group.AvgFirstTokenMs = performanceAverage(total.FirstTokenMs, total.FirstTokenCount)
+	}
+	return payload
+}
+
+func performanceAverage(sum, count int64) *float64 {
+	if count == 0 {
+		return nil
+	}
+	average := float64(sum) / float64(count)
+	return &average
 }

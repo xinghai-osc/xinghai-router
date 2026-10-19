@@ -90,7 +90,7 @@ async function submitCreate() {
     createError.value = t('admin.resetCardSubscriptionRequired')
     return
   }
-  const quantity = Number(createForm.quantity.trim())
+  const quantity = Number(String(createForm.quantity ?? '').trim())
   if (!Number.isInteger(quantity) || quantity < 1 || quantity > 1000) {
     createError.value = t('admin.resetCardQuantityHint')
     return
@@ -148,7 +148,7 @@ async function submitBatch() {
     batchError.value = t('admin.resetCardTierRequired')
     return
   }
-  const quantity = Number(batchForm.quantity.trim())
+  const quantity = Number(String(batchForm.quantity ?? '').trim())
   if (!Number.isInteger(quantity) || quantity < 1 || quantity > 1000) {
     batchError.value = t('admin.resetCardQuantityHint')
     return
@@ -208,7 +208,7 @@ async function openAll() {
 
 async function submitAll() {
   allError.value = ''
-  const quantity = Number(allForm.quantity.trim())
+  const quantity = Number(String(allForm.quantity ?? '').trim())
   if (!Number.isInteger(quantity) || quantity < 1 || quantity > 1000) {
     allError.value = t('admin.resetCardQuantityHint')
     return
@@ -219,7 +219,7 @@ async function submitAll() {
 
 async function confirmAll() {
   allConfirmOpen.value = false
-  const quantity = Number(allForm.quantity.trim())
+  const quantity = Number(String(allForm.quantity ?? '').trim())
   let result: { subscriptions: number; quantity: number } | null = null
   const ok = await run(async () => {
     result = await endpoints.createResetCardsAll({

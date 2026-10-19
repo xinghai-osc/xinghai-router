@@ -62,7 +62,10 @@ func loadRequestLimits(c *Config) error {
 		*setting.target = setting.fallback
 		if raw, exists := os.LookupEnv(setting.name); exists {
 			duration, err := time.ParseDuration(strings.TrimSpace(raw))
-			if err != nil || duration <= 0 {
+			if err != nil || duration < 0 || (duration == 0 && setting.name != "REQUEST_BODY_TIMEOUT") {
+				if setting.name == "REQUEST_BODY_TIMEOUT" {
+					return fmt.Errorf("%s must be a positive duration or 0 for no request body timeout", setting.name)
+				}
 				return fmt.Errorf("%s must be a positive duration", setting.name)
 			}
 			*setting.target = duration
@@ -86,7 +89,6 @@ func positiveRequestTimeout(value, fallback time.Duration) time.Duration {
 }
 
 func readRequestBody(w http.ResponseWriter, r *http.Request, timeout time.Duration) (body []byte, err error) {
-	timeout = positiveRequestTimeout(timeout, defaultRequestBodyTimeout)
 	controller := http.NewResponseController(w)
 	defer func() {
 		if err == nil {
@@ -98,14 +100,30 @@ func readRequestBody(w http.ResponseWriter, r *http.Request, timeout time.Durati
 			}
 		}
 	}()
-	if deadlineErr := controller.SetReadDeadline(time.Now().Add(timeout)); deadlineErr != nil && !errors.Is(deadlineErr, http.ErrNotSupported) {
-		return nil, deadlineErr
+	if timeout > 0 {
+		if deadlineErr := controller.SetReadDeadline(time.Now().Add(timeout)); deadlineErr != nil && !errors.Is(deadlineErr, http.ErrNotSupported) {
+			return nil, deadlineErr
+		}
 	}
 	body, err = io.ReadAll(r.Body)
 	if err != nil {
 		return nil, err
 	}
 	return body, nil
+}
+
+func (s *Service) requestBodyTimeout(ctx context.Context) time.Duration {
+	if s == nil || s.db == nil || s.reliabilityData == nil {
+		if s != nil {
+			return s.cfg.RequestBodyTimeout
+		}
+		return defaultRequestBodyTimeout
+	}
+	seconds := s.reliabilitySettings(ctx).RequestBodyTimeoutSeconds
+	if seconds <= 0 {
+		return 0
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 func parseRequestForm(w http.ResponseWriter, r *http.Request, timeout time.Duration) error {

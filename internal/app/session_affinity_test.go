@@ -191,8 +191,6 @@ func TestSessionAffinityPromotesTheBoundChannelOverPriority(t *testing.T) {
 	if want := []int64{2, 1}; !slices.Equal(affinityIDs(got), want) {
 		t.Fatalf("affinity order = %v, want the bound channel first: %v", affinityIDs(got), want)
 	}
-	// A session without an assignment is assigned to one of the candidates, so
-	// every later turn of the session keeps landing there.
 	fresh := sessionAffinityKey{session: "session-3-fresh", model: "model"}
 	if got := service.applySessionAffinity(fresh, []channel{
 		affinityChannel(1, "openai", 10, 1, "key-a"),
@@ -202,6 +200,23 @@ func TestSessionAffinityPromotesTheBoundChannelOverPriority(t *testing.T) {
 	}
 	if _, ok := service.sessionAffinity.get(sessionAffinityKey{session: "", model: "model"}); ok {
 		t.Fatal("pinned an empty session")
+	}
+}
+
+func TestSessionAffinityFallbackPreservesPriorityOrder(t *testing.T) {
+	service := &Service{sessionAffinity: newSessionAffinityCache(time.Minute, 64)}
+	key := sessionAffinityKey{session: "session-priority-fallback", model: "model"}
+	service.bindSessionChannel(key, affinityChannel(3, "anthropic", 20, 1, "key-a"))
+	channels := []channel{
+		affinityChannel(1, "openai", 100, 1, "key-a"),
+		affinityChannel(2, "openai_chat", 80, 1, "key-a"),
+		affinityChannel(3, "anthropic", 20, 1, "key-a"),
+		affinityChannel(4, "jev", 10, 1, "key-a"),
+	}
+
+	got := service.applySessionAffinity(key, channels)
+	if want := []int64{3, 1, 2, 4}; !slices.Equal(affinityIDs(got), want) {
+		t.Fatalf("retry order = %v, want affinity first then priority order %v", affinityIDs(got), want)
 	}
 }
 

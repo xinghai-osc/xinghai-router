@@ -50,7 +50,12 @@ async function refreshDashboard() {
   }
 }
 
-const endpointUrl = `${useRequestURL().origin}/api/v1`
+const endpointUrls = computed(() => {
+  const configured = settings.value.api_base_urls ?? []
+  if (configured.length) return configured.map(base => `${base.replace(/\/+$/, '')}/api/v1`)
+  return [`${useRequestURL().origin}/api/v1`]
+})
+const endpointUrl = computed(() => endpointUrls.value.join('\n'))
 
 function dayKey(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`

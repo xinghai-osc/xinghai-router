@@ -91,15 +91,10 @@ func (s *Service) deleteCluster(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Service) assignClusterManager(w http.ResponseWriter, r *http.Request) {
 	var v struct {
-		ManagerID string `json:"manager_id"`
+		ManagerID int64 `json:"manager_id"`
 	}
-	if decode(r, &v) != nil {
-		writeError(w, 400, "invalid_request", "invalid body")
-		return
-	}
-	v.ManagerID = strings.TrimSpace(v.ManagerID)
-	if v.ManagerID == "" {
-		writeError(w, 400, "invalid_request", "manager_id required")
+	if decode(r, &v) != nil || v.ManagerID <= 0 {
+		writeError(w, 400, "invalid_request", "manager_id must be a positive integer")
 		return
 	}
 	tag, e := s.db.Exec(r.Context(), `update clusters set manager_id=$2,updated_at=now() where id=$1 and exists(select 1 from users where id=$2 and enabled and role in ('admin','operator'))`, r.PathValue("id"), v.ManagerID)

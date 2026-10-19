@@ -110,6 +110,61 @@ watch([open, () => props.model?.model], ([nextOpen]) => {
 
       <section class="space-y-3">
         <div class="flex flex-wrap items-baseline justify-between gap-2">
+          <h3 class="text-[13px] font-medium text-ink">{{ t('site.sqDetailPerfTitle') }}</h3>
+          <p class="text-2xs text-faint">
+            {{ t('site.sqDetailPerfWindow', { hours: performance?.window_hours ?? 24 }) }}
+          </p>
+        </div>
+
+        <UiAlert
+          v-if="performanceError"
+          tone="danger"
+          :title="t('site.sqDetailPerfErrorTitle')"
+        >
+          {{ performanceError }}
+          <UiButton variant="link" size="sm" @click="loadPerformance">{{ t('common.retry') }}</UiButton>
+        </UiAlert>
+
+        <div v-else-if="performancePending" class="rounded-control border border-line bg-sunken px-4 py-5">
+          <UiSkeleton :rows="3" />
+        </div>
+
+        <UiEmptyState
+          v-else-if="!performanceRows.length"
+          class="rounded-control border border-line bg-sunken"
+          :title="t('site.sqDetailPerfEmptyTitle')"
+          :description="t('site.sqDetailPerfEmptyBody')"
+        />
+
+        <template v-else>
+          <MarketplacePerformanceChart v-if="performance" :performance="performance" />
+          <UiTable dense>
+            <thead>
+              <tr>
+                <th>{{ t('site.sqColGroup') }}</th>
+                <th class="num">{{ t('site.sqDetailPerfRequests') }}</th>
+                <th class="num">{{ t('site.sqDetailPerfRate') }}</th>
+                <th class="num">{{ t('site.sqDetailPerfLatency') }}</th>
+                <th class="num">{{ t('site.sqDetailPerfFirstToken') }}</th>
+                <th class="num">{{ t('site.sqDetailPerfSuccess') }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in performanceRows" :key="row.group_id">
+                <td class="whitespace-nowrap text-[13px]">{{ row.group_name }}</td>
+                <td class="num text-muted">{{ row.requests }}</td>
+                <td class="num">{{ formatRequestRate(row.tps) }}</td>
+                <td class="num">{{ formatLatency(row.avg_latency_ms) }}</td>
+                <td class="num text-muted">{{ row.avg_first_token_ms == null ? t('common.none') : formatLatency(row.avg_first_token_ms) }}</td>
+                <td class="num text-muted">{{ formatSuccessRate(row.success_rate) }}</td>
+              </tr>
+            </tbody>
+          </UiTable>
+        </template>
+      </section>
+
+      <section class="space-y-3">
+        <div class="flex flex-wrap items-baseline justify-between gap-2">
           <h3 class="text-[13px] font-medium text-ink">{{ t('site.sqDetailGroupsTitle') }}</h3>
           <p class="text-2xs text-faint">{{ unitHint }}</p>
         </div>
@@ -137,57 +192,6 @@ watch([open, () => props.model?.model], ([nextOpen]) => {
               <td class="num">{{ row.input }}</td>
               <td class="num">{{ row.output }}</td>
               <td class="num text-muted">{{ row.cache }}</td>
-            </tr>
-          </tbody>
-        </UiTable>
-      </section>
-
-      <section class="space-y-3">
-        <div class="flex flex-wrap items-baseline justify-between gap-2">
-          <h3 class="text-[13px] font-medium text-ink">{{ t('site.sqDetailPerfTitle') }}</h3>
-          <p class="text-2xs text-faint">
-            {{ t('site.sqDetailPerfWindow', { hours: performance?.window_hours ?? 24 }) }}
-          </p>
-        </div>
-
-        <UiAlert
-          v-if="performanceError"
-          tone="danger"
-          :title="t('site.sqDetailPerfErrorTitle')"
-        >
-          {{ performanceError }}
-        </UiAlert>
-
-        <div v-else-if="performancePending" class="rounded-control border border-line bg-sunken px-4 py-5">
-          <UiSkeleton :rows="3" />
-        </div>
-
-        <UiEmptyState
-          v-else-if="!performanceRows.length"
-          class="rounded-control border border-line bg-sunken"
-          :title="t('site.sqDetailPerfEmptyTitle')"
-          :description="t('site.sqDetailPerfEmptyBody')"
-        />
-
-        <UiTable v-else dense>
-          <thead>
-            <tr>
-              <th>{{ t('site.sqColGroup') }}</th>
-              <th class="num">{{ t('site.sqDetailPerfRequests') }}</th>
-              <th class="num">{{ t('site.sqDetailPerfRate') }}</th>
-              <th class="num">{{ t('site.sqDetailPerfLatency') }}</th>
-              <th class="num">{{ t('site.sqDetailPerfFirstToken') }}</th>
-              <th class="num">{{ t('site.sqDetailPerfSuccess') }}</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="row in performanceRows" :key="row.group_id">
-              <td class="text-[13px]">{{ row.group_name }}</td>
-              <td class="num text-muted">{{ row.requests }}</td>
-              <td class="num">{{ formatRequestRate(row.tps) }}</td>
-              <td class="num">{{ formatLatency(row.avg_latency_ms) }}</td>
-              <td class="num text-muted">{{ row.avg_first_token_ms == null ? t('common.none') : formatLatency(row.avg_first_token_ms) }}</td>
-              <td class="num text-muted">{{ formatSuccessRate(row.success_rate) }}</td>
             </tr>
           </tbody>
         </UiTable>

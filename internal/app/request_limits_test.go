@@ -74,6 +74,17 @@ func TestRequestLimitsConfigOverrides(t *testing.T) {
 	}
 }
 
+func TestRequestBodyTimeoutCanBeUnlimited(t *testing.T) {
+	requestLimitsTestEnv(t)
+	t.Setenv("REQUEST_BODY_TIMEOUT", "0s")
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RequestBodyTimeout != 0 {
+		t.Fatalf("request body timeout=%s, want unlimited", cfg.RequestBodyTimeout)
+	}
+}
 func TestRequestLimitsConfigRejectsInvalid(t *testing.T) {
 	requestLimitsTestEnv(t)
 	for _, key := range []string{"WS_MAX_MESSAGE_BYTES", "HTTP_MAX_HEADER_BYTES"} {
@@ -87,7 +98,11 @@ func TestRequestLimitsConfigRejectsInvalid(t *testing.T) {
 		}
 	}
 	for _, key := range []string{"REQUEST_BODY_TIMEOUT", "WS_IDLE_TIMEOUT", "HTTP_READ_HEADER_TIMEOUT", "HTTP_IDLE_TIMEOUT"} {
-		for _, value := range []string{"", "0s", "-1s", "nonsense", "99999999999999999999h"} {
+		values := []string{"", "-1s", "nonsense", "99999999999999999999h"}
+		if key != "REQUEST_BODY_TIMEOUT" {
+			values = append(values, "0s")
+		}
+		for _, value := range values {
 			t.Run(key+"/"+value, func(t *testing.T) {
 				t.Setenv(key, value)
 				if _, err := LoadConfig(); err == nil || !strings.Contains(err.Error(), key) {
@@ -222,6 +237,16 @@ func TestRequestBodyDeadlineClearedAfterRead(t *testing.T) {
 	}
 }
 
+func TestRequestBodyUnlimitedDoesNotSetDeadline(t *testing.T) {
+	w := &requestDeadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+	r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("ok"))
+	if _, err := readRequestBody(w, r, 0); err != nil {
+		t.Fatal(err)
+	}
+	if len(w.deadlines) != 1 || !w.deadlines[0].IsZero() {
+		t.Fatalf("unexpected deadlines: %v", w.deadlines)
+	}
+}
 func TestRequestBodyErrorStatus(t *testing.T) {
 	for _, tc := range []struct {
 		err    error

@@ -23,6 +23,7 @@ const FALLBACK: Omit<SiteSettings, 'name'> = {
   icon_url: '',
   announcement: '',
   contact_email: '',
+  api_base_urls: [],
   auto_disable_failed_channels: false,
   featured_enabled: true,
   featured_model: '',
