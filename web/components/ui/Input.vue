@@ -33,7 +33,7 @@ const rootClass = computed(() => cn('relative flex min-w-0 items-center', typeof
 
 <template>
   <div :class="rootClass" :style="attrs.style">
-    <span v-if="$slots.leading" class="pointer-events-none absolute left-3 flex text-faint">
+    <span v-if="$slots.leading" class="pointer-events-none absolute left-3 z-10 flex text-faint">
       <slot name="leading" />
     </span>
 
@@ -51,7 +51,7 @@ const rootClass = computed(() => cn('relative flex min-w-0 items-center', typeof
       :aria-required="required || undefined"
       :required="required || undefined"
       :class="cn(
-        'ui-input h-10 min-w-0 w-full rounded-control border border-line-strong bg-surface px-3 text-sm leading-6 text-ink',
+        'ui-input glass-control h-10 min-w-0 w-full rounded-full border border-line-strong px-3 text-sm leading-6 text-ink',
         'placeholder:text-faint transition-colors duration-150 ease-out motion-reduce:transition-none',
         'enabled:hover:border-faint focus:border-clay focus:outline-2 focus:outline-offset-2 focus:outline-clay/60',
         'disabled:cursor-not-allowed disabled:bg-sunken disabled:text-muted',
@@ -62,7 +62,7 @@ const rootClass = computed(() => cn('relative flex min-w-0 items-center', typeof
       )"
     >
 
-    <span v-if="$slots.trailing" class="absolute right-3 flex text-faint">
+    <span v-if="$slots.trailing" class="absolute right-3 z-10 flex text-faint">
       <slot name="trailing" />
     </span>
   </div>

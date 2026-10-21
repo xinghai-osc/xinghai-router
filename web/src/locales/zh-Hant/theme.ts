@@ -1,6 +1,8 @@
 export default {
   newapiLabel: '清新藍',
   newapiHint: 'New API 風 · 簡潔藍白工作台',
+  shadcnLabel: 'Shadcn',
+  shadcnHint: 'Zinc 中性色 · 簡潔高對比介面',
   defaultLabel: '默認',
   defaultHint: '暖紙底色 · 陶土強調',
   coolLabel: '酷炫',

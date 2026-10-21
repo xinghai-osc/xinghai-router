@@ -15,6 +15,7 @@ export default {
   metaDescription: 'Xinghai Router unifies multiple LLM providers behind one gateway. OpenAI and Anthropic compatible, with billing, rate limiting, failover and usage analytics built in.',
   footerBlurb: 'A unified LLM gateway. One API key reaches every provider, over both the OpenAI and Anthropic protocols.',
   footerCompat: 'OpenAI compatible · Anthropic compatible',
+  footerOpenSource: 'Source code',
 
   heroBadge: 'OpenAI and Anthropic compatible',
   heroTitleLine1: 'One key for',

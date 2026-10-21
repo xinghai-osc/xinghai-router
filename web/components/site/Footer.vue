@@ -52,7 +52,12 @@ const groups = [
 
     <div class="shell flex flex-col gap-2 border-t border-line py-5 text-2xs text-faint sm:flex-row sm:items-center sm:justify-between">
       <p>© {{ year }} {{ settings.name }}</p>
-      <p class="numeric">{{ t('site.footerCompat') }}</p>
+      <div class="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <a href="https://github.com/xinghai-osc/xinghai-router" target="_blank" rel="noopener noreferrer" class="transition-colors duration-150 ease-out hover:text-clay">
+          {{ t('site.footerOpenSource') }}
+        </a>
+        <p class="numeric">{{ t('site.footerCompat') }}</p>
+      </div>
     </div>
   </footer>
 </template>

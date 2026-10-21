@@ -17,10 +17,10 @@ const props = withDefaults(defineProps<{
 }>(), { variant: 'primary', size: 'md', type: 'button' })
 
 const VARIANTS: Record<Variant, string> = {
-  primary: 'bg-clay text-clay-ink hover:bg-clay-hover active:translate-y-px',
-  secondary: 'border border-line-strong bg-surface text-ink hover:bg-sunken active:translate-y-px',
-  ghost: 'text-muted hover:bg-sunken hover:text-ink',
-  danger: 'bg-danger text-white hover:opacity-90 active:translate-y-px',
+  primary: 'glass-control border border-clay/70 text-clay-ink hover:bg-clay-hover active:translate-y-px',
+  secondary: 'glass-control border border-line-strong text-ink hover:bg-sunken active:translate-y-px',
+  ghost: 'glass-control border border-line/50 text-muted hover:bg-sunken hover:text-ink',
+  danger: 'glass-control border border-danger/70 text-white hover:opacity-90 active:translate-y-px',
   link: 'text-clay underline-offset-4 hover:underline',
 }
 
@@ -46,7 +46,7 @@ const isDisabled = computed(() => props.disabled || props.loading)
     :aria-disabled="isDisabled || undefined"
     :class="cn(
       `ui-button ui-button-${variant}`,
-       'relative isolate inline-flex shrink-0 items-center overflow-hidden rounded-button font-medium whitespace-nowrap transition-[background-color,color,opacity,transform] duration-150 ease-out',
+       'relative isolate inline-flex shrink-0 items-center overflow-hidden rounded-full font-medium whitespace-nowrap transition-[background-color,color,opacity,transform] duration-150 ease-out',
       'disabled:pointer-events-none disabled:opacity-45 aria-disabled:pointer-events-none aria-disabled:opacity-45',
       VARIANTS[variant],
       SIZES[size],
@@ -61,6 +61,23 @@ const isDisabled = computed(() => props.disabled || props.loading)
 </template>
 
 <style scoped>
+.ui-button-primary,
+.ui-button-danger {
+  --glass-highlight: color-mix(in srgb, var(--shimmer-highlight) 20%, transparent);
+}
+
+.ui-button-primary {
+  --glass-fill: var(--clay);
+  --glass-solid: var(--clay);
+  --glass-opacity: 94%;
+}
+
+.ui-button-danger {
+  --glass-fill: var(--danger);
+  --glass-solid: var(--danger);
+  --glass-opacity: 94%;
+}
+
 .ui-button::after {
   content: '';
   position: absolute;

@@ -18,7 +18,7 @@ withDefaults(defineProps<{
         :align="align"
         :side="side"
         :side-offset="6"
-        class="animate-pop z-50 min-w-44 overflow-hidden rounded-control border border-line bg-surface p-1 shadow-pop"
+        class="glass-control animate-pop z-50 min-w-44 overflow-hidden rounded-2xl border border-line p-1 shadow-pop [--glass-opacity:90%]"
       >
         <slot />
       </DropdownMenuContent>

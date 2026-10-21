@@ -10,12 +10,12 @@ defineProps<{ items: TabItem[] }>()
 
 <template>
   <TabsRoot v-model="model" class="min-w-0">
-    <TabsList class="ui-tabs-list relative flex max-w-full items-center gap-1 overflow-x-auto overscroll-x-contain rounded-control border border-line bg-sunken/60 p-1">
+    <TabsList class="ui-tabs-list relative flex max-w-full items-center gap-1 overflow-x-auto overscroll-x-contain p-1">
       <TabsTrigger
         v-for="item in items"
         :key="item.value"
         :value="item.value"
-        class="relative flex min-h-9 shrink-0 items-center justify-center gap-2 rounded-control border border-transparent px-3 py-1.5 text-sm font-medium whitespace-nowrap text-muted transition-colors duration-150 ease-out hover:bg-surface/60 hover:text-ink focus-visible:z-10 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-clay data-[state=active]:border-line data-[state=active]:bg-surface data-[state=active]:text-clay motion-reduce:transition-none"
+        class="glass-control relative flex min-h-9 shrink-0 items-center justify-center gap-2 rounded-full border border-line/60 px-3 py-1.5 text-sm font-medium whitespace-nowrap text-muted transition-colors duration-150 ease-out hover:bg-surface/60 hover:text-ink focus-visible:z-10 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-clay data-[state=active]:border-clay/50 data-[state=active]:bg-clay-soft data-[state=active]:text-clay motion-reduce:transition-none"
       >
         {{ item.label }}
         <span

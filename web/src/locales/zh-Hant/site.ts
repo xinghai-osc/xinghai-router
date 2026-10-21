@@ -15,6 +15,7 @@ export default {
   metaDescription: '星海 Router 把多家大模型供應商聚合到一個統一網關，兼容 OpenAI 與 Anthropic 協議，提供計費、限流、容災與用量統計。',
   footerBlurb: '統一的大模型網關，一個 API 密鑰接入多家供應商，兼容 OpenAI 與 Anthropic 協議。',
   footerCompat: 'OpenAI 兼容 · Anthropic 兼容',
+  footerOpenSource: '開源地址',
 
   heroBadge: 'OpenAI 與 Anthropic 雙協議兼容',
   heroTitleLine1: 'One key for',

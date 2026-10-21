@@ -45,8 +45,8 @@ const pageItems = computed<(number | 'ellipsis')[]>(() => {
         <button
           v-else
           type="button"
-          class="numeric size-9 rounded-control border text-[13px] transition-colors duration-150"
-          :class="page === item ? 'border-clay bg-clay-soft text-clay' : 'border-line-strong bg-surface text-muted hover:border-faint hover:text-ink'"
+          class="glass-control numeric size-9 rounded-full border text-[13px] transition-colors duration-150"
+          :class="page === item ? 'border-clay bg-clay-soft text-clay' : 'border-line-strong text-muted hover:border-faint hover:text-ink'"
           :aria-current="page === item ? 'page' : undefined"
           :aria-label="t('site.sqPageGoto', { page: item })"
           @click="page = item"

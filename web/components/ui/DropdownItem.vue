@@ -22,7 +22,7 @@ defineEmits<{ select: [event: Event] }>()
     v-else
     :disabled="disabled"
     :class="cn(
-      'flex cursor-pointer items-center gap-2 rounded-[7px] px-2 py-1.5 text-sm select-none',
+      'flex cursor-pointer items-center gap-2 rounded-xl px-2 py-1.5 text-sm select-none',
       'data-[disabled]:pointer-events-none data-[disabled]:opacity-45 data-[highlighted]:outline-none',
       danger
         ? 'text-danger data-[highlighted]:bg-danger-soft'

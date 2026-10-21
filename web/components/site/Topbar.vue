@@ -30,16 +30,18 @@ watch(() => route.fullPath, () => { open.value = false })
 </script>
 
 <template>
-  <div class="site-topbar sticky top-2 z-40 mx-2 mt-2 shrink-0 rounded-[1.5rem] border sm:top-3 sm:mx-3 sm:mt-3 sm:rounded-[1.75rem]" @keydown.esc="closeMenu">
-    <div v-if="settings.announcement" class="mx-3 mt-3 rounded-2xl border border-clay/15 bg-clay-soft/60 px-4 py-2 text-center text-xs break-words text-clay">
+  <div class="site-topbar sticky top-2 z-40 mx-2 mt-2 shrink-0 sm:top-3 sm:mx-3 sm:mt-3" @keydown.esc="closeMenu">
+    <div v-if="settings.announcement" class="topbar-glass mx-3 mt-3 rounded-2xl border border-clay/15 px-4 py-2 text-center text-xs break-words text-clay">
       {{ settings.announcement }}
     </div>
     <header class="bg-transparent">
       <div class="shell">
         <div class="flex min-h-16 items-center justify-between gap-3 py-2 sm:min-h-20 lg:gap-6">
-          <SiteLogo :name="settings.name" :icon-url="settings.icon_url" class="min-w-0" />
+          <div class="header-actions flex min-w-0">
+            <SiteLogo :name="settings.name" :icon-url="settings.icon_url" class="glass-control min-w-0 rounded-full border border-line/50 px-3 py-1.5 transition-colors duration-150 ease-out hover:border-line-strong" />
+          </div>
 
-          <nav class="hidden items-center gap-1 rounded-full border border-line/50 bg-surface/25 p-1 lg:flex" :aria-label="t('common.menu')">
+          <nav class="topbar-glass hidden items-center gap-1 rounded-full border p-1 lg:flex" :aria-label="t('common.menu')">
             <NuxtLink
               v-for="link in links"
               :key="link.to"
@@ -49,15 +51,15 @@ watch(() => route.fullPath, () => { open.value = false })
             >{{ t(link.key) }}</NuxtLink>
           </nav>
 
-          <div class="flex shrink-0 items-center gap-1.5">
-            <div class="hidden items-center gap-1 rounded-full border border-line/50 bg-surface/25 p-1 lg:flex">
+          <div class="header-actions flex shrink-0 items-center gap-1.5">
+            <div class="hidden items-center gap-1 p-1 lg:flex">
               <SiteLocaleToggle />
               <SiteThemeToggle />
             </div>
             <template v-if="account">
               <NuxtLink
                 to="/console"
-                class="hidden max-w-44 items-center gap-2 rounded-full border border-line/60 bg-surface/25 py-1.5 pr-3 pl-1.5 text-sm text-ink transition-colors duration-150 ease-out hover:border-line-strong hover:bg-sunken sm:flex"
+                class="glass-control hidden max-w-44 items-center gap-2 rounded-full border border-line/50 py-1.5 pr-3 pl-1.5 text-sm text-ink transition-colors duration-150 ease-out hover:border-line-strong hover:bg-sunken/25 sm:flex"
                 :aria-label="t('common.openConsole')"
               >
                 <img v-if="account.avatar_url" :src="account.avatar_url" alt="" class="size-7 shrink-0 rounded-full object-cover">
@@ -74,7 +76,7 @@ watch(() => route.fullPath, () => { open.value = false })
             <button
               ref="menuTrigger"
               type="button"
-              class="inline-flex size-9 items-center justify-center rounded-full border border-line text-muted transition-colors duration-150 ease-out hover:bg-sunken hover:text-ink lg:hidden"
+              class="glass-control inline-flex size-9 items-center justify-center rounded-full border text-muted transition-colors duration-150 ease-out hover:bg-sunken hover:text-ink lg:hidden"
               :aria-expanded="open"
               :aria-controls="menuId"
               :aria-label="open ? t('common.close') : t('common.menu')"
@@ -86,7 +88,7 @@ watch(() => route.fullPath, () => { open.value = false })
           </div>
         </div>
 
-        <div v-if="open" :id="menuId" class="animate-fade max-h-[calc(100dvh-8rem)] overflow-y-auto border-t border-line pb-3 lg:hidden">
+        <div v-if="open" :id="menuId" class="topbar-glass animate-fade mt-2 max-h-[calc(100dvh-8rem)] overflow-y-auto rounded-3xl border px-3 pb-3 lg:hidden">
           <nav class="flex flex-col gap-1 py-3" :aria-label="t('common.menu')">
             <NuxtLink
               v-for="link in links"
@@ -120,7 +122,8 @@ watch(() => route.fullPath, () => { open.value = false })
 </template>
 
 <style scoped>
-.site-topbar {
+.topbar-glass {
+  position: relative;
   isolation: isolate;
   border-color: color-mix(in srgb, var(--line) 65%, transparent);
   background:
@@ -130,7 +133,7 @@ watch(() => route.fullPath, () => { open.value = false })
   backdrop-filter: blur(24px) saturate(150%);
 }
 
-.site-topbar::before {
+.topbar-glass::before {
   position: absolute;
   inset: 0;
   z-index: -1;
@@ -150,13 +153,13 @@ watch(() => route.fullPath, () => { open.value = false })
 }
 
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .site-topbar {
+  .topbar-glass {
     background: color-mix(in srgb, var(--surface) 95%, transparent);
   }
 }
 
 @media (prefers-reduced-transparency: reduce) {
-  .site-topbar {
+  .topbar-glass {
     background: var(--surface);
     -webkit-backdrop-filter: none;
     backdrop-filter: none;

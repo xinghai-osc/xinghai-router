@@ -16,7 +16,7 @@ const initial = computed(() => {
     <template #trigger>
       <button
         type="button"
-        class="group flex h-9 min-w-9 shrink-0 items-center justify-center gap-2 rounded-control border border-line/0 px-1 text-[13px] font-medium text-ink transition-colors duration-150 ease-out hover:border-line hover:bg-sunken focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-clay data-[state=open]:border-line data-[state=open]:bg-sunken sm:pr-2"
+        class="glass-control group flex h-9 min-w-9 shrink-0 items-center justify-center gap-2 rounded-full border border-line/50 px-1 text-[13px] font-medium text-ink transition-colors duration-150 ease-out hover:border-line hover:bg-sunken/25 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-clay data-[state=open]:border-line data-[state=open]:bg-sunken/25 sm:pr-2"
         :aria-label="t('auth.accountMenu')"
       >
         <img

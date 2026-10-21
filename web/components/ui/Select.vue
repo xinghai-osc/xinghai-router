@@ -49,7 +49,7 @@ const selection = computed({
       :aria-invalid="invalid || undefined"
       :aria-required="field?.required.value || undefined"
       :class="cn(
-        'ui-select-trigger inline-flex min-w-0 w-full items-center justify-between gap-2 rounded-control border border-line-strong bg-surface px-3 text-left text-sm text-ink',
+        'ui-select-trigger glass-control inline-flex min-w-0 w-full items-center justify-between gap-2 rounded-full border border-line-strong px-3 text-left text-sm text-ink',
         'transition-colors duration-150 ease-out enabled:hover:border-faint motion-reduce:transition-none',
         'focus-visible:border-clay focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-clay/60',
         'disabled:cursor-not-allowed disabled:bg-sunken disabled:text-muted',
@@ -69,7 +69,7 @@ const selection = computed({
         position="popper"
         :body-lock="false"
         :side-offset="6"
-        class="animate-pop z-50 max-h-[min(18rem,var(--reka-select-content-available-height))] min-w-[var(--reka-select-trigger-width)] max-w-[calc(100vw-2rem)] overflow-hidden rounded-control border border-line bg-surface shadow-pop motion-reduce:animate-none"
+        class="glass-control animate-pop z-50 max-h-[min(18rem,var(--reka-select-content-available-height))] min-w-[var(--reka-select-trigger-width)] max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border border-line shadow-pop [--glass-opacity:90%] motion-reduce:animate-none"
       >
         <SelectViewport class="p-1">
           <SelectItem
@@ -77,7 +77,7 @@ const selection = computed({
             :key="option.value"
             :value="option.value"
             :disabled="option.disabled"
-            class="relative flex min-h-9 cursor-pointer items-center gap-2 rounded-control py-2 pr-3 pl-8 text-sm leading-5 text-ink transition-colors duration-150 ease-out select-none data-[disabled]:pointer-events-none data-[disabled]:opacity-45 data-[highlighted]:bg-sunken data-[highlighted]:outline-none data-[state=checked]:text-clay motion-reduce:transition-none"
+            class="relative flex min-h-9 cursor-pointer items-center gap-2 rounded-xl py-2 pr-3 pl-8 text-sm leading-5 text-ink transition-colors duration-150 ease-out select-none data-[disabled]:pointer-events-none data-[disabled]:opacity-45 data-[highlighted]:bg-sunken data-[highlighted]:outline-none data-[state=checked]:text-clay motion-reduce:transition-none"
           >
             <SelectItemIndicator class="absolute left-2 flex">
               <Check class="size-3.5 text-clay" />

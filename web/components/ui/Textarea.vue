@@ -32,7 +32,7 @@ const invalid = computed(() => props.invalid || field?.invalid.value)
     :aria-required="field?.required.value || undefined"
     :required="field?.required.value || undefined"
     :class="cn(
-      'block min-h-24 w-full resize-y rounded-control border border-line-strong bg-surface px-3 py-2.5 text-sm leading-6 text-ink',
+      'glass-control block min-h-24 w-full resize-y rounded-2xl border border-line-strong px-3 py-2.5 text-sm leading-6 text-ink',
       'placeholder:text-faint transition-colors duration-150 ease-out motion-reduce:transition-none',
       'enabled:hover:border-faint focus:border-clay focus:outline-2 focus:outline-offset-2 focus:outline-clay/60',
       'disabled:cursor-not-allowed disabled:bg-sunken disabled:text-muted',

@@ -1,3 +1,35 @@
+@utility glass-control {
+  --glass-fill: var(--surface);
+  --glass-opacity: 60%;
+  --glass-solid: var(--paper);
+  background-color: var(--glass-solid);
+  background-image: linear-gradient(135deg, var(--glass-highlight, var(--shimmer-highlight)), transparent 55%);
+
+  @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    background-color: color-mix(in srgb, var(--glass-fill) var(--glass-opacity), transparent);
+    -webkit-backdrop-filter: blur(20px) saturate(140%);
+    backdrop-filter: blur(20px) saturate(140%);
+  }
+
+  @media (prefers-reduced-transparency: reduce) {
+    background-color: var(--glass-solid);
+    background-image: none;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+@utility header-actions {
+  & .glass-control:not(.ui-button-primary):not(.ui-button-danger) {
+    background-color: transparent;
+    background-image: none;
+
+    &:where(:hover, :focus-visible):not(:disabled):not([aria-disabled='true']) {
+      background-image: linear-gradient(135deg, var(--shimmer-highlight), transparent 65%);
+    }
+  }
+}
+
 @utility display {
   font-family: var(--app-font-display);
   font-weight: var(--app-display-weight);
