@@ -197,6 +197,9 @@ func (s *Service) queryOpenCodeGoUsage(ctx context.Context, baseURL, apiKey stri
 }
 
 func (s *Service) queryUpstreamBalance(ctx context.Context, baseURL, apiKey, provider string) (upstreamBalance, error) {
+	if provider == "minimax" {
+		return upstreamBalance{}, fmt.Errorf("MiniMax balance queries require separate login credentials")
+	}
 	if provider == "anthropic" || provider == "ollama" || provider == "commandcode" {
 		return upstreamBalance{}, fmt.Errorf("balance query is not supported for %s", provider)
 	}
@@ -258,11 +261,17 @@ func (s *Service) refreshChannelBalance(ctx context.Context, channelID string, k
 	if err := s.db.QueryRow(ctx, query, args...).Scan(&baseURL, &provider, &encrypted, &selectedKey); err != nil {
 		return upstreamBalance{}, fmt.Errorf("channel key not found")
 	}
-	apiKey, err := channelKeyValue(s.cfg.EncryptionKey, encrypted)
-	if err != nil {
-		return upstreamBalance{}, err
+	var b upstreamBalance
+	var err error
+	if provider == "minimax" {
+		b, err = s.queryMiniMaxChannelBalance(ctx, channelID)
+	} else {
+		var apiKey string
+		apiKey, err = channelKeyValue(s.cfg.EncryptionKey, encrypted)
+		if err == nil {
+			b, err = s.queryUpstreamBalance(ctx, baseURL, apiKey, provider)
+		}
 	}
-	b, err := s.queryUpstreamBalance(ctx, baseURL, apiKey, provider)
 	if err != nil {
 		_, _ = s.db.Exec(ctx, `insert into channel_balances(channel_id,key_id,supported,error,fetched_at) values($1,$2,false,$3,now()) on conflict (channel_id,key_id) do update set supported=false,error=excluded.error,fetched_at=excluded.fetched_at`, channelID, selectedKey, err.Error())
 		return b, err

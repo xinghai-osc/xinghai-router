@@ -25,6 +25,7 @@ type target struct {
 }
 
 var targets = []target{
+	{Table: "minimax_balance_credentials", IDCol: "channel_id", Column: "cookie_encrypted", Where: "cookie_encrypted<>''"},
 	{Table: "api_keys", IDCol: "id", Column: "secret_encrypted", Where: "secret_encrypted<>''"},
 	{Table: "payment_settings", IDCol: "provider", Column: "merchant_key_encrypted", Where: "merchant_key_encrypted<>''"},
 	{Table: "oauth_providers", IDCol: "id", Column: "client_secret_encrypted", Where: "client_secret_encrypted<>''"},

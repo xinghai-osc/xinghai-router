@@ -233,6 +233,17 @@ curl -X POST http://localhost:8080/admin/keys \
   -d '{"user_id":"USER_UUID","name":"development"}'
 ```
 
+Restrict the models a key may call with `allowed_models`. An empty list allows every model the key's group reaches; entries are exact model names or `*` wildcard patterns. The gateway rejects any other model with `403 model_not_allowed`, and `GET /v1/models` lists only the allowed ones.
+
+```sh
+curl -X PUT http://localhost:8080/account/keys/KEY_UUID/models \
+  -b cookies.txt -c cookies.txt -H 'X-Xinghai-Request: 1' \
+  -H 'Content-Type: application/json' \
+  -d '{"allowed_models":["gpt-4o","gpt-4o-mini","claude-3*"]}'
+```
+
+API Key 可以用 `allowed_models` 限制可调用的模型：留空表示允许分组内的全部模型，条目可以是精确模型名或带 `*` 的通配符。调用未授权的模型会返回 `403 model_not_allowed`，`GET /v1/models` 也只返回允许的模型。
+
 Create an OpenAI-compatible upstream channel:
 
 ```sh

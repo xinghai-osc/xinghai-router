@@ -106,6 +106,10 @@ watch([open, () => props.model?.model], ([nextOpen]) => {
             <dd class="numeric mt-1 text-ink">{{ formatContextWindow(model.context_window) }}</dd>
           </div>
         </dl>
+        <div v-if="[...(model.input_modalities ?? []), ...(model.output_modalities ?? [])].some(modality => modality === 'audio' || modality === 'video')" class="mt-3 space-y-2 text-xs leading-5">
+          <p class="text-muted">{{ t('site.sqMediaApiHint') }}</p>
+          <NuxtLink to="/console#media-api-help" class="text-clay underline underline-offset-4">{{ t('site.sqMediaApiHelp') }}</NuxtLink>
+        </div>
       </section>
 
       <section class="space-y-3">

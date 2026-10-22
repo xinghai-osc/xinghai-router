@@ -408,6 +408,9 @@ func (s *Service) models(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		seen[model] = true
+		if !modelAllowed(key.allowedModels, model) {
+			continue
+		}
 		if strings.TrimSpace(name) == "" {
 			name = model
 		}
@@ -562,7 +565,7 @@ func resolveUpstreamFormat(provider, configured string) string {
 		return configured
 	}
 	switch provider {
-	case "openai":
+	case "openai", "minimax":
 		return "openai"
 	case "openai_chat":
 		return "openai_chat"
@@ -617,6 +620,11 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 	started := time.Now()
 	ctx := r.Context()
 	key := ctx.Value(contextKey{}).(keyContext)
+	if !modelAllowed(key.allowedModels, model) {
+		s.logReject(ctx, model, http.StatusForbidden, "model_not_allowed", started)
+		writeError(w, http.StatusForbidden, "model_not_allowed", "this API key is not allowed to use this model")
+		return
+	}
 	needsConsent, err := s.requiresDataTransferConsent(ctx, key.userID, model)
 	if err != nil {
 		s.logReject(ctx, model, http.StatusInternalServerError, "internal_error", started)
@@ -629,10 +637,14 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 		return
 	}
 	imageOptions := imageGatewayOptionsFromContext(ctx)
+	mediaOptions := mediaOptionsFromContext(ctx)
+	if mediaOptions.kind != "" {
+		imageOptions.path, imageOptions.contentType = mediaOptions.path, mediaOptions.contentType
+	}
 	// The normalized prompt is derived once and reused by both the local prefix
 	// cache lookup and store; deriving it on each call parsed the body twice.
 	normalized := ""
-	if s.promptCache != nil && s.promptCache.enabled && upstreamFormatOnly(ctx) != "jev" {
+	if imageOptions.path == "" && s.promptCache != nil && s.promptCache.enabled && upstreamFormatOnly(ctx) != "jev" {
 		normalized = normalizedPrompt(body)
 	}
 	if maxTokens > maxGatewayMaxTokens {
@@ -669,6 +681,18 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 		}
 	}
 	groupMultiplier := s.groupMultiplierFor(ctx, key.groupID)
+	var mediaQuote BillingSnapshot
+	if mediaOptions.kind != "" {
+		reservationFacts, quoteErr := mediaOptions.reservationFacts(pricing)
+		if quoteErr == nil {
+			mediaQuote, quoteErr = calculateBill(reservationFacts, pricing, groupMultiplier)
+		}
+		if quoteErr != nil {
+			s.logReject(ctx, model, 402, "pricing_unavailable", started)
+			writeError(w, 402, "pricing_unavailable", "no matching media price is configured")
+			return
+		}
+	}
 	subscriptionAccess := s.subscriptionCoversModel(ctx, key, model)
 	ctx = context.WithValue(ctx, subscriptionCoveredKey{}, subscriptionAccess)
 	var reserved reservation
@@ -680,7 +704,9 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 		return
 	} else {
 		var err error
-		if imageOptions.image {
+		if mediaOptions.kind != "" {
+			reserved, err = s.reserveAmount(ctx, key, model, mediaQuote.Cost)
+		} else if imageOptions.image {
 			var bill BillingSnapshot
 			bill, err = calculateBill(imageOptions.reservationFacts(), pricing, groupMultiplier)
 			if err == nil {
@@ -748,6 +774,9 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 		client = http.DefaultClient
 	}
 	accept := "application/json"
+	if mediaOptions.kind == "speech" {
+		accept = "audio/*, application/octet-stream"
+	}
 	if stream {
 		accept = "text/event-stream"
 	}
@@ -790,6 +819,9 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 	// header is forwarded upstream below.
 	affinity := sessionAffinityKey{userID: key.userID, groupID: key.groupID, model: model}
 	identity := requestSessionID(ctx, r, body, key.userID)
+	if mediaOptions.kind != "" {
+		identity.stable = false
+	}
 	if identity.stable {
 		affinity.session = identity.session
 		retryChannels = s.applySessionAffinity(affinity, retryChannels)
@@ -830,7 +862,13 @@ tryChannels:
 			if imageOptions.image && (ch.provider == "anthropic" || ch.provider == "commandcode" || ch.upstreamFormat == "anthropic" || ch.upstreamFormat == "commandcode" || imageBillingOverrides(ch.overrides)) {
 				continue
 			}
+			if mediaOptions.minimaxNative && ch.provider != "minimax" {
+				continue
+			}
 			upstreamFormat := resolveUpstreamFormat(ch.provider, ch.upstreamFormat)
+			if mediaOptions.kind != "" && (upstreamFormat == "anthropic" || upstreamFormat == "commandcode" || upstreamFormat == "jev" || len(ch.overrides.Set) != 0 || len(ch.overrides.Delete) != 0) {
+				continue
+			}
 			if !channelMatchesUpstreamFormat(requiredUpstreamFormat, upstreamFormat) {
 				continue
 			}
@@ -841,7 +879,7 @@ tryChannels:
 			if forceChatFallback {
 				upstreamFormat = "openai_chat"
 			}
-			if imageOptions.image {
+			if imageOptions.path != "" {
 				upstreamFormat = "openai"
 			}
 			directResponses := responsesBody != nil && responsesPassthroughEnabled(upstreamFormat)
@@ -852,7 +890,7 @@ tryChannels:
 			selectedDirectResponses = directResponses
 			selectedPassthrough = passthrough
 			upstreamPath := ch.upstreamPath
-			if imageOptions.image {
+			if imageOptions.path != "" {
 				upstreamPath = imageOptions.path
 			} else if directResponses && upstreamPath == "" {
 				upstreamPath = "/v1/responses"
@@ -875,11 +913,13 @@ tryChannels:
 				upstreamBody = applyRequestOverrides(upstreamBody, ch.overrides)
 			} else {
 				upstreamBody = body
-				if imageOptions.image {
+				if imageOptions.path != "" {
 					upstreamContentType = imageOptions.contentType
 					if ch.upstreamModel != "" && ch.upstreamModel != model {
 						if strings.HasPrefix(imageOptions.contentType, "multipart/form-data") {
 							upstreamBody, upstreamContentType = rewriteMultipartModel(upstreamBody, imageOptions.contentType, ch.upstreamModel)
+						} else if mediaOptions.minimaxNative {
+							upstreamBody = rewriteJEVBody(upstreamBody, ch.upstreamModel, model)
 						} else {
 							upstreamBody = rewriteJSONModel(upstreamBody, ch.upstreamModel)
 						}
@@ -916,6 +956,20 @@ tryChannels:
 				} else {
 					upstreamBody = applyRequestOverrides(upstreamBody, ch.overrides)
 				}
+			}
+			if mediaOptions.kind == "video" && ch.provider == "minimax" {
+				upstreamModel := ch.upstreamModel
+				if upstreamModel == "" {
+					upstreamModel = model
+				}
+				upstreamBody, err = miniMaxVideoBody(upstreamBody, upstreamContentType, mediaOptions.minimaxNative, upstreamModel)
+				if err != nil {
+					s.logReject(ctx, model, http.StatusBadRequest, "invalid_request", started)
+					writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+					return
+				}
+				upstreamContentType = "application/json"
+				upstreamURL = strings.TrimRight(ch.baseURL, "/") + minimaxVideoPath
 			}
 			upstreamReq, requestErr := http.NewRequestWithContext(requestContext, http.MethodPost, upstreamURL, bytes.NewReader(upstreamBody))
 			if requestErr != nil {
@@ -974,7 +1028,7 @@ tryChannels:
 				// "no channel" error despite the upstream having returned valid usage.
 				break tryChannels
 			}
-			nonRetryable := false
+			nonRetryable := mediaOptions.kind == "video"
 			if err == nil && !nativeOnly && directResponses && responsesBody != nil && !forceChatFallback && ch.upstreamPath == "" && responsesFallbackStatus(resp.StatusCode) {
 				resp.Body.Close()
 				resp = nil
@@ -1184,7 +1238,14 @@ tryChannels:
 		}
 		return
 	}
-	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, maxUpstreamResponseBody))
+	responseLimit := int64(maxUpstreamResponseBody)
+	if mediaOptions.kind == "speech" {
+		responseLimit = defaultImageBodyMaxBytes
+	}
+	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, responseLimit+1))
+	if err == nil && int64(len(responseBody)) > responseLimit {
+		err = fmt.Errorf("upstream response exceeds size limit")
+	}
 	if err != nil {
 		prompt := len(body) / 3
 		code, detail, contextError := classifyContextError(err)
@@ -1210,6 +1271,36 @@ tryChannels:
 		return
 	}
 	facts := parseUsageFactsForFormat(responseBody, selectedFormat)
+	if mediaOptions.kind != "" && resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		facts, err = mediaOptions.responseFacts(responseBody, resp.Header.Get("Content-Type"), pricing)
+		if err == nil {
+			var actual BillingSnapshot
+			actual, err = calculateBill(facts, pricing, groupMultiplier)
+			if err == nil && actual.Cost > mediaQuote.Cost {
+				err = fmt.Errorf("upstream media usage exceeds the reserved request limit")
+			}
+		}
+		if err == nil && mediaOptions.kind == "video" {
+			if ch.provider == "minimax" {
+				responseBody, err = miniMaxCreatedVideo(responseBody)
+			}
+			if err == nil {
+				responseBody, err = s.registerVideoTask(ctx, key, ch, model, responseBody)
+			}
+			if err == nil && mediaOptions.minimaxNative {
+				var task struct {
+					ID string `json:"id"`
+				}
+				_ = json.Unmarshal(responseBody, &task)
+				responseBody, err = json.Marshal(map[string]string{"task_id": task.ID})
+			}
+		}
+		if err != nil {
+			s.logRequest(ctx, key, ch.id, ch.keyID, model, 502, 0, 0, 0, time.Since(started), "invalid_media_response", err.Error())
+			writeError(w, 502, "upstream_error", "could not account for upstream media response")
+			return
+		}
+	}
 	if imageOptions.image && resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		facts, err = imageResponseFacts(responseBody, imageOptions, facts)
 		if err != nil {
@@ -1291,12 +1382,17 @@ tryChannels:
 	}
 	if selectedDirectResponses || selectedPassthrough {
 		copyResponseHeaders(w.Header(), resp.Header)
+	} else if mediaOptions.kind == "speech" && resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+		w.Header().Set("Cache-Control", "private, no-store")
 	} else {
 		w.Header().Set("Content-Type", contentType(resp.Header.Get("Content-Type")))
 	}
 	w.WriteHeader(resp.StatusCode)
 	w.Write(responseBody)
-	s.storeConversationCache(ctx, key, model, false, body, responseBody, resp.StatusCode, time.Since(started).Milliseconds(), nil)
+	if mediaOptions.kind == "" {
+		s.storeConversationCache(ctx, key, model, false, body, responseBody, resp.StatusCode, time.Since(started).Milliseconds(), nil)
+	}
 }
 
 // reserveUsage holds the worst-case cost of a request before it is proxied. The whole

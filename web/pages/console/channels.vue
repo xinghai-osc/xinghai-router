@@ -14,7 +14,7 @@ const { busy, error: actionError, run } = useAction()
 const allowed = computed(() => can('channels.read'))
 const canManage = computed(() => can('channels.manage'))
 
-const PROVIDERS = ['openai', 'openai_chat', 'ollama', 'kimi', 'opencode_go', 'anthropic', 'deepseek', 'commandcode', 'jev', 'custom']
+const PROVIDERS = ['openai', 'openai_chat', 'ollama', 'kimi', 'opencode_go', 'minimax', 'anthropic', 'deepseek', 'commandcode', 'jev', 'custom']
 const KEY_TYPES = [
   { value: 'single', label: t('admin.singleKey') },
   { value: 'multi', label: t('admin.multiKey') },
@@ -26,6 +26,7 @@ const PROVIDER_ICONS: Record<string, Component> = {
   ollama: Cpu,
   kimi: Moon,
   opencode_go: SquareTerminal,
+  minimax: Sparkles,
   anthropic: Hexagon,
   deepseek: Brain,
   commandcode: Command,
@@ -96,6 +97,10 @@ function formatRelativeTime(value: string | null): string {
   if (hours < 24) return t('admin.timeHoursAgo', { count: hours })
   const days = Math.floor(hours / 24)
   return t('admin.timeDaysAgo', { count: days })
+}
+
+function formatUpstreamBalance(value: number, currency: string): string {
+  return currency === 'credits' ? t('admin.minimaxCredits', { value: formatNumber(value) }) : `${currency} ${formatNumber(value)}`
 }
 
 function formatDuration(ms: number): string {
@@ -398,6 +403,7 @@ const routeForm = reactive({
 function updateProvider(provider: string) {
   form.provider = provider
   if (provider === 'jev' && !form.base_url.trim()) form.base_url = 'https://api.typesafe.ai'
+  if (provider === 'minimax' && !form.base_url.trim()) form.base_url = 'https://api.minimax.cn'
 }
 
 function openCreate() {
@@ -1110,7 +1116,7 @@ function quotaUsageForWindow(window: string) {
                     <span class="block text-[12px] text-muted">{{ usageWindowText(window) }}</span>
                   </UiTooltip>
                 </div>
-                <span v-else-if="channel.upstream_balance_supported && channel.upstream_balance !== null">{{ channel.upstream_currency }} {{ formatNumber(channel.upstream_balance) }}</span>
+                <span v-else-if="channel.upstream_balance_supported && channel.upstream_balance !== null">{{ formatUpstreamBalance(channel.upstream_balance, channel.upstream_currency) }}</span>
                 <span v-else class="text-faint">-</span>
               </td>
               <td>
@@ -1180,6 +1186,8 @@ function quotaUsageForWindow(window: string) {
           </UiField>
         </div>
 
+        <UiAlert v-if="form.provider === 'minimax'">{{ t('admin.minimaxPlanHint') }}</UiAlert>
+
         <UiField :label="t('admin.baseUrl')" :hint="t('admin.baseUrlHint')" required>
           <UiInput v-model="form.base_url" mono :placeholder="t('admin.baseUrlPlaceholder')" />
         </UiField>
@@ -1201,6 +1209,15 @@ function quotaUsageForWindow(window: string) {
             <UiInput v-model="form.priority" type="number" mono />
           </UiField>
         </div>
+
+        <template v-if="canManage && form.provider === 'minimax'">
+          <ConsoleMiniMaxBalanceCredentials
+            v-if="dialogOpen && editingId && channels.data.value.data.some(channel => channel.id === editingId && channel.provider === 'minimax')"
+            :key="editingId"
+            :channel-id="editingId"
+          />
+          <p v-else class="text-sm text-muted">{{ t('admin.minimaxBalanceSaveChannelFirst') }}</p>
+        </template>
 
         <UiField
           :label="t('admin.apiKey')"
@@ -1334,7 +1351,7 @@ function quotaUsageForWindow(window: string) {
               </UiTooltip>
             </span>
             <span v-else-if="key.upstream_balance_supported && key.upstream_balance !== null" class="numeric text-[13px] text-muted shrink-0">
-              {{ key.upstream_currency }} {{ formatNumber(key.upstream_balance) }}
+              {{ formatUpstreamBalance(key.upstream_balance, key.upstream_currency) }}
             </span>
             <UiTooltip v-else-if="key.upstream_balance_error" :content="key.upstream_balance_error">
               <span class="text-[13px] text-warn shrink-0">-</span>

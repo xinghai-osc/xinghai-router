@@ -1838,7 +1838,7 @@ func validModelName(model string) bool {
 }
 
 func validChannelProvider(provider string) bool {
-	return map[string]bool{"openai": true, "openai_chat": true, "ollama": true, "kimi": true, "opencode_go": true, "anthropic": true, "deepseek": true, "commandcode": true, "jev": true, "custom": true}[provider]
+	return map[string]bool{"openai": true, "openai_chat": true, "ollama": true, "kimi": true, "opencode_go": true, "anthropic": true, "deepseek": true, "commandcode": true, "jev": true, "minimax": true, "custom": true}[provider]
 }
 
 func validChannelKeyType(keyType string) bool {
@@ -2108,11 +2108,12 @@ func (s *Service) setUserPermissions(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Service) createKey(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		UserID         int64  `json:"user_id"`
-		Name           string `json:"name"`
-		ExpiresAt      string `json:"expires_at"`
-		GroupID        string `json:"group_id"`
-		SubscriptionID string `json:"subscription_id"`
+		UserID         int64    `json:"user_id"`
+		Name           string   `json:"name"`
+		ExpiresAt      string   `json:"expires_at"`
+		GroupID        string   `json:"group_id"`
+		SubscriptionID string   `json:"subscription_id"`
+		AllowedModels  []string `json:"allowed_models"`
 	}
 	if decode(r, &in) != nil || in.UserID <= 0 {
 		writeError(w, 400, "invalid_request", "user_id and name are required")
@@ -2127,6 +2128,11 @@ func (s *Service) createKey(w http.ResponseWriter, r *http.Request) {
 	expires, err := parseExpiry(in.ExpiresAt)
 	if err != nil {
 		writeError(w, 400, "invalid_request", "expires_at must be RFC3339")
+		return
+	}
+	allowedModels, err := normalizeAllowedModels(in.AllowedModels)
+	if err != nil {
+		writeError(w, 400, "invalid_request", err.Error())
 		return
 	}
 	secret, err := randomSecret("sk-xh-")
@@ -2160,7 +2166,7 @@ func (s *Service) createKey(w http.ResponseWriter, r *http.Request) {
 		writeUserMutationError(w, err)
 		return
 	}
-	_, err = tx.Exec(r.Context(), `insert into api_keys(id,user_id,name,key_prefix,secret_hash,secret_encrypted,expires_at,group_id,subscription_id) values($1,$2,$3,$4,$5,$6,$7,$8,$9)`, id, userID, name, secret[:12], hashSecret(secret), encryptedSecret, expires, groupID, subscriptionID)
+	_, err = tx.Exec(r.Context(), `insert into api_keys(id,user_id,name,key_prefix,secret_hash,secret_encrypted,expires_at,group_id,subscription_id,allowed_models) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, id, userID, name, secret[:12], hashSecret(secret), encryptedSecret, expires, groupID, subscriptionID, allowedModels)
 	if err != nil {
 		writeError(w, 400, "invalid_request", "unknown user")
 		return
@@ -2169,8 +2175,8 @@ func (s *Service) createKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "internal_error", "could not create API key")
 		return
 	}
-	s.audit(r, "api_key.created", "api_key", id, map[string]any{"user_id": userID, "name": name, "subscription_id": subscriptionID})
-	writeJSON(w, 201, map[string]any{"id": id, "name": name, "key": secret, "expires_at": expires, "group_id": groupID, "subscription_id": subscriptionID})
+	s.audit(r, "api_key.created", "api_key", id, map[string]any{"user_id": userID, "name": name, "subscription_id": subscriptionID, "allowed_models": allowedModels})
+	writeJSON(w, 201, map[string]any{"id": id, "name": name, "key": secret, "expires_at": expires, "group_id": groupID, "subscription_id": subscriptionID, "allowed_models": allowedModels})
 }
 func (s *Service) listKeys(w http.ResponseWriter, r *http.Request) {
 	page, pageSize, offset := listPage(r)
@@ -2179,7 +2185,7 @@ func (s *Service) listKeys(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "internal_error", "query failed")
 		return
 	}
-	rows, err := s.db.Query(r.Context(), `select k.id,k.user_id,k.name,k.key_prefix,k.expires_at,k.revoked_at,k.last_used_at,k.created_at,coalesce(k.group_id::text,''),coalesce(g.name,''),k.secret_encrypted<>'',coalesce(k.subscription_id::text,''),case when s.id is null then '' when coalesce(t.name,'')='' then s.name else s.name||' · '||t.name end from api_keys k left join groups g on g.id=k.group_id left join user_subscriptions us on us.id=k.subscription_id left join subscription_tiers t on t.id=us.tier_id left join subscriptions s on s.id=t.subscription_id order by k.created_at desc limit $1 offset $2`, pageSize, offset)
+	rows, err := s.db.Query(r.Context(), `select k.id,k.user_id,k.name,k.key_prefix,k.expires_at,k.revoked_at,k.last_used_at,k.created_at,coalesce(k.group_id::text,''),coalesce(g.name,''),k.secret_encrypted<>'',coalesce(k.subscription_id::text,''),case when s.id is null then '' when coalesce(t.name,'')='' then s.name else s.name||' · '||t.name end,coalesce(k.allowed_models,'{}') from api_keys k left join groups g on g.id=k.group_id left join user_subscriptions us on us.id=k.subscription_id left join subscription_tiers t on t.id=us.tier_id left join subscriptions s on s.id=t.subscription_id order by k.created_at desc limit $1 offset $2`, pageSize, offset)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
@@ -2191,8 +2197,9 @@ func (s *Service) listKeys(w http.ResponseWriter, r *http.Request) {
 		var groupID, groupName, subscriptionID, subscriptionName string
 		var revealable bool
 		var expiry, revoked, used, created any
-		rows.Scan(&id, &uid, &name, &prefix, &expiry, &revoked, &used, &created, &groupID, &groupName, &revealable, &subscriptionID, &subscriptionName)
-		data = append(data, map[string]any{"id": id, "user_id": uid, "name": name, "key_prefix": prefix, "expires_at": expiry, "revoked_at": revoked, "last_used_at": used, "created_at": created, "group_id": groupID, "group_name": groupName, "subscription_id": subscriptionID, "subscription_name": subscriptionName, "revealable": revealable})
+		var allowedModels []string
+		rows.Scan(&id, &uid, &name, &prefix, &expiry, &revoked, &used, &created, &groupID, &groupName, &revealable, &subscriptionID, &subscriptionName, &allowedModels)
+		data = append(data, map[string]any{"id": id, "user_id": uid, "name": name, "key_prefix": prefix, "expires_at": expiry, "revoked_at": revoked, "last_used_at": used, "created_at": created, "group_id": groupID, "group_name": groupName, "subscription_id": subscriptionID, "subscription_name": subscriptionName, "revealable": revealable, "allowed_models": allowedModels})
 	}
 	writePaged(w, data, total, page, pageSize)
 }
@@ -2232,6 +2239,33 @@ func (s *Service) setKeyGroup(w http.ResponseWriter, r *http.Request) {
 	}
 	s.audit(r, "api_key.group_changed", "api_key", r.PathValue("id"), map[string]any{"group_id": groupID})
 	writeJSON(w, 200, map[string]any{"group_id": groupID})
+}
+
+// setKeyModels restricts (or releases) the models an API key may call.
+func (s *Service) setKeyModels(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		AllowedModels []string `json:"allowed_models"`
+	}
+	if decode(r, &in) != nil {
+		writeError(w, 400, "invalid_request", "allowed_models must be an array of model names")
+		return
+	}
+	allowedModels, err := normalizeAllowedModels(in.AllowedModels)
+	if err != nil {
+		writeError(w, 400, "invalid_request", err.Error())
+		return
+	}
+	result, err := s.db.Exec(r.Context(), `update api_keys set allowed_models=$1 where id=$2`, allowedModels, r.PathValue("id"))
+	if err != nil {
+		writeError(w, 500, "internal_error", "could not update API key models")
+		return
+	}
+	if result.RowsAffected() == 0 {
+		writeError(w, 404, "not_found", "API key not found")
+		return
+	}
+	s.audit(r, "api_key.models_changed", "api_key", r.PathValue("id"), map[string]any{"allowed_models": allowedModels})
+	writeJSON(w, 200, map[string]any{"id": r.PathValue("id"), "allowed_models": allowedModels})
 }
 func (s *Service) revokeKey(w http.ResponseWriter, r *http.Request) {
 	result, err := s.db.Exec(r.Context(), `update api_keys set revoked_at=coalesce(revoked_at, now()) where id=$1`, r.PathValue("id"))

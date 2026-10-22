@@ -15,6 +15,7 @@ import (
 type keyContext struct {
 	userID, keyID, groupID, workspaceID, subscriptionID string
 	dataUsageEnabled                                    bool
+	allowedModels                                       []string
 }
 type contextKey struct{}
 
@@ -67,6 +68,7 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("POST /account/keys", s.workspaceAccount(s.createAccountKey))
 	mux.Handle("PUT /account/keys/{id}", s.workspaceAccount(s.updateAccountKey))
 	mux.Handle("PUT /account/keys/{id}/group", s.workspaceAccount(s.setAccountKeyGroup))
+	mux.Handle("PUT /account/keys/{id}/models", s.workspaceAccount(s.setAccountKeyModels))
 	mux.Handle("POST /account/keys/{id}/revoke", s.workspaceAccount(s.revokeAccountKey))
 	mux.Handle("GET /account/keys/{id}/secret", s.workspaceAccount(s.requireRecentAuth(s.revealAccountKey)))
 	mux.Handle("GET /account/keys/{id}/quota", s.workspaceAccount(s.keyQuotaList))
@@ -141,6 +143,7 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("GET /admin/keys", s.permission("keys.manage", s.listKeys))
 	mux.Handle("POST /admin/keys/{id}/revoke", s.permission("keys.manage", s.revokeKey))
 	mux.Handle("PUT /admin/keys/{id}/group", s.permission("keys.manage", s.setKeyGroup))
+	mux.Handle("PUT /admin/keys/{id}/models", s.permission("keys.manage", s.setKeyModels))
 	mux.Handle("GET /admin/keys/{id}/secret", s.permission("keys.manage", s.requireRecentAuth(s.revealKey)))
 	mux.Handle("POST /admin/channels", s.permission("channels.manage", s.createChannel))
 	mux.Handle("POST /admin/channels/credentials/migrate", s.permission("channels.manage", s.requireRecentAuth(s.migrateChannelCredentials)))
@@ -276,6 +279,18 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("POST /v1/chat/completions", s.api(s.chatCompletions))
 	mux.Handle("POST /v1/images/generations", s.api(s.imageGenerations))
 	mux.Handle("POST /v1/images/edits", s.api(s.imageEdits))
+	mux.Handle("POST /v1/audio/speech", s.api(s.audioSpeech))
+	mux.Handle("POST /v1/audio/transcriptions", s.api(s.audioTranscriptions))
+	mux.Handle("POST /v1/audio/translations", s.api(s.audioTranscriptions))
+	mux.Handle("POST /v2/video_generation", s.api(s.minimaxVideoGenerations))
+	mux.Handle("GET /v2/query/video_generation/{id}", s.api(s.getMiniMaxVideo))
+	mux.Handle("DELETE /v2/video_generation/{id}", s.api(s.deleteMiniMaxVideo))
+	mux.Handle("GET /admin/channels/{id}/minimax-balance-credentials", s.permission("channels.manage", s.getMiniMaxBalanceCredentials))
+	mux.Handle("PUT /admin/channels/{id}/minimax-balance-credentials", s.permission("channels.manage", s.requireRecentAuth(s.updateMiniMaxBalanceCredentials)))
+	mux.Handle("DELETE /admin/channels/{id}/minimax-balance-credentials", s.permission("channels.manage", s.requireRecentAuth(s.deleteMiniMaxBalanceCredentials)))
+	mux.Handle("POST /v1/videos", s.api(s.videoGenerations))
+	mux.Handle("GET /v1/videos/{id}", s.api(s.getVideo))
+	mux.Handle("GET /v1/videos/{id}/content", s.api(s.getVideoContent))
 	mux.Handle("POST /v1/responses", s.api(s.responsesCompletions))
 	mux.Handle("GET /v1/responses", s.api(s.responsesWebSocket))
 	mux.Handle("GET /responses", s.api(s.responsesWebSocket))
@@ -353,7 +368,7 @@ func (s *Service) loadAPIKeyContext(ctx context.Context, token string) (keyConte
 	if token == "" {
 		return key, errInvalid
 	}
-	err := s.db.QueryRow(ctx, `select k.user_id,k.id,coalesce(k.group_id::text,''),u.data_usage_enabled,k.workspace_id::text,coalesce(k.subscription_id::text,'') from api_keys k join users u on u.id=k.user_id join workspaces ws on ws.id=k.workspace_id and ws.archived_at is null join workspace_members wm on wm.workspace_id=k.workspace_id and wm.user_id=k.user_id where k.secret_hash=$1 and k.revoked_at is null and (k.expires_at is null or k.expires_at>now()) and u.enabled and (k.group_id is null or exists(select 1 from groups g where g.id=k.group_id and g."public") or exists(select 1 from user_groups ug where ug.user_id=k.user_id and ug.group_id=k.group_id))`, hashSecret(token)).Scan(&key.userID, &key.keyID, &key.groupID, &key.dataUsageEnabled, &key.workspaceID, &key.subscriptionID)
+	err := s.db.QueryRow(ctx, `select k.user_id,k.id,coalesce(k.group_id::text,''),u.data_usage_enabled,k.workspace_id::text,coalesce(k.subscription_id::text,''),coalesce(k.allowed_models,'{}') from api_keys k join users u on u.id=k.user_id join workspaces ws on ws.id=k.workspace_id and ws.archived_at is null join workspace_members wm on wm.workspace_id=k.workspace_id and wm.user_id=k.user_id where k.secret_hash=$1 and k.revoked_at is null and (k.expires_at is null or k.expires_at>now()) and u.enabled and (k.group_id is null or exists(select 1 from groups g where g.id=k.group_id and g."public") or exists(select 1 from user_groups ug where ug.user_id=k.user_id and ug.group_id=k.group_id))`, hashSecret(token)).Scan(&key.userID, &key.keyID, &key.groupID, &key.dataUsageEnabled, &key.workspaceID, &key.subscriptionID, &key.allowedModels)
 	return key, err
 }
 
@@ -382,7 +397,7 @@ func (s *Service) me(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Service) myKeys(w http.ResponseWriter, r *http.Request) {
 	key := r.Context().Value(contextKey{}).(keyContext)
-	rows, err := s.db.Query(r.Context(), `select k.id,k.name,k.key_prefix,k.expires_at,k.revoked_at,k.last_used_at,k.created_at,coalesce(k.group_id::text,''),coalesce(g.name,''),k.secret_encrypted<>'' from api_keys k left join groups g on g.id=k.group_id where k.user_id=$1 and k.workspace_id=$2 order by k.created_at desc`, key.userID, key.workspaceID)
+	rows, err := s.db.Query(r.Context(), `select k.id,k.name,k.key_prefix,k.expires_at,k.revoked_at,k.last_used_at,k.created_at,coalesce(k.group_id::text,''),coalesce(g.name,''),k.secret_encrypted<>'',coalesce(k.allowed_models,'{}') from api_keys k left join groups g on g.id=k.group_id where k.user_id=$1 and k.workspace_id=$2 order by k.created_at desc`, key.userID, key.workspaceID)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
@@ -393,8 +408,9 @@ func (s *Service) myKeys(w http.ResponseWriter, r *http.Request) {
 		var id, name, prefix, groupID, groupName string
 		var revealable bool
 		var expires, revoked, used, created any
-		if rows.Scan(&id, &name, &prefix, &expires, &revoked, &used, &created, &groupID, &groupName, &revealable) == nil {
-			data = append(data, map[string]any{"id": id, "name": name, "key_prefix": prefix, "group_id": groupID, "group_name": groupName, "expires_at": expires, "revoked_at": revoked, "last_used_at": used, "created_at": created, "revealable": revealable})
+		var allowedModels []string
+		if rows.Scan(&id, &name, &prefix, &expires, &revoked, &used, &created, &groupID, &groupName, &revealable, &allowedModels) == nil {
+			data = append(data, map[string]any{"id": id, "name": name, "key_prefix": prefix, "group_id": groupID, "group_name": groupName, "expires_at": expires, "revoked_at": revoked, "last_used_at": used, "created_at": created, "revealable": revealable, "allowed_models": allowedModels})
 		}
 	}
 	writeJSON(w, 200, map[string]any{"data": data})

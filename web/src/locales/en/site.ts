@@ -1,4 +1,6 @@
 export default {
+  sqMediaApiHint: "Audio/video modalities describe model inputs and outputs; endpoint availability depends on the configured upstream. Media charges may use characters, audio tokens or seconds rather than the token prices shown below.",
+  sqMediaApiHelp: "Audio & video API examples in the console",
   consentTitle: 'Review the Terms and Privacy Policy',
   consentDescription: 'On your first visit or after an update, please read and accept the current Terms of Service and Privacy Policy before continuing to use this website.',
   consentCheckbox: 'I have read and agree to the Terms of Service and Privacy Policy',

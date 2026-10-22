@@ -10,6 +10,7 @@ import (
 const maxUsageFact = int64(1_000_000_000)
 
 type UsageFacts struct {
+	AudioCharacters    int64   `json:"audio_characters"`
 	InputTokens        int64   `json:"input_tokens"`
 	OutputTokens       int64   `json:"output_tokens"`
 	CacheReadTokens    int64   `json:"cache_read_tokens"`
@@ -53,7 +54,7 @@ func (f UsageFacts) HasUsage() bool {
 		f.InputTokens > 0 || f.OutputTokens > 0 || f.CacheReadTokens > 0 || f.CacheWriteTokens > 0 ||
 		f.CacheWrite5mTokens > 0 || f.CacheWrite1hTokens > 0 || f.ImageCount > 0 ||
 		f.AudioInputTokens > 0 || f.AudioOutputTokens > 0 || f.ImageInputTokens > 0 || f.ImageOutputTokens > 0 ||
-		f.ToolCalls > 0 || f.AudioSeconds > 0 || f.VideoSeconds > 0
+		f.AudioCharacters > 0 || f.ToolCalls > 0 || f.AudioSeconds > 0 || f.VideoSeconds > 0
 }
 
 func usageFactsFromLegacy(prompt, cached, completion int, source string) UsageFacts {
@@ -82,7 +83,7 @@ func clampUsageFloat(n float64) float64 {
 func normalizeUsageFacts(f UsageFacts) UsageFacts {
 	for _, n := range []*int64{&f.InputTokens, &f.OutputTokens, &f.CacheReadTokens, &f.CacheWriteTokens,
 		&f.CacheWrite5mTokens, &f.CacheWrite1hTokens, &f.ImageCount, &f.AudioInputTokens,
-		&f.AudioOutputTokens, &f.ImageInputTokens, &f.ImageOutputTokens, &f.ToolCalls} {
+		&f.AudioCharacters, &f.AudioOutputTokens, &f.ImageInputTokens, &f.ImageOutputTokens, &f.ToolCalls} {
 		*n = clampUsageInt(*n)
 	}
 	f.CacheWriteTokens = max(f.CacheWriteTokens, f.CacheWrite5mTokens+f.CacheWrite1hTokens)
@@ -103,6 +104,7 @@ func mergeUsageFacts(dst *UsageFacts, next UsageFacts) {
 	dst.CacheWrite5mTokens = max(dst.CacheWrite5mTokens, next.CacheWrite5mTokens)
 	dst.CacheWrite1hTokens = max(dst.CacheWrite1hTokens, next.CacheWrite1hTokens)
 	dst.ImageCount = max(dst.ImageCount, next.ImageCount)
+	dst.AudioCharacters = max(dst.AudioCharacters, next.AudioCharacters)
 	dst.AudioInputTokens = max(dst.AudioInputTokens, next.AudioInputTokens)
 	dst.AudioOutputTokens = max(dst.AudioOutputTokens, next.AudioOutputTokens)
 	dst.ImageInputTokens = max(dst.ImageInputTokens, next.ImageInputTokens)
@@ -290,7 +292,7 @@ func parseUsageFactsObject(root usageObject, format string) UsageFacts {
 	f.promptPresent = f.inputTotalPresent
 	f.outputPresent = f.outputTotalPresent
 	f.inclusiveInput = !anthropic
-	inputDetails := []usageObject{u.object("prompt_tokens_details", "promptTokensDetails"), u.object("input_tokens_details", "inputTokensDetails", "inputTokenDetails")}
+	inputDetails := []usageObject{u.object("prompt_tokens_details", "promptTokensDetails"), u.object("input_tokens_details", "input_token_details", "inputTokensDetails", "inputTokenDetails")}
 	outputDetails := []usageObject{u.object("completion_tokens_details", "completionTokensDetails"), u.object("output_tokens_details", "outputTokensDetails", "outputTokenDetails")}
 	readCount(&f.CacheReadTokens, u, "cache_read_input_tokens", "cacheReadInputTokens", "cache_read_tokens", "cachedContentTokenCount", "cached_content_token_count")
 	readCount(&f.CacheWriteTokens, u, "cache_creation_input_tokens", "cacheCreationInputTokens", "cache_write_tokens", "cacheWriteTokens")
@@ -299,6 +301,7 @@ func parseUsageFactsObject(root usageObject, format string) UsageFacts {
 	creation := u.object("cache_creation", "cacheCreation")
 	readCount(&f.CacheWrite5mTokens, creation, "ephemeral_5m_input_tokens", "ephemeral5mInputTokens")
 	readCount(&f.CacheWrite1hTokens, creation, "ephemeral_1h_input_tokens", "ephemeral1hInputTokens")
+	readCount(&f.AudioCharacters, u, "audio_characters")
 	readCount(&f.AudioInputTokens, u, "audio_input_tokens", "audioInputTokens")
 	readCount(&f.AudioOutputTokens, u, "audio_output_tokens", "audioOutputTokens")
 	readCount(&f.ImageInputTokens, u, "image_input_tokens", "imageInputTokens")
@@ -401,7 +404,7 @@ func usageFactsOpenAIUsage(f UsageFacts) map[string]any {
 		"prompt_tokens_details":     map[string]any{"cached_tokens": cached, "cache_write_tokens": f.CacheWriteTokens, "audio_tokens": f.AudioInputTokens, "image_tokens": f.ImageInputTokens},
 		"completion_tokens_details": map[string]any{"audio_tokens": f.AudioOutputTokens, "image_tokens": f.ImageOutputTokens},
 		"cache_write_5m_tokens":     f.CacheWrite5mTokens, "cache_write_1h_tokens": f.CacheWrite1hTokens,
-		"image_count": f.ImageCount, "audio_seconds": f.AudioSeconds, "video_seconds": f.VideoSeconds, "tool_calls": f.ToolCalls,
+		"audio_characters": f.AudioCharacters, "image_count": f.ImageCount, "audio_seconds": f.AudioSeconds, "video_seconds": f.VideoSeconds, "tool_calls": f.ToolCalls,
 		"pricing_version": f.PricingVersion, "image_size": f.ImageSize, "image_quality": f.ImageQuality,
 	}
 }
@@ -417,7 +420,7 @@ func usageFactsAnthropicUsage(f UsageFacts) map[string]any {
 		"cache_creation":     map[string]int64{"ephemeral_5m_input_tokens": f.CacheWrite5mTokens, "ephemeral_1h_input_tokens": f.CacheWrite1hTokens},
 		"audio_input_tokens": f.AudioInputTokens, "audio_output_tokens": f.AudioOutputTokens,
 		"image_input_tokens": f.ImageInputTokens, "image_output_tokens": f.ImageOutputTokens,
-		"image_count": f.ImageCount, "audio_seconds": f.AudioSeconds, "video_seconds": f.VideoSeconds, "tool_calls": f.ToolCalls,
+		"audio_characters": f.AudioCharacters, "image_count": f.ImageCount, "audio_seconds": f.AudioSeconds, "video_seconds": f.VideoSeconds, "tool_calls": f.ToolCalls,
 		"pricing_version": f.PricingVersion, "image_size": f.ImageSize, "image_quality": f.ImageQuality,
 	}
 }

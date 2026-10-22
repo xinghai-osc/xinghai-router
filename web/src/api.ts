@@ -5,7 +5,7 @@ export interface Workspace { id: string; name: string; slug: string; owner_id: n
 export interface WorkspaceForm { name: string; slug: string }
 export interface WorkspaceMember { user_id: number; email: string; name: string; role: WorkspaceRole; created_at: string }
 export interface WorkspaceMemberForm { email: string; role: 'admin' | 'member' }
-export interface ApiKey { id: string; user_id: number; name: string; key_prefix: string; group_id: string; group_name: string; subscription_id: string; subscription_name: string; expires_at: string | null; revoked_at: string | null; last_used_at: string | null; created_at: string; revealable: boolean }
+export interface ApiKey { id: string; user_id: number; name: string; key_prefix: string; group_id: string; group_name: string; subscription_id: string; subscription_name: string; expires_at: string | null; revoked_at: string | null; last_used_at: string | null; created_at: string; revealable: boolean; allowed_models: string[] }
 export interface KeyQuotaLimit { id: string; source: 'admin' | 'self_service'; window: 'minute' | 'day' | 'month' | 'total'; max_requests: number | null; max_tokens: number | null; max_cost: number | null; created_at: string }
 export interface KeyQuotaUsage { window: string; requests: number; tokens: number; cost: number }
 export interface KeyQuota { limits: KeyQuotaLimit[]; usage: KeyQuotaUsage[] }
@@ -13,13 +13,15 @@ export interface KeyQuotaForm { window: 'day' | 'month' | 'total'; max_requests?
 /** `groups` holds group ids, not names — resolve them through /admin/groups. */
 export interface RequestOverrides { delete: string[]; set: Record<string, unknown> }
 export interface ChannelUsageWindow { window: string; used: number | null; limit: number | null; remaining: number | null; percent: number | null; reset_at?: string; unit?: string }
-export interface Channel { id: string; name: string; base_url: string; avg_first_token_ms: number | null; upstream_balance: number | null; upstream_used: number | null; upstream_total: number | null; upstream_currency: string; upstream_usage_windows: ChannelUsageWindow[]; upstream_balance_supported: boolean; upstream_balance_error: string; upstream_balance_fetched_at: string | null; provider: 'openai' | 'openai_chat' | 'ollama' | 'kimi' | 'opencode_go' | 'anthropic' | 'deepseek' | 'commandcode' | 'jev' | 'custom'; models: string[]; test_model: string; enabled: boolean; auto_disabled: boolean; auto_disable: boolean; disabled_reason: string; priority: number; weight: number; max_concurrency: number | null; last_test_time: string | null; last_error: string | null; response_time_ms: number; used_requests: number; used_tokens: number; groups: string[]; key_type: 'single' | 'multi'; key_count: number; upstream_path: string; upstream_format: string; request_overrides: RequestOverrides; ua_pool: string[]; created_at: string; updated_at: string; model_routes: ModelRoute[]; user_id: number | null; user_email: string; user_name: string; shared_data_only: boolean }
+export interface Channel { id: string; name: string; base_url: string; avg_first_token_ms: number | null; upstream_balance: number | null; upstream_used: number | null; upstream_total: number | null; upstream_currency: string; upstream_usage_windows: ChannelUsageWindow[]; upstream_balance_supported: boolean; upstream_balance_error: string; upstream_balance_fetched_at: string | null; provider: 'openai' | 'openai_chat' | 'ollama' | 'kimi' | 'opencode_go' | 'minimax' | 'anthropic' | 'deepseek' | 'commandcode' | 'jev' | 'custom'; models: string[]; test_model: string; enabled: boolean; auto_disabled: boolean; auto_disable: boolean; disabled_reason: string; priority: number; weight: number; max_concurrency: number | null; last_test_time: string | null; last_error: string | null; response_time_ms: number; used_requests: number; used_tokens: number; groups: string[]; key_type: 'single' | 'multi'; key_count: number; upstream_path: string; upstream_format: string; request_overrides: RequestOverrides; ua_pool: string[]; created_at: string; updated_at: string; model_routes: ModelRoute[]; user_id: number | null; user_email: string; user_name: string; shared_data_only: boolean }
 
 export interface ChannelKey { id: string; name: string; enabled: boolean; priority: number; last_checked_at: string | null; last_error: string | null; created_at: string; upstream_balance: number | null; upstream_used: number | null; upstream_total: number | null; upstream_currency: string; upstream_usage_windows: ChannelUsageWindow[]; upstream_balance_supported: boolean; upstream_balance_error: string; upstream_balance_fetched_at: string | null }
 export interface ChannelKeyForm { name?: string; api_key?: string; priority?: number }
 export interface ChannelKeyTestResult { success: boolean; status_code: number; latency_ms: number; reason?: string; auto_disabled: boolean; channel_disabled?: boolean }
 export interface ChannelTestKeyResult { key_id: string; success: boolean; status_code: number; latency_ms: number; reason?: string; auto_disabled: boolean }
 export interface ChannelTestResult { success: boolean; status_code: number; latency_ms: number; reason?: string; channel_disabled: boolean; keys: ChannelTestKeyResult[] }
+export interface MiniMaxBalanceCredentials { configured: boolean; group_id: string }
+export interface MiniMaxBalanceCredentialsForm { cookie: string; group_id: string }
 export interface ChannelBalance { balance: number | null; used: number | null; total: number | null; currency: string; usage_windows: ChannelUsageWindow[]; supported: boolean; fetched_at: string }
 
 export interface ChannelQuotaLimit { id: string; window: 'minute' | 'day' | 'month'; max_requests: number | null; max_tokens: number | null; created_at: string }
@@ -54,6 +56,7 @@ export interface DimensionPrices {
   audio_output_per_million?: number | null
   image_input_per_million?: number | null
   image_output_per_million?: number | null
+  audio_per_million_characters?: number | null
   audio_per_second?: number | null
   video_per_second?: number | null
   tool_per_call?: number | null
@@ -73,6 +76,7 @@ export interface UsageFacts {
   image_input_tokens?: number
   image_output_tokens?: number
   tool_calls?: number
+  audio_characters?: number
   audio_seconds?: number
   video_seconds?: number
   usage_source?: string
@@ -1106,8 +1110,8 @@ export interface SessionResult { expires_at: string }
 
 export interface LoginBody { email: string; password: string; code?: string; captcha_id?: string; lot_number?: string; captcha_output?: string; pass_token?: string; gen_time?: string; captcha_token?: string; captcha_purpose?: string }
 export interface RegisterBody { risk_context_id?: string; name: string; email: string; password: string; code?: string; invitation_code?: string; captcha_id?: string; lot_number?: string; captcha_output?: string; pass_token?: string; gen_time?: string; captcha_token?: string; captcha_purpose?: string }
-export interface KeyForm { user_id?: number; name: string; expires_at: string; group_id: string; subscription_id: string }
-export interface AccountKeyForm { name: string; expires_at: string; group_id: string; subscription_id: string }
+export interface KeyForm { user_id?: number; name: string; expires_at: string; group_id: string; subscription_id: string; allowed_models?: string[] }
+export interface AccountKeyForm { name: string; expires_at: string; group_id: string; subscription_id: string; allowed_models?: string[] }
 export interface ChannelForm { name: string; provider: string; base_url: string; key_type: 'single' | 'multi'; api_keys: string; models: string[]; test_model?: string; priority: number; groups: string[]; upstream_path?: string; upstream_format?: string; model_routes?: ModelRouteForm[]; auto_disable: boolean; request_overrides?: RequestOverrides; ua_pool?: string[]; user_email?: string; max_concurrency?: number | null; shared_data_only: boolean }
 export interface ProviderForm { name: string; slug: string; prefixes: string[]; priority: number; id?: string }
 export interface PaymentSettingsForm { enabled: boolean; base_url: string; merchant_id: string; merchant_key: string; public_base_url: string }
@@ -1207,6 +1211,7 @@ export const endpoints = {
   createAccountKey: (form: AccountKeyForm) => post<{ key: string }>('/account/keys', form),
   updateAccountKey: (id: string, form: AccountKeyForm) => send(`/account/keys/${encodeURIComponent(id)}`, 'PUT', form),
   revealAccountKey: (id: string) => get<{ key: string }>(`/account/keys/${encodeURIComponent(id)}/secret`),
+  setAccountKeyModels: (id: string, allowedModels: string[]) => send(`/account/keys/${encodeURIComponent(id)}/models`, 'PUT', { allowed_models: allowedModels }),
   getKeyQuota: (id: string) => get<KeyQuota>(`/account/keys/${encodeURIComponent(id)}/quota`),
   upsertKeyQuota: (id: string, form: KeyQuotaForm) => post<{ id: string }>(`/account/keys/${encodeURIComponent(id)}/quota`, form),
   deleteKeyQuota: (id: string, window: string) => send(`/account/keys/${encodeURIComponent(id)}/quota?window=${encodeURIComponent(window)}`, 'DELETE'),
@@ -1282,6 +1287,7 @@ export const endpoints = {
   createKey: (form: KeyForm) => post<{ key: string }>('/admin/keys', form),
   revokeKey: (id: string) => send(`/admin/keys/${encodeURIComponent(id)}/revoke`, 'POST'),
   revealKey: (id: string) => get<{ key: string }>(`/admin/keys/${encodeURIComponent(id)}/secret`),
+  setKeyModels: (id: string, allowedModels: string[]) => send(`/admin/keys/${encodeURIComponent(id)}/models`, 'PUT', { allowed_models: allowedModels }),
   getAdminChannels: (query = '') => get<Page<Channel>>(`/admin/channels${query}`),
   batchToggleChannels: (ids: string[], enabled: boolean) => post<{ affected: number }>('/admin/channels/batch-status', { ids, enabled }),
   createChannel: (form: ChannelForm) => send('/admin/channels', 'POST', form),
@@ -1299,6 +1305,9 @@ export const endpoints = {
   testChannelKey: (channelId: string, keyId: string) => post<ChannelKeyTestResult>(`/admin/channels/${encodeURIComponent(channelId)}/keys/${encodeURIComponent(keyId)}/test`),
   testChannel: (id: string) => post<ChannelTestResult>(`/admin/channels/${encodeURIComponent(id)}/test`),
   refreshChannelBalance: (id: string, keyId?: string) => post<ChannelBalance>(`/admin/channels/${encodeURIComponent(id)}/balance${keyId ? `?key_id=${encodeURIComponent(keyId)}` : ''}`),
+  getMiniMaxBalanceCredentials: (id: string) => get<MiniMaxBalanceCredentials>(`/admin/channels/${encodeURIComponent(id)}/minimax-balance-credentials`),
+  saveMiniMaxBalanceCredentials: (id: string, form: MiniMaxBalanceCredentialsForm) => put<unknown>(`/admin/channels/${encodeURIComponent(id)}/minimax-balance-credentials`, form),
+  deleteMiniMaxBalanceCredentials: (id: string) => send(`/admin/channels/${encodeURIComponent(id)}/minimax-balance-credentials`, 'DELETE'),
   migrateChannelKeys: (id: string) => post<{ migrated: boolean }>(`/admin/channels/${encodeURIComponent(id)}/keys/migrate`),
   getAdminProviders: () => get<{ data: ModelProvider[] }>('/admin/providers'),
   saveProvider: (form: ProviderForm) => send('/admin/providers', 'POST', form),

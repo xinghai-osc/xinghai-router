@@ -25,6 +25,10 @@ const { data: subscriptions } = useResource(
   () => endpoints.getAccountSubscriptions(),
   { data: [] as UserSubscription[] },
 )
+const { data: catalog } = useResource(
+  () => endpoints.getModelCatalog(),
+  { data: [] as CatalogModel[] },
+)
 const { busy, run } = useAction()
 
 const formOpen = ref(false)
@@ -44,7 +48,28 @@ const opencodeError = ref('')
 const opencodeFormat = ref<'opencode' | 'codex'>('opencode')
 const opencodeThinking = ref<'none' | 'low' | 'medium' | 'high'>('medium')
 const formError = ref('')
-const form = reactive({ name: '', expiresOn: '', groupId: '', subscriptionId: '' })
+const form = reactive({ name: '', expiresOn: '', groupId: '', subscriptionId: '', allowedModels: '' })
+
+const parsedAllowedModels = computed(() => form.allowedModels
+  .split(/[\n,]/)
+  .map(model => model.trim())
+  .filter(Boolean))
+
+const catalogModel = ref('')
+const catalogModelOptions = computed(() => {
+  const chosen = new Set(parsedAllowedModels.value)
+  return catalog.value.data
+    .map(item => item.model)
+    .filter(model => model && !chosen.has(model))
+    .sort((a, b) => a.localeCompare(b))
+    .map(model => ({ value: model, label: model }))
+})
+
+watch(catalogModel, (value) => {
+  if (!value) return
+  form.allowedModels = [...parsedAllowedModels.value, value].join(', ')
+  catalogModel.value = ''
+})
 
 const activeSubscriptions = computed(() => subscriptions.value.data.filter(subscription =>
   subscription.status === 'active' && (!subscription.current_period_end || new Date(subscription.current_period_end).getTime() > Date.now()),
@@ -119,6 +144,7 @@ function openCreate() {
   form.expiresOn = ''
   form.groupId = ''
   form.subscriptionId = ''
+  form.allowedModels = ''
   formOpen.value = true
 }
 
@@ -129,6 +155,7 @@ function openEdit(key: ApiKey) {
   form.expiresOn = toDateInput(key.expires_at)
   form.groupId = key.group_id
   form.subscriptionId = key.subscription_id
+  form.allowedModels = (key.allowed_models ?? []).join(', ')
   formOpen.value = true
   keyQuota.refresh()
 }
@@ -237,7 +264,7 @@ async function submitForm() {
     formError.value = t('console.keyNameRequired')
     return
   }
-  const payload: AccountKeyForm = { name, expires_at: toRfc3339(form.expiresOn), group_id: form.groupId, subscription_id: form.subscriptionId }
+  const payload: AccountKeyForm = { name, expires_at: toRfc3339(form.expiresOn), group_id: form.groupId, subscription_id: form.subscriptionId, allowed_models: parsedAllowedModels.value }
   const target = editing.value
 
   if (target) {
@@ -383,6 +410,7 @@ onMounted(() => { if (route.query.create) openCreate() })
                 <th>{{ t('common.name') }}</th>
                 <th>{{ t('console.keyPrefix') }}</th>
                 <th>{{ t('console.group') }}</th>
+                <th>{{ t('console.keyAllowedModels') }}</th>
                 <th>{{ t('console.keySubscription') }}</th>
                 <th>{{ t('common.status') }}</th>
                 <th>{{ t('console.keyExpiry') }}</th>
@@ -396,6 +424,13 @@ onMounted(() => { if (route.query.create) openCreate() })
                 <td class="font-medium">{{ key.name }}</td>
                 <td><code class="font-mono text-[13px] text-muted">{{ key.key_prefix }}</code></td>
                 <td class="text-muted">{{ key.group_name || t('console.keyGroupDefault') }}</td>
+                <td>
+                  <span v-if="!key.allowed_models?.length" class="text-faint">{{ t('console.keyAllModels') }}</span>
+                  <span v-else class="flex flex-wrap gap-1">
+                    <UiBadge v-for="model in key.allowed_models.slice(0, 3)" :key="model" tone="outline">{{ model }}</UiBadge>
+                    <span v-if="key.allowed_models.length > 3" class="text-2xs text-faint">+{{ key.allowed_models.length - 3 }}</span>
+                  </span>
+                </td>
                 <td class="text-muted">{{ key.subscription_name || t('console.keySubscriptionAuto') }}</td>
                 <td>
                   <UiBadge :tone="state.tone" dot>{{ t(state.labelKey) }}</UiBadge>
@@ -462,6 +497,26 @@ onMounted(() => { if (route.query.create) openCreate() })
             v-model="form.subscriptionId"
             :options="subscriptionOptions"
             :placeholder="t('common.selectPlaceholder')"
+          />
+        </UiField>
+
+        <UiField :label="t('console.keyAllowedModels')" :hint="t('console.keyAllowedModelsHint')">
+          <UiTextarea
+            v-model="form.allowedModels"
+            :rows="3"
+            mono
+            :placeholder="t('console.keyAllowedModelsPlaceholder')"
+          />
+          <div v-if="parsedAllowedModels.length" class="mt-2 flex flex-wrap gap-1.5">
+            <UiBadge v-for="model in parsedAllowedModels" :key="model" tone="outline">{{ model }}</UiBadge>
+          </div>
+        </UiField>
+
+        <UiField :label="t('console.keyAllowedModelsPick')">
+          <UiSelect
+            v-model="catalogModel"
+            :options="catalogModelOptions"
+            :placeholder="t('console.keyAllowedModelsPick')"
           />
         </UiField>
       </form>

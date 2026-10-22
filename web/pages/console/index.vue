@@ -305,6 +305,8 @@ const quickLinks = computed(() => [
           <p class="text-xs font-medium text-muted">{{ t('console.overviewBaseUrl') }}</p>
           <code class="block min-w-0 rounded-control border border-line bg-sunken px-3 py-3 font-mono text-[13px] leading-6 text-ink [overflow-wrap:anywhere]">{{ endpointUrl }}</code>
           <ConsoleUserCopyButton :value="endpointUrl" :label="t('console.overviewCopyEndpoint')" :success-message="t('console.endpointCopied')" />
+          <ConsoleMiniMaxApiHelp :base-url="endpointUrls[0]!" />
+          <ConsoleMediaApiHelp :base-url="endpointUrls[0]!" />
         </div>
         <template #footer>
           <p class="text-xs leading-5 text-muted">{{ t('console.overviewEndpointNote') }}</p>

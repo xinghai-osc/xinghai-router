@@ -1,4 +1,6 @@
 export default {
+  sqMediaApiHint: "音訊/影片模態描述模型的輸入輸出，介面可用性取決於設定的上游。媒體請求可能按字元、音訊 Tokens 或秒數計費，不等同於下方展示的 Token 價格。",
+  sqMediaApiHelp: "在控制台查看音訊與影片 API 範例",
   consentTitle: '請確認使用者協議與隱私政策',
   consentDescription: '首次造訪或協議更新後，需要你閱讀並同意最新的使用者協議和隱私政策，才能繼續使用網站。',
   consentCheckbox: '我已閱讀並同意使用者協議和隱私政策',

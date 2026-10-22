@@ -38,19 +38,20 @@ type ThinkingPrice struct {
 }
 
 type DimensionPrices struct {
-	CacheWritePerMillion   *float64                    `json:"cache_write_per_million,omitempty"`
-	CacheWrite5mPerMillion *float64                    `json:"cache_write_5m_per_million,omitempty"`
-	CacheWrite1hPerMillion *float64                    `json:"cache_write_1h_per_million,omitempty"`
-	AudioInputPerMillion   *float64                    `json:"audio_input_per_million,omitempty"`
-	AudioOutputPerMillion  *float64                    `json:"audio_output_per_million,omitempty"`
-	ImageInputPerMillion   *float64                    `json:"image_input_per_million,omitempty"`
-	ImageOutputPerMillion  *float64                    `json:"image_output_per_million,omitempty"`
-	AudioPerSecond         *float64                    `json:"audio_per_second,omitempty"`
-	VideoPerSecond         *float64                    `json:"video_per_second,omitempty"`
-	ToolPerCall            *float64                    `json:"tool_per_call,omitempty"`
-	Images                 []ImagePrice                `json:"images,omitempty"`
-	ServiceTiers           map[string]ServiceTierPrice `json:"service_tiers,omitempty"`
-	ThinkingPrices         map[string]ThinkingPrice    `json:"thinking_prices,omitempty"`
+	AudioPerMillionCharacters *float64                    `json:"audio_per_million_characters,omitempty"`
+	CacheWritePerMillion      *float64                    `json:"cache_write_per_million,omitempty"`
+	CacheWrite5mPerMillion    *float64                    `json:"cache_write_5m_per_million,omitempty"`
+	CacheWrite1hPerMillion    *float64                    `json:"cache_write_1h_per_million,omitempty"`
+	AudioInputPerMillion      *float64                    `json:"audio_input_per_million,omitempty"`
+	AudioOutputPerMillion     *float64                    `json:"audio_output_per_million,omitempty"`
+	ImageInputPerMillion      *float64                    `json:"image_input_per_million,omitempty"`
+	ImageOutputPerMillion     *float64                    `json:"image_output_per_million,omitempty"`
+	AudioPerSecond            *float64                    `json:"audio_per_second,omitempty"`
+	VideoPerSecond            *float64                    `json:"video_per_second,omitempty"`
+	ToolPerCall               *float64                    `json:"tool_per_call,omitempty"`
+	Images                    []ImagePrice                `json:"images,omitempty"`
+	ServiceTiers              map[string]ServiceTierPrice `json:"service_tiers,omitempty"`
+	ThinkingPrices            map[string]ThinkingPrice    `json:"thinking_prices,omitempty"`
 }
 
 type BillingPricing struct {
@@ -148,6 +149,7 @@ func validateDimensionPrices(prices DimensionPrices) error {
 		{"audio_output_per_million", prices.AudioOutputPerMillion},
 		{"image_input_per_million", prices.ImageInputPerMillion},
 		{"image_output_per_million", prices.ImageOutputPerMillion},
+		{"audio_per_million_characters", prices.AudioPerMillionCharacters},
 		{"audio_per_second", prices.AudioPerSecond},
 		{"video_per_second", prices.VideoPerSecond},
 		{"tool_per_call", prices.ToolPerCall},
@@ -236,6 +238,7 @@ func cloneDimensionPrices(prices DimensionPrices) DimensionPrices {
 	prices.AudioOutputPerMillion = clone(prices.AudioOutputPerMillion)
 	prices.ImageInputPerMillion = clone(prices.ImageInputPerMillion)
 	prices.ImageOutputPerMillion = clone(prices.ImageOutputPerMillion)
+	prices.AudioPerMillionCharacters = clone(prices.AudioPerMillionCharacters)
 	prices.AudioPerSecond = clone(prices.AudioPerSecond)
 	prices.VideoPerSecond = clone(prices.VideoPerSecond)
 	prices.ToolPerCall = clone(prices.ToolPerCall)
@@ -298,7 +301,7 @@ func billingUsageTokens(facts UsageFacts) (int64, error) {
 	if facts.CacheWrite5mTokens < 0 || facts.CacheWrite1hTokens < 0 || facts.CacheWrite5mTokens > facts.CacheWriteTokens || facts.CacheWrite1hTokens > facts.CacheWriteTokens-facts.CacheWrite5mTokens {
 		return 0, fmt.Errorf("cache write TTL usage exceeds total cache write tokens")
 	}
-	if facts.ImageCount < 0 || facts.ToolCalls < 0 || !validNonNegativeFinite(facts.AudioSeconds) || !validNonNegativeFinite(facts.VideoSeconds) {
+	if facts.AudioCharacters < 0 || facts.ImageCount < 0 || facts.ToolCalls < 0 || !validNonNegativeFinite(facts.AudioSeconds) || !validNonNegativeFinite(facts.VideoSeconds) {
 		return 0, fmt.Errorf("invalid dimension usage")
 	}
 	return total, nil
@@ -450,6 +453,12 @@ func (snapshot BillingSnapshot) Recompute() (string, error) {
 				return "", fmt.Errorf("%s is not configured", dimension.name)
 			}
 			add(billingDecimal(dimension.quantity), *dimension.rate, 1)
+		}
+		if facts.AudioCharacters > 0 {
+			if dimensions.AudioPerMillionCharacters == nil {
+				return "", fmt.Errorf("audio_per_million_characters is not configured")
+			}
+			add(new(big.Rat).SetInt64(facts.AudioCharacters), *dimensions.AudioPerMillionCharacters, 1_000_000)
 		}
 		if facts.ToolCalls > 0 {
 			if dimensions.ToolPerCall == nil {

@@ -1,4 +1,6 @@
 export default {
+  sqMediaApiHint: "音频/视频模态描述模型的输入输出，接口可用性取决于配置的上游。媒体请求可能按字符、音频 Tokens 或秒数计费，不等同于下方展示的 Token 价格。",
+  sqMediaApiHelp: "在控制台查看音频与视频 API 示例",
   consentTitle: '请确认用户协议与隐私政策',
   consentDescription: '首次访问或协议更新后，需要你阅读并同意最新的用户协议和隐私政策，才能继续使用网站。',
   consentCheckbox: '我已阅读并同意用户协议和隐私政策',

@@ -395,6 +395,9 @@ func (s *Service) testChannelWithConfig(ctx context.Context, baseURL, apiKey, pr
 		timeout = healthCheckProbeTimeout
 	}
 	format := resolveUpstreamFormat(provider, upstreamFormat)
+	if provider == "minimax" && strings.HasPrefix(strings.ToLower(testModel), "minimax-h3") {
+		testModel = ""
+	}
 	path, method := "/v1/models", http.MethodGet
 	if format == "commandcode" {
 		path = commandCodeModelsPath
