@@ -2,7 +2,7 @@
 #                Go Router Build
 ##################################################
 
-FROM golang:1.26-alpine AS router-build
+FROM golang:1.26.10-alpine AS router-build
 
 ARG GOPROXY
 ENV GOPROXY=${GOPROXY:-https://proxy.golang.org,direct}
@@ -10,14 +10,14 @@ ENV GOPROXY=${GOPROXY:-https://proxy.golang.org,direct}
 WORKDIR /src
 
 COPY go.mod go.sum ./
-COPY vendor ./vendor
+RUN go mod download
 COPY . .
 
 RUN CGO_ENABLED=0 \
     GOOS=linux \
     GOARCH=amd64 \
     go build \
-    -mod=vendor \
+    -mod=readonly \
     -trimpath \
     -ldflags="-s -w" \
     -o /out/xinghai-router \
@@ -56,13 +56,13 @@ ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
 
 # 安装 pnpm
-RUN npm install -g pnpm \
+RUN npm install -g pnpm@12.14.0 \
     --registry=https://registry.npmmirror.com
 # 设置 pnpm 国内源
 RUN pnpm config set registry https://registry.npmmirror.com
-COPY web/package.json web/pnpm-lock.yaml ./
+COPY web/package.json web/pnpm-lock.yaml web/pnpm-workspace.yaml ./
+COPY web/patches ./patches
 # pnpm store缓存
-RUN pnpm config set dangerouslyAllowAllBuilds true
 RUN --mount=type=cache,id=xinghai-pnpm-store,target=/pnpm/store \
     pnpm config set store-dir /pnpm/store \
     && pnpm install --frozen-lockfile

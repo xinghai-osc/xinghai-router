@@ -2,4 +2,6 @@ allowBuilds:
   esbuild: true
   unrs-resolver: true
   vue-demi: true
-confirmModulesPurge: false
+patchedDependencies:
+  braces@3.0.3: patches/braces@3.0.3.patch
+  node-forge@1.4.0: patches/node-forge@1.4.0.patch

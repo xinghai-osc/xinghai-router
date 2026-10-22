@@ -9,31 +9,27 @@
     "generate": "nuxt generate",
     "preview": "nuxt preview",
     "lint": "nuxt prepare && eslint .",
-    "lint:fix": "nuxt prepare && eslint . --fix"
+    "lint:fix": "nuxt prepare && eslint . --fix",
+    "test:security": "node --test tests/dependency-security.test.mjs",
+    "audit:security": "node scripts/security-audit.mjs"
   },
   "dependencies": {
     "@lobehub/icons-static-svg": "1.95.1",
-    "@nuxt/eslint": "^1.16.0",
-    "@tailwindcss/vite": "^4.1.6",
-    "@vueuse/core": "^14.3.0",
+    "@nuxt/eslint": "^1.17.0",
+    "@tailwindcss/vite": "^4.3.3",
+    "@vueuse/core": "^14.4.0",
     "clsx": "^2.1.1",
     "lucide-vue-next": "^0.511.0",
-    "nuxt": "^3.21.8",
-    "reka-ui": "^2.2.0",
-    "tailwind-merge": "^3.2.0",
-    "tailwindcss": "^4.1.6",
-    "vue": "^3.5.13",
-    "vue-router": "^4.5.1"
+    "nuxt": "^3.21.11",
+    "reka-ui": "^2.11.0",
+    "tailwind-merge": "^3.7.0",
+    "tailwindcss": "^4.3.3",
+    "vue": "^3.5.44",
+    "vue-router": "^4.6.4"
   },
   "devDependencies": {
-    "eslint": "^9.25.1",
+    "eslint": "^9.39.5",
     "typescript": "~5.7.3"
   },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "esbuild",
-      "unrs-resolver",
-      "vue-demi"
-    ]
-  }
+  "packageManager": "pnpm@12.14.0"
 }
