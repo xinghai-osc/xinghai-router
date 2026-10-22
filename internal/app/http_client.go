@@ -42,10 +42,7 @@ var upstreamTransport = sync.OnceValue(func() *http.Transport {
 })
 
 func checkUpstreamRedirect(req *http.Request, via []*http.Request) error {
-	if len(via) >= maxRedirects {
-		return fmt.Errorf("stopped after %d redirects", maxRedirects)
-	}
-	return validateRedirectURL(req.URL)
+	return http.ErrUseLastResponse
 }
 
 func newHTTPClient(timeout time.Duration) *http.Client {

@@ -72,6 +72,7 @@ async function submit() {
 
       <UiCard flush class="mt-8">
         <form v-if="token" class="space-y-4 px-5 py-5" novalidate @submit.prevent="submit">
+          <UiAlert tone="warn">{{ t('auth.resetRevocationNotice') }}</UiAlert>
           <UiField :label="t('auth.newPassword')" for="auth-reset-password" :hint="t('auth.passwordHint')" required>
             <UiInput
               id="auth-reset-password"

@@ -507,6 +507,56 @@ func TestIntegrationSubscriptionTierSync(t *testing.T) {
 	}
 }
 
+func TestIntegrationSubscriptionCoverageUsesGrantedTierGroupForLegacyKeyGroup(t *testing.T) {
+	db, _ := integrationPool(t)
+	defer db.Close()
+	resetIntegrationDatabase(t, db)
+	s := integrationService(t, db)
+	ctx := context.Background()
+	userID, _ := integrationUser(t, db, "group-migrated-key@example.com", 0)
+	_, tierID := seedSubscriptionTier(t, s, "Group migrated")
+
+	newGroupID, err := randomID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyGroupID, err := randomID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `insert into groups(id,name) values($1,'new-tier-group'),($2,'legacy-key-group')`, newGroupID, legacyGroupID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `update subscription_tiers set group_id=$1 where id=$2`, newGroupID, tierID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `insert into user_groups(user_id,group_id) values($1,$2)`, userID, newGroupID); err != nil {
+		t.Fatal(err)
+	}
+
+	purchase, err := s.loadTierPurchase(ctx, db, tierID, "month", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	subID, _, err := s.activateSubscriptionTx(ctx, tx, userID, purchase, subscriptionActivation{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	key := keyContext{userID: userID, keyID: "legacy-key", groupID: legacyGroupID}
+	access := s.subscriptionCoversModel(ctx, key, "gpt-4o")
+	if !access.Covered || access.SubscriptionID != subID {
+		t.Fatalf("legacy-group key access = %+v, want subscription %s", access, subID)
+	}
+}
+
 func TestIntegrationMultipleTierInstancesAndKeyBinding(t *testing.T) {
 	db, _ := integrationPool(t)
 	defer db.Close()

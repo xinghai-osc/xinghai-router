@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"errors"
 	"mime"
 	"mime/multipart"
 	"net/http/httptest"
@@ -45,15 +46,12 @@ func TestImageEditFields(t *testing.T) {
 	}
 }
 
-func TestReadImageBodyAcceptsLargeBody(t *testing.T) {
-	body := strings.Repeat("x", 50<<20+1)
+func TestReadImageBodyRejectsOversizedBody(t *testing.T) {
+	body := strings.Repeat("x", int(defaultImageBodyMaxBytes)+1)
 	s := &Service{}
-	got, err := s.readImageBody(httptest.NewRecorder(), httptest.NewRequest("POST", "/v1/images/edits", strings.NewReader(body)))
-	if err != nil {
-		t.Fatalf("readImageBody returned error: %v", err)
-	}
-	if len(got) != len(body) {
-		t.Fatalf("body length = %d, want %d", len(got), len(body))
+	_, err := s.readImageBody(httptest.NewRecorder(), httptest.NewRequest("POST", "/v1/images/edits", strings.NewReader(body)))
+	if !errors.Is(err, errRequestBodyTooLarge) {
+		t.Fatalf("readImageBody error = %v, want body size rejection", err)
 	}
 }
 

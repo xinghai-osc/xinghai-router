@@ -280,6 +280,7 @@ function openCreateQuota() {
 }
 
 function openEditQuota(limit: KeyQuotaLimit) {
+  if (limit.source !== 'self_service' || limit.window === 'minute') return
   editingQuotaWindow.value = limit.window
   quotaFormError.value = ''
   quotaForm.window = limit.window
@@ -491,7 +492,8 @@ onMounted(() => { if (route.query.create) openCreate() })
           >
             <div class="flex items-center justify-between">
               <UiBadge tone="outline">{{ t(`console.quotaWindow${limit.window.charAt(0).toUpperCase() + limit.window.slice(1)}`) }}</UiBadge>
-              <div class="flex items-center gap-1">
+              <UiBadge v-if="limit.source === 'admin'" tone="outline">{{ t('console.quotaAdminManaged') }}</UiBadge>
+              <div v-else-if="limit.source === 'self_service'" class="flex items-center gap-1">
                 <UiButton variant="ghost" size="sm" :disabled="Boolean(editing.revoked_at)" @click="openEditQuota(limit)">{{ t('common.edit') }}</UiButton>
                 <UiButton variant="danger" size="sm" :disabled="Boolean(editing.revoked_at)" @click="deleteQuota(limit.window)">{{ t('common.delete') }}</UiButton>
               </div>

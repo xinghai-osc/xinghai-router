@@ -327,7 +327,7 @@ export default {
   apiBaseUrlsHint: 'Shown to users and used in SDK configuration. Enter one address per line; empty uses the current request address.',
   apiBaseUrlsPlaceholder: 'https://api.example.com\nhttps://api-backup.example.com',
   publicBaseUrl: 'Public base URL',
-  publicBaseUrlHint: 'Public origin (https://host) used in password-reset emails and OAuth callback URIs. Leave empty to derive it from the request host.',
+  publicBaseUrlHint: 'Trusted public origin (https://host) required for password-reset emails and OAuth callbacks. These flows are disabled when it is missing or unavailable.',
   siteSettingsSaved: 'Site settings saved',
   featuredSectionTitle: 'Featured recommendation',
   featuredSectionLead: 'Choose a model and configure the localized copy shown in the public catalogue.',

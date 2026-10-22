@@ -36,7 +36,7 @@ func imageGatewayOptionsFromContext(ctx context.Context) imageGatewayOptions {
 }
 
 func (s *Service) readImageBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
-	return readRequestBody(w, r, s.requestBodyTimeout(r.Context()))
+	return readRequestBodyLimited(w, r, s.requestBodyTimeout(r.Context()), positiveRequestLimit(s.cfg.ImageMaxBodyBytes, defaultImageBodyMaxBytes))
 }
 
 func (s *Service) imageGenerations(w http.ResponseWriter, r *http.Request) {

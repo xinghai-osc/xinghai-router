@@ -12,26 +12,19 @@ import (
 	"time"
 )
 
-func TestParseRequestFormAcceptsLargeBodies(t *testing.T) {
-	const merchantKey = "fake-test-merchant-key"
-	form := url.Values{"pid": {"test-merchant"}, "extra": {strings.Repeat("x", (10<<20)+1)}}
-	form.Set("sign", epaySign(form, merchantKey))
-	body := form.Encode()
+func TestParseRequestFormRejectsOversizedBodies(t *testing.T) {
+	form := url.Values{"pid": {"test-merchant"}, "extra": {strings.Repeat("x", defaultConsoleBodyMaxBytes)}}
 	for _, unknownLength := range []bool{false, true} {
 		t.Run(fmt.Sprintf("unknown=%v", unknownLength), func(t *testing.T) {
-			r := httptest.NewRequest(http.MethodPost, "/epay/notify", strings.NewReader(body))
+			r := httptest.NewRequest(http.MethodPost, "/epay/notify", strings.NewReader(form.Encode()))
 			r.Header.Set("Content-Type", "application/x-www-form-urlencoded; charset=utf-8")
 			if unknownLength {
 				r.ContentLength = -1
 			}
-			if err := parseRequestForm(httptest.NewRecorder(), r, time.Second); err != nil {
-				t.Fatal(err)
-			}
-			if !reflect.DeepEqual(r.PostForm, form) || !reflect.DeepEqual(r.Form, form) {
-				t.Fatal("large form values changed")
-			}
-			if !equalSecret(r.Form.Get("sign"), epaySign(r.Form, merchantKey)) {
-				t.Fatal("large form signature changed")
+			if err := parseRequestForm(httptest.NewRecorder(), r, time.Second); err == nil {
+				t.Fatal("accepted oversized form")
+			} else if status, code, _ := requestBodyError(err); status != http.StatusRequestEntityTooLarge || code != "request_too_large" {
+				t.Fatalf("unexpected error mapping: %d %s (%v)", status, code, err)
 			}
 		})
 	}

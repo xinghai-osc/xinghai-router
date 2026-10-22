@@ -62,6 +62,16 @@ func (s *Service) responsesWebSocket(w http.ResponseWriter, r *http.Request) {
 			_ = conn.Close(websocket.StatusPolicyViolation, "invalid or expired API key")
 			return
 		}
+		allowed, limitErr := allowRateLimit(s.limiter, key.keyID, 0)
+		if limitErr != nil {
+			_ = conn.Close(websocket.StatusTryAgainLater, "rate limit service unavailable")
+			return
+		}
+		if !allowed {
+			_ = conn.Close(websocket.StatusPolicyViolation, "too many requests")
+			return
+		}
+		s.touchAPIKey(key.keyID)
 		frameRequestID := randomIDString()
 		frameCtx := context.WithValue(ctx, contextKey{}, key)
 		frameCtx = context.WithValue(frameCtx, requestIDKey{}, frameRequestID)

@@ -114,7 +114,7 @@ func normalizeBatchUserUpdate(in batchUserUpdateInput) (normalizedBatchUserUpdat
 }
 
 func (s *Service) batchUpdateUsers(w http.ResponseWriter, r *http.Request) {
-	body, err := readRequestBody(w, r, s.requestBodyTimeout(r.Context()))
+	body, err := readRequestBodyLimited(w, r, s.requestBodyTimeout(r.Context()), defaultConsoleBodyMaxBytes)
 	if err != nil {
 		status, code, message := requestBodyError(err)
 		writeError(w, status, code, message)

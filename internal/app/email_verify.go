@@ -183,10 +183,15 @@ func (s *Service) sendEmailCode(w http.ResponseWriter, r *http.Request) {
 // verifyEmailCode validates a registration code and consumes it on success.
 func (s *Service) verifyEmailCode(ctx context.Context, email, code string) error {
 	email = strings.ToLower(strings.TrimSpace(email))
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("could not confirm the code")
+	}
+	defer tx.Rollback(ctx)
 	var id, codeHash string
 	var attempts int
 	var expiresAt time.Time
-	err := s.db.QueryRow(ctx, `select id::text, code_hash, attempts, expires_at from email_verification_codes where email=$1 and purpose='register' and consumed_at is null order by created_at desc limit 1`, email).Scan(&id, &codeHash, &attempts, &expiresAt)
+	err = tx.QueryRow(ctx, `select id::text, code_hash, attempts, expires_at from email_verification_codes where email=$1 and purpose='register' and consumed_at is null order by created_at desc limit 1 for update`, email).Scan(&id, &codeHash, &attempts, &expiresAt)
 	if err != nil || time.Now().After(expiresAt) {
 		return fmt.Errorf("the verification code is invalid or expired")
 	}
@@ -194,10 +199,14 @@ func (s *Service) verifyEmailCode(ctx context.Context, email, code string) error
 		return fmt.Errorf("too many incorrect attempts, request a new code")
 	}
 	if !equalSecret(hashEmailCode(email, code), codeHash) {
-		_, _ = s.db.Exec(ctx, `update email_verification_codes set attempts=attempts+1 where id=$1`, id)
+		_, _ = tx.Exec(ctx, `update email_verification_codes set attempts=attempts+1 where id=$1`, id)
+		_ = tx.Commit(ctx)
 		return fmt.Errorf("the verification code is invalid or expired")
 	}
-	if _, err := s.db.Exec(ctx, `update email_verification_codes set consumed_at=now() where id=$1`, id); err != nil {
+	if _, err := tx.Exec(ctx, `update email_verification_codes set consumed_at=now() where id=$1`, id); err != nil {
+		return fmt.Errorf("could not confirm the code")
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("could not confirm the code")
 	}
 	return nil

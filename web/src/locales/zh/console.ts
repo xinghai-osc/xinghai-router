@@ -201,6 +201,8 @@ export default {
   usageLimits: '用量限制',
   usageLimitsHint: '设置此密钥在时间窗口内的请求、Token 或消费上限。达到上限后请求会返回 429。',
   quotaWindow: '时间窗口',
+  quotaWindowMinute: '每分钟',
+  quotaAdminManaged: '管理员限制（只读）',
   quotaWindowDay: '每日',
   quotaWindowMonth: '每月',
   quotaWindowTotal: '总量',

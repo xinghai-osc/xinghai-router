@@ -602,6 +602,7 @@ func TestIntegrationRewardRiskCheckinInviterCohortBan(t *testing.T) {
 
 func TestIntegrationRewardRiskOAuthAuthorizeCallback(t *testing.T) {
 	s := rewardRiskIntegrationService(t, defaultRewardRiskSettings())
+	rewardRiskExec(t, s, `update site_settings set public_base_url='https://router.example.test' where id=true`)
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/login/oauth/access_token":

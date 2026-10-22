@@ -26,6 +26,7 @@ type oauthRewardRiskInput struct {
 }
 
 var errOAuthEmailNotVerified = errors.New("refusing to use an unverified email for account matching or binding")
+var errOAuthEmailVerificationRequired = errors.New("existing account requires email recovery before OAuth login")
 var errOAuthEmailNotAllowed = errors.New("email is not allowed to register")
 
 // oauthStateCookie binds an OAuth authorize request to the browser that started
@@ -70,15 +71,12 @@ func oauthStateSignature(encryptionKey, data string) string {
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
-func (s *Service) callbackURI(r *http.Request, provider string) string {
-	if base := s.loadPublicBaseURL(r.Context()); base != "" {
-		return strings.TrimRight(base, "/") + "/api/auth/oauth/" + provider + "/callback"
+func (s *Service) callbackURI(ctx context.Context, provider string) (string, error) {
+	base, err := s.trustedPublicBaseURL(ctx)
+	if err != nil {
+		return "", err
 	}
-	scheme := "https"
-	if r.TLS == nil && (strings.HasPrefix(r.Host, "localhost:") || r.Host == "localhost" || strings.HasPrefix(r.Host, "127.0.0.1")) {
-		scheme = "http"
-	}
-	return fmt.Sprintf("%s://%s/api/auth/oauth/%s/callback", scheme, r.Host, provider)
+	return base + "/api/auth/oauth/" + provider + "/callback", nil
 }
 
 func clearOAuthStateCookie(w http.ResponseWriter, r *http.Request) {
@@ -92,6 +90,11 @@ func (s *Service) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_provider", "OAuth provider is not configured or disabled")
 		return
 	}
+	cb, err := s.callbackURI(r.Context(), provider)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "public_url_unavailable", "OAuth callback URL is not configured")
+		return
+	}
 	nonce, err := randomSecret("")
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not start OAuth")
@@ -103,7 +106,6 @@ func (s *Service) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 	// Bind the state to the initiating browser so an attacker-backed callback
 	// cannot be replayed into a victim's session.
 	http.SetCookie(w, &http.Cookie{Name: oauthStateCookie, Value: state, Path: "/", MaxAge: oauthStateTTL, HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: oauthCookieSecure(r)})
-	cb := s.callbackURI(r, provider)
 	var authURL string
 	switch provider {
 	case "github":
@@ -177,7 +179,11 @@ func (s *Service) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_provider", "OAuth provider is not configured")
 		return
 	}
-	cb := s.callbackURI(r, provider)
+	cb, err := s.callbackURI(r.Context(), provider)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "public_url_unavailable", "OAuth callback URL is not configured")
+		return
+	}
 	var accessToken, userEmail, userName, userAvatar, providerUserID string
 	var emailVerified bool
 	switch provider {
@@ -211,6 +217,10 @@ func (s *Service) oauthCallback(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid_risk_context", "invalid reward risk context")
 			return
 		}
+		if errors.Is(err, errOAuthEmailVerificationRequired) {
+			writeError(w, http.StatusConflict, "email_verification_required", "reset your password using your email before signing in with OAuth; recovery revokes old sessions and API keys")
+			return
+		}
 		if errors.Is(err, errOAuthEmailNotVerified) {
 			writeError(w, http.StatusConflict, "email_not_verified", "cannot bind an unverified provider email to an existing account")
 			return
@@ -228,7 +238,7 @@ func (s *Service) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	if err := s.db.QueryRow(r.Context(), `select email from users where id=$1`, userID).Scan(&email); err == nil {
 		s.notifyLogin(r.Context(), email, requestMetadata(r))
 	}
-	token, expiresAt, err := s.createSessionToken(r.Context(), userID)
+	token, expiresAt, err := s.createOAuthSessionToken(r.Context(), userID, provider, providerUserID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not create session")
 		return
@@ -238,36 +248,53 @@ func (s *Service) oauthCallback(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) findOrCreateOAuthUser(ctx context.Context, provider, providerUserID, email string, emailVerified bool, name, avatar string, riskInputs ...*oauthRewardRiskInput) (string, error) {
+	if strings.TrimSpace(providerUserID) == "" {
+		return "", errInvalid
+	}
 	tx, err := s.beginRewardRiskTx(ctx, true)
 	if err != nil {
 		return "", err
 	}
 	defer tx.Rollback(ctx)
 	var userID string
-	var enabled bool
+	var enabled, hasPassword bool
+	var verifiedAt *time.Time
+	var localEmail string
+	email = strings.ToLower(strings.TrimSpace(email))
+	emailVerified = emailVerified && email != "" && validEmail(email)
 	created := false
-	err = tx.QueryRow(ctx, `select c.user_id,u.enabled from user_oauth_connections c join users u on u.id=c.user_id where c.provider=$1 and c.provider_user_id=$2 for update of u`, provider, providerUserID).Scan(&userID, &enabled)
+	err = tx.QueryRow(ctx, `select c.user_id,u.enabled,u.password_hash is not null,u.email_verified_at,u.email from user_oauth_connections c join users u on u.id=c.user_id where c.provider=$1 and c.provider_user_id=$2 for update of u`, provider, providerUserID).Scan(&userID, &enabled, &hasPassword, &verifiedAt, &localEmail)
 	if err != nil && err != pgx.ErrNoRows {
 		return "", err
 	}
 	if err == nil && !enabled {
 		return "", errRiskAccountRestricted
 	}
+	if userID != "" && hasPassword && verifiedAt == nil {
+		return "", errOAuthEmailVerificationRequired
+	}
+	if userID != "" && verifiedAt == nil && emailVerified && email != "" && email == strings.ToLower(localEmail) {
+		if _, err = tx.Exec(ctx, `update users set email_verified_at=now() where id=$1`, userID); err != nil {
+			return "", err
+		}
+	}
 	if userID == "" {
-		email = strings.ToLower(strings.TrimSpace(email))
 		if email != "" && !emailVerified {
 			return "", errOAuthEmailNotVerified
 		}
 		if email == "" {
 			email = fmt.Sprintf("%s-%s@oauth.local", provider, providerUserID)
 		}
-		err = tx.QueryRow(ctx, `select id,enabled from users where email=$1 for update`, email).Scan(&userID, &enabled)
+		err = tx.QueryRow(ctx, `select id,enabled,email_verified_at from users where email=$1 for update`, email).Scan(&userID, &enabled, &verifiedAt)
 		if err != nil && err != pgx.ErrNoRows {
 			return "", err
 		}
 		if err == nil {
 			if !enabled {
 				return "", errRiskAccountRestricted
+			}
+			if verifiedAt == nil {
+				return "", errOAuthEmailVerificationRequired
 			}
 			if !emailVerified {
 				return "", errOAuthEmailNotVerified
@@ -285,7 +312,7 @@ func (s *Service) findOrCreateOAuthUser(ctx context.Context, provider, providerU
 			if displayName == "" {
 				displayName = email
 			}
-			err = tx.QueryRow(ctx, `insert into users(email,name,role,avatar_url) values($1,$2,'user',$3) returning id`, email, displayName, avatar).Scan(&userID)
+			err = tx.QueryRow(ctx, `insert into users(email,name,role,avatar_url,email_verified_at) values($1,$2,'user',$3,case when $4 then now() else null end) returning id`, email, displayName, avatar, emailVerified).Scan(&userID)
 			if err != nil {
 				return "", err
 			}
@@ -329,6 +356,43 @@ func (s *Service) findOrCreateOAuthUser(ctx context.Context, provider, providerU
 	return userID, nil
 }
 
+func (s *Service) createOAuthSessionToken(ctx context.Context, userID, provider, providerUserID string) (string, time.Time, error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	defer tx.Rollback(ctx)
+	var allowed bool
+	if err = tx.QueryRow(ctx, `select password_hash is null or email_verified_at is not null from users where id=$1 and enabled for update`, userID).Scan(&allowed); err != nil {
+		return "", time.Time{}, err
+	}
+	if !allowed {
+		return "", time.Time{}, errOAuthEmailVerificationRequired
+	}
+	if err = tx.QueryRow(ctx, `select exists(select 1 from user_oauth_connections where user_id=$1 and provider=$2 and provider_user_id=$3)`, userID, provider, providerUserID).Scan(&allowed); err != nil {
+		return "", time.Time{}, err
+	}
+	if !allowed {
+		return "", time.Time{}, errInvalid
+	}
+	token, err := randomSecret("xh_session_")
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	id, err := randomID()
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	expiresAt := time.Now().Add(7 * 24 * time.Hour)
+	if _, err = tx.Exec(ctx, `insert into user_sessions(id,user_id,token_hash,expires_at) values($1,$2,$3,$4)`, id, userID, hashSecret(token), expiresAt); err != nil {
+		return "", time.Time{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return "", time.Time{}, err
+	}
+	return token, expiresAt, nil
+}
+
 func (s *Service) githubExchangeToken(ctx context.Context, cfg *oauthProviderConfig, code, redirectURI string) (string, error) {
 	body := fmt.Sprintf("client_id=%s&client_secret=%s&code=%s&redirect_uri=%s",
 		url.QueryEscape(cfg.ClientID), url.QueryEscape(cfg.ClientSecret), url.QueryEscape(code), url.QueryEscape(redirectURI))
@@ -343,7 +407,13 @@ func (s *Service) githubExchangeToken(ctx context.Context, cfg *oauthProviderCon
 		return "", err
 	}
 	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("GitHub token endpoint returned HTTP %d", resp.StatusCode)
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	if err != nil {
+		return "", fmt.Errorf("read token response: %w", err)
+	}
 	var result struct {
 		AccessToken string `json:"access_token"`
 		Error       string `json:"error_description"`
@@ -352,12 +422,18 @@ func (s *Service) githubExchangeToken(ctx context.Context, cfg *oauthProviderCon
 		return "", fmt.Errorf("unmarshal: %w", err)
 	}
 	if result.Error != "" {
-		return "", fmt.Errorf("%s", result.Error)
+		return "", fmt.Errorf("GitHub token exchange failed")
+	}
+	if strings.TrimSpace(result.AccessToken) == "" {
+		return "", fmt.Errorf("GitHub token response did not contain an access token")
 	}
 	return result.AccessToken, nil
 }
 
 func (s *Service) githubFetchUser(ctx context.Context, accessToken string) (id, email, name, avatar string, emailVerified bool, err error) {
+	if strings.TrimSpace(accessToken) == "" {
+		return "", "", "", "", false, fmt.Errorf("GitHub access token is empty")
+	}
 	req, _ := http.NewRequestWithContext(ctx, "GET", "https://api.github.com/user", nil)
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
@@ -366,7 +442,13 @@ func (s *Service) githubFetchUser(ctx context.Context, accessToken string) (id, 
 		return "", "", "", "", false, err
 	}
 	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", "", "", "", false, fmt.Errorf("GitHub user endpoint returned HTTP %d", resp.StatusCode)
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	if err != nil {
+		return "", "", "", "", false, fmt.Errorf("read GitHub user response: %w", err)
+	}
 	var user struct {
 		ID        int    `json:"id"`
 		Login     string `json:"login"`
@@ -376,7 +458,10 @@ func (s *Service) githubFetchUser(ctx context.Context, accessToken string) (id, 
 	if err := json.Unmarshal(raw, &user); err != nil {
 		return "", "", "", "", false, fmt.Errorf("unmarshal user: %w", err)
 	}
-	id = fmt.Sprintf("%d", user.ID)
+	if user.ID <= 0 {
+		return "", "", "", "", false, fmt.Errorf("GitHub user response is missing a valid identity")
+	}
+	id = strconv.Itoa(user.ID)
 	name = user.Name
 	if name == "" {
 		name = user.Login
@@ -387,20 +472,26 @@ func (s *Service) githubFetchUser(ctx context.Context, accessToken string) (id, 
 	req2.Header.Set("Accept", "application/vnd.github.v3+json")
 	resp2, err := s.httpClient.Do(req2)
 	if err != nil {
-		return id, "", name, avatar, false, nil
+		return id, "", name, avatar, false, err
 	}
 	defer resp2.Body.Close()
-	raw2, _ := io.ReadAll(io.LimitReader(resp2.Body, 2<<20))
+	if resp2.StatusCode < 200 || resp2.StatusCode >= 300 {
+		return id, "", name, avatar, false, fmt.Errorf("GitHub email endpoint returned HTTP %d", resp2.StatusCode)
+	}
+	raw2, err := io.ReadAll(io.LimitReader(resp2.Body, 2<<20))
+	if err != nil {
+		return id, "", name, avatar, false, fmt.Errorf("read GitHub email response: %w", err)
+	}
 	var emails []struct {
 		Email    string `json:"email"`
 		Primary  bool   `json:"primary"`
 		Verified bool   `json:"verified"`
 	}
 	if json.Unmarshal(raw2, &emails) != nil {
-		return id, "", name, avatar, false, nil
+		return id, "", name, avatar, false, fmt.Errorf("invalid GitHub email response")
 	}
 	for _, e := range emails {
-		if e.Primary && e.Verified {
+		if e.Primary && e.Verified && validEmail(e.Email) {
 			return id, e.Email, name, avatar, true, nil
 		}
 	}

@@ -39,6 +39,8 @@ type Config struct {
 	BootstrapAdminName       string
 	BootstrapAdminPass       string
 	WSMaxMessageBytes        int64
+	GatewayMaxBodyBytes      int64
+	ImageMaxBodyBytes        int64
 	RequestBodyTimeout       time.Duration
 	WSIdleTimeout            time.Duration
 	HTTPReadHeaderTimeout    time.Duration

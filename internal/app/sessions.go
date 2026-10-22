@@ -58,17 +58,21 @@ func (s *Service) consoleSecurity(next http.Handler) http.Handler {
 			w.Header().Set("Cache-Control", "no-store")
 			unsafe := r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions
 			if unsafe && !consoleRequestAllowed(r) {
+				if r.ProtoMajor == 1 {
+					w.Header().Set("Connection", "close")
+					_ = http.NewResponseController(w).SetReadDeadline(time.Now())
+				}
 				writeError(w, http.StatusForbidden, "csrf_failed", "same-origin console request required")
 				return
 			}
-			if unsafe {
-				body, err := readRequestBody(w, r, s.requestBodyTimeout(r.Context()))
-				if err != nil {
-					status, code, message := requestBodyError(err)
-					writeError(w, status, code, message)
-					return
-				}
-				r.Body = io.NopCloser(bytes.NewReader(body))
+			if unsafe && r.Body != nil {
+				original := r.Clone(r.Context())
+				body := &consoleRequestBody{source: original.Body, load: func() ([]byte, error) {
+					return readRequestBodyLimited(w, original, s.requestBodyTimeout(r.Context()), defaultConsoleBodyMaxBytes)
+				}}
+				r.Body = body
+				next.ServeHTTP(&consoleBodyResponseWriter{ResponseWriter: w, body: body, protoMajor: r.ProtoMajor}, r)
+				return
 			}
 		}
 		next.ServeHTTP(w, r)
@@ -100,7 +104,7 @@ func (s *Service) reauthenticate(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Password string `json:"password"`
 	}
-	body, err := readRequestBody(w, r, s.requestBodyTimeout(r.Context()))
+	body, err := readRequestBodyLimited(w, r, s.requestBodyTimeout(r.Context()), defaultConsoleBodyMaxBytes)
 	if err != nil {
 		status, code, message := requestBodyError(err)
 		writeError(w, status, code, message)

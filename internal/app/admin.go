@@ -976,7 +976,7 @@ func (s *Service) updateUser(w http.ResponseWriter, r *http.Request) {
 	changed := map[string]any{}
 	if in.Email != nil {
 		email := strings.ToLower(strings.TrimSpace(*in.Email))
-		if _, err = tx.Exec(r.Context(), `update users set email=$1 where id=$2`, email, userID); err != nil {
+		if _, err = tx.Exec(r.Context(), `update users set email_verified_at=case when email is distinct from $1 then null else email_verified_at end,email=$1 where id=$2`, email, userID); err != nil {
 			writeError(w, 409, "conflict", "email already exists or user could not be updated")
 			return
 		}
@@ -3837,8 +3837,12 @@ func (s *Service) upsertQuota(w http.ResponseWriter, r *http.Request) {
 	if in.UserID > 0 {
 		userID = strconv.FormatInt(in.UserID, 10)
 	}
-	id, _ := randomID()
-	_, err := s.db.Exec(r.Context(), `insert into quota_limits(id,user_id,api_key_id,model,"window",max_requests,max_tokens,max_cost) values($1,nullif($2,'')::bigint,nullif($3,'')::uuid,nullif($4,''),$5,$6,$7,$8) on conflict (coalesce(user_id, 0), coalesce(api_key_id, '00000000-0000-0000-0000-000000000000'::uuid), coalesce(model, ''), "window") do update set max_requests=excluded.max_requests,max_tokens=excluded.max_tokens,max_cost=excluded.max_cost`, id, userID, in.APIKeyID, in.Model, in.Window, in.MaxRequests, in.MaxTokens, in.MaxCost)
+	id, err := randomID()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not create quota")
+		return
+	}
+	err = s.db.QueryRow(r.Context(), `insert into quota_limits(id,user_id,api_key_id,model,"window",max_requests,max_tokens,max_cost,source) values($1,nullif($2,'')::bigint,nullif($3,'')::uuid,nullif($4,''),$5,$6,$7,$8,'admin') on conflict (coalesce(user_id, 0), coalesce(api_key_id, '00000000-0000-0000-0000-000000000000'::uuid), coalesce(model, ''), "window", source) do update set max_requests=excluded.max_requests,max_tokens=excluded.max_tokens,max_cost=excluded.max_cost returning id`, id, userID, in.APIKeyID, in.Model, in.Window, in.MaxRequests, in.MaxTokens, in.MaxCost).Scan(&id)
 	if err != nil {
 		writeError(w, 400, "invalid_request", "could not save quota")
 		return
@@ -3853,7 +3857,7 @@ func (s *Service) upsertQuota(w http.ResponseWriter, r *http.Request) {
 func (s *Service) listQuotaLimits(w http.ResponseWriter, r *http.Request) {
 	userID := strings.TrimSpace(r.URL.Query().Get("user_id"))
 	apiKeyID := strings.TrimSpace(r.URL.Query().Get("api_key_id"))
-	q := `select id,coalesce(user_id::text,''),coalesce(api_key_id::text,''),coalesce(model,''),"window",max_requests,max_tokens,max_cost,created_at from quota_limits`
+	q := `select id,coalesce(user_id::text,''),coalesce(api_key_id::text,''),coalesce(model,''),"window",max_requests,max_tokens,max_cost,created_at,source from quota_limits`
 	var args []any
 	var clauses []string
 	if userID != "" {
@@ -3876,12 +3880,12 @@ func (s *Service) listQuotaLimits(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	data := []map[string]any{}
 	for rows.Next() {
-		var id, uid, keyID, model, window string
+		var id, uid, keyID, model, window, source string
 		var maxRequests, maxTokens *int64
 		var maxCost *float64
 		var created any
-		if rows.Scan(&id, &uid, &keyID, &model, &window, &maxRequests, &maxTokens, &maxCost, &created) == nil {
-			data = append(data, map[string]any{"id": id, "user_id": uid, "api_key_id": keyID, "model": model, "window": window, "max_requests": maxRequests, "max_tokens": maxTokens, "max_cost": maxCost, "created_at": created})
+		if rows.Scan(&id, &uid, &keyID, &model, &window, &maxRequests, &maxTokens, &maxCost, &created, &source) == nil {
+			data = append(data, map[string]any{"id": id, "user_id": uid, "api_key_id": keyID, "model": model, "window": window, "max_requests": maxRequests, "max_tokens": maxTokens, "max_cost": maxCost, "created_at": created, "source": source})
 		}
 	}
 	writeJSON(w, 200, map[string]any{"data": data})

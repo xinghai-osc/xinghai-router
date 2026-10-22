@@ -140,6 +140,10 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 			return nil, fmt.Errorf("required Redis is unavailable")
 		}
 	}
+	if err := secureConversationCacheDir(cfg.ConversationCacheDir); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("secure conversation cache directory: %w", err)
+	}
 	log.Printf("event=deployment_config mode=%s redis_failure_policy=%s", cfg.DeploymentMode, cfg.RedisFailurePolicy)
 	s := &Service{
 		cfg:                   cfg,
@@ -191,9 +195,6 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 	s.startChannelBalanceScheduler(schedulerCtx)
 	s.startWalletSettlementScheduler(schedulerCtx)
 	s.startAuthCleanupScheduler(schedulerCtx)
-	if err := os.MkdirAll(s.cfg.ConversationCacheDir, 0o755); err != nil {
-		log.Printf("conversation cache dir: %v", err)
-	}
 	if s.cfg.SessionAffinityDir != "" {
 		if err := os.MkdirAll(s.cfg.SessionAffinityDir, 0o755); err != nil {
 			log.Printf("session affinity dir: %v", err)

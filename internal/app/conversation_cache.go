@@ -132,9 +132,22 @@ func randomIDString() string {
 	return id
 }
 
+func secureConversationCacheDir(dir string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	return os.Chmod(dir, 0o700)
+}
+
 func writeConversationFile(dir string, entry conversationFile) error {
+	if err := secureConversationCacheDir(dir); err != nil {
+		return err
+	}
 	sub := filepath.Join(dir, entry.CreatedAt.Format("2006-01-02"))
-	if err := os.MkdirAll(sub, 0o755); err != nil {
+	if err := os.MkdirAll(sub, 0o700); err != nil {
+		return err
+	}
+	if err := os.Chmod(sub, 0o700); err != nil {
 		return err
 	}
 	data, err := json.Marshal(entry)
@@ -143,7 +156,10 @@ func writeConversationFile(dir string, entry conversationFile) error {
 	}
 	path := filepath.Join(sub, entry.ID+".json")
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp, 0o600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, path)

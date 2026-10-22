@@ -15,6 +15,37 @@ import (
 	"time"
 )
 
+func TestUpstreamClientsDoNotFollowRedirects(t *testing.T) {
+	for _, status := range []int{http.StatusFound, http.StatusTemporaryRedirect} {
+		var destinationCalls atomic.Int32
+		destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			destinationCalls.Add(1)
+			if r.Header.Get("X-API-Key") != "" || r.Header.Get("Authorization") != "" {
+				t.Error("credentials were forwarded to redirect destination")
+			}
+		}))
+		source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Location", destination.URL+"/collect")
+			w.WriteHeader(status)
+		}))
+		request, err := http.NewRequest(http.MethodPost, source.URL+"/messages", strings.NewReader(`{}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("X-API-Key", "fake-channel-key")
+		response, err := newHTTPClient(time.Second).Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode != status || destinationCalls.Load() != 0 {
+			t.Fatalf("status=%d destination requests=%d", response.StatusCode, destinationCalls.Load())
+		}
+		source.Close()
+		destination.Close()
+	}
+}
+
 func TestUpstreamClientsShareTransport(t *testing.T) {
 	client := newHTTPClient(time.Second)
 	streamClient := newStreamClient()

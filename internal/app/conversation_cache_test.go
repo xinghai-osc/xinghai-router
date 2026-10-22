@@ -3,6 +3,8 @@ package app
 import (
 	"encoding/json"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -30,6 +32,17 @@ func TestListConversationCachePaginatesDeterministically(t *testing.T) {
 	} {
 		if err := writeConversationFile(dir, entry); err != nil {
 			t.Fatal(err)
+		}
+	}
+
+	path := filepath.Join(dir, createdAt.Format("2006-01-02"), "entry-a.json")
+	for path, mode := range map[string]os.FileMode{dir: 0o700, filepath.Dir(path): 0o700, path: 0o600} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != mode {
+			t.Fatalf("%s mode=%v err=%v want=%04o", path, info.Mode().Perm(), err, mode)
 		}
 	}
 

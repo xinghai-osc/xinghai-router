@@ -61,6 +61,7 @@ func (s *Service) register(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	var emailVerifiedAt *time.Time
 	if s.loadSystemConfig(r.Context()).emailVerificationEnabled() {
 		if strings.TrimSpace(in.Code) == "" {
 			writeError(w, http.StatusBadRequest, "code_required", "the email verification code is required")
@@ -70,6 +71,8 @@ func (s *Service) register(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid_code", err.Error())
 			return
 		}
+		verifiedAt := time.Now()
+		emailVerifiedAt = &verifiedAt
 	}
 	if err := s.verifyCaptcha(r.Context(), in.geetestPayload, in.corptchaPayload, captchaPurposeRegister); err != nil {
 		writeError(w, http.StatusForbidden, "captcha_failed", err.Error())
@@ -92,7 +95,7 @@ func (s *Service) register(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(r.Context())
 	var id string
-	err = tx.QueryRow(r.Context(), `insert into users(email,name,role,password_hash) values($1,$2,'user',$3) returning id`, email, strings.TrimSpace(in.Name), passwordHash).Scan(&id)
+	err = tx.QueryRow(r.Context(), `insert into users(email,name,role,password_hash,email_verified_at) values($1,$2,'user',$3,$4) returning id`, email, strings.TrimSpace(in.Name), passwordHash, emailVerifiedAt).Scan(&id)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -181,7 +184,7 @@ func (s *Service) register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.auditActor(r, id, "account.registered", "user", id, nil)
-	s.createSession(w, r, id, http.StatusCreated)
+	s.createSession(w, r, id, http.StatusCreated, passwordHash)
 }
 
 func (s *Service) login(w http.ResponseWriter, r *http.Request) {
@@ -709,8 +712,8 @@ func (s *Service) accountUsage(w http.ResponseWriter, r *http.Request) {
 	argIdx := 2
 	where := []string{"rl.workspace_id=$1"}
 	if model != "" {
-		where = append(where, "rl.model ilike $"+strconv.Itoa(argIdx))
-		args = append(args, "%"+model+"%")
+		where = append(where, "rl.model ilike $"+strconv.Itoa(argIdx)+likeEscapeClause)
+		args = append(args, "%"+escapeLikePattern(model)+"%")
 		argIdx++
 	}
 	if groupName != "" {

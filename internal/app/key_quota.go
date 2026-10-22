@@ -54,18 +54,18 @@ func (s *Service) keyQuotaList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) listKeyQuotaLimits(ctx context.Context, keyID string) ([]map[string]any, error) {
-	rows, err := s.db.Query(ctx, `select id,"window",max_requests,max_tokens,max_cost,created_at from quota_limits where api_key_id=$1 and model is null order by "window"`, keyID)
+	rows, err := s.db.Query(ctx, `select id,"window",max_requests,max_tokens,max_cost,created_at,source from quota_limits where api_key_id=$1 and model is null order by "window"`, keyID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	result := make([]map[string]any, 0)
 	for rows.Next() {
-		var id, window string
+		var id, window, source string
 		var maxRequests, maxTokens *int64
 		var maxCost *float64
 		var created any
-		if err := rows.Scan(&id, &window, &maxRequests, &maxTokens, &maxCost, &created); err != nil {
+		if err := rows.Scan(&id, &window, &maxRequests, &maxTokens, &maxCost, &created, &source); err != nil {
 			return nil, err
 		}
 		result = append(result, map[string]any{
@@ -75,6 +75,7 @@ func (s *Service) listKeyQuotaLimits(ctx context.Context, keyID string) ([]map[s
 			"max_tokens":   maxTokens,
 			"max_cost":     maxCost,
 			"created_at":   created,
+			"source":       source,
 		})
 	}
 	return result, rows.Err()
@@ -85,14 +86,13 @@ func (s *Service) listKeyQuotaLimits(ctx context.Context, keyID string) ([]map[s
 // UI shows the same numbers the gateway enforces.
 func (s *Service) keyQuotaUsage(ctx context.Context, keyID string) ([]map[string]any, error) {
 	rows, err := s.db.Query(ctx, `select q."window",agg.requests,agg.tokens,agg.cost
-	from quota_limits q
+	from (select distinct "window" from quota_limits where api_key_id=$1 and model is null) q
 	left join lateral (
 		select count(rl.*) as requests, coalesce(sum(rl.total_tokens),0) as tokens, coalesce(sum(ur.cost),0) as cost
 		from request_logs rl
 		left join usage_records ur on ur.request_id=rl.request_id
-		where rl.api_key_id=$1 and (q."window"='total' or rl.created_at >= now() - ('1 '||q."window")::interval)
+		where rl.api_key_id=$1 and rl.created_at >= case when q."window"='total' then '-infinity'::timestamptz else now() - ('1 '||q."window")::interval end
 	) agg on true
-	where q.api_key_id=$1 and q.model is null
 	order by q."window"`, keyID)
 	if err != nil {
 		return nil, err
@@ -149,12 +149,17 @@ func (s *Service) keyQuotaUpsert(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "API key not found")
 		return
 	}
-	id, _ := randomID()
-	_, err := s.db.Exec(r.Context(), `insert into quota_limits(id,user_id,api_key_id,model,"window",max_requests,max_tokens,max_cost) values($1,$2,$3,null,$4,$5,$6,$7) on conflict (coalesce(user_id, 0), coalesce(api_key_id, '00000000-0000-0000-0000-000000000000'::uuid), coalesce(model, ''), "window") do update set max_requests=excluded.max_requests,max_tokens=excluded.max_tokens,max_cost=excluded.max_cost`, id, account.userID, keyID, in.Window, in.MaxRequests, in.MaxTokens, in.MaxCost)
+	id, err := randomID()
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_request", "could not save quota")
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not create quota")
 		return
 	}
+	err = s.db.QueryRow(r.Context(), `insert into quota_limits(id,user_id,api_key_id,model,"window",max_requests,max_tokens,max_cost,source) values($1,$2,$3,null,$4,$5,$6,$7,'self_service') on conflict (coalesce(user_id, 0), coalesce(api_key_id, '00000000-0000-0000-0000-000000000000'::uuid), coalesce(model, ''), "window", source) do update set max_requests=excluded.max_requests,max_tokens=excluded.max_tokens,max_cost=excluded.max_cost returning id`, id, account.userID, keyID, in.Window, in.MaxRequests, in.MaxTokens, in.MaxCost).Scan(&id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not save quota")
+		return
+	}
+	s.invalidateQuotaAbsence()
 	s.audit(r, "key_quota.updated", "api_key", keyID, map[string]any{"window": in.Window, "max_requests": in.MaxRequests, "max_tokens": in.MaxTokens, "max_cost": in.MaxCost, "self_service": true})
 	writeJSON(w, http.StatusOK, map[string]any{"id": id})
 }
@@ -168,6 +173,10 @@ func (s *Service) keyQuotaDelete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "key id and window are required")
 		return
 	}
+	if !keyQuotaWindows[window] {
+		writeError(w, http.StatusBadRequest, "invalid_request", "window must be day, month, or total")
+		return
+	}
 	var owner string
 	if err := s.db.QueryRow(r.Context(), `select user_id from api_keys where id=$1 and workspace_id=$2`, keyID, account.workspaceID).Scan(&owner); err != nil {
 		writeError(w, http.StatusNotFound, "not_found", "API key not found")
@@ -177,7 +186,7 @@ func (s *Service) keyQuotaDelete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "API key not found")
 		return
 	}
-	_, err := s.db.Exec(r.Context(), `delete from quota_limits where api_key_id=$1 and model is null and "window"=$2`, keyID, window)
+	_, err := s.db.Exec(r.Context(), `delete from quota_limits where api_key_id=$1 and user_id=$2 and source='self_service' and model is null and "window"=$3`, keyID, account.userID, window)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not delete quota")
 		return

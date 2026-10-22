@@ -6,7 +6,7 @@ export interface WorkspaceForm { name: string; slug: string }
 export interface WorkspaceMember { user_id: number; email: string; name: string; role: WorkspaceRole; created_at: string }
 export interface WorkspaceMemberForm { email: string; role: 'admin' | 'member' }
 export interface ApiKey { id: string; user_id: number; name: string; key_prefix: string; group_id: string; group_name: string; subscription_id: string; subscription_name: string; expires_at: string | null; revoked_at: string | null; last_used_at: string | null; created_at: string; revealable: boolean }
-export interface KeyQuotaLimit { id: string; window: 'day' | 'month' | 'total'; max_requests: number | null; max_tokens: number | null; max_cost: number | null; created_at: string }
+export interface KeyQuotaLimit { id: string; source: 'admin' | 'self_service'; window: 'minute' | 'day' | 'month' | 'total'; max_requests: number | null; max_tokens: number | null; max_cost: number | null; created_at: string }
 export interface KeyQuotaUsage { window: string; requests: number; tokens: number; cost: number }
 export interface KeyQuota { limits: KeyQuotaLimit[]; usage: KeyQuotaUsage[] }
 export interface KeyQuotaForm { window: 'day' | 'month' | 'total'; max_requests?: number | null; max_tokens?: number | null; max_cost?: number | null }

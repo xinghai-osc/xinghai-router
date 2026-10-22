@@ -6,25 +6,48 @@ import (
 	"html"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
 
 const passwordResetTTL = 30 * time.Minute
 
-// resetLink builds the console URL that carries the reset token. When an admin
-// has configured a public base URL it is used verbatim so links stay valid
-// behind proxies; otherwise the request Host (already the console origin through
-// the Nuxt proxy) is used.
-func (s *Service) resetLink(ctx context.Context, r *http.Request, token string) string {
-	if base := s.loadPublicBaseURL(ctx); base != "" {
-		return base + "/auth/reset?token=" + url.QueryEscape(token)
+func (s *Service) resetLink(ctx context.Context, token string) (string, error) {
+	base, err := s.trustedPublicBaseURL(ctx)
+	if err != nil {
+		return "", err
 	}
-	scheme := "http"
-	if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
-		scheme = "https"
+	return base + "/auth/reset?token=" + url.QueryEscape(token), nil
+}
+
+func (s *Service) trustedPublicBaseURL(ctx context.Context) (string, error) {
+	if s.db == nil {
+		return "", fmt.Errorf("trusted public base URL is unavailable")
 	}
-	return scheme + "://" + r.Host + "/auth/reset?token=" + url.QueryEscape(token)
+	var base string
+	if err := s.db.QueryRow(ctx, `select public_base_url from site_settings where id=true`).Scan(&base); err != nil {
+		return "", fmt.Errorf("trusted public base URL is unavailable")
+	}
+	return normalizeTrustedPublicOrigin(base)
+}
+
+func normalizeTrustedPublicOrigin(base string) (string, error) {
+	base = strings.TrimSpace(base)
+	u, err := url.Parse(base)
+	if err != nil || u.Hostname() == "" || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(base, "#") || (u.Path != "" && u.Path != "/") || u.RawPath != "" || u.Opaque != "" {
+		return "", fmt.Errorf("trusted public base URL must be an origin")
+	}
+	if u.Scheme != "https" && !isLoopbackHost(u.Hostname()) {
+		return "", fmt.Errorf("trusted public base URL must use HTTPS")
+	}
+	if port := u.Port(); port != "" {
+		n, err := strconv.Atoi(port)
+		if err != nil || n < 1 || n > 65535 {
+			return "", fmt.Errorf("trusted public base URL has an invalid port")
+		}
+	}
+	return u.Scheme + "://" + u.Host, nil
 }
 
 func (s *Service) requestPasswordReset(w http.ResponseWriter, r *http.Request) {
@@ -54,6 +77,11 @@ func (s *Service) requestPasswordReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
+	base, err := s.trustedPublicBaseURL(ctx)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "public_url_unavailable", "password reset links are not configured")
+		return
+	}
 	var userID string
 	if err := s.db.QueryRow(ctx, `select id from users where email=$1 and enabled`, email).Scan(&userID); err != nil {
 		// Always return the same success shape so callers cannot probe whether
@@ -88,9 +116,10 @@ func (s *Service) requestPasswordReset(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not create reset token")
 		return
 	}
+	linkURL := base + "/auth/reset?token=" + url.QueryEscape(token)
 	siteName := s.siteName(ctx)
 	subject := fmt.Sprintf("%s 密码重置 / Password reset", siteName)
-	link := html.EscapeString(s.resetLink(ctx, r, token))
+	link := html.EscapeString(linkURL)
 	body := fmt.Sprintf(`<div style="max-width:480px;margin:0 auto;padding:32px;font-family:-apple-system,'Segoe UI',sans-serif;color:#1a1a2e">
 	<h2 style="margin:0 0 8px;font-size:20px">%s</h2>
 	<p style="margin:0 0 24px;color:#666;font-size:14px">我们收到了重置密码的请求 / We received a request to reset your password</p>
@@ -148,17 +177,28 @@ func (s *Service) confirmPasswordReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var userID string
-	if err := tx.QueryRow(ctx, `select id from users where email=$1 and enabled and password_hash is not null`, email).Scan(&userID); err != nil {
+	var wasVerified bool
+	if err := tx.QueryRow(ctx, `select id,email_verified_at is not null from users where email=$1 and enabled for update`, email).Scan(&userID, &wasVerified); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_token", "this reset link is invalid or has expired")
 		return
 	}
-	if _, err = tx.Exec(ctx, `update users set password_hash=$1, must_change_password=false where id=$2`, newHash, userID); err != nil {
+	if _, err = tx.Exec(ctx, `update users set password_hash=$1, must_change_password=false, email_verified_at=coalesce(email_verified_at,now()) where id=$2`, newHash, userID); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not reset password")
 		return
 	}
 	if _, err = tx.Exec(ctx, `delete from user_sessions where user_id=$1`, userID); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not revoke sessions")
 		return
+	}
+	if _, err = tx.Exec(ctx, `update api_keys set revoked_at=now() where user_id=$1 and revoked_at is null`, userID); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not revoke API keys")
+		return
+	}
+	if !wasVerified {
+		if _, err = tx.Exec(ctx, `delete from user_oauth_connections where user_id=$1`, userID); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "could not revoke OAuth connections")
+			return
+		}
 	}
 	if _, err = tx.Exec(ctx, `update password_reset_tokens set consumed_at=now() where token_hash=$1`, tokenHash); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not consume reset token")
@@ -168,6 +208,6 @@ func (s *Service) confirmPasswordReset(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not reset password")
 		return
 	}
-	s.auditActor(r, userID, "account.password_reset", "user", userID, map[string]any{"sessions_revoked": true})
+	s.auditActor(r, userID, "account.password_reset", "user", userID, map[string]any{"sessions_revoked": true, "api_keys_revoked": true, "oauth_connections_revoked": !wasVerified})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -52,6 +53,36 @@ func TestSessionTokenRejectsLegacyBearer(t *testing.T) {
 		t.Fatal("gateway bearer extraction changed")
 	}
 }
+
+func TestConsoleSecurityDoesNotReadBeforeAuthentication(t *testing.T) {
+	var read int
+	body := &countingReadCloser{Reader: strings.NewReader(strings.Repeat("x", 8<<20)), read: &read}
+	handler := (&Service{}).consoleSecurity(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "account session required")
+	}))
+	r := httptest.NewRequest(http.MethodPost, "/account/keys", nil)
+	r.Body = body
+	r.ContentLength = 8 << 20
+	r.Header.Set("X-Xinghai-Request", "1")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+	if w.Code != http.StatusUnauthorized || read != 0 {
+		t.Fatalf("status=%d bytes read before authentication=%d", w.Code, read)
+	}
+}
+
+type countingReadCloser struct {
+	io.Reader
+	read *int
+}
+
+func (c *countingReadCloser) Read(p []byte) (int, error) {
+	n, err := c.Reader.Read(p)
+	*c.read += n
+	return n, err
+}
+
+func (c *countingReadCloser) Close() error { return nil }
 
 func TestConsoleCSRFBoundary(t *testing.T) {
 	for _, tc := range []struct {

@@ -197,6 +197,8 @@ export default {
   codexConfigHint: '將上面的內容合併到 ~/.codex/config.toml，並把密鑰寫入 XINGHAI_API_KEY 環境變數，重啟 codex 後即可使用。',
 
   // ---- 用量 ----
+  quotaWindowMinute: '每分鐘',
+  quotaAdminManaged: '管理員限制（唯讀）',
   usageDescription: '最近 100 條調用記錄，含每次請求的 Tokens 與費用。',
   promptTokens: '輸入',
   cachedTokens: '緩存',

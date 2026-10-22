@@ -54,6 +54,7 @@ export default {
   confirmPassword: '确认新密码',
   passwordsMismatch: '两次输入的密码不一致',
   resetInvalidToken: '链接无效或已过期，请重新申请',
+  resetRevocationNotice: '重置后所有会话和 API Key 将被撤销。此前未验证邮箱的账户还会解除旧 OAuth 绑定，请重新登录并创建密钥。',
   resetSuccess: '密码已重置，请使用新密码登录',
 
   reauthenticationTitle: '确认你的身份',

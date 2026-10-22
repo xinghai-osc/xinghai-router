@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net/http"
 	"sort"
 	"strconv"
@@ -152,7 +154,11 @@ func (s *Service) clearSessionAffinity(w http.ResponseWriter, r *http.Request) {
 		UserID int64 `json:"user_id"`
 	}
 	if r.Body != nil {
-		_ = decode(r, &in)
+		if err := decode(r, &in); err != nil && !errors.Is(err, io.EOF) {
+			status, code, message := requestBodyError(err)
+			writeError(w, status, code, message)
+			return
+		}
 	}
 	userID := ""
 	if in.UserID > 0 {

@@ -1542,7 +1542,7 @@ func (s *Service) loadSubscriptionCoversModel(ctx context.Context, key keyContex
 		  and ($4='' or us.id::text=$4)
 		  and (t.group_id::text=$3
 		    or (t.group_id is null and ($3='' or exists(select 1 from user_groups ug where ug.user_id::text=$1 and ug.group_id::text=$3)))
-		    or ($3='' and exists(select 1 from user_groups ug where ug.user_id::text=$1 and ug.group_id=t.group_id)))
+		    or exists(select 1 from user_groups ug where ug.user_id::text=$1 and ug.group_id=t.group_id))
 		  and (coalesce(array_length(t.model_whitelist,1),0)=0 or $2 = any(t.model_whitelist))
 	)
 	select coalesce((select bool_or(req_ok and credit_ok) from candidates), false),

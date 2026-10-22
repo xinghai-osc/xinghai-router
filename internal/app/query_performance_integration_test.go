@@ -196,7 +196,7 @@ func TestIntegrationQueryPerformanceCheckQuota(t *testing.T) {
 					case "cost":
 						cost = window.cost + float64(increment)*0.01
 					}
-					insertLimit(userID, keyID, "query-model", window.name, requests, tokens, cost)
+					insertLimit(userID, keyID, nil, window.name, requests, tokens, cost)
 					assertQuota(reject)
 				})
 			}
@@ -215,7 +215,7 @@ func TestIntegrationQueryPerformanceCheckQuota(t *testing.T) {
 			if scope&4 != 0 {
 				model = "query-model"
 			}
-			insertLimit(user, apiKey, model, "minute", 2, nil, nil)
+			insertLimit(user, apiKey, model, "minute", 1, nil, nil)
 			assertQuota(true)
 		})
 	}
@@ -229,10 +229,10 @@ func TestIntegrationQueryPerformanceCheckQuota(t *testing.T) {
 	})
 	t.Run("multiple-windows", func(t *testing.T) {
 		clearLimits()
-		insertLimit(userID, keyID, "query-model", "minute", 3, 14, 0.26)
-		insertLimit(userID, keyID, "query-model", "day", 4, 24, 0.51)
-		insertLimit(userID, keyID, "query-model", "month", 5, 34, 0.76)
-		insertLimit(userID, keyID, "query-model", "total", 6, 44, 1.01)
+		insertLimit(userID, keyID, nil, "minute", 3, 14, 0.26)
+		insertLimit(userID, keyID, nil, "day", 4, 24, 0.51)
+		insertLimit(userID, keyID, nil, "month", 5, 34, 0.76)
+		insertLimit(userID, keyID, nil, "total", 6, 44, 1.01)
 		assertQuota(false)
 		if _, err := db.Exec(ctx, `update quota_limits set max_cost=0.50 where "window"='day'`); err != nil {
 			t.Fatal(err)
@@ -357,6 +357,43 @@ func TestIntegrationQueryPerformanceUsageStats(t *testing.T) {
 	}
 	filters.Set("model", "absent-model")
 	assertNumbers(fetch(filters), map[string]float64{"total_requests": 0, "success_count": 0, "error_count": 0, "total_cost": 0})
+
+	filters.Set("model", "stats-")
+	assertNumbers(fetch(filters), map[string]float64{"total_requests": 4, "success_count": 2, "error_count": 1, "total_cost": 1})
+
+	filters.Set("model", "stats_%")
+	literalWildcard := base
+	literalWildcard.requestID = "stats-literal-wildcard"
+	literalWildcard.model = "stats_%_model"
+	queryPerformanceInsertUsage(t, db, literalWildcard)
+	assertNumbers(fetch(filters), map[string]float64{"total_requests": 1, "success_count": 1, "error_count": 0, "total_cost": 0.25})
+
+	type usageLogModel struct {
+		Model string `json:"model"`
+	}
+	fetchLogs := func(model string) []usageLogModel {
+		t.Helper()
+		values := url.Values{"model": {model}, "user_id": {userID}, "channel_id": {strconv.FormatInt(channelID, 10)}, "group_id": {groupID}, "start": {start.Format(time.RFC3339)}, "end": {end.Format(time.RFC3339)}}
+		r := httptest.NewRequest(http.MethodGet, "/admin/usage-logs?"+values.Encode(), nil)
+		w := httptest.NewRecorder()
+		s.listUsageLogs(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("listUsageLogs status=%d body=%s", w.Code, w.Body.String())
+		}
+		var result struct {
+			Data []usageLogModel `json:"data"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		return result.Data
+	}
+	if rows := fetchLogs("stats-"); len(rows) != 4 {
+		t.Fatalf("partial model filter returned %d rows, want 4", len(rows))
+	}
+	if rows := fetchLogs("stats_%"); len(rows) != 1 || rows[0].Model != "stats_%_model" {
+		t.Fatalf("literal wildcard model filter returned %#v", rows)
+	}
 }
 
 func TestIntegrationQueryPerformanceIndexes(t *testing.T) {

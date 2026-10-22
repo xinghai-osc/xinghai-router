@@ -379,9 +379,13 @@ func (s *Service) updateSiteSettings(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid_request", "public_base_url must be at most 2048 characters")
 			return
 		}
-		if base != "" && validUpstreamURL(base) != nil {
-			writeError(w, http.StatusBadRequest, "invalid_request", "public_base_url must be an HTTP or HTTPS URL")
-			return
+		if base != "" {
+			var err error
+			base, err = normalizeTrustedPublicOrigin(base)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "invalid_request", "public_base_url must be an HTTPS origin (HTTP is allowed for loopback)")
+				return
+			}
 		}
 		*in.PublicBaseURL = base
 	}

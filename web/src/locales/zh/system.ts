@@ -326,7 +326,7 @@ export default {
   apiBaseUrlsHint: '展示给用户并用于生成 SDK 配置，每行一个地址；留空则使用当前访问地址。',
   apiBaseUrlsPlaceholder: 'https://api.example.com\nhttps://api-backup.example.com',
   publicBaseUrl: '公开基础地址',
-  publicBaseUrlHint: '用于密码重置邮件与 OAuth 回调地址的公开地址（https://域名）。留空则根据请求 Host 推导。',
+  publicBaseUrlHint: '用于密码重置邮件与 OAuth 回调的可信公开地址（https://域名）。必须配置；留空或不可用时停用相关流程。',
   siteSettingsSaved: '站点设置已保存',
   featuredSectionTitle: '推荐内容',
   featuredSectionLead: '选择推荐模型，并配置公开模型广场展示的多语言文案。',

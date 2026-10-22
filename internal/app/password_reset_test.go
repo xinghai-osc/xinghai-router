@@ -66,24 +66,51 @@ func TestConfirmPasswordResetRejectsInvalidBodyBeforeDatabase(t *testing.T) {
 	}
 }
 
-func TestResetLink(t *testing.T) {
-	req := httptest.NewRequest(http.MethodPost, "/auth/password-reset/request", nil)
-	req.Host = "example.com"
-	wantA := "http://example.com/auth/reset?token=abc"
-	if got := (&Service{}).resetLink(req.Context(), req, "abc"); got != wantA {
-		t.Fatalf("http resetLink = %q, want %q", got, wantA)
+func TestResetLinkRequiresTrustedPublicOrigin(t *testing.T) {
+	if _, err := (&Service{}).trustedPublicBaseURL(t.Context()); err == nil {
+		t.Fatal("missing configured public origin was accepted")
 	}
-	req2 := httptest.NewRequest(http.MethodPost, "/auth/password-reset/request", nil)
-	req2.Host = "example.com"
-	req2.Header.Set("X-Forwarded-Proto", "https")
-	wantB := "https://example.com/auth/reset?token=abc"
-	if got := (&Service{}).resetLink(req2.Context(), req2, "abc"); got != wantB {
-		t.Fatalf("https resetLink = %q, want %q", got, wantB)
+}
+
+func TestNormalizeTrustedPublicOrigin(t *testing.T) {
+	for _, tc := range []struct{ input, want string }{
+		{"https://router.example.test", "https://router.example.test"},
+		{" https://router.example.test/ ", "https://router.example.test"},
+		{"https://router.example.test:8443/", "https://router.example.test:8443"},
+		{"http://localhost:5173/", "http://localhost:5173"},
+		{"http://127.0.0.1:8080", "http://127.0.0.1:8080"},
+		{"http://[::1]:8080", "http://[::1]:8080"},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			got, err := normalizeTrustedPublicOrigin(tc.input)
+			if err != nil || got != tc.want {
+				t.Fatalf("origin=%q want=%q err=%v", got, tc.want, err)
+			}
+		})
 	}
-	req3 := httptest.NewRequest(http.MethodPost, "/auth/password-reset/request", nil)
-	req3.Host = "example.com"
-	wantC := "http://example.com/auth/reset?token=a+b"
-	if got := (&Service{}).resetLink(req3.Context(), req3, "a b"); got != wantC {
-		t.Fatalf("escaped resetLink = %q, want %q", got, wantC)
+	for _, input := range []string{
+		"", "//router.example.test", "http://router.example.test", "javascript:alert(1)",
+		"https://user:password@router.example.test", "https://router.example.test/path",
+		"https://router.example.test//", "https://router.example.test?next=evil", "https://router.example.test?",
+		"https://router.example.test#fragment", "https://router.example.test#", "https://router.example.test/%2f",
+		"https://router.example.test:0", "https://router.example.test:65536", "https://router.example.test:invalid",
+		"https://:443", "https:///missing-host", "https://router.example.test\\@evil.test",
+	} {
+		t.Run(input, func(t *testing.T) {
+			if got, err := normalizeTrustedPublicOrigin(input); err == nil {
+				t.Fatalf("accepted unsafe origin %q as %q", input, got)
+			}
+		})
+	}
+}
+
+func TestUpdateSiteSettingsRejectsUnsafePublicOrigin(t *testing.T) {
+	for _, origin := range []string{"http://evil.example", "https://router.example/path", "https://router.example?", "https://user:pass@router.example"} {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPut, "/admin/site-settings", strings.NewReader(`{"public_base_url":"`+origin+`"}`))
+		(&Service{}).updateSiteSettings(w, r)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("origin=%q status=%d body=%s", origin, w.Code, w.Body.String())
+		}
 	}
 }

@@ -1,9 +1,11 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -328,7 +330,11 @@ func (s *Service) api(next http.HandlerFunc) http.Handler {
 			writeError(w, 401, "invalid_api_key", "invalid or expired API key")
 			return
 		}
-		allowed, limitErr := allowRateLimit(s.limiter, k.keyID, 0)
+		limitKey := k.keyID
+		if isWebSocketUpgrade(r) {
+			limitKey = "ws-handshake:" + k.keyID
+		}
+		allowed, limitErr := allowRateLimit(s.limiter, limitKey, 0)
 		if limitErr != nil {
 			writeError(w, 503, "rate_limit_unavailable", "could not enforce rate limits")
 			return
@@ -495,7 +501,14 @@ func writeError(w http.ResponseWriter, status int, code, msg string) {
 	writeJSON(w, status, map[string]any{"error": map[string]string{"message": msg, "type": code, "code": code, "request_id": w.Header().Get("X-Request-ID")}})
 }
 func decode(r *http.Request, target any) error {
-	d := json.NewDecoder(r.Body)
+	body, err := io.ReadAll(io.LimitReader(r.Body, defaultConsoleBodyMaxBytes+1))
+	if err != nil {
+		return err
+	}
+	if len(body) > defaultConsoleBodyMaxBytes {
+		return errRequestBodyTooLarge
+	}
+	d := json.NewDecoder(bytes.NewReader(body))
 	d.DisallowUnknownFields()
 	return d.Decode(target)
 }

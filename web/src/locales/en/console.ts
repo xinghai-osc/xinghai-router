@@ -201,6 +201,8 @@ export default {
   usageLimits: 'Usage limits',
   usageLimitsHint: 'Cap this key on requests, tokens, or spend over a time window. Requests return 429 once a limit is reached.',
   quotaWindow: 'Window',
+  quotaWindowMinute: 'Per minute',
+  quotaAdminManaged: 'Administrator limit (read-only)',
   quotaWindowDay: 'Daily',
   quotaWindowMonth: 'Monthly',
   quotaWindowTotal: 'Lifetime',

@@ -39,8 +39,8 @@ func TestRequestLimitsConfigDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.WSMaxMessageBytes != 2<<20 || cfg.HTTPMaxHeaderBytes != 1<<20 {
-		t.Fatalf("unexpected byte limits: websocket=%d headers=%d", cfg.WSMaxMessageBytes, cfg.HTTPMaxHeaderBytes)
+	if cfg.WSMaxMessageBytes != 2<<20 || cfg.GatewayMaxBodyBytes != defaultGatewayBodyMaxBytes || cfg.ImageMaxBodyBytes != defaultImageBodyMaxBytes || cfg.HTTPMaxHeaderBytes != 1<<20 {
+		t.Fatalf("unexpected byte limits: websocket=%d gateway=%d image=%d headers=%d", cfg.WSMaxMessageBytes, cfg.GatewayMaxBodyBytes, cfg.ImageMaxBodyBytes, cfg.HTTPMaxHeaderBytes)
 	}
 	if cfg.RequestBodyTimeout != 30*time.Second || cfg.WSIdleTimeout != 2*time.Minute || cfg.HTTPReadHeaderTimeout != 10*time.Second || cfg.HTTPIdleTimeout != 2*time.Minute {
 		t.Fatalf("unexpected timeouts: body=%s websocket=%s headers=%s idle=%s", cfg.RequestBodyTimeout, cfg.WSIdleTimeout, cfg.HTTPReadHeaderTimeout, cfg.HTTPIdleTimeout)
@@ -53,7 +53,7 @@ func TestRequestLimitsConfigDefaults(t *testing.T) {
 func TestRequestLimitsConfigOverrides(t *testing.T) {
 	requestLimitsTestEnv(t)
 	for key, value := range map[string]string{
-		"WS_MAX_MESSAGE_BYTES": "789",
+		"WS_MAX_MESSAGE_BYTES": "789", "GATEWAY_MAX_BODY_BYTES": "1234", "IMAGE_MAX_BODY_BYTES": "5678",
 		"REQUEST_BODY_TIMEOUT": "1500ms", "WS_IDLE_TIMEOUT": "3m", "HTTP_READ_HEADER_TIMEOUT": "12s",
 		"HTTP_IDLE_TIMEOUT": "4m", "HTTP_MAX_HEADER_BYTES": "8192", "CHANNEL_CREDENTIAL_STORAGE": "encrypted", "SESSION_COOKIE_SECURE": "false",
 	} {
@@ -63,7 +63,7 @@ func TestRequestLimitsConfigOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.WSMaxMessageBytes != 789 || cfg.HTTPMaxHeaderBytes != 8192 {
+	if cfg.WSMaxMessageBytes != 789 || cfg.GatewayMaxBodyBytes != 1234 || cfg.ImageMaxBodyBytes != 5678 || cfg.HTTPMaxHeaderBytes != 8192 {
 		t.Fatal("byte overrides were not applied")
 	}
 	if cfg.RequestBodyTimeout != 1500*time.Millisecond || cfg.WSIdleTimeout != 3*time.Minute || cfg.HTTPReadHeaderTimeout != 12*time.Second || cfg.HTTPIdleTimeout != 4*time.Minute {
@@ -87,7 +87,7 @@ func TestRequestBodyTimeoutCanBeUnlimited(t *testing.T) {
 }
 func TestRequestLimitsConfigRejectsInvalid(t *testing.T) {
 	requestLimitsTestEnv(t)
-	for _, key := range []string{"WS_MAX_MESSAGE_BYTES", "HTTP_MAX_HEADER_BYTES"} {
+	for _, key := range []string{"WS_MAX_MESSAGE_BYTES", "GATEWAY_MAX_BODY_BYTES", "IMAGE_MAX_BODY_BYTES", "HTTP_MAX_HEADER_BYTES"} {
 		for _, value := range []string{"", "0", "-1", "nonsense", "9223372036854775807", "999999999999999999999999"} {
 			t.Run(key+"/"+value, func(t *testing.T) {
 				t.Setenv(key, value)
@@ -121,20 +121,21 @@ func TestRequestLimitsConfigRejectsInvalid(t *testing.T) {
 	}
 }
 
-func TestRequestLimitsConfigIgnoresRemovedBodyLimits(t *testing.T) {
+func TestRequestLimitsConfigRejectsInvalidBodyLimits(t *testing.T) {
 	requestLimitsTestEnv(t)
-	for _, value := range []string{"1", "0", "-1", "invalid"} {
-		t.Run(value, func(t *testing.T) {
-			t.Setenv("GATEWAY_MAX_BODY_BYTES", value)
-			t.Setenv("IMAGE_MAX_BODY_BYTES", value)
-			if _, err := LoadConfig(); err != nil {
-				t.Fatalf("removed body limits affected startup: %v", err)
-			}
-		})
+	for _, key := range []string{"GATEWAY_MAX_BODY_BYTES", "IMAGE_MAX_BODY_BYTES"} {
+		for _, value := range []string{"0", "-1", "invalid"} {
+			t.Run(key+"/"+value, func(t *testing.T) {
+				t.Setenv(key, value)
+				if _, err := LoadConfig(); err == nil || !strings.Contains(err.Error(), key) {
+					t.Fatalf("expected %s validation error, got %v", key, err)
+				}
+			})
+		}
 	}
 }
 
-func TestReadRequestBodyWithoutSizeLimit(t *testing.T) {
+func TestReadRequestBodyWithinSizeLimit(t *testing.T) {
 	for _, unknownLength := range []bool{false, true} {
 		for _, size := range []int{0, 2 << 20, (2 << 20) + 1, (8 << 20) + 1} {
 			t.Run(fmt.Sprintf("unknown=%v/bytes=%d", unknownLength, size), func(t *testing.T) {
@@ -164,8 +165,8 @@ func TestRequestHandlersValidateLargeBodies(t *testing.T) {
 		{"responses", s.responsesCompletions, (2 << 20) + 1, http.StatusBadRequest},
 		{"anthropic", s.anthropicMessages, (2 << 20) + 1, http.StatusBadRequest},
 		{"jev", s.jevCompletions, (2 << 20) + 1, http.StatusUnprocessableEntity},
-		{"images/generations", s.imageGenerations, (50 << 20) + 1, http.StatusBadRequest},
-		{"images/edits", s.imageEdits, (50 << 20) + 1, http.StatusBadRequest},
+		{"images/generations", s.imageGenerations, (50 << 20) + 1, http.StatusRequestEntityTooLarge},
+		{"images/edits", s.imageEdits, (50 << 20) + 1, http.StatusRequestEntityTooLarge},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			for _, unknownLength := range []bool{false, true} {
@@ -177,7 +178,7 @@ func TestRequestHandlersValidateLargeBodies(t *testing.T) {
 				}
 				w := httptest.NewRecorder()
 				tc.handler(w, r)
-				if w.Code != tc.status || !strings.Contains(w.Body.String(), "invalid_request") {
+				if w.Code != tc.status {
 					t.Fatalf("unknown=%v status=%d body=%s", unknownLength, w.Code, w.Body)
 				}
 			}
@@ -185,30 +186,18 @@ func TestRequestHandlersValidateLargeBodies(t *testing.T) {
 	}
 }
 
-func TestConsoleSecurityAcceptsLargeRequestBodies(t *testing.T) {
-	want := strings.Repeat("x", (8<<20)+1)
+func TestDecodeEnforcesBodyLimit(t *testing.T) {
 	for _, unknownLength := range []bool{false, true} {
-		t.Run(fmt.Sprintf("unknown=%v", unknownLength), func(t *testing.T) {
-			called := false
-			handler := (&Service{}).consoleSecurity(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				called = true
-				body, err := io.ReadAll(r.Body)
-				if err != nil || string(body) != want {
-					t.Errorf("forwarded body length=%d want=%d err=%v", len(body), len(want), err)
-				}
-				w.WriteHeader(http.StatusNoContent)
-			}))
-			r := httptest.NewRequest(http.MethodPost, "/admin/channels", strings.NewReader(want))
-			r.Header.Set("X-Xinghai-Request", "1")
-			if unknownLength {
-				r.ContentLength = -1
-			}
-			w := httptest.NewRecorder()
-			handler.ServeHTTP(w, r)
-			if !called || w.Code != http.StatusNoContent {
-				t.Fatalf("called=%v status=%d body=%s", called, w.Code, w.Body)
-			}
-		})
+		r := httptest.NewRequest(http.MethodPost, "/admin/channels", strings.NewReader(strings.Repeat(" ", defaultConsoleBodyMaxBytes)+`{}`))
+		if unknownLength {
+			r.ContentLength = -1
+		}
+		var payload map[string]any
+		if err := decode(r, &payload); err == nil {
+			t.Fatalf("unknownLength=%v accepted an oversized JSON body", unknownLength)
+		} else if status, code, _ := requestBodyError(err); status != http.StatusRequestEntityTooLarge || code != "request_too_large" {
+			t.Fatalf("unexpected error mapping: %d %s (%v)", status, code, err)
+		}
 	}
 }
 
@@ -270,7 +259,7 @@ func TestRequestBodySlowRead(t *testing.T) {
 		status int
 	}{
 		{"slow-body", 8, http.StatusRequestTimeout},
-		{"large-length-without-body", (50 << 20) + 1, http.StatusRequestTimeout},
+		{"large-length-without-body", (50 << 20) + 1, http.StatusRequestEntityTooLarge},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

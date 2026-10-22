@@ -54,6 +54,7 @@ export default {
   confirmPassword: 'Confirm new password',
   passwordsMismatch: 'Passwords do not match',
   resetInvalidToken: 'This link is invalid or has expired. Request a new one.',
+  resetRevocationNotice: 'Resetting revokes all sessions and API keys. Accounts with previously unverified email also lose old OAuth connections. Sign in again and create replacement keys.',
   resetSuccess: 'Password reset. Sign in with your new password.',
 
   reauthenticationTitle: 'Confirm your identity',

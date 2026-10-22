@@ -134,24 +134,23 @@ func TestValidUpstreamURL(t *testing.T) {
 	}
 }
 
-func TestHTTPClientFollowsPlainHTTPRedirects(t *testing.T) {
-	// Redirect to another loopback HTTP server should succeed; non-loopback
-	// HTTP targets are covered by TestValidateRedirectURL (no network here).
-	safeTarget := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func TestHTTPClientDoesNotFollowRedirects(t *testing.T) {
+	targetCalls := 0
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetCalls++
 		w.WriteHeader(http.StatusNoContent)
 	}))
-	defer safeTarget.Close()
-	safeRedirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, safeTarget.URL, http.StatusFound)
+	defer target.Close()
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusFound)
 	}))
-	defer safeRedirect.Close()
-	client := newHTTPClient(5 * time.Second)
-	resp, err := client.Get(safeRedirect.URL)
+	defer redirect.Close()
+	response, err := newHTTPClient(5 * time.Second).Get(redirect.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusNoContent {
-		t.Fatalf("status = %d", resp.StatusCode)
+	response.Body.Close()
+	if response.StatusCode != http.StatusFound || targetCalls != 0 {
+		t.Fatalf("status=%d target calls=%d", response.StatusCode, targetCalls)
 	}
 }

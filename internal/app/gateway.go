@@ -447,7 +447,7 @@ func (s *Service) models(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) readGatewayBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
-	return readRequestBody(w, r, s.requestBodyTimeout(r.Context()))
+	return readRequestBodyLimited(w, r, s.requestBodyTimeout(r.Context()), positiveRequestLimit(s.cfg.GatewayMaxBodyBytes, defaultGatewayBodyMaxBytes))
 }
 
 func (s *Service) chatCompletions(w http.ResponseWriter, r *http.Request) {
@@ -1586,40 +1586,23 @@ func (s *Service) checkQuota(ctx context.Context, key keyContext, model string) 
 		return nil
 	}
 	rows, err := s.db.Query(ctx, `with matching_limits as (
-		select max_requests,max_tokens,max_cost,"window"
+		select user_id,api_key_id,model,max_requests,max_tokens,max_cost,"window"
 		from quota_limits
 		where (user_id=$1 or user_id is null)
 		  and (api_key_id=$2 or api_key_id is null)
 		  and (model=$3 or model is null)
 		  and (max_requests is not null or max_tokens is not null or max_cost is not null)
-	), scan_bounds as (
-		select min(case "window"
-			when 'total' then '-infinity'::timestamptz
-			else now() - ('1 '||"window")::interval
-		end) as cutoff from matching_limits
-	), usage as materialized (
-		select
-			count(*) as total_requests,
-			coalesce(sum(rl.total_tokens),0) as total_tokens,
-			coalesce(sum(ur.cost),0) as total_cost,
-			count(*) filter (where rl.created_at >= now() - interval '1 minute') as minute_requests,
-			coalesce(sum(rl.total_tokens) filter (where rl.created_at >= now() - interval '1 minute'),0) as minute_tokens,
-			coalesce(sum(ur.cost) filter (where rl.created_at >= now() - interval '1 minute'),0) as minute_cost,
-			count(*) filter (where rl.created_at >= now() - interval '1 day') as day_requests,
-			coalesce(sum(rl.total_tokens) filter (where rl.created_at >= now() - interval '1 day'),0) as day_tokens,
-			coalesce(sum(ur.cost) filter (where rl.created_at >= now() - interval '1 day'),0) as day_cost,
-			count(*) filter (where rl.created_at >= now() - interval '1 month') as month_requests,
-			coalesce(sum(rl.total_tokens) filter (where rl.created_at >= now() - interval '1 month'),0) as month_tokens,
-			coalesce(sum(ur.cost) filter (where rl.created_at >= now() - interval '1 month'),0) as month_cost
+	)
+	select q.max_requests,q.max_tokens,q.max_cost,u.requests,u.tokens,u.cost
+	from matching_limits q
+	cross join lateral (
+		select count(*) as requests,coalesce(sum(rl.total_tokens),0) as tokens,coalesce(sum(ur.cost),0) as cost
 		from request_logs rl
 		left join usage_records ur on ur.request_id=rl.request_id
-		where rl.api_key_id=$2 and rl.created_at >= (select cutoff from scan_bounds)
-	)
-	select q.max_requests,q.max_tokens,q.max_cost,
-		case q."window" when 'minute' then u.minute_requests when 'day' then u.day_requests when 'month' then u.month_requests else u.total_requests end,
-		case q."window" when 'minute' then u.minute_tokens when 'day' then u.day_tokens when 'month' then u.month_tokens else u.total_tokens end,
-		case q."window" when 'minute' then u.minute_cost when 'day' then u.day_cost when 'month' then u.month_cost else u.total_cost end
-	from matching_limits q cross join usage u`, key.userID, key.keyID, model)
+		where case when q.api_key_id is null and q.user_id is not null then rl.user_id=$1 else rl.api_key_id=$2 end
+		  and (q.model is null or rl.model=q.model)
+		  and rl.created_at >= case when q."window"='total' then '-infinity'::timestamptz else now() - ('1 '||q."window")::interval end
+	) u`, key.userID, key.keyID, model)
 	if err != nil {
 		return err
 	}
@@ -2093,13 +2076,17 @@ func streamResponseDirect(w http.ResponseWriter, resp *http.Response) (streamSta
 	}
 	var st streamStats
 	reader := bufio.NewReader(resp.Body)
+	var line []byte
 	for {
-		line, err := reader.ReadBytes('\n')
+		part, err := reader.ReadSlice('\n')
+		if len(line)+len(part) > 2<<20 {
+			return st, fmt.Errorf("upstream SSE line exceeds size limit")
+		}
+		line = append(line, part...)
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
 		if len(line) > 0 {
-			if _, writeErr := w.Write(line); writeErr != nil {
-				return st, writeErr
-			}
-			flusher.Flush()
 			trimmed := strings.TrimSpace(string(line))
 			if strings.HasPrefix(trimmed, "data:") {
 				data := strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
@@ -2107,6 +2094,11 @@ func streamResponseDirect(w http.ResponseWriter, resp *http.Response) (streamSta
 					parseSSEUsage([]byte(data), &st)
 				}
 			}
+			if _, writeErr := w.Write(line); writeErr != nil {
+				return st, writeErr
+			}
+			flusher.Flush()
+			line = line[:0]
 		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {

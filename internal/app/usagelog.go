@@ -50,8 +50,8 @@ func (s *Service) listUsageLogs(w http.ResponseWriter, r *http.Request) {
 		argIdx++
 	}
 	if model != "" {
-		where = append(where, "rl.model=$"+strconv.Itoa(argIdx))
-		args = append(args, model)
+		where = append(where, "rl.model ilike $"+strconv.Itoa(argIdx)+likeEscapeClause)
+		args = append(args, "%"+escapeLikePattern(model)+"%")
 		argIdx++
 	}
 	if channelID != "" {
@@ -156,6 +156,17 @@ func (s *Service) listUsageLogs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"data": data, "total": total, "page": page, "page_size": pageSize})
 }
 
+func escapeLikePattern(value string) string {
+	value = strings.ReplaceAll(value, `\`, `\\`)
+	value = strings.ReplaceAll(value, `%`, `\%`)
+	return strings.ReplaceAll(value, `_`, `\_`)
+}
+
+// likeEscapeClause pins the ESCAPE character used with escapeLikePattern.
+// It must stay E'\\': inside a PostgreSQL E-string \' is an escaped quote, so
+// E'\' leaves the literal unterminated and every filtered query fails.
+const likeEscapeClause = ` escape E'\\'`
+
 func (s *Service) usageStats(w http.ResponseWriter, r *http.Request) {
 	if rawGroupBy := strings.TrimSpace(r.URL.Query().Get("group_by")); rawGroupBy != "" {
 		groupBy := parseUsageStatsDimension(rawGroupBy)
@@ -204,8 +215,8 @@ func (s *Service) usageStats(w http.ResponseWriter, r *http.Request) {
 		argIdx++
 	}
 	if model != "" {
-		where = append(where, "rl.model=$"+strconv.Itoa(argIdx))
-		args = append(args, model)
+		where = append(where, "rl.model ilike $"+strconv.Itoa(argIdx)+likeEscapeClause)
+		args = append(args, "%"+escapeLikePattern(model)+"%")
 		argIdx++
 	}
 	if channelID != "" {

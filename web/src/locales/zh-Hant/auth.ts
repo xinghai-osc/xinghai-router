@@ -54,6 +54,7 @@ export default {
   confirmPassword: '確認新密碼',
   passwordsMismatch: '兩次輸入的密碼不一致',
   resetInvalidToken: '鏈接無效或已過期，請重新申請',
+  resetRevocationNotice: '重置後所有工作階段與 API Key 將被撤銷。先前未驗證郵箱的帳戶也會解除舊 OAuth 綁定，請重新登入並建立金鑰。',
   resetSuccess: '密碼已重置，請使用新密碼登錄',
 
   reauthenticationTitle: '確認你的身分',
