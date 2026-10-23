@@ -28,6 +28,7 @@ export default {
   heroBodyTail: 'switching models means changing one field — never your code.',
   heroPrimary: 'Start free',
   heroSecondary: 'Browse models',
+  homepageVideo: 'Homepage video',
 
   featuresEyebrow: 'Why this gateway',
   featuresTitle: 'Built for production',

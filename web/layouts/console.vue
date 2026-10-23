@@ -43,7 +43,7 @@ watch([() => account.value?.id, () => account.value?.must_change_password], () =
   if (import.meta.client && account.value && !account.value.must_change_password) void loadWorkspaces()
 }, { immediate: true })
 
-const booting = computed(() => !mounted.value || loading.value || (!account.value && !error.value) || (Boolean(account.value) && !mustChangePassword.value && !workspaceReady.value && !workspaceError.value))
+const booting = computed(() => !mounted.value || (loading.value && !account.value) || (!account.value && !error.value) || (Boolean(account.value) && !mustChangePassword.value && !workspaceReady.value && !workspaceError.value))
 
 // The backend answers 403 password_change_required on every route except
 // /account/me, /account/password and /auth/logout, so nothing else is usable
@@ -62,16 +62,16 @@ watchEffect(() => {
 <template>
   <div :class="['console-shell min-h-dvh bg-paper lg:grid', navCollapsed ? 'lg:grid-cols-[4.5rem_minmax(0,1fr)]' : 'lg:grid-cols-[16rem_minmax(0,1fr)]']">
     <a href="#console-content" class="sr-only z-50 rounded-control bg-clay px-4 py-2 text-sm text-clay-ink focus:not-sr-only focus:fixed focus:top-2 focus:left-2">{{ t('common.skipToContent') }}</a>
-    <aside class="sticky top-0 hidden h-dvh bg-paper lg:block">
+    <aside class="sticky top-0 hidden h-dvh border-r border-line bg-surface lg:block">
       <ConsoleSidebar :can="canNavigate" :site-name="settings.name" :icon-url="settings.icon_url" :collapsed="navCollapsed" collapsible @toggle="toggleSidebar" />
     </aside>
 
     <DialogRoot v-model:open="navOpen">
       <DialogPortal>
         <DialogOverlay class="animate-fade fixed inset-0 z-50 bg-[var(--overlay)]" />
-        <DialogContent class="fixed inset-y-0 left-0 z-50 w-72 max-w-[85vw] border-r border-line bg-surface shadow-pop focus:outline-none" :aria-describedby="undefined">
+        <DialogContent id="console-mobile-nav" class="fixed inset-y-0 left-0 z-50 w-80 max-w-[calc(100vw-2rem)] border-r border-line bg-surface shadow-pop focus:outline-none" :aria-describedby="undefined">
           <DialogTitle class="sr-only">{{ t('common.menu') }}</DialogTitle>
-          <DialogClose class="absolute top-4 right-3 flex size-8 items-center justify-center rounded-control bg-surface text-muted transition-colors duration-150 ease-out hover:bg-sunken hover:text-ink" :aria-label="t('common.close')">
+          <DialogClose class="absolute top-4 right-3 z-10 flex size-10 items-center justify-center rounded-control bg-surface text-muted transition-colors duration-150 ease-out hover:bg-sunken hover:text-ink" :aria-label="t('common.close')">
             <X class="size-4" aria-hidden="true" />
           </DialogClose>
           <ConsoleSidebar :can="canNavigate" :site-name="settings.name" :icon-url="settings.icon_url" class="[&>div:first-child]:pr-14" />
@@ -79,15 +79,15 @@ watchEffect(() => {
       </DialogPortal>
     </DialogRoot>
 
-    <div class="console-workspace flex min-w-0 flex-col bg-sunken/40 lg:my-3 lg:mr-3 lg:rounded-[1.75rem] lg:border lg:border-line">
-      <ConsoleHeader @open-nav="navOpen = true">
+    <div class="console-workspace flex min-w-0 flex-col bg-paper">
+      <ConsoleHeader :nav-open="navOpen" @open-nav="navOpen = true">
         <template #account>
           <ConsoleAccountMenu v-if="mounted && account" />
           <UiSkeleton v-else class="size-8 rounded-full" />
         </template>
       </ConsoleHeader>
 
-      <main id="console-content" tabindex="-1" class="mx-auto min-w-0 w-full max-w-[var(--layout-console-width)] flex-1 space-y-6 px-4 py-6 outline-none sm:px-6 lg:px-8 lg:py-8 xl:px-10">
+      <main id="console-content" tabindex="-1" class="mx-auto min-w-0 w-full max-w-[var(--layout-console-width)] flex-1 scroll-mt-24 space-y-6 px-4 py-6 outline-none sm:px-6 lg:px-8 lg:py-8 xl:px-10">
         <UiAlert v-if="mustChangePassword" tone="warn" :title="t('console.mustChangePasswordTitle')">
           {{ t('console.mustChangePasswordBody') }}
         </UiAlert>

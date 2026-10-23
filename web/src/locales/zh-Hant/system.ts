@@ -262,6 +262,8 @@ export default {
   basicSection: '基本信息',
   siteNameHint: '顯示在導航欄、瀏覽器標題與郵件中的名稱。',
   siteIconHint: '圖標的圖片地址，建議使用正方形 PNG 或 SVG。',
+  homepageVideo: '首頁影片',
+  homepageVideoHint: '填寫可公開存取的影片檔案 URL（MP4 或 WebM）；留空則隱藏首頁影片。',
   contactEmail: '協議聯繫方式',
   contactEmailHint: '顯示在服務條款與隱私政策中的聯繫郵箱；留空則使用預設聯繫方式。',
   iconPreview: '圖標預覽',

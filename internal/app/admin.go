@@ -265,11 +265,8 @@ func (s *Service) upsertPricing(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_request", "invalid pricing rule")
 		return
 	}
-	if in.Multiplier == 0 {
-		in.Multiplier = 1
-	}
 	if !validPricingMultiplier(in.Multiplier) {
-		writeError(w, 400, "invalid_request", "multiplier must be between 0 exclusive and 1000")
+		writeError(w, 400, "invalid_request", "multiplier must be between 0 inclusive and 1000")
 		return
 	}
 	var dimensions any
@@ -1786,7 +1783,7 @@ func validQuotaCost(value *float64) bool {
 }
 
 func validPricingMultiplier(value float64) bool {
-	return validPositiveFinite(value) && value <= maxPricingMultiplier
+	return validNonNegativeFinite(value) && value <= maxPricingMultiplier
 }
 
 func validPricingRate(value float64) bool {
@@ -1864,6 +1861,13 @@ func validUpstreamPath(path string) bool {
 		}
 	}
 	return true
+}
+
+func channelUpstreamPath(provider, path string) string {
+	if provider != "custom" {
+		return ""
+	}
+	return path
 }
 
 func validChannelPriority(priority int) bool {
@@ -2396,6 +2400,7 @@ func (s *Service) createChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.UpstreamPath = strings.TrimSpace(in.UpstreamPath)
+	in.UpstreamPath = channelUpstreamPath(in.Provider, in.UpstreamPath)
 	if in.UpstreamPath != "" && !validUpstreamPath(in.UpstreamPath) {
 		writeError(w, 400, "invalid_request", "upstream_path must be an absolute API path without a query or fragment")
 		return
@@ -2558,6 +2563,7 @@ func (s *Service) copyChannel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "not_found", "channel not found")
 		return
 	}
+	upstreamPath = channelUpstreamPath(provider, upstreamPath)
 	apiKey, err = s.copyChannelCredential(apiKey)
 	if err != nil {
 		writeError(w, 500, "internal_error", "could not copy channel credential")
@@ -2727,6 +2733,7 @@ func (s *Service) updateChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.UpstreamPath = strings.TrimSpace(in.UpstreamPath)
+	in.UpstreamPath = channelUpstreamPath(in.Provider, in.UpstreamPath)
 	if in.UpstreamPath != "" && !validUpstreamPath(in.UpstreamPath) {
 		writeError(w, 400, "invalid_request", "upstream_path must be an absolute API path without a query or fragment")
 		return

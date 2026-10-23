@@ -98,6 +98,8 @@ export default {
   time: '時間',
   email: '郵箱',
   groups: '分組',
+  expandSubscriptionGroups: '展開{name}的等級分組',
+  collapseSubscriptionGroups: '收起{name}的等級分組',
   balance: '餘額',
 
   adminOrdersLead: '查看全站充值與訂閱訂單，並識別訂單發起人。',

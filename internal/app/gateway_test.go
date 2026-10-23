@@ -661,8 +661,11 @@ func TestUsageCostAndClamp(t *testing.T) {
 	if got := usageCost(1_000_000, 0, 1_000_000, 1, 0.5, 2, 2, 1.5); got != 9 {
 		t.Fatalf("usageCost with multipliers = %v, want 9", got)
 	}
-	if got := usageCost(100, 0, 1, 1, 0.5, 1, 0, 0); got != usageCost(100, 0, 1, 1, 0.5, 1, 1, 1) {
-		t.Fatal("zero multipliers must fall back to 1")
+	if got := usageCost(100, 0, 1, 1, 0.5, 1, 0, 1); got != 0 {
+		t.Fatalf("zero model multiplier cost = %v, want 0", got)
+	}
+	if got := usageCost(100, 0, 1, 1, 0.5, 1, 1, 0); got != usageCost(100, 0, 1, 1, 0.5, 1, 1, 1) {
+		t.Fatal("zero group multiplier must continue falling back to 1")
 	}
 	if got := clampCostToHold(5, 3); got != 3 {
 		t.Fatalf("clamp = %v, want 3", got)

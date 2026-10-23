@@ -127,6 +127,8 @@ export default {
   overviewWelcomeFallback: '欢迎回来',
   overviewDescription: '查看账户资金与调用趋势，在这里管理你的 API 使用。',
   overviewWallet: '我的钱包',
+  overviewFundsTitle: '账户资金',
+  overviewUsageTitle: '本月用量',
   overviewStats: '账户与本月用量统计',
   overviewRequestsHint: '本月累计请求次数',
   overviewTokensHint: '输入与输出 Tokens 合计',

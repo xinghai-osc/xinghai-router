@@ -20,7 +20,7 @@ const VARIANTS: Record<Variant, string> = {
   primary: 'glass-control border border-clay/70 text-clay-ink hover:bg-clay-hover active:translate-y-px',
   secondary: 'glass-control border border-line-strong text-ink hover:bg-sunken active:translate-y-px',
   ghost: 'glass-control border border-line/50 text-muted hover:bg-sunken hover:text-ink',
-  danger: 'glass-control border border-danger/70 text-white hover:opacity-90 active:translate-y-px',
+  danger: 'glass-control border border-danger/25 text-danger hover:bg-danger/15 active:translate-y-px',
   link: 'text-clay underline-offset-4 hover:underline',
 }
 
@@ -33,6 +33,12 @@ const SIZES: Record<Size, string> = {
 
 const tag = computed(() => (props.to ? resolveComponent('NuxtLink') : props.href ? 'a' : 'button'))
 const isDisabled = computed(() => props.disabled || props.loading)
+
+function guardActivation(event: MouseEvent) {
+  if (!isDisabled.value) return
+  event.preventDefault()
+  event.stopImmediatePropagation()
+}
 </script>
 
 <template>
@@ -44,41 +50,40 @@ const isDisabled = computed(() => props.disabled || props.loading)
     :disabled="tag === 'button' ? isDisabled : undefined"
     :aria-busy="loading || undefined"
     :aria-disabled="isDisabled || undefined"
+    :tabindex="isDisabled && (to || href) ? -1 : undefined"
     :class="cn(
       `ui-button ui-button-${variant}`,
-       'relative isolate inline-flex shrink-0 items-center overflow-hidden rounded-full font-medium whitespace-nowrap transition-[background-color,color,opacity,transform] duration-150 ease-out',
+      'relative isolate inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full font-medium whitespace-nowrap transition-[background-color,color,opacity,transform] duration-150 ease-out motion-reduce:transition-none',
       'disabled:pointer-events-none disabled:opacity-45 aria-disabled:pointer-events-none aria-disabled:opacity-45',
       VARIANTS[variant],
       SIZES[size],
-      block && 'w-full justify-center',
+      block && 'w-full',
     )"
+    @click.capture="guardActivation"
+    @auxclick.capture="guardActivation"
   >
     <span class="relative z-10 inline-flex items-center gap-2">
-      <Loader2 v-if="loading" class="size-4 animate-spin" />
+      <Loader2 v-if="loading" class="size-4 shrink-0 animate-spin" aria-hidden="true" />
       <slot />
     </span>
   </component>
 </template>
 
 <style scoped>
-.ui-button-primary,
-.ui-button-danger {
-  --glass-highlight: color-mix(in srgb, var(--shimmer-highlight) 20%, transparent);
-}
-
 .ui-button-primary {
   --glass-fill: var(--clay);
   --glass-solid: var(--clay);
   --glass-opacity: 94%;
+  --glass-highlight: color-mix(in srgb, var(--shimmer-highlight) 20%, transparent);
 }
 
 .ui-button-danger {
-  --glass-fill: var(--danger);
-  --glass-solid: var(--danger);
+  --glass-fill: var(--danger-soft);
+  --glass-solid: var(--danger-soft);
   --glass-opacity: 94%;
 }
 
-.ui-button::after {
+.ui-button:not(.ui-button-link)::after {
   content: '';
   position: absolute;
   z-index: 0;
@@ -94,9 +99,11 @@ const isDisabled = computed(() => props.disabled || props.loading)
   transition: opacity 150ms ease-out, transform 150ms ease-out;
 }
 
-.ui-button:hover::after {
-  opacity: 0.08;
-  transform: translate(-50%, -50%) scale(1);
+@media (hover: hover) {
+  .ui-button:hover::after {
+    opacity: 0.08;
+    transform: translate(-50%, -50%) scale(1);
+  }
 }
 
 .ui-button:disabled::after,

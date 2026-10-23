@@ -58,15 +58,15 @@ const { copy, copied } = useClipboard({ copiedDuring: 1600 })
 </script>
 
 <template>
-  <TabsRoot v-model="active" class="min-w-0 overflow-hidden rounded-card border border-line bg-surface text-left">
-    <div class="flex items-center justify-between gap-3 border-b border-line px-4 py-3">
+  <TabsRoot v-model="active" class="min-w-0 overflow-hidden rounded-control border border-line bg-sunken/50 text-left">
+    <div class="flex items-center justify-between gap-3 border-b border-line bg-surface px-4 py-2">
       <span class="inline-flex items-center gap-2 text-2xs font-medium text-muted">
         <Terminal class="size-3.5 text-clay" aria-hidden="true" />
         {{ t('site.codeTerminal') }}
       </span>
       <button
         type="button"
-        class="inline-flex items-center gap-1.5 rounded-control px-2 py-1 text-2xs text-muted transition-colors duration-150 ease-out hover:bg-sunken hover:text-ink"
+        class="inline-flex min-h-11 items-center gap-2 rounded-control px-3 text-xs font-medium text-muted transition-colors duration-150 ease-out hover:bg-sunken hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-clay"
         :aria-label="copied ? t('common.copied') : t('site.codeCopy')"
         @click="copy(current.code)"
       >
@@ -76,14 +76,14 @@ const { copy, copied } = useClipboard({ copiedDuring: 1600 })
       </button>
     </div>
 
-    <TabsList class="flex gap-5 overflow-x-auto border-b border-line bg-sunken/40 px-4" :aria-label="t('site.codeLanguage')">
+    <TabsList class="flex gap-1 overflow-x-auto border-b border-line bg-surface px-2" :aria-label="t('site.codeLanguage')">
       <TabsTrigger
         v-for="sample in samples"
         :id="`${sampleId}-${sample.value}-tab`"
         :key="sample.value"
         :value="sample.value"
         :aria-controls="`${sampleId}-${sample.value}-panel`"
-        class="shrink-0 border-b-2 border-transparent py-3 text-xs font-medium text-muted transition-colors duration-150 ease-out hover:text-ink data-[state=active]:border-clay data-[state=active]:text-clay"
+        class="min-h-11 shrink-0 border-b-2 border-transparent px-3 py-3 text-xs font-medium text-muted transition-colors duration-150 ease-out hover:bg-sunken hover:text-ink focus-visible:outline-2 focus-visible:-outline-offset-4 focus-visible:outline-clay data-[state=active]:border-clay data-[state=active]:text-clay"
       >{{ sample.label }}</TabsTrigger>
     </TabsList>
 
@@ -95,7 +95,7 @@ const { copy, copied } = useClipboard({ copiedDuring: 1600 })
       :aria-labelledby="`${sampleId}-${sample.value}-tab`"
       class="min-w-0"
     >
-      <pre class="min-h-[17rem] overflow-x-auto py-5 pr-5 font-mono text-[11px] leading-[1.85] text-ink sm:text-xs"><code><span v-for="(line, index) in sample.code.split('\n')" :key="index" class="block min-h-[1.85em]"><span class="inline-block w-10 select-none pr-3 text-right text-faint/60" aria-hidden="true">{{ index + 1 }}</span>{{ line }}</span></code></pre>
+      <pre tabindex="0" :aria-label="t('site.codeTerminal')" class="min-h-[19rem] overflow-x-auto py-5 pr-5 font-mono text-xs leading-[1.85] text-ink focus-visible:outline-2 focus-visible:-outline-offset-4 focus-visible:outline-clay"><code><span v-for="(line, index) in sample.code.split('\n')" :key="index" class="block min-h-[1.85em]"><span class="inline-block w-10 select-none pr-3 text-right text-faint" aria-hidden="true">{{ index + 1 }}</span>{{ line }}</span></code></pre>
     </TabsContent>
   </TabsRoot>
 </template>

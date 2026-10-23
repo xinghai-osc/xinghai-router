@@ -18,7 +18,7 @@ withDefaults(defineProps<{
         :align="align"
         :side="side"
         :side-offset="6"
-        class="glass-control animate-pop z-50 min-w-44 overflow-hidden rounded-2xl border border-line p-1 shadow-pop [--glass-opacity:90%]"
+        class="glass-control animate-pop z-50 max-h-[var(--reka-dropdown-menu-content-available-height)] min-w-44 max-w-[calc(100vw-2rem)] overflow-y-auto overscroll-contain rounded-2xl border border-line p-1 shadow-pop [--glass-opacity:90%] motion-reduce:animate-none"
       >
         <slot />
       </DropdownMenuContent>

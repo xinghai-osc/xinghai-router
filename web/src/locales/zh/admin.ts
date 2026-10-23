@@ -106,6 +106,8 @@ export default {
   time: '时间',
   email: '邮箱',
   groups: '分组',
+  expandSubscriptionGroups: '展开{name}的等级分组',
+  collapseSubscriptionGroups: '收起{name}的等级分组',
   balance: '余额',
 
   adminOrdersLead: '查看全站充值与订阅订单，并识别订单发起人。',
@@ -364,6 +366,7 @@ export default {
   apiKeyHintEdit: '留空表示不修改现有密钥；重新填写会替换全部密钥。',
   apiKeyHintChannelCreate: '可一次粘贴多个密钥，每行一个；多密钥渠道会自动轮换。',
   apiKeyHintChannelEdit: '留空则保留已保存的密钥；填写密钥后，保存时会整体替换密钥列表。',
+  apiKeySavedCount: '已保存 {count} 个启用密钥，留空会继续使用。',
   apiKeyRequired: '请填写密钥',
   apiKeysPlaceholder: 'sk-xxx1\nsk-xxx2',
   apiKeyInvalid: '密钥长度须为 1-4096 个字符',

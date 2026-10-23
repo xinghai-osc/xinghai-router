@@ -303,6 +303,26 @@ func TestCalculateBillServiceTierPrices(t *testing.T) {
 	}
 }
 
+func TestCalculateBillZeroMultiplierIsFree(t *testing.T) {
+	pricing := billingTestPricing()
+	pricing.multiplier = 0
+	pricing.serviceTiers = map[string]ServiceTierPrice{
+		"fast": {InputPerMillion: 5, CachedInputPerMillion: 1, OutputPerMillion: 10},
+	}
+	facts := UsageFacts{InputTokens: 1_000_000, CacheReadTokens: 1_000_000, OutputTokens: 1_000_000}
+	for _, tier := range []string{"", "fast"} {
+		pricing.serviceTier = tier
+		snapshot, err := calculateBill(facts, pricing, 1)
+		if err != nil || snapshot.Amount != "0.00000000" || snapshot.Cost != 0 {
+			t.Fatalf("service tier %q with zero multiplier = %+v, %v", tier, snapshot, err)
+		}
+		recomputed, err := snapshot.Recompute()
+		if err != nil || recomputed != "0.00000000" {
+			t.Fatalf("service tier %q recompute = %q, %v", tier, recomputed, err)
+		}
+	}
+}
+
 func TestParseDimensionPricesValidation(t *testing.T) {
 	for _, raw := range []string{
 		`null`, `[]`, `{} {}`, `{"unknown":1}`, `{"tool_per_call":-1}`,

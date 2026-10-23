@@ -23,6 +23,7 @@ const EMPTY: AdminSiteSettings = {
   name: '',
   icon_url: '',
   announcement: '',
+  homepage_video_url: '',
   contact_email: '',
   api_base_urls: [],
   auto_disable_failed_channels: false,
@@ -60,6 +61,7 @@ const form = reactive({
   name: '',
   icon_url: '',
   announcement: '',
+  homepage_video_url: '',
   contact_email: '',
   auto_disable_failed_channels: false,
   api_base_urls: '',
@@ -104,6 +106,7 @@ watch(data, (next) => {
   form.name = next.name
   form.icon_url = next.icon_url
   form.announcement = next.announcement
+  form.homepage_video_url = next.homepage_video_url ?? ''
   form.contact_email = next.contact_email
   form.api_base_urls = (next.api_base_urls ?? []).join('\n')
   form.auto_disable_failed_channels = next.auto_disable_failed_channels
@@ -145,6 +148,7 @@ async function save() {
     name: form.name.trim(),
     icon_url: form.icon_url.trim(),
     announcement: form.announcement.trim(),
+    homepage_video_url: form.homepage_video_url.trim(),
     contact_email: form.contact_email.trim(),
     api_base_urls: form.api_base_urls.split(/\r?\n/),
     auto_disable_failed_channels: form.auto_disable_failed_channels,
@@ -232,6 +236,10 @@ const featuredModelOptions = computed(() => [
 
               <UiField :label="t('system.announcement')" :hint="t('system.announcementHint')" for="site-announcement" class="sm:col-span-2">
                 <UiTextarea id="site-announcement" v-model="form.announcement" :maxlength="2000" :rows="3" />
+              </UiField>
+
+              <UiField :label="t('system.homepageVideo')" :hint="t('system.homepageVideoHint')" for="homepage-video" class="sm:col-span-2">
+                <UiInput id="homepage-video" v-model="form.homepage_video_url" type="url" />
               </UiField>
 
               <UiField :label="t('system.contactEmail')" :hint="t('system.contactEmailHint')" for="contact-email">

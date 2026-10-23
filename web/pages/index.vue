@@ -24,6 +24,7 @@ usePageSeo({
 <template>
   <div>
     <SiteHero :model-count="models.length" />
+    <SiteVideo />
     <SiteFeatureGrid />
     <div ref="catalogTarget">
       <SiteModelWall :models="models" :loading="catalogLoading || !catalogStarted" :error="catalogError" @retry="loadCatalog(true)" />

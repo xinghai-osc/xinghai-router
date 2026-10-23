@@ -46,6 +46,7 @@ export default {
   loadFailed: '加载失败',
   actionFailed: '操作失败',
   sessionExpired: '登录状态已失效',
+  sessionEstablishmentFailed: '登录成功，但未能确认登录状态。请检查 HTTPS 和浏览器 Cookie 设置后重试。',
   saved: '已保存',
   deleted: '已删除',
   created: '已创建',

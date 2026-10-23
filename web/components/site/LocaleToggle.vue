@@ -9,7 +9,7 @@ const { locale, locales, t, setLocale } = useI18n()
     <template #trigger>
       <button
         type="button"
-        class="glass-control inline-flex size-9 items-center justify-center rounded-full border border-line/50 text-muted transition-colors duration-150 hover:bg-sunken hover:text-ink"
+        class="glass-control inline-flex size-10 shrink-0 items-center justify-center rounded-full border border-line/50 text-muted transition-colors duration-150 ease-out hover:bg-sunken hover:text-ink data-[state=open]:bg-sunken data-[state=open]:text-ink"
         :aria-label="t('common.language')"
       >
         <Languages class="size-[18px]" />

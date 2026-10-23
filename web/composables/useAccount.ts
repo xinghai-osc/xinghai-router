@@ -77,7 +77,7 @@ export function useAccount() {
   async function signIn() {
     clearSession()
     await loadAccount(true)
-    if (!account.value) throw new Error(error.value || t('common.sessionExpired'))
+    if (!account.value) throw new Error(error.value || t('common.sessionEstablishmentFailed'))
     await loadWorkspaces()
   }
 

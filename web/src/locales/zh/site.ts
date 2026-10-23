@@ -28,6 +28,7 @@ export default {
   heroBodyTail: '换模型只需改一个字段，不用改代码。',
   heroPrimary: '免费开始',
   heroSecondary: '浏览模型',
+  homepageVideo: '首页视频',
 
   featuresEyebrow: '为什么用它',
   featuresTitle: 'Built for production',

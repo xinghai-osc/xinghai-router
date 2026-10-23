@@ -46,6 +46,7 @@ export default {
   loadFailed: '加載失敗',
   actionFailed: '操作失敗',
   sessionExpired: '登錄狀態已失效',
+  sessionEstablishmentFailed: '登錄成功，但未能確認登錄狀態。請檢查 HTTPS 和瀏覽器 Cookie 設置後重試。',
   saved: '已保存',
   deleted: '已刪除',
   created: '已創建',

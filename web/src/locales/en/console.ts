@@ -127,6 +127,8 @@ export default {
   overviewWelcomeFallback: 'Welcome back',
   overviewDescription: 'Keep track of your balance and request activity, and manage your API usage in one place.',
   overviewWallet: 'My wallet',
+  overviewFundsTitle: 'Account balances',
+  overviewUsageTitle: 'This month',
   overviewStats: 'Account and monthly usage statistics',
   overviewRequestsHint: 'Total requests this month',
   overviewTokensHint: 'Input and output tokens combined',

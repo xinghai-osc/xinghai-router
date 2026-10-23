@@ -46,6 +46,7 @@ export default {
   loadFailed: 'Failed to load',
   actionFailed: 'Action failed',
   sessionExpired: 'Your session has expired',
+  sessionEstablishmentFailed: 'Sign-in succeeded, but the session could not be confirmed. Check HTTPS and browser cookie settings, then try again.',
   saved: 'Saved',
   deleted: 'Deleted',
   created: 'Created',

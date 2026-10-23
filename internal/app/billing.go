@@ -388,7 +388,7 @@ func (snapshot BillingSnapshot) validatePricing() error {
 	if !validCurrencyCode(prices.Currency) || snapshot.Exchange.Currency != prices.Currency || snapshot.Exchange.BaseCurrency != "CNY" || !validPositiveFinite(snapshot.Exchange.RateToBase) {
 		return fmt.Errorf("invalid billing exchange rate")
 	}
-	if !validPricingRate(prices.InputPerMillion) || !validPricingRate(prices.CachedInputPerMillion) || !validPricingRate(prices.OutputPerMillion) || !validPricingMultiplier(snapshot.Multipliers.Model) || !validNonNegativeFinite(snapshot.Multipliers.Group) {
+	if !validPricingRate(prices.InputPerMillion) || !validPricingRate(prices.CachedInputPerMillion) || !validPricingRate(prices.OutputPerMillion) || !validNonNegativeFinite(snapshot.Multipliers.Model) || !validNonNegativeFinite(snapshot.Multipliers.Group) {
 		return fmt.Errorf("invalid billing prices or multipliers")
 	}
 	if snapshot.Rounding.Mode != "HALF_UP" || snapshot.Rounding.Scale != billingScale {

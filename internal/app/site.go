@@ -164,11 +164,11 @@ func (s *Service) loadSystemConfig(ctx context.Context) systemConfig {
 type featuredCopy map[string]map[string]string
 
 func (s *Service) siteSettings(w http.ResponseWriter, r *http.Request) {
-	var name, iconURL, announcement, contactEmail, featuredModel string
+	var name, iconURL, announcement, contactEmail, featuredModel, homepageVideoURL string
 	var autoDisableFailedChannels, invitationsEnabled, whitelistEnabled, aliasBlocked, featuredEnabled bool
 	var featuredCopyJSON []byte
 	var apiBaseURLs string
-	if err := s.db.QueryRow(r.Context(), `select name,icon_url,announcement,contact_email,auto_disable_failed_channels,invitations_enabled,registration_email_whitelist_enabled,registration_email_alias_blocked,featured_enabled,featured_model,featured_copy,api_base_urls from site_settings where id=true`).Scan(&name, &iconURL, &announcement, &contactEmail, &autoDisableFailedChannels, &invitationsEnabled, &whitelistEnabled, &aliasBlocked, &featuredEnabled, &featuredModel, &featuredCopyJSON, &apiBaseURLs); err != nil {
+	if err := s.db.QueryRow(r.Context(), `select name,icon_url,announcement,contact_email,auto_disable_failed_channels,invitations_enabled,registration_email_whitelist_enabled,registration_email_alias_blocked,featured_enabled,featured_model,featured_copy,api_base_urls,homepage_video_url from site_settings where id=true`).Scan(&name, &iconURL, &announcement, &contactEmail, &autoDisableFailedChannels, &invitationsEnabled, &whitelistEnabled, &aliasBlocked, &featuredEnabled, &featuredModel, &featuredCopyJSON, &apiBaseURLs, &homepageVideoURL); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not load site settings")
 		return
 	}
@@ -195,11 +195,11 @@ func (s *Service) siteSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	probe := map[string]any{"enabled": risk.Enabled && risk.WebRTCEnabled, "stun_urls": risk.STUNURLs, "timeout_ms": 2000, "notice_version": "1"}
 	apiBaseURLList := splitAPIBaseURLs(apiBaseURLs)
-	writeJSON(w, http.StatusOK, map[string]any{"risk_probe": probe, "api_base_urls": apiBaseURLList, "name": name, "icon_url": iconURL, "announcement": announcement, "contact_email": contactEmail, "auto_disable_failed_channels": autoDisableFailedChannels, "invitations_enabled": invitationsEnabled, "registration_email_whitelist_enabled": whitelistEnabled, "registration_email_alias_blocked": aliasBlocked, "featured_enabled": featuredEnabled, "featured_model": featuredModel, "featured_copy": copy, "captcha_provider": sys.captchaProvider(), "geetest_enabled": sys.geetestEnabled(), "geetest_captcha_id": sys.GeetestCaptchaID, "corptcha_site_id": sys.CorptchaSiteID, "email_verification_enabled": sys.emailVerificationEnabled(), "oauth_providers": oauthProviders})
+	writeJSON(w, http.StatusOK, map[string]any{"risk_probe": probe, "api_base_urls": apiBaseURLList, "name": name, "icon_url": iconURL, "announcement": announcement, "homepage_video_url": homepageVideoURL, "contact_email": contactEmail, "auto_disable_failed_channels": autoDisableFailedChannels, "invitations_enabled": invitationsEnabled, "registration_email_whitelist_enabled": whitelistEnabled, "registration_email_alias_blocked": aliasBlocked, "featured_enabled": featuredEnabled, "featured_model": featuredModel, "featured_copy": copy, "captcha_provider": sys.captchaProvider(), "geetest_enabled": sys.geetestEnabled(), "geetest_captcha_id": sys.GeetestCaptchaID, "corptcha_site_id": sys.CorptchaSiteID, "email_verification_enabled": sys.emailVerificationEnabled(), "oauth_providers": oauthProviders})
 }
 
 func (s *Service) adminSiteSettings(w http.ResponseWriter, r *http.Request) {
-	var name, iconURL, announcement, contactEmail, featuredModel string
+	var name, iconURL, announcement, contactEmail, featuredModel, homepageVideoURL string
 	var autoDisableFailedChannels, invitationsEnabled, whitelistEnabled, aliasBlocked, featuredEnabled bool
 	var whitelist []string
 	var featuredCopyJSON []byte
@@ -207,7 +207,7 @@ func (s *Service) adminSiteSettings(w http.ResponseWriter, r *http.Request) {
 	var checkinMaxBonusDays int
 	var captchaProvider, geetestID, geetestKeyEnc, corptchaSiteID, corptchaSecretEnc, smtpHost, smtpPort, smtpUser, smtpPassEnc, smtpFrom, publicBaseURL, apiBaseURLs string
 	var apiBaseURLList []string
-	err := s.db.QueryRow(r.Context(), `select name,icon_url,announcement,contact_email,auto_disable_failed_channels,registration_email_whitelist_enabled,registration_email_whitelist,registration_email_alias_blocked,captcha_provider,geetest_captcha_id,geetest_captcha_key_encrypted,corptcha_site_id,corptcha_secret_encrypted,smtp_host,smtp_port,smtp_username,smtp_password_encrypted,smtp_from,public_base_url,api_base_urls,invitations_enabled,inviter_reward::text,invitee_reward::text,checkin_base_reward::text,checkin_streak_bonus::text,checkin_max_bonus_days,featured_enabled,featured_model,featured_copy from site_settings where id=true`).Scan(&name, &iconURL, &announcement, &contactEmail, &autoDisableFailedChannels, &whitelistEnabled, &whitelist, &aliasBlocked, &captchaProvider, &geetestID, &geetestKeyEnc, &corptchaSiteID, &corptchaSecretEnc, &smtpHost, &smtpPort, &smtpUser, &smtpPassEnc, &smtpFrom, &publicBaseURL, &apiBaseURLs, &invitationsEnabled, &inviterReward, &inviteeReward, &checkinBaseReward, &checkinStreakBonus, &checkinMaxBonusDays, &featuredEnabled, &featuredModel, &featuredCopyJSON)
+	err := s.db.QueryRow(r.Context(), `select name,icon_url,announcement,contact_email,auto_disable_failed_channels,registration_email_whitelist_enabled,registration_email_whitelist,registration_email_alias_blocked,captcha_provider,geetest_captcha_id,geetest_captcha_key_encrypted,corptcha_site_id,corptcha_secret_encrypted,smtp_host,smtp_port,smtp_username,smtp_password_encrypted,smtp_from,public_base_url,api_base_urls,invitations_enabled,inviter_reward::text,invitee_reward::text,checkin_base_reward::text,checkin_streak_bonus::text,checkin_max_bonus_days,featured_enabled,featured_model,featured_copy,homepage_video_url from site_settings where id=true`).Scan(&name, &iconURL, &announcement, &contactEmail, &autoDisableFailedChannels, &whitelistEnabled, &whitelist, &aliasBlocked, &captchaProvider, &geetestID, &geetestKeyEnc, &corptchaSiteID, &corptchaSecretEnc, &smtpHost, &smtpPort, &smtpUser, &smtpPassEnc, &smtpFrom, &publicBaseURL, &apiBaseURLs, &invitationsEnabled, &inviterReward, &inviteeReward, &checkinBaseReward, &checkinStreakBonus, &checkinMaxBonusDays, &featuredEnabled, &featuredModel, &featuredCopyJSON, &homepageVideoURL)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not load site settings")
 		return
@@ -217,7 +217,7 @@ func (s *Service) adminSiteSettings(w http.ResponseWriter, r *http.Request) {
 		copy = defaultFeaturedCopy()
 	}
 	apiBaseURLList = splitAPIBaseURLs(apiBaseURLs)
-	writeJSON(w, http.StatusOK, map[string]any{"name": name, "icon_url": iconURL, "announcement": announcement, "contact_email": contactEmail, "auto_disable_failed_channels": autoDisableFailedChannels, "featured_enabled": featuredEnabled, "featured_model": featuredModel, "featured_copy": copy, "captcha_provider": captchaProvider, "geetest_captcha_id": geetestID, "has_geetest_captcha_key": strings.TrimSpace(geetestKeyEnc) != "", "corptcha_site_id": corptchaSiteID, "has_corptcha_secret": strings.TrimSpace(corptchaSecretEnc) != "", "smtp_host": smtpHost, "smtp_port": smtpPort, "smtp_username": smtpUser, "has_smtp_password": strings.TrimSpace(smtpPassEnc) != "", "smtp_from": smtpFrom, "public_base_url": publicBaseURL, "api_base_urls": apiBaseURLList, "invitations_enabled": invitationsEnabled, "inviter_reward": inviterReward, "invitee_reward": inviteeReward, "registration_email_whitelist_enabled": whitelistEnabled, "registration_email_whitelist": whitelist, "registration_email_alias_blocked": aliasBlocked, "checkin_base_reward": checkinBaseReward, "checkin_streak_bonus": checkinStreakBonus, "checkin_max_bonus_days": checkinMaxBonusDays})
+	writeJSON(w, http.StatusOK, map[string]any{"name": name, "icon_url": iconURL, "announcement": announcement, "homepage_video_url": homepageVideoURL, "contact_email": contactEmail, "auto_disable_failed_channels": autoDisableFailedChannels, "featured_enabled": featuredEnabled, "featured_model": featuredModel, "featured_copy": copy, "captcha_provider": captchaProvider, "geetest_captcha_id": geetestID, "has_geetest_captcha_key": strings.TrimSpace(geetestKeyEnc) != "", "corptcha_site_id": corptchaSiteID, "has_corptcha_secret": strings.TrimSpace(corptchaSecretEnc) != "", "smtp_host": smtpHost, "smtp_port": smtpPort, "smtp_username": smtpUser, "has_smtp_password": strings.TrimSpace(smtpPassEnc) != "", "smtp_from": smtpFrom, "public_base_url": publicBaseURL, "api_base_urls": apiBaseURLList, "invitations_enabled": invitationsEnabled, "inviter_reward": inviterReward, "invitee_reward": inviteeReward, "registration_email_whitelist_enabled": whitelistEnabled, "registration_email_whitelist": whitelist, "registration_email_alias_blocked": aliasBlocked, "checkin_base_reward": checkinBaseReward, "checkin_streak_bonus": checkinStreakBonus, "checkin_max_bonus_days": checkinMaxBonusDays})
 }
 
 func (s *Service) updateSiteSettings(w http.ResponseWriter, r *http.Request) {
@@ -225,6 +225,7 @@ func (s *Service) updateSiteSettings(w http.ResponseWriter, r *http.Request) {
 		Name                      string          `json:"name"`
 		IconURL                   string          `json:"icon_url"`
 		Announcement              string          `json:"announcement"`
+		HomepageVideoURL           *string         `json:"homepage_video_url"`
 		ContactEmail              *string         `json:"contact_email"`
 		AutoDisableFailedChannels *bool           `json:"auto_disable_failed_channels"`
 		FeaturedEnabled           *bool           `json:"featured_enabled"`
@@ -259,6 +260,14 @@ func (s *Service) updateSiteSettings(w http.ResponseWriter, r *http.Request) {
 	in.Name = strings.TrimSpace(in.Name)
 	in.IconURL = strings.TrimSpace(in.IconURL)
 	in.Announcement = strings.TrimSpace(in.Announcement)
+	if in.HomepageVideoURL != nil {
+		videoURL := strings.TrimSpace(*in.HomepageVideoURL)
+		if len(videoURL) > maxSiteIconURLLen || (videoURL != "" && !validIconURL(videoURL)) {
+			writeError(w, http.StatusBadRequest, "invalid_request", "homepage_video_url must be a valid HTTPS URL, except for loopback HTTP URLs, and at most 2048 characters")
+			return
+		}
+		*in.HomepageVideoURL = videoURL
+	}
 	if in.FeaturedModel != nil {
 		model := strings.TrimSpace(*in.FeaturedModel)
 		if len([]rune(model)) > maxFeaturedModelLen {
@@ -467,11 +476,12 @@ func (s *Service) updateSiteSettings(w http.ResponseWriter, r *http.Request) {
 			featured_enabled=coalesce($27,featured_enabled),
 			featured_model=coalesce($28,featured_model),
 			featured_copy=coalesce($29::jsonb,featured_copy),
+			homepage_video_url=coalesce($30,homepage_video_url),
 			updated_at=now() where id=true`,
 		in.Name, in.IconURL, in.Announcement, trimmedPtr(in.ContactEmail), in.AutoDisableFailedChannels,
 		trimmedPtr(in.CaptchaProvider), trimmedPtr(in.GeetestCaptchaID), geetestKeyEnc,
 		trimmedPtr(in.CorptchaSiteID), corptchaSecretEnc,
-		trimmedPtr(in.SMTPHost), trimmedPtr(in.SMTPPort), trimmedPtr(in.SMTPUsername), smtpPassEnc, trimmedPtr(in.SMTPFrom), trimmedPtr(in.PublicBaseURL), apiBaseURLs, in.InvitationsEnabled, in.InviterReward, in.InviteeReward, in.CheckinBaseReward, in.CheckinStreakBonus, in.CheckinMaxBonusDays, in.WhitelistEnabled, whitelist, in.AliasBlocked, in.FeaturedEnabled, trimmedPtr(in.FeaturedModel), featuredCopyValue); err != nil {
+		trimmedPtr(in.SMTPHost), trimmedPtr(in.SMTPPort), trimmedPtr(in.SMTPUsername), smtpPassEnc, trimmedPtr(in.SMTPFrom), trimmedPtr(in.PublicBaseURL), apiBaseURLs, in.InvitationsEnabled, in.InviterReward, in.InviteeReward, in.CheckinBaseReward, in.CheckinStreakBonus, in.CheckinMaxBonusDays, in.WhitelistEnabled, whitelist, in.AliasBlocked, in.FeaturedEnabled, trimmedPtr(in.FeaturedModel), featuredCopyValue, in.HomepageVideoURL); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not save site settings")
 		return
 	}

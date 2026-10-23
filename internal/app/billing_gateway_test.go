@@ -94,6 +94,14 @@ func TestNonTokenReservationAdmissionFloor(t *testing.T) {
 	}
 }
 
+func TestZeroPricingMultiplierReservesNothing(t *testing.T) {
+	pricing := pricingRule{found: true, input: 10, cachedInput: 2, output: 40, multiplier: 0, exchangeRate: 1, currency: "CNY"}
+	amount, err := reservationAmount(4096, 100_000, pricing, 1)
+	if err != nil || amount != 0 {
+		t.Fatalf("zero multiplier reservation = %v, %v; want 0", amount, err)
+	}
+}
+
 func TestReservationUsesMaximumDimensionAndTier(t *testing.T) {
 	cacheWrite, audioOutput := 12.0, 15.0
 	pricing := freezePricing(pricingRule{found: true, input: 1, output: 2, multiplier: 1, exchangeRate: 1,

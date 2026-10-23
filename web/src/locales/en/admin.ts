@@ -106,6 +106,8 @@ export default {
   time: 'Time',
   email: 'Email',
   groups: 'Groups',
+  expandSubscriptionGroups: 'Expand {name} tier groups',
+  collapseSubscriptionGroups: 'Collapse {name} tier groups',
   balance: 'Balance',
 
   adminOrdersLead: 'View every top-up and subscription order with its account owner.',
@@ -363,6 +365,7 @@ export default {
   apiKeyHintEdit: 'Leave blank to keep stored keys; re-entering replaces all keys.',
   apiKeyHintChannelCreate: 'Paste multiple keys at once, one per line. Multi-key channels rotate between them automatically.',
   apiKeyHintChannelEdit: 'Leave empty to keep the stored keys; enter keys to replace the full list when saved.',
+  apiKeySavedCount: '{count} enabled key(s) saved; leave empty to keep using them.',
   apiKeyRequired: 'Enter an API key',
   apiKeysPlaceholder: 'sk-xxx1\nsk-xxx2',
   apiKeyInvalid: 'API keys must be 1-4096 characters',

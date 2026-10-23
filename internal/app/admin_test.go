@@ -376,6 +376,17 @@ func TestValidUpstreamPath(t *testing.T) {
 	}
 }
 
+func TestChannelUpstreamPath(t *testing.T) {
+	if got := channelUpstreamPath("custom", "/custom/generate"); got != "/custom/generate" {
+		t.Fatalf("custom channel path = %q", got)
+	}
+	for _, provider := range []string{"openai", "anthropic", "jev", "openai_chat"} {
+		if got := channelUpstreamPath(provider, "/custom/generate"); got != "" {
+			t.Errorf("%s channel path = %q, want empty", provider, got)
+		}
+	}
+}
+
 func TestValidChannelProviderAndPriority(t *testing.T) {
 	for _, p := range []string{"openai", "openai_chat", "ollama", "kimi", "opencode_go", "anthropic", "deepseek", "commandcode", "jev", "custom"} {
 		if !validChannelProvider(p) {
@@ -592,10 +603,10 @@ func TestValidFiniteHelpers(t *testing.T) {
 	if validGroupMultiplier(-0.01) || validGroupMultiplier(maxGroupMultiplier+0.01) || validGroupMultiplier(math.NaN()) {
 		t.Fatal("out-of-range group multipliers must be invalid")
 	}
-	if !validPricingMultiplier(0.01) || !validPricingMultiplier(maxPricingMultiplier) {
-		t.Fatal("boundary pricing multipliers must be valid")
+	if !validPricingMultiplier(0) || !validPricingMultiplier(0.01) || !validPricingMultiplier(maxPricingMultiplier) {
+		t.Fatal("boundary pricing multipliers must be valid, including zero")
 	}
-	if validPricingMultiplier(0) || validPricingMultiplier(maxPricingMultiplier+0.01) {
+	if validPricingMultiplier(-0.01) || validPricingMultiplier(maxPricingMultiplier+0.01) {
 		t.Fatal("out-of-range pricing multipliers must be invalid")
 	}
 	if !validPricingRate(0) || !validPricingRate(maxPricingRate) || validPricingRate(maxPricingRate+1) {

@@ -296,6 +296,8 @@ export default {
   basicSection: '基本信息',
   siteNameHint: '显示在导航栏、浏览器标题与邮件中的名称。',
   siteIconHint: '图标的图片地址，建议使用正方形 PNG 或 SVG。',
+  homepageVideo: '首页视频',
+  homepageVideoHint: '填写可公开访问的视频文件 URL（MP4 或 WebM）；留空则隐藏首页视频。',
   contactEmail: '协议联系方式',
   contactEmailHint: '显示在服务条款与隐私政策中的联系邮箱；留空则使用默认联系方式。',
   iconPreview: '图标预览',

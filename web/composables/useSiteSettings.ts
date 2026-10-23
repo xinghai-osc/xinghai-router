@@ -22,6 +22,7 @@ let siteSettingsRequest: Promise<void> | null = null
 const FALLBACK: Omit<SiteSettings, 'name'> = {
   icon_url: '',
   announcement: '',
+  homepage_video_url: '',
   contact_email: '',
   api_base_urls: [],
   auto_disable_failed_channels: false,

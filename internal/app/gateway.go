@@ -889,7 +889,7 @@ tryChannels:
 			}
 			selectedDirectResponses = directResponses
 			selectedPassthrough = passthrough
-			upstreamPath := ch.upstreamPath
+			upstreamPath := channelUpstreamPath(ch.provider, ch.upstreamPath)
 			if imageOptions.path != "" {
 				upstreamPath = imageOptions.path
 			} else if directResponses && upstreamPath == "" {
@@ -1444,7 +1444,7 @@ func pricingExchangeRate(pricing pricingRule) float64 {
 }
 
 func usageCost(prompt, cached, completion int, input, cachedInput, output, multiplier, groupMultiplier float64) float64 {
-	if multiplier <= 0 {
+	if multiplier < 0 {
 		multiplier = 1
 	}
 	if groupMultiplier <= 0 {
@@ -1461,7 +1461,7 @@ func usageCost(prompt, cached, completion int, input, cachedInput, output, multi
 // completion) selects the active price band, then the standard formula applies.
 func tieredUsageCost(prompt, cached, completion int, pricing pricingRule, input, cachedInput, output float64) float64 {
 	multiplier := pricing.multiplier
-	if multiplier <= 0 {
+	if multiplier < 0 {
 		multiplier = 1
 	}
 	totalTokens := int64(prompt) + int64(completion)

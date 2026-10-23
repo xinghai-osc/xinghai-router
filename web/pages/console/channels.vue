@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { Component } from 'vue'
-import { Server, KeyRound, Play, ArrowRightLeft, BarChart3, X, ListChecks, SortAsc, Eye, EyeOff, Sparkles, Cpu, Moon, SquareTerminal, Hexagon, Brain, Plug, WalletCards, Copy, Command } from 'lucide-vue-next'
-import { endpoints, type Channel, type ChannelForm, type ChannelKey, type ChannelKeyTestResult, type ChannelQuota, type ChannelQuotaForm, type ChannelTestResult, type ChannelUsageStats, type ChannelUsageWindow, type Group, type ModelRoute, type ModelRouteForm } from '~/src/api'
+import { Server, KeyRound, Play, ArrowRightLeft, BarChart3, X, ListChecks, SortAsc, Eye, EyeOff, Sparkles, Cpu, Moon, SquareTerminal, Hexagon, Brain, Plug, WalletCards, Copy, Command, ChevronDown, ChevronRight } from 'lucide-vue-next'
+import { endpoints, type Channel, type ChannelForm, type ChannelKey, type ChannelKeyTestResult, type ChannelQuota, type ChannelQuotaForm, type ChannelTestResult, type ChannelUsageStats, type ChannelUsageWindow, type Group, type ModelRoute, type ModelRouteForm, type SubscriptionProduct } from '~/src/api'
 import { formatCompact, formatNumber, formatMoney, formatDateTime } from '~/src/format'
 
 definePageMeta({ layout: 'console', middleware: 'console-auth' })
@@ -55,6 +55,11 @@ const groups = useResource(
   () => (can('users.read') ? endpoints.getAdminGroups('?page_size=100') : Promise.resolve({ data: [] as Group[], total: 0, page: 1, page_size: 100 })),
   { data: [] as Group[], total: 0, page: 1, page_size: 100 },
 )
+const subscriptionProducts = useResource(
+  () => endpoints.getPublicSubscriptionPlans(),
+  { data: [] as SubscriptionProduct[] },
+)
+const expandedChannelGroups = ref<Set<string>>(new Set())
 
 const search = ref('')
 const modelFilter = ref('')
@@ -142,6 +147,48 @@ function toggleSelected(id: string) {
 
 const groupOptions = computed(() => groups.data.value.data)
 const groupNames = computed(() => new Map(groupOptions.value.map(group => [group.id, group.display_name || group.name])))
+const groupSubscriptionMap = computed(() => {
+  const result = new Map<string, { productId: string; productName: string; tierName: string; groupName: string }>()
+  for (const product of subscriptionProducts.data.value.data) {
+    for (const tier of product.tiers) {
+      if (!tier.group_id) continue
+      result.set(tier.group_id, {
+        productId: product.id,
+        productName: product.name,
+        tierName: tier.name,
+        groupName: tier.group_name || groupNames.value.get(tier.group_id) || tier.group_id,
+      })
+    }
+  }
+  return result
+})
+
+function channelGroupDisplay(channel: Channel) {
+  const products = new Map<string, { name: string; groups: { id: string; label: string }[] }>()
+  const standalone: { id: string; label: string }[] = []
+  for (const id of channel.groups) {
+    const subscription = groupSubscriptionMap.value.get(id)
+    if (!subscription) {
+      standalone.push({ id, label: groupNames.value.get(id) ?? id })
+      continue
+    }
+    const entry = products.get(subscription.productId) ?? { name: subscription.productName, groups: [] }
+    entry.groups.push({ id, label: `${subscription.tierName} · ${subscription.groupName}` })
+    products.set(subscription.productId, entry)
+  }
+  return [
+    ...[...products].map(([id, product]) => ({ id, label: product.name, groups: product.groups })),
+    ...standalone.map(group => ({ id: group.id, label: group.label, groups: [] as { id: string; label: string }[] })),
+  ]
+}
+
+function toggleChannelGroups(key: string) {
+  const next = new Set(expandedChannelGroups.value)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  expandedChannelGroups.value = next
+}
+
 const groupFilterOptions = computed(() => [
   { value: 'all', label: t('common.all') },
   ...groupOptions.value.map(group => ({ value: group.id, label: group.display_name || group.name })),
@@ -243,6 +290,7 @@ const form = reactive({
 const keyDraft = ref('')
 const keyInputError = ref('')
 const keyChips = computed(() => parseApiKeys(form.api_keys))
+const savedKeyCount = computed(() => channels.data.value.data.find(channel => channel.id === editingId.value)?.key_count ?? 0)
 
 function addKey() {
   keyInputError.value = ''
@@ -402,6 +450,7 @@ const routeForm = reactive({
 
 function updateProvider(provider: string) {
   form.provider = provider
+  if (provider !== 'custom') form.upstream_path = ''
   if (provider === 'jev' && !form.base_url.trim()) form.base_url = 'https://api.typesafe.ai'
   if (provider === 'minimax' && !form.base_url.trim()) form.base_url = 'https://api.minimax.cn'
 }
@@ -629,7 +678,7 @@ async function save() {
     auto_disable: form.auto_disable,
     shared_data_only: form.shared_data_only,
     max_concurrency: maxConcurrency,
-    upstream_path: upstreamPath,
+    upstream_path: form.provider === 'custom' ? upstreamPath : '',
     upstream_format: form.upstream_format,
     request_overrides: { delete: overrideFields, set: overrideSet },
     ua_pool: uaPool,
@@ -1091,7 +1140,24 @@ function quotaUsageForWindow(window: string) {
               </td>
               <td>
                 <div v-if="channel.groups.length" class="flex flex-wrap gap-1">
-                  <UiBadge v-for="id in channel.groups" :key="id" tone="outline">{{ sensitiveVisible ? (groupNames.get(id) ?? id) : '••••' }}</UiBadge>
+                  <template v-for="entry in channelGroupDisplay(channel)" :key="entry.id">
+                    <button
+                      v-if="entry.groups.length > 1"
+                      type="button"
+                      class="inline-flex items-center gap-1 rounded-control border border-line px-2 py-0.5 text-xs text-ink hover:bg-sunken"
+                      :aria-expanded="expandedChannelGroups.has(`${channel.id}:${entry.id}`)"
+                      :aria-label="t(expandedChannelGroups.has(`${channel.id}:${entry.id}`) ? 'admin.collapseSubscriptionGroups' : 'admin.expandSubscriptionGroups', { name: entry.label })"
+                      @click="toggleChannelGroups(`${channel.id}:${entry.id}`)"
+                    >
+                      <component :is="expandedChannelGroups.has(`${channel.id}:${entry.id}`) ? ChevronDown : ChevronRight" class="size-3.5" />
+                      {{ sensitiveVisible ? entry.label : '••••' }}
+                      <span class="text-faint">{{ entry.groups.length }}</span>
+                    </button>
+                    <UiBadge v-else tone="outline">{{ sensitiveVisible ? entry.label : '••••' }}</UiBadge>
+                    <div v-if="entry.groups.length > 1 && expandedChannelGroups.has(`${channel.id}:${entry.id}`)" class="basis-full flex flex-wrap gap-1 pl-3">
+                      <UiBadge v-for="group in entry.groups" :key="group.id" tone="outline">{{ sensitiveVisible ? group.label : '••••' }}</UiBadge>
+                    </div>
+                  </template>
                 </div>
                 <span v-else class="text-faint">{{ t('common.all') }}</span>
               </td>
@@ -1196,7 +1262,7 @@ function quotaUsageForWindow(window: string) {
           <UiField :label="t('admin.upstreamFormat')" :hint="t('admin.upstreamFormatHint')">
             <UiSelect v-model="form.upstream_format" :options="formatOptions" />
           </UiField>
-          <UiField :label="t('admin.upstreamPath')" :hint="t('admin.upstreamPathHint')">
+          <UiField v-if="form.provider === 'custom'" :label="t('admin.upstreamPath')" :hint="t('admin.upstreamPathHint')">
             <UiInput v-model="form.upstream_path" mono :placeholder="t('admin.upstreamPathPlaceholder')" />
           </UiField>
         </div>
@@ -1241,6 +1307,7 @@ function quotaUsageForWindow(window: string) {
                 </button>
               </span>
             </div>
+            <p v-else-if="editingId && savedKeyCount > 0" class="px-1 pb-1 text-2xs text-success">{{ t('admin.apiKeySavedCount', { count: savedKeyCount }) }}</p>
             <p v-else class="px-1 pb-1 text-2xs text-faint">{{ t('admin.keyListEmpty') }}</p>
             <UiTextarea
               v-model="keyDraft"

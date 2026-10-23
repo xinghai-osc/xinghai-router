@@ -28,6 +28,7 @@ export default {
   heroBodyTail: '換模型只需改一個字段，不用改代碼。',
   heroPrimary: '免費開始',
   heroSecondary: '浏覽模型',
+  homepageVideo: '首頁影片',
 
   featuresEyebrow: '為什麼用它',
   featuresTitle: 'Built for production',

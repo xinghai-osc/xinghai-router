@@ -391,6 +391,7 @@ func (s *Service) testChannel(ctx context.Context, baseURL, apiKey, provider, te
 }
 
 func (s *Service) testChannelWithConfig(ctx context.Context, baseURL, apiKey, provider, testModel, upstreamPath, upstreamFormat string, uaPool []string, timeout time.Duration) (int, []byte, time.Duration, error) {
+	upstreamPath = channelUpstreamPath(provider, upstreamPath)
 	if timeout <= 0 {
 		timeout = healthCheckProbeTimeout
 	}
