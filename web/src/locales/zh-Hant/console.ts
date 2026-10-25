@@ -255,6 +255,8 @@ export default {
   noMatchTitle: '沒有匹配的記錄',
   noMatchBody: '換個關鍵詞或篩選條件再試試。',
   statusSettled: '已結算',
+  statusInProgress: '進行中',
+  activeRequests: '進行中請求',
   statusSuccess: '成功',
   clientIp: 'IP',
   userAgent: 'UA',

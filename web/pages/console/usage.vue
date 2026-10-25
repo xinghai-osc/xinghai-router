@@ -3,7 +3,7 @@ import { CalendarDays, ChevronDown, KeyRound, Search } from 'lucide-vue-next'
 import {
   PopoverContent, PopoverPortal, PopoverRoot, PopoverTrigger,
 } from 'reka-ui'
-import { endpoints, type UsageLog, type UsageRecord, type UsageStats } from '~/src/api'
+import { endpoints, type ActiveUsageRequest, type UsageLog, type UsageRecord, type UsageStats } from '~/src/api'
 import { formatCompact, formatDateTime, formatMoney, formatNumber, shortId } from '~/src/format'
 
 definePageMeta({ layout: 'console', middleware: 'console-auth' })
@@ -22,12 +22,27 @@ const { data: usage, pending, error, refresh: refreshUsage } = useResource(
   { data: [] as UsageRecord[] },
 )
 
+const { data: activeUsage, error: activeUsageError, refresh: refreshActiveUsage } = useResource(
+  () => adminView.value ? endpoints.getActiveAdminUsage() : endpoints.getActiveAccountUsage(),
+  { data: [] as ActiveUsageRequest[] },
+)
+let activeRefreshTimer: ReturnType<typeof setInterval> | null = null
+const now = ref(Date.now())
+onMounted(() => {
+  activeRefreshTimer = setInterval(() => {
+    now.value = Date.now()
+    if (document.visibilityState === 'visible') void refreshActiveUsage()
+  }, 5000)
+})
+onUnmounted(() => { if (activeRefreshTimer) clearInterval(activeRefreshTimer) })
+
 const statusOptions = computed(() => {
   if (adminView.value) {
     return [
       { value: '', label: t('console.statusAll') },
       { value: 'success', label: t('console.statusSuccess') },
       { value: 'error', label: t('admin.statusError') },
+      { value: 'in_progress', label: t('console.statusInProgress') },
     ]
   }
   return [
@@ -35,6 +50,7 @@ const statusOptions = computed(() => {
     { value: 'success', label: t('console.statusSuccess') },
     { value: 'failed', label: t('console.statusFailed') },
     { value: 'settled', label: t('console.statusSettled') },
+    { value: 'in_progress', label: t('console.statusInProgress') },
   ]
 })
 
@@ -126,7 +142,7 @@ const filtered = computed(() => {
   const needleKey = keyword(applied.key)
   const needleRequestId = keyword(applied.requestId)
   return usage.value.data.filter((record) => {
-    if (applied.status && record.status !== applied.status) return false
+    if (applied.status && (applied.status === 'in_progress' || record.status !== applied.status)) return false
     if (needleModel && !record.model.toLowerCase().includes(needleModel)) return false
     if (needleGroup && !(record.group_name || '').toLowerCase().includes(needleGroup)) return false
     if (needleKey && !(record.key_name || '').toLowerCase().includes(needleKey)) return false
@@ -205,7 +221,7 @@ const adminStats = useResource(() => endpoints.getUsageStats(adminStatsQuery()),
 
 const totalPages = computed(() => Math.max(1, Math.ceil(adminUsage.data.value.total / Math.max(1, adminUsage.data.value.page_size))))
 
-type UsageRow = UsageRecord & { user_id?: string | null; user_name?: string }
+type UsageRow = UsageRecord & { user_id?: string | null; user_name?: string; in_progress?: boolean }
 
 function normalizeRow(log: UsageLog): UsageRow {
   return {
@@ -230,7 +246,55 @@ function normalizeRow(log: UsageLog): UsageRow {
   }
 }
 
-const rows = computed<UsageRow[]>(() => (adminView.value ? adminUsage.data.value.data.map(normalizeRow) : filtered.value))
+const activeRows = computed<UsageRow[]>(() => {
+  if (!adminView.value && (applied.key.trim() || applied.group.trim())) return []
+  const selectedStatus = adminView.value ? status.value : applied.status
+  if (selectedStatus && selectedStatus !== 'in_progress') return []
+  const modelNeedle = (adminView.value ? model.value : applied.model).trim().toLowerCase()
+  const requestNeedle = (adminView.value ? requestId.value : applied.requestId).trim().toLowerCase()
+  const userNeedle = adminView.value ? userId.value.trim() : ''
+  return activeUsage.value.data
+    .filter((request) => {
+      if (modelNeedle && !request.model.toLowerCase().includes(modelNeedle)) return false
+      if (requestNeedle && !request.request_id.toLowerCase().includes(requestNeedle)) return false
+      if (userNeedle && String(request.user_id ?? '') !== userNeedle) return false
+      const created = new Date(request.created_at)
+      if (range.start && created < range.start) return false
+      if (range.end && created > range.end) return false
+      return true
+    })
+    .map(request => ({
+      request_id: request.request_id,
+      model: request.model,
+      prompt_tokens: 0,
+      cached_prompt_tokens: 0,
+      completion_tokens: 0,
+      cost: '0',
+      status: 'in_progress',
+      created_at: request.created_at,
+      client_ip: '',
+      user_agent: '',
+      error: '',
+      key_name: '',
+      subscription: false,
+      duration_ms: Math.max(0, now.value - new Date(request.created_at).getTime()),
+      first_token_ms: null,
+      group_name: '',
+      usage_facts: null,
+      billing_snapshot: null,
+      in_progress: true,
+      user_id: request.user_id == null ? null : String(request.user_id),
+    }))
+})
+
+const rows = computed<UsageRow[]>(() => {
+  if (adminView.value) {
+    if (status.value === 'in_progress') return activeRows.value
+    const history = adminUsage.data.value.data.map(normalizeRow)
+    return status.value ? history : [...activeRows.value, ...history].sort((a, b) => b.created_at.localeCompare(a.created_at))
+  }
+  return [...activeRows.value, ...filtered.value].sort((a, b) => b.created_at.localeCompare(a.created_at))
+})
 
 const displayStats = computed(() => {
   if (adminView.value) {
@@ -306,6 +370,7 @@ async function setAdminView(on: boolean) {
   page.value = 1
   if (on) await applyAdminFilters()
   else commitClientFilters()
+  await refreshActiveUsage()
 }
 
 async function goToPage(next: number) {
@@ -445,6 +510,11 @@ const clientTarget = ref<UsageRow | null>(null)
               <span class="text-muted">{{ t('console.requests') }}</span>
               <span class="numeric font-semibold text-ink">{{ formatNumber(displayStats.requests) }}</span>
             </span>
+            <span v-if="activeRows.length" class="inline-flex h-7 items-center gap-2 rounded-md border border-line bg-surface px-2.5 text-xs">
+              <span class="h-3.5 w-0.5 rounded-full bg-warn" />
+              <span class="text-muted">{{ t('console.activeRequests') }}</span>
+              <span class="numeric font-semibold text-ink">{{ formatNumber(activeRows.length) }}</span>
+            </span>
             <span class="inline-flex h-7 items-center gap-2 rounded-md border border-line bg-surface px-2.5 text-xs">
               <span class="h-3.5 w-0.5 rounded-full bg-warn" />
               <span class="text-muted">{{ t('console.tokens') }}</span>
@@ -474,6 +544,7 @@ const clientTarget = ref<UsageRow | null>(null)
         </div>
       </div>
 
+      <UiAlert v-if="activeUsageError" tone="danger" :title="t('common.loadFailed')">{{ activeUsageError }}</UiAlert>
       <ConsoleUserDataState
         :pending="adminView ? adminUsage.pending.value : pending"
         :error="adminView ? adminUsage.error.value : error"

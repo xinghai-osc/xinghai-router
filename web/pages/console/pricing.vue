@@ -27,20 +27,6 @@ const dialogOpen = ref(false)
 const editing = ref(false)
 const formError = ref('')
 const existingDimensions = ref<DimensionPrices>({})
-const mediaPriceFields = [
-  { key: 'audio_input_per_million', label: 'admin.audioInputPerMillion' },
-  { key: 'audio_output_per_million', label: 'admin.audioOutputPerMillion' },
-  { key: 'audio_per_million_characters', label: 'admin.audioPerMillionCharacters' },
-  { key: 'audio_per_second', label: 'admin.audioPerSecond' },
-  { key: 'video_per_second', label: 'admin.videoPerSecond' },
-] as const
-const mediaPrices = reactive<Record<typeof mediaPriceFields[number]['key'], string>>({
-  audio_input_per_million: '',
-  audio_output_per_million: '',
-  audio_per_million_characters: '',
-  audio_per_second: '',
-  video_per_second: '',
-})
 const form = reactive({
   model: '',
   input_per_million: '0',
@@ -62,7 +48,6 @@ function openCreate() {
   form.currency = 'CNY'
   form.thinking_prices = ''
   existingDimensions.value = {}
-  for (const field of mediaPriceFields) mediaPrices[field.key] = ''
   dialogOpen.value = true
 }
 
@@ -77,10 +62,6 @@ function openEdit(rule: Pricing) {
   form.currency = rule.currency || 'CNY'
   form.thinking_prices = rule.dimension_prices?.thinking_prices ? JSON.stringify(rule.dimension_prices.thinking_prices, null, 2) : ''
   existingDimensions.value = { ...rule.dimension_prices }
-  for (const field of mediaPriceFields) {
-    const value = rule.dimension_prices?.[field.key]
-    mediaPrices[field.key] = value == null ? '' : String(value)
-  }
   dialogOpen.value = true
 }
 
@@ -111,16 +92,11 @@ async function save() {
 
   const thinkingPrices = form.thinking_prices.trim()
   const dimension_prices: DimensionPrices = { ...existingDimensions.value }
-  for (const field of mediaPriceFields) {
-    const raw = String(mediaPrices[field.key]).trim()
-    if (!raw) {
-      dimension_prices[field.key] = undefined
-      continue
-    }
-    const value = rate(raw)
-    if (value === null) { formError.value = t('admin.rateInvalid'); return }
-    dimension_prices[field.key] = value
-  }
+  delete dimension_prices.audio_input_per_million
+  delete dimension_prices.audio_output_per_million
+  delete dimension_prices.audio_per_million_characters
+  delete dimension_prices.audio_per_second
+  delete dimension_prices.video_per_second
   if (thinkingPrices) {
     try {
       const parsed: unknown = JSON.parse(thinkingPrices)
@@ -485,7 +461,6 @@ async function deleteTimeRule(rule: PricingTimeRule) {
             <th class="num">{{ t('admin.cachedInputPerMillion') }}</th>
             <th class="num">{{ t('admin.outputPerMillion') }}</th>
             <th>{{ t('admin.thinkingPrices') }}</th>
-            <th>{{ t('admin.mediaPrices') }}</th>
             <th class="num">{{ t('admin.modelMultiplier') }}</th>
             <th>{{ t('common.status') }}</th>
             <th>{{ t('common.updatedAt') }}</th>
@@ -504,17 +479,6 @@ async function deleteTimeRule(rule: PricingTimeRule) {
                 <UiBadge v-for="level in thinkingPriceEntries(rule)" :key="level" tone="neutral">{{ level }}</UiBadge>
               </div>
               <span v-else class="text-faint">—</span>
-            </td>
-            <td>
-              <dl class="space-y-1 text-xs">
-                <template v-for="field in mediaPriceFields" :key="field.key">
-                  <div v-if="rule.dimension_prices?.[field.key] != null">
-                    <dt class="text-muted">{{ t(field.label) }}</dt>
-                    <dd class="numeric">{{ rule.currency || 'CNY' }} {{ rule.dimension_prices[field.key] }}</dd>
-                  </div>
-                </template>
-              </dl>
-              <span v-if="!mediaPriceFields.some(field => rule.dimension_prices?.[field.key] != null)" class="text-faint">—</span>
             </td>
             <td class="num">{{ rule.multiplier }}</td>
             <td>
@@ -565,16 +529,6 @@ async function deleteTimeRule(rule: PricingTimeRule) {
             <UiTextarea v-model="form.thinking_prices" :placeholder="t('admin.thinkingPricesPlaceholder')" :rows="5" mono />
           </UiField>
         </div>
-        <section class="space-y-3 border-t border-line pt-4">
-          <h3 class="text-sm font-medium text-ink">{{ t('admin.mediaPrices') }}</h3>
-          <p class="text-xs leading-5 text-muted">{{ t('admin.mediaPricesHint') }}</p>
-          <div class="grid gap-4 sm:grid-cols-2">
-            <UiField v-for="field in mediaPriceFields" :key="field.key" :label="t(field.label)">
-              <UiInput v-model="mediaPrices[field.key]" type="number" min="0" step="any" mono />
-            </UiField>
-          </div>
-          <p class="text-xs leading-5 text-muted">{{ t('admin.mediaPricesBillingHint') }}</p>
-        </section>
       </div>
 
       <template #footer>

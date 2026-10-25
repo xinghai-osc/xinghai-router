@@ -2,7 +2,6 @@ package app
 
 import (
 	"bytes"
-	"encoding/json"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -34,30 +33,28 @@ func mediaTestMultipart(t *testing.T, fields [][2]string, fileField string) ([]b
 	return body.Bytes(), writer.FormDataContentType()
 }
 
-func TestMediaSpeechCharacterBilling(t *testing.T) {
-	model, _, options, err := parseMediaRequest([]byte(`{"model":" speech-model ","input":"你好🌊 A","voice":"alloy"}`), "Application/JSON", "speech")
-	if err != nil || model != "speech-model" || options.facts.AudioCharacters != 5 {
-		t.Fatalf("model=%s options=%+v err=%v", model, options, err)
+func TestMediaSpeechUsesOnlyUpstreamTokens(t *testing.T) {
+	_, _, options, err := parseMediaRequest([]byte(`{"model":" speech-model ","input":"你好🌊 A","voice":"alloy"}`), "Application/JSON", "speech")
+	if err != nil || options.facts.AudioCharacters != 5 {
+		t.Fatalf("options=%+v err=%v", options, err)
 	}
 	pricing := billingTestPricing()
-	if _, err := calculateBill(options.facts, pricing, 1); err == nil {
-		t.Fatal("missing character tariff accepted")
-	}
 	pricing.dimensions.AudioPerMillionCharacters = billingTestRate(20)
-	bill, err := calculateBill(options.facts, pricing, 1)
-	if err != nil || bill.Amount != "0.00010000" {
-		t.Fatalf("bill=%+v err=%v", bill, err)
+	facts, err := options.responseFacts([]byte{0, 1, 255}, "audio/mpeg", pricing)
+	if err != nil || facts.HasUsage() {
+		t.Fatalf("binary speech response without token usage = %+v, %v", facts, err)
 	}
-	encoded, _ := json.Marshal(bill)
-	var snapshot BillingSnapshot
-	if err := json.Unmarshal(encoded, &snapshot); err != nil {
+	bill, err := calculateBill(facts, pricing, 1)
+	if err != nil || bill.Status != "missing_usage" || bill.Amount != "0.00000000" {
+		t.Fatalf("missing upstream usage bill=%+v err=%v", bill, err)
+	}
+	withTokens, err := options.responseFacts([]byte(`{"usage":{"prompt_tokens":2,"completion_tokens":3}}`), "audio/mpeg", pricing)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if got, err := snapshot.Recompute(); err != nil || got != bill.Amount {
-		t.Fatalf("recompute=%s err=%v", got, err)
-	}
-	if _, err := options.responseFacts([]byte{0, 1, 255}, "audio/mpeg", pricing); err != nil {
-		t.Fatal(err)
+	bill, err = calculateBill(withTokens, pricing, 1)
+	if err != nil || bill.Amount != "0.00001600" {
+		t.Fatalf("token-priced speech bill=%+v err=%v", bill, err)
 	}
 	if _, err := options.responseFacts([]byte(`{"error":"failed"}`), "application/json", pricing); err == nil {
 		t.Fatal("JSON speech response accepted as audio")
@@ -141,41 +138,36 @@ func TestMediaMultipartNormalizationAndVideoDefault(t *testing.T) {
 	if err != nil || video.facts.VideoSeconds != 4 || !bytes.Contains(video.body, []byte(`"seconds":"4"`)) {
 		t.Fatalf("video=%+v err=%v", video, err)
 	}
+	videoFacts, err := video.responseFacts([]byte(`{"id":"task","status":"queued","seconds":"4"}`), "application/json", billingTestPricing())
+	if err != nil || videoFacts.HasUsage() {
+		t.Fatalf("video duration without upstream tokens = %+v, %v", videoFacts, err)
+	}
 }
 
 func TestMediaTranscriptionReservationAndMetering(t *testing.T) {
 	options := mediaGatewayOptions{kind: "transcription", maxAudioSeconds: 60, promptTokens: 5}
 	pricing := billingTestPricing()
-	if _, err := options.reservationFacts(pricing); err == nil {
-		t.Fatal("unconfigured transcription pricing accepted")
-	}
-	pricing.dimensions.AudioPerSecond = billingTestRate(0.1)
 	reserve, err := options.reservationFacts(pricing)
-	if err != nil {
-		t.Fatal(err)
-	}
-	quote, err := calculateBill(reserve, pricing, 1)
-	if err != nil || quote.Amount != "6.00000000" {
-		t.Fatalf("quote=%+v err=%v", quote, err)
-	}
-	facts, err := options.responseFacts([]byte(`{"text":"hello","duration":2.5,"usage":{"input_tokens":10,"output_tokens":3}}`), "application/json", pricing)
-	if err != nil || facts.AudioSeconds != 2.5 || facts.InputTokens != 0 {
-		t.Fatalf("facts=%+v err=%v", facts, err)
-	}
-	if _, err := options.responseFacts([]byte(`{"text":"hello","duration":61}`), "application/json", pricing); err == nil {
-		t.Fatal("over-limit duration accepted")
-	}
-	if _, err := options.responseFacts([]byte(`{"text":"hello"}`), "application/json", pricing); err == nil {
-		t.Fatal("missing usage accepted")
-	}
-	pricing.dimensions.AudioPerSecond = nil
-	pricing.dimensions.AudioInputPerMillion = billingTestRate(10)
-	reserve, err = options.reservationFacts(pricing)
-	if err != nil || reserve.AudioInputTokens != 6000 || reserve.InputTokens != 6005 || reserve.AudioOutputTokens != 6000 {
+	if err != nil || reserve.InputTokens != 6005 || reserve.AudioInputTokens != 0 || reserve.OutputTokens != 0 {
 		t.Fatalf("reserve=%+v err=%v", reserve, err)
 	}
-	facts, err = options.responseFacts([]byte(`{"text":"hello","usage":{"input_tokens":10,"output_tokens":3,"input_token_details":{"audio_tokens":8,"text_tokens":2}}}`), "application/json", pricing)
-	if err != nil || facts.AudioSeconds != 0 || facts.AudioInputTokens != 8 || facts.InputTokens != 2 {
-		t.Fatalf("token facts=%+v err=%v", facts, err)
+	quote, err := calculateBill(reserve, pricing, 1)
+	if err != nil || quote.Amount != "0.01201000" {
+		t.Fatalf("quote=%+v err=%v", quote, err)
+	}
+	facts, err := options.responseFacts([]byte(`{"text":"hello","duration":2.5,"usage":{"input_tokens":10,"output_tokens":3,"input_token_details":{"audio_tokens":8,"text_tokens":2}}}`), "application/json", pricing)
+	if err != nil || facts.AudioSeconds != 0 || facts.InputTokens != 2 || facts.AudioInputTokens != 8 || facts.OutputTokens != 3 {
+		t.Fatalf("facts=%+v err=%v", facts, err)
+	}
+	bill, err := calculateBill(facts, pricing, 1)
+	if err != nil || bill.Amount != "0.00003200" {
+		t.Fatalf("actual token bill=%+v err=%v", bill, err)
+	}
+	if _, err := options.responseFacts([]byte(`{"text":"too long","duration":61}`), "application/json", pricing); err == nil {
+		t.Fatal("over-limit duration accepted")
+	}
+	facts, err = options.responseFacts([]byte(`{"text":"hello","duration":2.5}`), "application/json", pricing)
+	if err != nil || facts.HasUsage() {
+		t.Fatalf("duration without upstream usage = %+v, %v", facts, err)
 	}
 }

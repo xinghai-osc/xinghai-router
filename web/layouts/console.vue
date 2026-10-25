@@ -62,7 +62,7 @@ watchEffect(() => {
 <template>
   <div :class="['console-shell min-h-dvh bg-paper lg:grid', navCollapsed ? 'lg:grid-cols-[4.5rem_minmax(0,1fr)]' : 'lg:grid-cols-[16rem_minmax(0,1fr)]']">
     <a href="#console-content" class="sr-only z-50 rounded-control bg-clay px-4 py-2 text-sm text-clay-ink focus:not-sr-only focus:fixed focus:top-2 focus:left-2">{{ t('common.skipToContent') }}</a>
-    <aside class="sticky top-0 hidden h-dvh border-r border-line bg-surface lg:block">
+    <aside class="console-sidebar sticky top-0 hidden h-dvh border-r border-line bg-surface lg:block">
       <ConsoleSidebar :can="canNavigate" :site-name="settings.name" :icon-url="settings.icon_url" :collapsed="navCollapsed" collapsible @toggle="toggleSidebar" />
     </aside>
 

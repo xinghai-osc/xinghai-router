@@ -1,4 +1,6 @@
 export default {
+  liquidLabel: 'Liquid Glass',
+  liquidHint: 'Translucent glass · soft fluid backdrop',
   newapiLabel: 'Clear Blue',
   newapiHint: 'New API inspired · clean blue workspace',
   shadcnLabel: 'Shadcn',

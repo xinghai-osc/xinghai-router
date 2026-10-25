@@ -31,6 +31,7 @@
 
   --radius-card-token: 18px;
   --surface-blur: 14px;
+  --glass-panel-opacity: 100%;
 }
 
 :root[data-preset='galaxy'][data-theme='dark'] {

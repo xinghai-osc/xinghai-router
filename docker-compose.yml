@@ -5,6 +5,7 @@ services:
       dockerfile: Dockerfile
       target: router
     restart: unless-stopped
+    stop_grace_period: ${ROUTER_STOP_GRACE_PERIOD:-24h}
     environment:
       DATABASE_URL: postgres://router:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/router?sslmode=disable
       REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD}@redis:6379/0}
@@ -24,6 +25,8 @@ services:
       WS_IDLE_TIMEOUT: ${WS_IDLE_TIMEOUT:-2m}
       HTTP_READ_HEADER_TIMEOUT: ${HTTP_READ_HEADER_TIMEOUT:-10s}
       HTTP_IDLE_TIMEOUT: ${HTTP_IDLE_TIMEOUT:-2m}
+      SHUTDOWN_DELAY: ${SHUTDOWN_DELAY:-10s}
+      SHUTDOWN_TIMEOUT: ${SHUTDOWN_TIMEOUT:-0s}
       LISTEN_ADDR: :8080
       GEETEST_CAPTCHA_ID: ${GEETEST_CAPTCHA_ID:-}
       GEETEST_CAPTCHA_KEY: ${GEETEST_CAPTCHA_KEY:-}

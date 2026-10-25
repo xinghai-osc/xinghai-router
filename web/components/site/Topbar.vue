@@ -35,13 +35,15 @@ watch(desktop, (value) => { if (value) open.value = false })
 </script>
 
 <template>
-  <header ref="topbar" class="site-topbar glass-control sticky top-0 z-40 shrink-0 border-b border-line/70 [--glass-opacity:72%]" @keydown.esc="closeMenu">
-    <div v-if="settings.announcement" class="border-b border-clay/15 bg-clay-soft px-5 py-2 text-center text-xs leading-5 break-words text-clay">
+  <header ref="topbar" class="site-topbar sticky top-2 z-40 mx-2 mt-2 shrink-0 bg-transparent sm:top-3 sm:mx-3 sm:mt-3" @keydown.esc="closeMenu">
+    <div v-if="settings.announcement" class="glass-control mx-3 mt-3 rounded-2xl border border-clay/15 px-5 py-2 text-center text-xs leading-5 break-words text-clay">
       {{ settings.announcement }}
     </div>
     <div class="shell">
       <div class="flex min-h-18 items-center justify-between gap-3 py-3 xl:gap-8">
-        <SiteLogo :name="settings.name" :icon-url="settings.icon_url" class="min-w-0 rounded-control py-2" />
+        <div class="header-actions flex min-w-0">
+          <SiteLogo :name="settings.name" :icon-url="settings.icon_url" class="glass-control min-h-11 min-w-0 rounded-full border border-line/50 px-3 py-1.5 transition-colors duration-150 ease-out hover:border-line-strong" />
+        </div>
 
         <nav class="glass-control hidden items-center gap-1 rounded-full border border-line/60 p-1 xl:flex" :aria-label="t('common.menu')">
           <NuxtLink
@@ -53,7 +55,7 @@ watch(desktop, (value) => { if (value) open.value = false })
           >{{ t(link.key) }}</NuxtLink>
         </nav>
 
-        <div class="flex shrink-0 items-center gap-2">
+        <div class="header-actions flex shrink-0 items-center gap-2">
           <div class="hidden items-center gap-1 border-r border-line pr-3 xl:flex">
             <SiteLocaleToggle />
             <SiteThemeToggle />
@@ -88,20 +90,20 @@ watch(desktop, (value) => { if (value) open.value = false })
         </div>
       </div>
 
-      <div v-show="open" :id="menuId" class="max-h-[60dvh] overflow-y-auto overscroll-contain border-t border-line pb-4 xl:hidden">
+      <div v-show="open" :id="menuId" class="glass-control mt-2 max-h-[60dvh] overflow-y-auto overscroll-contain rounded-3xl border border-line px-3 pb-4 xl:hidden">
         <nav class="grid gap-1 py-3 sm:grid-cols-2" :aria-label="t('common.menu')">
           <NuxtLink
             v-for="link in links"
             :key="link.to"
             :to="link.to"
-            class="flex min-h-11 items-center rounded-control px-3 py-2.5 text-sm font-medium text-muted transition-colors duration-150 ease-out hover:bg-sunken hover:text-ink"
+            class="flex min-h-11 items-center rounded-full px-3 py-2.5 text-sm font-medium text-muted transition-colors duration-150 ease-out hover:bg-sunken hover:text-ink"
             active-class="bg-clay-soft !text-clay"
             @click="open = false"
           >{{ t(link.key) }}</NuxtLink>
           <NuxtLink
             v-if="account"
             to="/console"
-            class="flex min-h-11 items-center gap-2 rounded-control px-3 py-2.5 text-sm text-muted transition-colors duration-150 ease-out hover:bg-sunken hover:text-ink sm:hidden"
+            class="flex min-h-11 items-center gap-2 rounded-full px-3 py-2.5 text-sm text-muted transition-colors duration-150 ease-out hover:bg-sunken hover:text-ink sm:hidden"
             :aria-label="t('common.openConsole')"
             @click="open = false"
           >
@@ -109,7 +111,7 @@ watch(desktop, (value) => { if (value) open.value = false })
             <span v-else class="flex size-7 shrink-0 items-center justify-center rounded-full bg-clay-soft text-2xs font-semibold text-clay">{{ accountInitial }}</span>
             <span class="truncate">{{ accountName }}</span>
           </NuxtLink>
-          <NuxtLink v-else to="/auth" class="flex min-h-11 items-center rounded-control px-3 py-2.5 text-sm text-muted transition-colors duration-150 ease-out hover:bg-sunken hover:text-ink sm:hidden" @click="open = false">
+          <NuxtLink v-else to="/auth" class="flex min-h-11 items-center rounded-full px-3 py-2.5 text-sm text-muted transition-colors duration-150 ease-out hover:bg-sunken hover:text-ink sm:hidden" @click="open = false">
             {{ t('common.signIn') }}
           </NuxtLink>
         </nav>

@@ -277,6 +277,8 @@ export default {
   noMatchTitle: 'No matching records',
   noMatchBody: 'Try a different keyword or filter.',
   statusSettled: 'Settled',
+  statusInProgress: 'In progress',
+  activeRequests: 'In-progress requests',
   statusSuccess: 'Success',
   clientIp: 'IP',
   userAgent: 'UA',

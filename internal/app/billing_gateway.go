@@ -26,12 +26,12 @@ func reservationAmount(bodyLen, maxTokens int, pricing pricingRule, groupMultipl
 		output = math.Max(output, tier.output)
 	}
 	input = math.Max(input, cached)
-	for _, rate := range []*float64{pricing.dimensions.CacheWritePerMillion, pricing.dimensions.CacheWrite5mPerMillion, pricing.dimensions.CacheWrite1hPerMillion, pricing.dimensions.AudioInputPerMillion, pricing.dimensions.ImageInputPerMillion} {
+	for _, rate := range []*float64{pricing.dimensions.CacheWritePerMillion, pricing.dimensions.CacheWrite5mPerMillion, pricing.dimensions.CacheWrite1hPerMillion, pricing.dimensions.ImageInputPerMillion} {
 		if rate != nil {
 			input = math.Max(input, *rate)
 		}
 	}
-	for _, rate := range []*float64{pricing.dimensions.AudioOutputPerMillion, pricing.dimensions.ImageOutputPerMillion} {
+	for _, rate := range []*float64{pricing.dimensions.ImageOutputPerMillion} {
 		if rate != nil {
 			output = math.Max(output, *rate)
 		}

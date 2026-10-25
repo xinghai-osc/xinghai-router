@@ -3,8 +3,31 @@ package app
 import (
 	"context"
 	"log"
+	"net/http"
 	"time"
 )
+
+func (s *Service) maintenanceModeEnabled(ctx context.Context) bool {
+	if s.db == nil {
+		return false
+	}
+	var enabled bool
+	if err := s.db.QueryRow(ctx, `select maintenance_mode from site_settings where id=true`).Scan(&enabled); err != nil {
+		return false
+	}
+	return enabled
+}
+
+func (s *Service) maintenance(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.maintenanceModeEnabled(r.Context()) || r.URL.Path == "/healthz" || r.URL.Path == "/readyz" || r.URL.Path == "/site-settings" || r.URL.Path == "/admin/site-settings" || r.URL.Path == "/auth/login" || r.URL.Path == "/auth/logout" || r.URL.Path == "/account/me" || r.URL.Path == "/account/password" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		w.Header().Set("Retry-After", "120")
+		writeError(w, http.StatusServiceUnavailable, "maintenance_mode", "service is temporarily unavailable for maintenance")
+	})
+}
 
 const (
 	authCleanupInterval = time.Hour

@@ -1,0 +1,73 @@
+/* 通用液态玻璃层：所有预设共享，只读取各主题自身的色彩令牌。
+   预设可通过 --glass-panel-opacity / --glass-blur 等变量调整强度，
+   或用更高优先级的 `:root[data-preset='x']` 规则整体覆盖。 */
+
+:root {
+  --glass-panel-opacity: 78%;
+  --glass-blur: 18px;
+  --glass-saturate: 160%;
+  --glass-rim: var(--shimmer-highlight);
+  --glass-rim-soft: color-mix(in srgb, var(--shimmer-highlight) 45%, transparent);
+  --glass-sheen: linear-gradient(160deg, color-mix(in srgb, var(--shimmer-highlight) 55%, transparent), transparent 45%);
+  --glass-ambient:
+    radial-gradient(42% 38% at 6% 2%, color-mix(in srgb, var(--clay) 11%, transparent), transparent 70%),
+    radial-gradient(36% 34% at 96% 10%, color-mix(in srgb, var(--success) 7%, transparent), transparent 70%),
+    radial-gradient(46% 40% at 82% 100%, color-mix(in srgb, var(--clay) 8%, transparent), transparent 72%);
+}
+
+:root body {
+  background-image: var(--glass-ambient), var(--page-glow, none);
+}
+
+:root .site-shell,
+:root .console-shell,
+:root .console-workspace {
+  background-color: transparent;
+}
+
+:root .ui-card,
+:root .ui-table,
+:root [class*='rounded-card'][class*='bg-surface'],
+:root .console-sidebar,
+:root #console-mobile-nav {
+  background-color: color-mix(in srgb, var(--surface) var(--glass-panel-opacity), transparent);
+  background-image: var(--glass-sheen);
+  box-shadow: inset 0 1px 0 var(--glass-rim-soft);
+}
+
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root .ui-card,
+  :root .ui-table,
+  :root [class*='rounded-card'][class*='bg-surface'],
+  :root .console-sidebar,
+  :root #console-mobile-nav {
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+    backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  }
+}
+
+:root .console-sidebar > .bg-surface,
+:root #console-mobile-nav > .bg-surface {
+  background-color: transparent;
+}
+
+:root .glass-control {
+  box-shadow: inset 0 1px 0 var(--glass-rim-soft);
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  :root {
+    --glass-panel-opacity: 100%;
+    --glass-ambient: none;
+  }
+
+  :root .ui-card,
+  :root .ui-table,
+  :root [class*='rounded-card'][class*='bg-surface'],
+  :root .console-sidebar,
+  :root #console-mobile-nav {
+    background-image: none;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}

@@ -24,6 +24,7 @@ export default {
   rewardRiskStunInvalid: '請輸入最多兩個有效的 stun:主機:連接埠 位址，每行一個。',
 
   siteName: '站點名稱',
+  siteNameHint: '顯示在導覽列、瀏覽器標題與電子郵件中的名稱。',
   siteIcon: '站點圖標',
   announcement: '通知',
   announcementHint: '顯示在公開頁面頂部；留空則不顯示。最多 2000 個字符。',
@@ -260,7 +261,10 @@ export default {
   siteSettingsTitle: '站點設定',
   siteSettingsLead: '配置站點信息、人機驗證、郵件服務與渠道自動停用。',
   basicSection: '基本信息',
-  siteNameHint: '顯示在導航欄、瀏覽器標題與郵件中的名稱。',
+  maintenanceTitle: '系統維護中',
+  maintenanceBody: '我們正在進行系統維護，請稍後再回來。',
+
+  maintenanceModeHint: '開啟後公開頁面顯示維護提示，API 請求暫停；管理員仍可進入控制台關閉維護模式。',
   siteIconHint: '圖標的圖片地址，建議使用正方形 PNG 或 SVG。',
   homepageVideo: '首頁影片',
   homepageVideoHint: '填寫可公開存取的影片檔案 URL（MP4 或 WebM）；留空則隱藏首頁影片。',

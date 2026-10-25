@@ -23,7 +23,10 @@ export default {
   rewardRiskInvalid: '请按显示的范围填写。集中注册窗口不能超过观察窗口，集中注册账号数阈值不能小于相似账号数阈值。',
   rewardRiskStunInvalid: '请输入最多两个有效的 stun:主机:端口 地址，每行一个。',
 
-  siteName: '站点名称',
+  maintenanceTitle: '系统维护中',
+  maintenanceBody: '我们正在进行系统维护，请稍后再回来。',
+
+  maintenanceModeHint: '开启后公开页面显示维护提示，API 请求暂停；管理员仍可进入控制台关闭维护模式。',
   siteIcon: '站点图标',
   announcement: '通知',
   announcementHint: '显示在公开页面顶部；留空则不显示。最多 2000 个字符。',

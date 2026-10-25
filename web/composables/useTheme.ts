@@ -1,8 +1,8 @@
 export type ThemeMode = 'light' | 'dark'
-export type ThemePreset = 'default' | 'cool' | 'galaxy' | 'deepseek' | 'newapi' | 'shadcn'
+export type ThemePreset = 'default' | 'cool' | 'galaxy' | 'deepseek' | 'newapi' | 'shadcn' | 'liquid'
 
 export const DEFAULT_THEME_MODE: ThemeMode = 'light'
-export const DEFAULT_THEME_PRESET: ThemePreset = 'newapi'
+export const DEFAULT_THEME_PRESET: ThemePreset = 'liquid'
 
 export const MODE_STORAGE_KEY = 'xinghai.theme'
 export const PRESET_STORAGE_KEY = 'xinghai.preset'
@@ -15,6 +15,7 @@ export const PRESET_STORAGE_KEY = 'xinghai.preset'
  * them in sync with `assets/css/themes/<value>.css`.
  */
 export const THEME_PRESETS: { value: ThemePreset; swatch: string[] }[] = [
+  { value: 'liquid', swatch: ['#eef1f8', '#0a74f0', '#c48cff'] },
   { value: 'newapi', swatch: ['#f7f8fa', '#3563e9', '#1c2434'] },
   { value: 'shadcn', swatch: ['#ffffff', '#18181b', '#09090b'] },
   { value: 'default', swatch: ['#faf9f5', '#c96442', '#141413'] },

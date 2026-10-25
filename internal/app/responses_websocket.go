@@ -36,8 +36,16 @@ func (s *Service) responsesWebSocket(w http.ResponseWriter, r *http.Request) {
 	sessionLite := isResponsesLiteHeader(r.Header.Get(responsesLiteHeader))
 	conn.SetReadLimit(positiveRequestLimit(s.cfg.WSMaxMessageBytes, defaultWSMaxMessageBytes))
 	for {
+		if s.isDraining() {
+			_ = conn.Close(websocket.StatusServiceRestart, "server is restarting; reconnect")
+			return
+		}
 		typ, payload, readErr := s.readResponsesWSMessage(ctx, conn)
 		if readErr != nil {
+			return
+		}
+		if s.isDraining() {
+			_ = conn.Close(websocket.StatusServiceRestart, "server is restarting; reconnect")
 			return
 		}
 		if typ != websocket.MessageText && typ != websocket.MessageBinary {

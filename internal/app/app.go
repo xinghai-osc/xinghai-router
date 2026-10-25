@@ -21,6 +21,8 @@ import (
 var migrations embed.FS
 
 type Service struct {
+	lifecycle             requestLifecycle
+	activeUsage           activeUsageTracker
 	cfg                   Config
 	db                    *pgxpool.Pool
 	httpClient            *http.Client
@@ -245,13 +247,17 @@ func (s *Service) Close() {
 	}
 	s.db.Close()
 }
-func (s *Service) Handler() http.Handler { return s.routes() }
+func (s *Service) Handler() http.Handler { return s.trackRequests(s.routes()) }
 
 func (s *Service) healthz(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (s *Service) readyz(w http.ResponseWriter, r *http.Request) {
+	if s.isDraining() {
+		writeError(w, http.StatusServiceUnavailable, "draining", "server is draining")
+		return
+	}
 	if s.db == nil {
 		writeError(w, http.StatusServiceUnavailable, "not_ready", "database is not configured")
 		return

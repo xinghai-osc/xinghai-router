@@ -221,9 +221,9 @@ func (o mediaGatewayOptions) responseFacts(body []byte, contentType string, pric
 		if err != nil || !(strings.HasPrefix(mediaType, "audio/") || mediaType == "application/octet-stream") || len(body) == 0 {
 			return UsageFacts{}, fmt.Errorf("upstream did not return audio")
 		}
-		return o.facts, nil
+		return parseUsageFacts(body), nil
 	case "video":
-		return o.facts, nil
+		return parseUsageFacts(body), nil
 	case "transcription":
 		var response struct {
 			Text     *string  `json:"text"`
@@ -243,16 +243,9 @@ func (o mediaGatewayOptions) responseFacts(body []byte, contentType string, pric
 		if facts.AudioSeconds > o.maxAudioSeconds {
 			return UsageFacts{}, fmt.Errorf("upstream audio duration exceeds max_audio_seconds")
 		}
-		if pricing.dimensions.AudioPerSecond != nil {
-			if facts.AudioSeconds <= 0 {
-				return UsageFacts{}, fmt.Errorf("duration-priced transcription requires upstream duration; request verbose_json")
-			}
-			return UsageFacts{AudioSeconds: facts.AudioSeconds, UsageSource: facts.UsageSource}, nil
-		}
 		facts.AudioSeconds = 0
-		prompt, _, completion := facts.LegacyTokens()
-		if prompt == 0 && completion == 0 {
-			return UsageFacts{}, fmt.Errorf("upstream audio response is missing usage or duration; use verbose_json for duration-based models")
+		if facts.UsageSource == "upstream_duration" {
+			facts.UsageSource = "missing"
 		}
 		return facts, nil
 	}
@@ -260,17 +253,19 @@ func (o mediaGatewayOptions) responseFacts(body []byte, contentType string, pric
 }
 
 func (o mediaGatewayOptions) reservationFacts(pricing pricingRule) (UsageFacts, error) {
-	if o.kind != "transcription" {
-		return o.facts, nil
+	switch o.kind {
+	case "speech":
+		tokens := int64(math.Ceil(float64(o.facts.AudioCharacters) / 4))
+		return UsageFacts{InputTokens: tokens, UsageSource: "request_estimate"}, nil
+	case "transcription":
+		tokens := int64(math.Ceil(o.maxAudioSeconds * 100))
+		return UsageFacts{InputTokens: o.promptTokens + tokens, UsageSource: "request_estimate"}, nil
+	case "video":
+		tokens := int64(math.Ceil(o.facts.VideoSeconds * 100))
+		return UsageFacts{OutputTokens: tokens, UsageSource: "request_estimate"}, nil
+	default:
+		return UsageFacts{}, fmt.Errorf("unsupported media operation")
 	}
-	if pricing.dimensions.AudioPerSecond != nil {
-		return UsageFacts{AudioSeconds: o.maxAudioSeconds, UsageSource: "request_limit"}, nil
-	}
-	if pricing.dimensions.AudioInputPerMillion == nil {
-		return UsageFacts{}, fmt.Errorf("transcription requires an audio duration or audio input token price")
-	}
-	tokens := int64(math.Ceil(o.maxAudioSeconds * 100))
-	return UsageFacts{InputTokens: o.promptTokens + tokens, AudioInputTokens: tokens, OutputTokens: tokens, AudioOutputTokens: tokens, UsageSource: "request_limit"}, nil
 }
 
 func rewriteMediaFields(body []byte, contentType string, set map[string]string, remove string) ([]byte, string, error) {

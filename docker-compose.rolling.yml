@@ -1,0 +1,92 @@
+x-router: &router
+  image: ${ROUTER_IMAGE:?set ROUTER_IMAGE to an immutable release tag or digest}
+  build:
+    context: .
+    dockerfile: Dockerfile
+    target: router
+  restart: unless-stopped
+  stop_signal: SIGTERM
+  stop_grace_period: ${ROUTER_STOP_GRACE_PERIOD:-24h}
+  environment:
+    DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL to the existing PostgreSQL database}
+    REDIS_URL: ${REDIS_URL:?set REDIS_URL to the shared Redis database}
+    ENCRYPTION_KEY: ${ENCRYPTION_KEY:?set ENCRYPTION_KEY to the existing encryption key}
+    DEPLOYMENT_MODE: cluster
+    REDIS_FAILURE_POLICY: deny
+    LOCAL_PROMPT_CACHE: "false"
+    CONCURRENCY_LEASE_TTL: ${CONCURRENCY_LEASE_TTL:-30s}
+    DB_MAX_CONNS: ${DB_MAX_CONNS:-0}
+    IP_RATE_LIMIT_PER_MINUTE: ${IP_RATE_LIMIT_PER_MINUTE:-10}
+    LISTEN_ADDR: :8080
+    TRUSTED_PROXIES: ${HAPROXY_IPV4:-172.30.240.2}
+    SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
+    CHANNEL_CREDENTIAL_STORAGE: ${CHANNEL_CREDENTIAL_STORAGE:-plaintext}
+    SESSION_AFFINITY_DIR: /tmp/sessions
+    SESSION_AFFINITY_TTL: ${SESSION_AFFINITY_TTL:-168h}
+    CONVERSATION_CACHE_DIR: /tmp/conversations
+    SHUTDOWN_DELAY: ${SHUTDOWN_DELAY:-10s}
+    SHUTDOWN_TIMEOUT: ${SHUTDOWN_TIMEOUT:-0s}
+    WS_IDLE_TIMEOUT: ${WS_IDLE_TIMEOUT:-2m}
+    WS_MAX_MESSAGE_BYTES: ${WS_MAX_MESSAGE_BYTES:-2097152}
+    GATEWAY_MAX_BODY_BYTES: ${GATEWAY_MAX_BODY_BYTES:-20971520}
+    IMAGE_MAX_BODY_BYTES: ${IMAGE_MAX_BODY_BYTES:-52428800}
+    HTTP_MAX_HEADER_BYTES: ${HTTP_MAX_HEADER_BYTES:-1048576}
+    REQUEST_BODY_TIMEOUT: ${REQUEST_BODY_TIMEOUT:-30s}
+    HTTP_READ_HEADER_TIMEOUT: ${HTTP_READ_HEADER_TIMEOUT:-10s}
+    HTTP_IDLE_TIMEOUT: ${HTTP_IDLE_TIMEOUT:-2m}
+    BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-}
+    BOOTSTRAP_ADMIN_NAME: ${BOOTSTRAP_ADMIN_NAME:-}
+    BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
+    CAPTCHA_PROVIDER: ${CAPTCHA_PROVIDER:-}
+    CORPTCHA_SITE_ID: ${CORPTCHA_SITE_ID:-}
+    CORPTCHA_SECRET: ${CORPTCHA_SECRET:-}
+    GEETEST_CAPTCHA_ID: ${GEETEST_CAPTCHA_ID:-}
+    GEETEST_CAPTCHA_KEY: ${GEETEST_CAPTCHA_KEY:-}
+    SMTP_HOST: ${SMTP_HOST:-}
+    SMTP_PORT: ${SMTP_PORT:-465}
+    SMTP_USERNAME: ${SMTP_USERNAME:-}
+    SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+    SMTP_FROM: ${SMTP_FROM:-}
+  expose:
+    - "8080"
+  networks:
+    - rolling
+  healthcheck:
+    test: ["CMD", "wget", "--spider", "--quiet", "http://127.0.0.1:8080/readyz"]
+    interval: 2s
+    timeout: 2s
+    retries: 2
+    start_period: 30s
+
+services:
+  router-a:
+    <<: *router
+    volumes:
+      - router_a_state:/tmp
+
+  router-b:
+    <<: *router
+    volumes:
+      - router_b_state:/tmp
+
+  haproxy:
+    image: ${HAPROXY_IMAGE:-haproxy:3.0-alpine}
+    restart: unless-stopped
+    ports:
+      - "${ROLLING_BIND_ADDR:-127.0.0.1}:${ROLLING_PORT:-8080}:8080"
+    volumes:
+      - ./deploy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    networks:
+      rolling:
+        ipv4_address: ${HAPROXY_IPV4:-172.30.240.2}
+
+networks:
+  rolling:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${ROLLING_SUBNET:-172.30.240.0/24}
+
+volumes:
+  router_a_state:
+  router_b_state:

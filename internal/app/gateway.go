@@ -746,6 +746,8 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 	}
 	defer releaseConcurrency()
 	ctx = leaseCtx
+	stopTracking := s.trackActiveUsage(requestID(ctx), key.workspaceID, key.userID, model)
+	defer stopTracking()
 	channels, err := s.channelsForModel(ctx, key, model)
 	if err != nil {
 		if errors.Is(err, errChannelCredentials) {
@@ -1496,7 +1498,7 @@ func (s *Service) settleUsageFacts(ctx context.Context, key keyContext, held res
 		s.recordUnsettledUsage(ctx, key, model, bill)
 		return held
 	}
-	if !facts.HasUsage() {
+	if !facts.HasUsage() || bill.Status == "missing_usage" {
 		bill.Status = "missing_usage"
 		s.recordUnsettledUsage(ctx, key, model, bill)
 		return held
@@ -1590,7 +1592,7 @@ func (s *Service) settleSubscriptionFacts(ctx context.Context, key keyContext, m
 	if err != nil {
 		bill.Status, bill.Error = "unpriced", err.Error()
 		bill.Cost, bill.Amount = 0, "0.00000000"
-	} else if !facts.HasUsage() {
+	} else if !facts.HasUsage() || bill.Status == "missing_usage" {
 		bill.Status = "missing_usage"
 	} else {
 		bill.Status = "subscription"

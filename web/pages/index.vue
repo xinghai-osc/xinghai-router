@@ -4,8 +4,13 @@ const { t } = useI18n()
 const { models, loading: catalogLoading, error: catalogError, loadCatalog } = useCatalog()
 const { products, loading: plansLoading, error: plansError, loadPlans } = usePlans()
 const siteOrigin = useSiteOrigin()
-const { target: catalogTarget, started: catalogStarted } = useDeferredLoad(() => { void loadCatalog() })
+const catalogRequested = ref(false)
 const { target: plansTarget, started: plansStarted } = useDeferredLoad(() => { void loadPlans() })
+
+onMounted(() => {
+  catalogRequested.value = true
+  void loadCatalog()
+})
 
 usePageSeo({
   title: () => `${settings.value.name} · ${t('common.tagline')}`,
@@ -23,12 +28,10 @@ usePageSeo({
 
 <template>
   <div>
-    <SiteHero :model-count="models.length" />
+    <SiteHero :models="models" :catalog-loading="catalogLoading || !catalogRequested" />
     <SiteVideo />
-    <SiteFeatureGrid />
-    <div ref="catalogTarget">
-      <SiteModelWall :models="models" :loading="catalogLoading || !catalogStarted" :error="catalogError" @retry="loadCatalog(true)" />
-    </div>
+    <SiteFeatureGrid :models="models" />
+    <SiteModelWall :models="models" :loading="catalogLoading || !catalogRequested" :error="catalogError" @retry="loadCatalog(true)" />
 
     <section ref="plansTarget" class="relative overflow-hidden py-20 md:py-24">
       <div class="shell relative">

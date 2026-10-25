@@ -50,6 +50,8 @@ Stop the stack with `docker compose down` (use `docker compose down -v` only whe
 
 ### 单实例与多副本部署边界
 
+双副本 HAProxy 部署、顺序更新、排空与回滚步骤见 [滚动更新与应用迁移](docs/rolling-updates.md)，使用独立的 [滚动 Compose 模板](docker-compose.rolling.yml)。
+
 | 配置 | 单实例 `single`（默认） | 集群 `cluster` |
 | --- | --- | --- |
 | 用户/分组/渠道并发 | 进程内计数，副本之间不共享 | Redis 原子获取用户、分组与渠道租约，全副本共享 |

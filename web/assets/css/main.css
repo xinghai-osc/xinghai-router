@@ -1,12 +1,14 @@
 @import 'tailwindcss';
 
 @import './tokens.css';
+@import './glass.css';
 @import './themes/default.css';
 @import './themes/cool.css';
 @import './themes/galaxy.css';
 @import './themes/deepseek.css';
 @import './themes/newapi.css';
 @import './themes/shadcn.css';
+@import './themes/liquid.css';
 @import './base.css';
 @import './utilities.css';
 

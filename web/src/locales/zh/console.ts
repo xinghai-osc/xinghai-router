@@ -277,6 +277,8 @@ export default {
   noMatchTitle: '没有匹配的记录',
   noMatchBody: '换个关键词或筛选条件再试试。',
   statusSettled: '已结算',
+  statusInProgress: '进行中',
+  activeRequests: '进行中请求',
   statusSuccess: '成功',
   clientIp: 'IP',
   userAgent: 'UA',

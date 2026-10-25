@@ -70,7 +70,7 @@ func TestIntegrationMiniMaxVideoLifecycle(t *testing.T) {
 	if err := db.QueryRow(ctx, `select upstream_provider,upstream_id from video_tasks where id=$1`, result.TaskID).Scan(&protocol, &original); err != nil || protocol != "minimax" || original != "upstream_1" {
 		t.Fatalf("task protocol=%s original=%s err=%v", protocol, original, err)
 	}
-	if err := db.QueryRow(ctx, `select cost::text from usage_records where request_id=$1`, created.Header().Get("X-Request-ID")).Scan(&cost); err != nil || cost != "0.50000000" {
+	if err := db.QueryRow(ctx, `select cost::text from usage_records where request_id=$1`, created.Header().Get("X-Request-ID")).Scan(&cost); err != nil || cost != "0.00000000" {
 		t.Fatalf("cost=%s err=%v", cost, err)
 	}
 	otherSecret := "sk-xh-minimax-other-key"

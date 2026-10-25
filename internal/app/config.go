@@ -45,6 +45,8 @@ type Config struct {
 	WSIdleTimeout            time.Duration
 	HTTPReadHeaderTimeout    time.Duration
 	HTTPIdleTimeout          time.Duration
+	ShutdownDelay            time.Duration
+	ShutdownTimeout          time.Duration
 	HTTPMaxHeaderBytes       int
 	ChannelCredentialStorage string
 	SessionCookieSecure      bool
@@ -100,6 +102,9 @@ func LoadConfig() (Config, error) {
 		}
 	}
 	if err := c.normalizeDeployment(); err != nil {
+		return c, err
+	}
+	if err := loadShutdownConfig(&c); err != nil {
 		return c, err
 	}
 	if err := loadRequestLimits(&c); err != nil {

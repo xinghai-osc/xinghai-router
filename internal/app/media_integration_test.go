@@ -61,16 +61,12 @@ func TestIntegrationMediaSpeechBinaryAndPricing(t *testing.T) {
 	if err := json.Unmarshal(raw, &facts); err != nil {
 		t.Fatal(err)
 	}
-	if cost != "0.00010000" || facts.AudioCharacters != 5 {
+	if cost != "0.00000000" || facts.AudioCharacters != 0 {
 		t.Fatalf("cost=%s facts=%+v", cost, facts)
 	}
-	if _, err := db.Exec(ctx, `update pricing_rules set dimension_prices='{}' where model='speech-model'`); err != nil {
-		t.Fatal(err)
-	}
-	s.pricingCache.clear()
 	got = mediaIntegrationPost(s, secret, "/v1/audio/speech", body, "application/json")
-	if got.Code != 402 || calls.Load() != 1 {
-		t.Fatalf("unpriced status=%d calls=%d body=%s", got.Code, calls.Load(), got.Body.String())
+	if got.Code != 200 || calls.Load() != 2 {
+		t.Fatalf("tokenless speech status=%d calls=%d body=%s", got.Code, calls.Load(), got.Body.String())
 	}
 }
 
@@ -106,12 +102,12 @@ func TestIntegrationMediaTranscriptionReservation(t *testing.T) {
 			_, _ = io.WriteString(w, `{"text":"too long","duration":61}`)
 			return
 		}
-		_, _ = io.WriteString(w, `{"text":"hello","duration":2.5}`)
+		_, _ = io.WriteString(w, `{"text":"hello","duration":2.5,"usage":{"input_tokens":10,"output_tokens":3}}`)
 	}))
 	defer upstream.Close()
 	s, db, secret := billingIntegrationFixture(t, upstream.URL)
 	ctx := context.Background()
-	if _, err := db.Exec(ctx, `insert into model_routes(id,channel_id,public_model,upstream_model) select gen_random_uuid(),id,'audio-model','audio-upstream' from channels where name='billing'; insert into pricing_rules(id,model,input_per_million,output_per_million,dimension_prices) values(gen_random_uuid(),'audio-model',0,0,'{"audio_per_second":0.1}'); update user_wallets set balance=1`); err != nil {
+	if _, err := db.Exec(ctx, `insert into model_routes(id,channel_id,public_model,upstream_model) select gen_random_uuid(),id,'audio-model','audio-upstream' from channels where name='billing'; insert into pricing_rules(id,model,input_per_million,output_per_million) values(gen_random_uuid(),'audio-model',1000,1000); update user_wallets set balance=0.5`); err != nil {
 		t.Fatal(err)
 	}
 	body, ct := mediaTestMultipart(t, [][2]string{{"model", "audio-model"}, {"response_format", "verbose_json"}, {"max_audio_seconds", "60"}}, "file")
@@ -134,7 +130,7 @@ func TestIntegrationMediaTranscriptionReservation(t *testing.T) {
 	if err := db.QueryRow(ctx, `select reserved::text from user_wallets where user_id=(select user_id from api_keys where secret_hash=$1)`, hashSecret(secret)).Scan(&reserved); err != nil {
 		t.Fatal(err)
 	}
-	if cost != "0.25000000" || reserved != cost {
+	if cost != "0.01300000" || reserved != cost {
 		t.Fatalf("cost=%s reserved=%s", cost, reserved)
 	}
 	got = mediaIntegrationPost(s, secret, "/v1/audio/translations", body, ct)
@@ -146,7 +142,7 @@ func TestIntegrationMediaTranscriptionReservation(t *testing.T) {
 	if got.Code != 502 {
 		t.Fatalf("excessive status=%d body=%s", got.Code, got.Body.String())
 	}
-	if err := db.QueryRow(ctx, `select reserved::text from user_wallets where user_id=(select user_id from api_keys where secret_hash=$1)`, hashSecret(secret)).Scan(&reserved); err != nil || reserved != "0.50000000" {
+	if err := db.QueryRow(ctx, `select reserved::text from user_wallets where user_id=(select user_id from api_keys where secret_hash=$1)`, hashSecret(secret)).Scan(&reserved); err != nil || reserved != "0.02600000" {
 		t.Fatalf("failed request hold reserved=%s err=%v", reserved, err)
 	}
 }
@@ -210,7 +206,7 @@ func TestIntegrationMediaVideoCreateAndSingleCharge(t *testing.T) {
 	if err := db.QueryRow(ctx, `select count(*),coalesce(sum(cost),0)::numeric(20,8)::text from usage_records`).Scan(&count, &cost); err != nil {
 		t.Fatal(err)
 	}
-	if count != 1 || cost != "0.80000000" {
+	if count != 1 || cost != "0.00000000" {
 		t.Fatalf("count=%d cost=%s", count, cost)
 	}
 	fail.Store(true)
@@ -219,7 +215,7 @@ func TestIntegrationMediaVideoCreateAndSingleCharge(t *testing.T) {
 		t.Fatalf("failed create status=%d posts=%d", got.Code, posts.Load())
 	}
 	var reserved string
-	if err := db.QueryRow(ctx, `select reserved::text from user_wallets where user_id=(select user_id from api_keys where secret_hash=$1)`, hashSecret(secret)).Scan(&reserved); err != nil || reserved != "0.80000000" {
+	if err := db.QueryRow(ctx, `select reserved::text from user_wallets where user_id=(select user_id from api_keys where secret_hash=$1)`, hashSecret(secret)).Scan(&reserved); err != nil || reserved != "0.00000000" {
 		t.Fatalf("reserved=%s err=%v", reserved, err)
 	}
 }

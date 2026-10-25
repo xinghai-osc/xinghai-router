@@ -307,8 +307,18 @@ func billingUsageTokens(facts UsageFacts) (int64, error) {
 	return total, nil
 }
 
+func hasBillableTokenUsage(facts UsageFacts) bool {
+	return facts.promptPresent || facts.outputPresent || facts.inputTotalPresent || facts.outputTotalPresent ||
+		facts.InputTokens > 0 || facts.OutputTokens > 0 || facts.CacheReadTokens > 0 || facts.CacheWriteTokens > 0 ||
+		facts.CacheWrite5mTokens > 0 || facts.CacheWrite1hTokens > 0 || facts.AudioInputTokens > 0 || facts.AudioOutputTokens > 0 ||
+		facts.ImageInputTokens > 0 || facts.ImageOutputTokens > 0
+}
+
 func calculateBill(facts UsageFacts, pricing pricingRule, groupMultiplier float64) (BillingSnapshot, error) {
 	pricing = freezePricing(pricing, time.Now())
+	if pricing.billingMode == "" {
+		pricing.billingMode = "token"
+	}
 	currency := pricing.currency
 	if currency == "" {
 		currency = "CNY"
@@ -374,7 +384,7 @@ func calculateBill(facts UsageFacts, pricing pricingRule, groupMultiplier float6
 		return fail(fmt.Errorf("convert billed amount: %w", err))
 	}
 	snapshot.Status = "settled"
-	if !facts.HasUsage() || pricing.billingMode == "image" && facts.ImageCount == 0 {
+	if !facts.HasUsage() || pricing.billingMode == "image" && facts.ImageCount == 0 || pricing.billingMode == "token" && !hasBillableTokenUsage(facts) && facts.ImageCount == 0 && facts.ToolCalls == 0 {
 		snapshot.Status = "missing_usage"
 	}
 	return snapshot, nil
@@ -382,7 +392,7 @@ func calculateBill(facts UsageFacts, pricing pricingRule, groupMultiplier float6
 
 func (snapshot BillingSnapshot) validatePricing() error {
 	prices := snapshot.Pricing
-	if prices.BillingMode != "" && prices.BillingMode != "image" {
+	if prices.BillingMode != "" && prices.BillingMode != "image" && prices.BillingMode != "token" {
 		return fmt.Errorf("unsupported billing mode %q", prices.BillingMode)
 	}
 	if !validCurrencyCode(prices.Currency) || snapshot.Exchange.Currency != prices.Currency || snapshot.Exchange.BaseCurrency != "CNY" || !validPositiveFinite(snapshot.Exchange.RateToBase) {
@@ -400,6 +410,20 @@ func (snapshot BillingSnapshot) validatePricing() error {
 func billingDecimal(value float64) *big.Rat {
 	decimal, _ := new(big.Rat).SetString(strconv.FormatFloat(value, 'f', -1, 64))
 	return decimal
+}
+
+func audioInputRate(prices BillingPricing, dimensions DimensionPrices) float64 {
+	if prices.BillingMode == "token" {
+		return prices.InputPerMillion
+	}
+	return *dimensions.AudioInputPerMillion
+}
+
+func audioOutputRate(prices BillingPricing, dimensions DimensionPrices) float64 {
+	if prices.BillingMode == "token" {
+		return prices.OutputPerMillion
+	}
+	return *dimensions.AudioOutputPerMillion
 }
 
 func (snapshot BillingSnapshot) Recompute() (string, error) {
@@ -429,36 +453,38 @@ func (snapshot BillingSnapshot) Recompute() (string, error) {
 			{facts.CacheWriteTokens - facts.CacheWrite5mTokens - facts.CacheWrite1hTokens, *dimensions.CacheWritePerMillion},
 			{facts.CacheWrite5mTokens, *dimensions.CacheWrite5mPerMillion},
 			{facts.CacheWrite1hTokens, *dimensions.CacheWrite1hPerMillion},
-			{facts.AudioInputTokens, *dimensions.AudioInputPerMillion},
-			{facts.AudioOutputTokens, *dimensions.AudioOutputPerMillion},
+			{facts.AudioInputTokens, audioInputRate(prices, dimensions)},
+			{facts.AudioOutputTokens, audioOutputRate(prices, dimensions)},
 			{facts.ImageInputTokens, *dimensions.ImageInputPerMillion},
 			{facts.ImageOutputTokens, *dimensions.ImageOutputPerMillion},
 		}
 		for _, count := range counts {
 			add(new(big.Rat).SetInt64(count.quantity), count.rate, 1_000_000)
 		}
-		seconds := []struct {
-			name     string
-			quantity float64
-			rate     *float64
-		}{
-			{"audio_per_second", facts.AudioSeconds, dimensions.AudioPerSecond},
-			{"video_per_second", facts.VideoSeconds, dimensions.VideoPerSecond},
-		}
-		for _, dimension := range seconds {
-			if dimension.quantity == 0 {
-				continue
+		if prices.BillingMode != "token" {
+			seconds := []struct {
+				name     string
+				quantity float64
+				rate     *float64
+			}{
+				{"audio_per_second", facts.AudioSeconds, dimensions.AudioPerSecond},
+				{"video_per_second", facts.VideoSeconds, dimensions.VideoPerSecond},
 			}
-			if dimension.rate == nil {
-				return "", fmt.Errorf("%s is not configured", dimension.name)
+			for _, dimension := range seconds {
+				if dimension.quantity == 0 {
+					continue
+				}
+				if dimension.rate == nil {
+					return "", fmt.Errorf("%s is not configured", dimension.name)
+				}
+				add(billingDecimal(dimension.quantity), *dimension.rate, 1)
 			}
-			add(billingDecimal(dimension.quantity), *dimension.rate, 1)
-		}
-		if facts.AudioCharacters > 0 {
-			if dimensions.AudioPerMillionCharacters == nil {
-				return "", fmt.Errorf("audio_per_million_characters is not configured")
+			if facts.AudioCharacters > 0 {
+				if dimensions.AudioPerMillionCharacters == nil {
+					return "", fmt.Errorf("audio_per_million_characters is not configured")
+				}
+				add(new(big.Rat).SetInt64(facts.AudioCharacters), *dimensions.AudioPerMillionCharacters, 1_000_000)
 			}
-			add(new(big.Rat).SetInt64(facts.AudioCharacters), *dimensions.AudioPerMillionCharacters, 1_000_000)
 		}
 		if facts.ToolCalls > 0 {
 			if dimensions.ToolPerCall == nil {

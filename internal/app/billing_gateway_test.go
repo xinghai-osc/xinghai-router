@@ -89,7 +89,7 @@ func TestNonTokenReservationAdmissionFloor(t *testing.T) {
 	rate := 1.0
 	pricing := pricingRule{found: true, multiplier: 1, exchangeRate: 1, dimensions: DimensionPrices{ToolPerCall: &rate, AudioPerSecond: &rate, VideoPerSecond: &rate}}
 	amount, err := reservationAmount(30, 100, pricing, 1)
-	if err != nil || amount != 3 {
+	if err != nil || amount != 1 {
 		t.Fatalf("amount=%v err=%v", amount, err)
 	}
 }
@@ -109,7 +109,7 @@ func TestReservationUsesMaximumDimensionAndTier(t *testing.T) {
 		tiers:      []pricingTier{{fromTokens: 100, input: 20, output: 3}, {fromTokens: 10000, input: 2, output: 2}},
 	}, time.Now())
 	amount, err := reservationAmount(300, 1000, pricing, 1)
-	if err != nil || amount != 0.017 {
+	if err != nil || amount != 0.005 {
 		t.Fatalf("amount=%v err=%v", amount, err)
 	}
 }

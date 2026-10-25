@@ -295,7 +295,10 @@ export default {
   siteSettingsTitle: 'Site settings',
   siteSettingsLead: 'Configure site identity, captcha, email delivery and channel auto-disable.',
   basicSection: 'Basics',
-  siteNameHint: 'Shown in the navigation, the browser title and outgoing email.',
+  maintenanceTitle: 'System maintenance',
+  maintenanceBody: 'We are performing system maintenance. Please check back shortly.',
+
+  maintenanceModeHint: 'Public pages show a maintenance notice and API requests pause while enabled. Administrators can still enter the console to turn it off.',
   siteIconHint: 'Image URL for the icon. A square PNG or SVG works best.',
   homepageVideo: 'Homepage video',
   homepageVideoHint: 'Enter a publicly accessible video file URL (MP4 or WebM). Leave blank to hide the video.',

@@ -522,6 +522,7 @@ func (s *Service) nodeComposeFile(n nodeRecord, port int) (string, error) {
   router:
     image: %s
     restart: unless-stopped
+    stop_grace_period: 24h
     environment:
       DATABASE_URL: %s
       REDIS_URL: %s
@@ -530,6 +531,14 @@ func (s *Service) nodeComposeFile(n nodeRecord, port int) (string, error) {
       LOCAL_PROMPT_CACHE: 'false'
       ENCRYPTION_KEY: %s
       LISTEN_ADDR: ':8080'
+      SHUTDOWN_DELAY: '10s'
+      SHUTDOWN_TIMEOUT: '0s'
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '--quiet', 'http://127.0.0.1:8080/readyz']
+      interval: 5s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
     ports:
       - '%d:8080'
 `, composeScalar(n.RouterImage), composeScalar(s.cfg.DatabaseURL), composeScalar(s.cfg.RedisURL), composeScalar(s.cfg.EncryptionKey), port), nil

@@ -14,6 +14,7 @@ const TONES: Record<string, Tone> = {
   active: 'success',
   cancelled: 'neutral',
   settled: 'success',
+  in_progress: 'warn',
   success: 'success',
   error: 'danger',
 }
@@ -26,6 +27,7 @@ const LABEL_KEYS: Record<string, string> = {
   active: 'console.subStatusActive',
   cancelled: 'console.subStatusCancelled',
   settled: 'console.statusSettled',
+  in_progress: 'console.statusInProgress',
   success: 'console.statusSuccess',
 }
 

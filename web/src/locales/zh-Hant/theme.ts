@@ -1,4 +1,6 @@
 export default {
+  liquidLabel: '液態玻璃',
+  liquidHint: '通透折射 · 柔光流體底',
   newapiLabel: '清新藍',
   newapiHint: 'New API 風 · 簡潔藍白工作台',
   shadcnLabel: 'Shadcn',

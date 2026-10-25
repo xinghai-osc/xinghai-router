@@ -36,7 +36,7 @@ func TestCalculateBillDimensions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.Amount != "17.48984400" || snapshot.Cost != 17.489844 || snapshot.Status != "settled" {
+	if snapshot.Amount != "12.98530800" || snapshot.Cost != 12.985308 || snapshot.Status != "settled" {
 		t.Fatalf("unexpected bill: %+v", snapshot)
 	}
 	if snapshot.Usage.CacheWriteTokens != 60 || snapshot.Pricing.Version == "" || snapshot.Usage.PricingVersion != snapshot.Pricing.Version {
@@ -53,6 +53,24 @@ func TestCalculateBillDimensions(t *testing.T) {
 	recomputed, err := restored.Recompute()
 	if err != nil || recomputed != snapshot.Amount {
 		t.Fatalf("recompute = %q, %v", recomputed, err)
+	}
+}
+
+func TestLegacyBillingSnapshotRetainsAudioRates(t *testing.T) {
+	inputRate, outputRate := 11.0, 13.0
+	snapshot := BillingSnapshot{
+		Usage: UsageFacts{AudioInputTokens: 1_000_000},
+		Pricing: BillingPricing{
+			Currency: "CNY", InputPerMillion: 2, CachedInputPerMillion: 0.5, OutputPerMillion: 4,
+			DimensionPrices: DimensionPrices{AudioInputPerMillion: &inputRate, AudioOutputPerMillion: &outputRate},
+		},
+		Exchange:    BillingExchange{Currency: "CNY", BaseCurrency: "CNY", RateToBase: 1},
+		Multipliers: BillingMultipliers{Model: 1, Group: 1},
+		Rounding:    BillingRounding{Mode: "HALF_UP", Scale: billingScale},
+	}
+	amount, err := snapshot.Recompute()
+	if err != nil || amount != "11.00000000" {
+		t.Fatalf("legacy snapshot amount=%s err=%v", amount, err)
 	}
 }
 
@@ -114,6 +132,14 @@ func TestCalculateBillRoundsOnceHalfUp(t *testing.T) {
 	}
 }
 
+func TestExplicitZeroTokenUsageIsNotMissing(t *testing.T) {
+	facts := parseUsageFacts([]byte(`{"usage":{"input_tokens":0,"output_tokens":0}}`))
+	snapshot, err := calculateBill(facts, billingTestPricing(), 1)
+	if err != nil || snapshot.Status != "settled" || snapshot.Amount != "0.00000000" {
+		t.Fatalf("explicit zero token usage = %+v, %v", snapshot, err)
+	}
+}
+
 func TestCalculateBillMissingTariffs(t *testing.T) {
 	for _, test := range []struct {
 		name  string
@@ -126,6 +152,12 @@ func TestCalculateBillMissingTariffs(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			snapshot, err := calculateBill(test.facts, billingTestPricing(), 1)
+			if test.name == "audio" || test.name == "video" {
+				if err != nil || snapshot.Status != "missing_usage" || snapshot.Amount != "0.00000000" {
+					t.Fatalf("media duration without upstream tokens = %+v, %v", snapshot, err)
+				}
+				return
+			}
 			if err == nil || snapshot.Status != "unpriced" || snapshot.Error == "" || snapshot.Usage.PricingVersion == "" || snapshot.Pricing.PricedAt.IsZero() {
 				t.Fatalf("missing tariff not preserved: %+v, %v", snapshot, err)
 			}

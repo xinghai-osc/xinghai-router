@@ -11,6 +11,7 @@ const router = useRouter()
 const mounted = ref(false)
 const legalPage = computed(() => /^\/(terms|privacy)\/?$/.test(router.currentRoute.value.path))
 const canUseSite = computed(() => !mounted.value || legalPage.value || legalAccepted.value)
+const maintenanceMode = computed(() => settings.value.maintenance_mode && !router.currentRoute.value.path.startsWith('/console'))
 
 watch([accountLoaded, sessionScope], () => {
   if (import.meta.client) void checkLegalConsent()
@@ -51,7 +52,8 @@ onMounted(() => {
 <template>
   <NuxtLoadingIndicator color="var(--clay)" error-color="var(--danger)" :height="3" :throttle="120" />
   <NuxtLayout v-if="canUseSite">
-    <NuxtPage :page-key="route => route.path.startsWith('/console') ? `${route.path}:${workspacePageKey}` : route.path" />
+    <div v-if="maintenanceMode" class="flex min-h-dvh items-center justify-center bg-paper px-6 py-16"><div class="w-full max-w-xl rounded-card border border-line bg-surface p-8 text-center"><h1 class="display text-3xl text-ink">{{ t('system.maintenanceTitle') }}</h1><p class="mt-3 text-muted">{{ t('system.maintenanceBody') }}</p></div></div>
+    <NuxtPage v-else :page-key="route => route.path.startsWith('/console') ? `${route.path}:${workspacePageKey}` : route.path" />
   </NuxtLayout>
   <ClientOnly>
     <SiteLegalConsentDialog v-if="!legalPage && ((legalReady && !legalAccepted) || legalCheckFailed || accountError)" />

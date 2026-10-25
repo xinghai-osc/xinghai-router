@@ -26,6 +26,7 @@ const FALLBACK: Omit<SiteSettings, 'name'> = {
   contact_email: '',
   api_base_urls: [],
   auto_disable_failed_channels: false,
+  maintenance_mode: false,
   featured_enabled: true,
   featured_model: '',
   featured_copy: emptyFeaturedCopy(),

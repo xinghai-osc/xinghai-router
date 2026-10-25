@@ -74,6 +74,7 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("GET /account/keys/{id}/quota", s.workspaceAccount(s.keyQuotaList))
 	mux.Handle("POST /account/keys/{id}/quota", s.workspaceAccount(s.keyQuotaUpsert))
 	mux.Handle("DELETE /account/keys/{id}/quota", s.workspaceAccount(s.keyQuotaDelete))
+	mux.Handle("GET /account/usage/active", s.workspaceAccount(s.accountActiveUsage))
 	mux.Handle("GET /account/usage", s.workspaceAccount(s.accountUsage))
 	mux.Handle("GET /account/usage/daily", s.workspaceAccount(s.accountUsageDaily))
 	mux.Handle("GET /account/usage/summary", s.workspaceAccount(s.accountUsageSummary))
@@ -160,6 +161,7 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("PUT /admin/channels/{id}/groups", s.permission("channels.manage", s.setChannelGroups))
 	mux.Handle("GET /admin/request-logs", s.permission("logs.read", s.listLogs))
 	mux.Handle("GET /admin/usage-logs", s.permission("logs.read", s.listUsageLogs))
+	mux.Handle("GET /admin/usage-active", s.permission("logs.read", s.adminActiveUsage))
 	mux.Handle("GET /admin/usage-stats", s.permission("logs.read", s.usageStats))
 	mux.Handle("GET /admin/concurrency", s.permission("logs.read", s.concurrencyStatus))
 	mux.Handle("GET /admin/pricing", s.permission("pricing.read", s.listPricing))
@@ -297,7 +299,7 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("GET /backend-api/codex/responses", s.api(s.responsesWebSocket))
 	mux.Handle("POST /v1/messages", s.api(s.anthropicMessages))
 	mux.Handle("POST /v1/systemone", s.api(s.jevCompletions))
-	return recoverPanic(securityHeaders(s.requestID(s.consoleSecurity(mux))))
+	return recoverPanic(securityHeaders(s.requestID(s.consoleSecurity(s.maintenance(mux)))))
 }
 func (s *Service) requestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
