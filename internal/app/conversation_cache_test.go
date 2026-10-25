@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -19,6 +20,37 @@ func TestValidConversationCacheID(t *testing.T) {
 		if !validConversationCacheID(id) {
 			t.Fatalf("validConversationCacheID(%q) = false, want true", id)
 		}
+	}
+}
+
+func TestReadConversationFilesSkipsBodies(t *testing.T) {
+	dir := t.TempDir()
+	createdAt := time.Now()
+	body := `{"payload":"` + strings.Repeat("x", 1<<20) + `"}`
+	if err := writeConversationFile(dir, conversationFile{
+		ID:           "large-entry",
+		RequestID:    "request-large",
+		Model:        "model",
+		CreatedAt:    createdAt,
+		RequestBody:  json.RawMessage(body),
+		ResponseBody: json.RawMessage(body),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, err := readConversationFiles(dir, createdAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].ID != "large-entry" {
+		t.Fatalf("entries = %#v, want one metadata summary", entries)
+	}
+	encoded, err := json.Marshal(entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "payload") {
+		t.Fatal("list summary retained request or response body")
 	}
 }
 

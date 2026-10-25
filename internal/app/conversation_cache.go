@@ -32,6 +32,22 @@ type conversationFile struct {
 	ResponseBody json.RawMessage `json:"response_body"`
 }
 
+// conversationCacheSummary deliberately excludes request and response bodies.
+// List requests only need metadata, so decoding every full cache file would
+// retain all cached bodies until the scan completes.
+type conversationCacheSummary struct {
+	ID           string    `json:"id"`
+	RequestID    string    `json:"request_id"`
+	UserID       string    `json:"user_id"`
+	APIKeyID     string    `json:"api_key_id"`
+	Model        string    `json:"model"`
+	StatusCode   int       `json:"status_code"`
+	Stream       bool      `json:"stream"`
+	DurationMS   int64     `json:"duration_ms"`
+	FirstTokenMS *int      `json:"first_token_ms,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
 func (s *Service) conversationCacheDir() string {
 	return s.cfg.ConversationCacheDir
 }
@@ -261,8 +277,8 @@ func (s *Service) getConversationCacheDetail(w http.ResponseWriter, r *http.Requ
 // readConversationFiles walks the cache directory and returns every record that
 // is still within the retention window (today plus the immediately preceding day,
 // so deletions at midnight never race an in-flight write).
-func readConversationFiles(dir string, today time.Time) ([]conversationFile, error) {
-	var entries []conversationFile
+func readConversationFiles(dir string, today time.Time) ([]conversationCacheSummary, error) {
+	var entries []conversationCacheSummary
 	dayDirs, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -286,12 +302,14 @@ func readConversationFiles(dir string, today time.Time) ([]conversationFile, err
 			if f.IsDir() || !strings.HasSuffix(f.Name(), ".json") {
 				continue
 			}
-			data, err := os.ReadFile(filepath.Join(dir, day.Name(), f.Name()))
+			file, err := os.Open(filepath.Join(dir, day.Name(), f.Name()))
 			if err != nil {
 				continue
 			}
-			var e conversationFile
-			if json.Unmarshal(data, &e) == nil {
+			var e conversationCacheSummary
+			err = json.NewDecoder(file).Decode(&e)
+			_ = file.Close()
+			if err == nil {
 				entries = append(entries, e)
 			}
 		}
@@ -368,10 +386,7 @@ func (s *Service) cleanupConversationCache(ctx context.Context) {
 	}
 }
 
-// conversationEntry is used both for disk persistence and for in-memory scans.
-type conversationEntry = conversationFile
-
-func conversationSummary(e conversationEntry) map[string]any {
+func conversationSummary(e conversationCacheSummary) map[string]any {
 	return map[string]any{
 		"id":             e.ID,
 		"request_id":     e.RequestID,
