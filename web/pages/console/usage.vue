@@ -284,6 +284,7 @@ const activeRows = computed<UsageRow[]>(() => {
       billing_snapshot: null,
       in_progress: true,
       user_id: request.user_id == null ? null : String(request.user_id),
+       user_name: request.user_name || '',
     }))
 })
 

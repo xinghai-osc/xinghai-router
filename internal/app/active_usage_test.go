@@ -13,6 +13,11 @@ func TestAccountActiveUsageScopesByWorkspace(t *testing.T) {
 	defer stop()
 	service.trackActiveUsage("request-b", "workspace-b", "user-b", "model-b")()
 
+	snapshot := service.activeUsageSnapshot(context.Background(), "workspace-a")
+	if len(snapshot) != 1 || snapshot[0].RequestID != "request-a" || snapshot[0].Model != "model-a" {
+		t.Fatalf("unexpected active usage: %+v", snapshot)
+	}
+
 	req := httptest.NewRequest("GET", "/account/usage/active", nil)
 	req = req.WithContext(context.WithValue(req.Context(), accountContextKey{}, accountContext{workspaceID: "workspace-a"}))
 	response := httptest.NewRecorder()

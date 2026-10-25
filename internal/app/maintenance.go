@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -18,9 +19,21 @@ func (s *Service) maintenanceModeEnabled(ctx context.Context) bool {
 	return enabled
 }
 
+func maintenancePathAllowed(path string) bool {
+	if strings.HasPrefix(path, "/admin/") || path == "/account/legal-consent" || path == "/account/data-transfer-consent" || path == "/account/workspaces" || strings.HasPrefix(path, "/account/workspaces/") {
+		return true
+	}
+	switch path {
+	case "/healthz", "/readyz", "/site-settings", "/admin/site-settings", "/auth/login", "/auth/logout", "/account/me", "/account/password":
+		return true
+	default:
+		return false
+	}
+}
+
 func (s *Service) maintenance(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !s.maintenanceModeEnabled(r.Context()) || r.URL.Path == "/healthz" || r.URL.Path == "/readyz" || r.URL.Path == "/site-settings" || r.URL.Path == "/admin/site-settings" || r.URL.Path == "/auth/login" || r.URL.Path == "/auth/logout" || r.URL.Path == "/account/me" || r.URL.Path == "/account/password" {
+		if !s.maintenanceModeEnabled(r.Context()) || maintenancePathAllowed(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}

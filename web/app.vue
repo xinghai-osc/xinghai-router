@@ -56,7 +56,7 @@ onMounted(() => {
     <NuxtPage v-else :page-key="route => route.path.startsWith('/console') ? `${route.path}:${workspacePageKey}` : route.path" />
   </NuxtLayout>
   <ClientOnly>
-    <SiteLegalConsentDialog v-if="!legalPage && ((legalReady && !legalAccepted) || legalCheckFailed || accountError)" />
+    <SiteLegalConsentDialog v-if="!maintenanceMode && !legalPage && ((legalReady && !legalAccepted) || legalCheckFailed || accountError)" />
     <SessionReauthenticationDialog />
   </ClientOnly>
 </template>

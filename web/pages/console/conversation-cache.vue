@@ -89,7 +89,8 @@ async function openDetail(log: ConversationLog) {
 }
 
 function prettyJson(value: unknown): string {
-  if (value === null || value === undefined) return '—'
+  if (value === null || value === undefined) return t('common.none')
+  if (typeof value === 'string') return value
   try {
     return JSON.stringify(value, null, 2)
   } catch {
@@ -158,7 +159,7 @@ function prettyJson(value: unknown): string {
           <tr v-for="log in conversations.data.value.data" :key="log.id">
             <td class="text-muted whitespace-nowrap">{{ formatDateTime(log.created_at) }}</td>
             <td class="font-mono text-[13px] text-muted">{{ shortId(log.request_id) }}</td>
-            <td class="text-muted">{{ log.user_id ? shortId(log.user_id) : '—' }}</td>
+            <td class="text-muted">{{ log.user_id == null ? t('common.none') : log.user_id }}</td>
             <td class="font-medium text-ink">{{ log.model }}</td>
             <td>
               <UiBadge :tone="statusTone(log.status_code)">{{ log.status_code }}</UiBadge>
@@ -195,7 +196,7 @@ function prettyJson(value: unknown): string {
           </div>
           <div>
             <div class="mb-1 text-xs text-muted">{{ t('admin.user') }}</div>
-            <div class="font-mono text-ink">{{ detail.user_id ? shortId(detail.user_id) : '—' }}</div>
+            <div class="font-mono text-ink">{{ detail.user_id == null ? t('common.none') : detail.user_id }}</div>
           </div>
           <div>
             <div class="mb-1 text-xs text-muted">{{ t('admin.model') }}</div>

@@ -9,14 +9,6 @@
   --glass-rim: var(--shimmer-highlight);
   --glass-rim-soft: color-mix(in srgb, var(--shimmer-highlight) 45%, transparent);
   --glass-sheen: linear-gradient(160deg, color-mix(in srgb, var(--shimmer-highlight) 55%, transparent), transparent 45%);
-  --glass-ambient:
-    radial-gradient(42% 38% at 6% 2%, color-mix(in srgb, var(--clay) 11%, transparent), transparent 70%),
-    radial-gradient(36% 34% at 96% 10%, color-mix(in srgb, var(--success) 7%, transparent), transparent 70%),
-    radial-gradient(46% 40% at 82% 100%, color-mix(in srgb, var(--clay) 8%, transparent), transparent 72%);
-}
-
-:root body {
-  background-image: var(--glass-ambient), var(--page-glow, none);
 }
 
 :root .site-shell,
@@ -58,7 +50,6 @@
 @media (prefers-reduced-transparency: reduce) {
   :root {
     --glass-panel-opacity: 100%;
-    --glass-ambient: none;
   }
 
   :root .ui-card,

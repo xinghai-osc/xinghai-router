@@ -193,7 +193,7 @@ export interface ModelPerformancePoint { timestamp: string; requests: number; fa
 export interface ModelPerformanceSeries { group_id: string; points: ModelPerformancePoint[] }
 export interface ModelPerformance { model: string; window_hours: number; window_start: string; bucket_minutes: number; groups: ModelPerformanceGroup[]; series: ModelPerformanceSeries[]; updated_at: string }
 export interface ModelProvider { id: string; name: string; slug: string; prefixes: string[]; priority: number }
-export interface ActiveUsageRequest { request_id: string; model: string; created_at: string; user_id?: string | number }
+export interface ActiveUsageRequest { request_id: string; model: string; created_at: string; user_id?: string | number; user_name?: string }
 export interface UsageRecord { request_id: string; model: string; prompt_tokens: number; cached_prompt_tokens: number; completion_tokens: number; cost: string; status: string; created_at: string; client_ip: string; user_agent: string; error: string; key_name: string; subscription: boolean; duration_ms: number; first_token_ms: number | null; group_name: string; usage_facts: UsageFacts | null; billing_snapshot: Partial<BillingSnapshot> | null }
 
 export interface AccountUsageSummary { requests: number; tokens: number; cost: string }
@@ -261,7 +261,7 @@ export interface ConversationCacheSettings { conversation_cache_enabled: boolean
 export interface ConversationLog {
   id: string
   request_id: string
-  user_id: number
+  user_id: number | null
   api_key_id: string
   model: string
   status_code: number

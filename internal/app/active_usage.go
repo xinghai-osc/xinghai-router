@@ -1,8 +1,10 @@
 package app
 
 import (
+	"context"
 	"net/http"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -12,6 +14,7 @@ type activeUsageEntry struct {
 	Model       string    `json:"model"`
 	CreatedAt   time.Time `json:"created_at"`
 	UserID      string    `json:"user_id"`
+	UserName    string    `json:"user_name,omitempty"`
 	WorkspaceID string    `json:"-"`
 }
 
@@ -41,14 +44,14 @@ func (s *Service) trackActiveUsage(requestID, workspaceID, userID, model string)
 
 func (s *Service) accountActiveUsage(w http.ResponseWriter, r *http.Request) {
 	account := accountFromContext(r)
-	writeJSON(w, http.StatusOK, map[string]any{"data": s.activeUsageSnapshot(account.workspaceID)})
+	writeJSON(w, http.StatusOK, map[string]any{"data": s.activeUsageSnapshot(r.Context(), account.workspaceID)})
 }
 
 func (s *Service) adminActiveUsage(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"data": s.activeUsageSnapshot("")})
+	writeJSON(w, http.StatusOK, map[string]any{"data": s.activeUsageSnapshot(r.Context(), "")})
 }
 
-func (s *Service) activeUsageSnapshot(workspaceID string) []activeUsageEntry {
+func (s *Service) activeUsageSnapshot(ctx context.Context, workspaceID string) []activeUsageEntry {
 	tracker := &s.activeUsage
 	tracker.mu.Lock()
 	data := make([]activeUsageEntry, 0, len(tracker.entries))
@@ -58,6 +61,35 @@ func (s *Service) activeUsageSnapshot(workspaceID string) []activeUsageEntry {
 		}
 	}
 	tracker.mu.Unlock()
+
+	userIDs := make([]int64, 0, len(data))
+	seenUserIDs := make(map[int64]struct{}, len(data))
+	for _, entry := range data {
+		userID, err := strconv.ParseInt(entry.UserID, 10, 64)
+		if err == nil {
+			if _, seen := seenUserIDs[userID]; !seen {
+				seenUserIDs[userID] = struct{}{}
+				userIDs = append(userIDs, userID)
+			}
+		}
+	}
+	if len(userIDs) > 0 && s.db != nil {
+		if rows, err := s.db.Query(ctx, `select id,name from users where id = any($1::bigint[])`, userIDs); err == nil {
+			userNames := make(map[string]string, len(userIDs))
+			for rows.Next() {
+				var userID int64
+				var userName string
+				if rows.Scan(&userID, &userName) == nil {
+					userNames[strconv.FormatInt(userID, 10)] = userName
+				}
+			}
+			rows.Close()
+			for i := range data {
+				data[i].UserName = userNames[data[i].UserID]
+			}
+		}
+	}
+
 	sort.Slice(data, func(i, j int) bool { return data[i].CreatedAt.After(data[j].CreatedAt) })
 	return data
 }
