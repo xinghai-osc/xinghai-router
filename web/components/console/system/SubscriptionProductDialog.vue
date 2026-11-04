@@ -482,7 +482,7 @@ function submit() {
                   <UiSelect v-model="price.billing_period" :options="periodOptions" />
                 </UiField>
 
-                <UiField :label="t('system.priceAmount')">
+                <UiField :label="t('system.priceAmount')" :hint="t('system.priceAmountHint')">
                   <UiInput v-model="price.price" inputmode="decimal" />
                 </UiField>
 

@@ -286,3 +286,126 @@ func TestProviderForModel(t *testing.T) {
 		t.Fatalf("fallback got %+v", got)
 	}
 }
+
+func TestRenewsExpiredSubscription(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	future := now.Add(24 * time.Hour)
+	past := now.Add(-24 * time.Hour)
+	explicitExpired := "expired"
+	explicitActive := "active"
+	tests := []struct {
+		name      string
+		requested *string
+		current   string
+		end       *time.Time
+		want      bool
+	}{
+		{"moves expired end into the future", nil, "expired", &future, true},
+		{"keeps the end in the past", nil, "expired", &past, false},
+		{"cleared end means no expiry", nil, "expired", nil, true},
+		{"status explicitly expired", &explicitExpired, "expired", &future, false},
+		{"status explicitly active is handled elsewhere", &explicitActive, "expired", &future, false},
+		{"already active", nil, "active", &future, false},
+		{"cancelled", nil, "cancelled", &future, false},
+		{"pending", nil, "pending", &future, false},
+	}
+	for _, tt := range tests {
+		if got := renewsExpiredSubscription(tt.requested, tt.current, tt.end, now); got != tt.want {
+			t.Fatalf("%s: renewsExpiredSubscription = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestExtendsIntoActive(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	future := now.Add(24 * time.Hour)
+	past := now.Add(-24 * time.Hour)
+	tests := []struct {
+		name   string
+		status string
+		days   int
+		end    *time.Time
+		want   bool
+	}{
+		{"extends expired forward", "expired", 30, &future, true},
+		{"negative extension", "expired", -30, &future, false},
+		{"past end", "expired", 30, &past, false},
+		{"no end", "expired", 30, nil, false},
+		{"active subscription", "active", 30, &future, false},
+		{"cancelled subscription", "cancelled", 30, &future, false},
+		{"pending subscription", "pending", 30, &future, false},
+	}
+	for _, tt := range tests {
+		if got := extendsIntoActive(tt.status, tt.days, tt.end, now); got != tt.want {
+			t.Fatalf("%s: extendsIntoActive = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestUpgradeFraction(t *testing.T) {
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	end := start.AddDate(0, 0, 30)
+	tests := []struct {
+		name string
+		now  time.Time
+		want float64
+	}{
+		{"start of the period", start, 1},
+		{"halfway", start.AddDate(0, 0, 15), 0.5},
+		{"one day left", end.Add(-24 * time.Hour), 1.0 / 30.0},
+		{"at the end", end, 0},
+		{"after the end", end.Add(time.Hour), 0},
+	}
+	for _, tt := range tests {
+		got := upgradeFraction(start, end, tt.now)
+		if diff := got - tt.want; diff > 1e-9 || diff < -1e-9 {
+			t.Fatalf("%s: upgradeFraction = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+	if got := upgradeFraction(end, start, start); got != 0 {
+		t.Fatalf("inverted period: upgradeFraction = %v, want 0", got)
+	}
+}
+
+func TestProratedUpgradeCents(t *testing.T) {
+	tests := []struct {
+		name     string
+		oldCents int64
+		newCents int64
+		fraction float64
+		want     int64
+	}{
+		{"half of the difference", 7900, 18900, 0.5, 5500},
+		{"full period", 7900, 18900, 1, 11000},
+		{"nothing left", 7900, 18900, 0, 0},
+		{"cheaper target", 18900, 7900, 0.5, 0},
+		{"same price", 7900, 7900, 0.5, 0},
+		{"rounds to the nearest cent", 1000, 1001, 0.5, 1},
+	}
+	for _, tt := range tests {
+		if got := proratedUpgradeCents(tt.oldCents, tt.newCents, tt.fraction); got != tt.want {
+			t.Fatalf("%s: proratedUpgradeCents = %d, want %d", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestProratedUpgradeCredit(t *testing.T) {
+	tests := []struct {
+		name      string
+		oldCredit float64
+		newCredit float64
+		fraction  float64
+		want      float64
+	}{
+		{"half of the delta", 988, 2366, 0.5, 689},
+		{"full period", 988, 2366, 1, 1378},
+		{"nothing left", 988, 2366, 0, 0},
+		{"lower tier", 2366, 988, 0.5, 0},
+		{"rounded to cents", 0, 1, 1.0 / 3.0, 0.33},
+	}
+	for _, tt := range tests {
+		if got := proratedUpgradeCredit(tt.oldCredit, tt.newCredit, tt.fraction); got != tt.want {
+			t.Fatalf("%s: proratedUpgradeCredit = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}

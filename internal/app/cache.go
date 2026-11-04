@@ -263,7 +263,7 @@ func (s *Service) pricingFor(ctx context.Context, model string) pricingRule {
 	rule, err := s.pricingCache.get(ctx, model, func(ctx context.Context) (pricingRule, error) {
 		var rule pricingRule
 		var dimensions json.RawMessage
-		err := s.db.QueryRow(ctx, `select p.input_per_million,p.cached_input_per_million,p.output_per_million,p.multiplier,p.currency,coalesce(e.rate_to_base,0),p.dimension_prices from pricing_rules p left join exchange_rates e on e.currency=p.currency and e.enabled where p.model=$1 and p.enabled`, model).Scan(&rule.input, &rule.cachedInput, &rule.output, &rule.multiplier, &rule.currency, &rule.exchangeRate, &dimensions)
+		err := s.db.QueryRow(ctx, `select p.input_per_million,p.cached_input_per_million,p.output_per_million,p.multiplier,p.currency,coalesce(e.points_per_unit,0),p.dimension_prices from pricing_rules p left join exchange_rates e on e.currency=p.currency and e.enabled where p.model=$1 and p.enabled`, model).Scan(&rule.input, &rule.cachedInput, &rule.output, &rule.multiplier, &rule.currency, &rule.exchangeRate, &dimensions)
 		if err != nil {
 			// A missing row is a valid, cacheable answer; anything else is not cached.
 			if isNoRows(err) {

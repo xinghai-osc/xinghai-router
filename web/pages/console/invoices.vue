@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Download, FileText, RefreshCw, X } from 'lucide-vue-next'
 import { endpoints, type InvoiceApplication, type InvoiceCheckout, type InvoiceEligibleOrder, type InvoiceValidation } from '~/src/api'
-import { formatDateTime, formatMoney } from '~/src/format'
+import { formatCNY, formatDateTime } from '~/src/format'
 
 definePageMeta({ layout: 'console', middleware: 'console-auth' })
 
@@ -77,7 +77,7 @@ const statusTones: Record<string, 'warn' | 'clay' | 'danger' | 'success' | 'neut
 }
 
 function formatAmount(value: string | number | null | undefined) {
-  return formatMoney(Number(value || 0))
+  return formatCNY(Number(value || 0))
 }
 
 function isSelected(orderNo: string) {

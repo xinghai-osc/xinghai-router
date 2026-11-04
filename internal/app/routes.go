@@ -13,9 +13,9 @@ import (
 )
 
 type keyContext struct {
-	userID, keyID, groupID, workspaceID, subscriptionID string
-	dataUsageEnabled                                    bool
-	allowedModels                                       []string
+	userID, keyID, keyName, groupID, workspaceID, subscriptionID string
+	dataUsageEnabled                                             bool
+	allowedModels                                                []string
 }
 type contextKey struct{}
 
@@ -100,6 +100,7 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("GET /account/subscriptions", s.account(s.accountSubscriptions))
 	mux.Handle("POST /account/subscriptions", s.account(s.createSubscription))
 	mux.Handle("POST /account/subscriptions/balance", s.account(s.createBalanceSubscription))
+	mux.Handle("GET /account/subscription-upgrade", s.account(s.accountSubscriptionUpgrade))
 	mux.Handle("POST /account/subscriptions/{id}/cancel", s.account(s.cancelSubscription))
 	mux.Handle("GET /account/subscription-orders", s.account(s.accountSubscriptionOrders))
 	mux.Handle("GET /account/subscription-orders/{order_no}", s.account(s.accountSubscriptionOrder))
@@ -370,7 +371,7 @@ func (s *Service) loadAPIKeyContext(ctx context.Context, token string) (keyConte
 	if token == "" {
 		return key, errInvalid
 	}
-	err := s.db.QueryRow(ctx, `select k.user_id,k.id,coalesce(k.group_id::text,''),u.data_usage_enabled,k.workspace_id::text,coalesce(k.subscription_id::text,''),coalesce(k.allowed_models,'{}') from api_keys k join users u on u.id=k.user_id join workspaces ws on ws.id=k.workspace_id and ws.archived_at is null join workspace_members wm on wm.workspace_id=k.workspace_id and wm.user_id=k.user_id where k.secret_hash=$1 and k.revoked_at is null and (k.expires_at is null or k.expires_at>now()) and u.enabled and (k.group_id is null or exists(select 1 from groups g where g.id=k.group_id and g."public") or exists(select 1 from user_groups ug where ug.user_id=k.user_id and ug.group_id=k.group_id))`, hashSecret(token)).Scan(&key.userID, &key.keyID, &key.groupID, &key.dataUsageEnabled, &key.workspaceID, &key.subscriptionID, &key.allowedModels)
+	err := s.db.QueryRow(ctx, `select k.user_id,k.id,k.name,coalesce(k.group_id::text,''),u.data_usage_enabled,k.workspace_id::text,coalesce(k.subscription_id::text,''),coalesce(k.allowed_models,'{}') from api_keys k join users u on u.id=k.user_id join workspaces ws on ws.id=k.workspace_id and ws.archived_at is null join workspace_members wm on wm.workspace_id=k.workspace_id and wm.user_id=k.user_id where k.secret_hash=$1 and k.revoked_at is null and (k.expires_at is null or k.expires_at>now()) and u.enabled and (k.group_id is null or exists(select 1 from groups g where g.id=k.group_id and g."public") or exists(select 1 from user_groups ug where ug.user_id=k.user_id and ug.group_id=k.group_id))`, hashSecret(token)).Scan(&key.userID, &key.keyID, &key.keyName, &key.groupID, &key.dataUsageEnabled, &key.workspaceID, &key.subscriptionID, &key.allowedModels)
 	return key, err
 }
 

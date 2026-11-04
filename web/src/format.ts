@@ -1,4 +1,11 @@
-/** Shared display formatters. Pure functions — no Vue, no API imports. */
+import { ref } from 'vue'
+
+/** Shared display formatters. */
+
+const POINTS_NAME = ref('积分')
+export function setPointsName(name: string) {
+  POINTS_NAME.value = name.trim() || '积分'
+}
 
 const NUMBER = new Intl.NumberFormat('zh-CN')
 const DATE = new Intl.DateTimeFormat('zh-CN', {
@@ -26,7 +33,23 @@ export function formatCompact(value: number | string | null | undefined): string
 export function formatMoney(value: number | string | null | undefined, digits = 2): string {
   const numeric = Number(value ?? 0)
   if (!Number.isFinite(numeric)) return '—'
+  return `${numeric.toFixed(digits)} ${POINTS_NAME.value}`
+}
+
+/** Subscription prices are quoted in yuan regardless of the site's point unit. */
+export function formatCNY(value: number | string | null | undefined, digits = 2): string {
+  const numeric = Number(value ?? 0)
+  if (!Number.isFinite(numeric)) return '—'
   return `¥${numeric.toFixed(digits)}`
+}
+
+/** Format a money amount by its currency code: CNY as ¥, anything else with the code. */
+export function formatCurrency(value: number | string | null | undefined, currency?: string | null, digits = 2): string {
+  const code = (currency ?? 'CNY').trim().toUpperCase()
+  if (!code || code === 'CNY' || code === 'RMB') return formatCNY(value, digits)
+  const numeric = Number(value ?? 0)
+  if (!Number.isFinite(numeric)) return '—'
+  return `${numeric.toFixed(digits)} ${code}`
 }
 
 export function formatPercent(value: number | null | undefined, digits = 1): string {

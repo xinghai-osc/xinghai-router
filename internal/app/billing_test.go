@@ -64,7 +64,7 @@ func TestLegacyBillingSnapshotRetainsAudioRates(t *testing.T) {
 			Currency: "CNY", InputPerMillion: 2, CachedInputPerMillion: 0.5, OutputPerMillion: 4,
 			DimensionPrices: DimensionPrices{AudioInputPerMillion: &inputRate, AudioOutputPerMillion: &outputRate},
 		},
-		Exchange:    BillingExchange{Currency: "CNY", BaseCurrency: "CNY", RateToBase: 1},
+		Exchange:    BillingExchange{Currency: "CNY", BaseCurrency: "POINTS", RateToBase: 1},
 		Multipliers: BillingMultipliers{Model: 1, Group: 1},
 		Rounding:    BillingRounding{Mode: "HALF_UP", Scale: billingScale},
 	}
@@ -308,7 +308,8 @@ func TestCalculateBillInvalidFactsAndRates(t *testing.T) {
 func TestCalculateBillServiceTierPrices(t *testing.T) {
 	pricing := billingTestPricing()
 	pricing.serviceTiers = map[string]ServiceTierPrice{
-		"fast": {InputPerMillion: 5, CachedInputPerMillion: 1, OutputPerMillion: 10},
+		"fast":     {InputPerMillion: 5, CachedInputPerMillion: 1, OutputPerMillion: 10},
+		"priority": {InputPerMillion: 8, CachedInputPerMillion: 2, OutputPerMillion: 15},
 	}
 	facts := UsageFacts{InputTokens: 1_000_000, CacheReadTokens: 1_000_000, OutputTokens: 1_000_000}
 
@@ -320,6 +321,12 @@ func TestCalculateBillServiceTierPrices(t *testing.T) {
 	recomputed, err := snapshot.Recompute()
 	if err != nil || recomputed != snapshot.Amount {
 		t.Fatalf("fast tier recompute = %q, %v", recomputed, err)
+	}
+
+	pricing.serviceTier = "priority"
+	snapshot, err = calculateBill(facts, pricing, 1)
+	if err != nil || snapshot.Amount != "25.00000000" || snapshot.Pricing.ServiceTier != "priority" {
+		t.Fatalf("priority tier bill = %+v, %v", snapshot, err)
 	}
 
 	pricing.serviceTier = ""
@@ -362,16 +369,16 @@ func TestParseDimensionPricesValidation(t *testing.T) {
 		`{"images":[{"size":"*","quality":"*"}]}`,
 		`{"images":[{"size":"*","quality":"*","price":null}]}`,
 		`{"images":[{"size":"*","quality":"*","price":1},{"size":"*","quality":"*","price":2}]}`,
-		`{"service_tiers":{"priority":{"input_per_million":1,"cached_input_per_million":0.5,"output_per_million":2}}}`,
+		`{"service_tiers":{"Bad Tier":{"input_per_million":1,"cached_input_per_million":0.5,"output_per_million":2}}}`,
 		`{"service_tiers":{"fast":{"input_per_million":1,"cached_input_per_million":0.5,"output_per_million":-1}}}`,
 	} {
 		if _, err := parseDimensionPrices(json.RawMessage(raw)); err == nil {
 			t.Fatalf("accepted %s", raw)
 		}
 	}
-	prices, err := parseDimensionPrices(json.RawMessage(`{"audio_per_second":0,"images":[{"size":"*","quality":"*","price":0.1}]}`))
-	if err != nil || prices.AudioPerSecond == nil || *prices.AudioPerSecond != 0 {
-		t.Fatalf("explicit zero lost: %+v, %v", prices, err)
+	prices, err := parseDimensionPrices(json.RawMessage(`{"service_tiers":{"priority":{"input_per_million":1,"cached_input_per_million":0.5,"output_per_million":2}},"audio_per_second":0,"images":[{"size":"*","quality":"*","price":0.1}]}`))
+	if err != nil || prices.ServiceTiers["priority"].OutputPerMillion != 2 || prices.AudioPerSecond == nil || *prices.AudioPerSecond != 0 {
+		t.Fatalf("explicit dimension prices lost: %+v, %v", prices, err)
 	}
 }
 

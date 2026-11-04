@@ -9,12 +9,12 @@ import (
 
 func TestAccountActiveUsageScopesByWorkspace(t *testing.T) {
 	service := &Service{}
-	stop := service.trackActiveUsage("request-a", "workspace-a", "user-a", "model-a")
+	stop := service.trackActiveUsage("request-a", "workspace-a", "user-a", "Primary key", "model-a")
 	defer stop()
-	service.trackActiveUsage("request-b", "workspace-b", "user-b", "model-b")()
+	service.trackActiveUsage("request-b", "workspace-b", "user-b", "Secondary key", "model-b")()
 
 	snapshot := service.activeUsageSnapshot(context.Background(), "workspace-a")
-	if len(snapshot) != 1 || snapshot[0].RequestID != "request-a" || snapshot[0].Model != "model-a" {
+	if len(snapshot) != 1 || snapshot[0].RequestID != "request-a" || snapshot[0].Model != "model-a" || snapshot[0].KeyName != "Primary key" {
 		t.Fatalf("unexpected active usage: %+v", snapshot)
 	}
 
@@ -29,14 +29,14 @@ func TestAccountActiveUsageScopesByWorkspace(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if len(payload.Data) != 1 || payload.Data[0].RequestID != "request-a" || payload.Data[0].Model != "model-a" {
+	if len(payload.Data) != 1 || payload.Data[0].RequestID != "request-a" || payload.Data[0].Model != "model-a" || payload.Data[0].KeyName != "Primary key" {
 		t.Fatalf("unexpected active usage: %+v", payload.Data)
 	}
 }
 
 func TestTrackActiveUsageRemovesRequest(t *testing.T) {
 	service := &Service{}
-	stop := service.trackActiveUsage("request-a", "workspace-a", "user-a", "model-a")
+	stop := service.trackActiveUsage("request-a", "workspace-a", "user-a", "Primary key", "model-a")
 	stop()
 
 	service.activeUsage.mu.Lock()

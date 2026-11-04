@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Check } from 'lucide-vue-next'
 import type { BillingPeriod, SubscriptionProduct, SubscriptionTier, SubscriptionTierPrice } from '~/src/api'
-import { formatMoney, formatNumber } from '~/src/format'
+import { formatCNY, formatMoney, formatNumber } from '~/src/format'
 import { effectiveAmounts, periodLabel, sortProducts, sortTiers, tierPrices } from '~/src/subscriptions'
 
 const props = withDefaults(defineProps<{
@@ -75,7 +75,7 @@ function selectPeriod(product: SubscriptionProduct, period: BillingPeriod) {
 function priceText(price: SubscriptionTierPrice | undefined): string {
   if (!price) return '—'
   const currency = (price.currency || 'CNY').toUpperCase()
-  return currency === 'CNY' ? formatMoney(price.price) : `${price.price} ${currency}`
+  return currency === 'CNY' ? formatCNY(price.price) : `${price.price} ${currency}`
 }
 
 function periodText(product: SubscriptionProduct): string {
@@ -91,7 +91,7 @@ function productBenefits(product: SubscriptionProduct): string[] {
   if (purchasableTiers(product).length > 1) list.push(t('site.planTierLevel', { level: tier.level }))
   const amounts = effectiveAmounts(tier, price)
   if (amounts.creditAmount) {
-    list.push(t('site.planCredit', { amount: Number(amounts.creditAmount).toFixed(2) }))
+    list.push(t('site.planCredit', { amount: formatMoney(amounts.creditAmount) }))
   } else if (amounts.maxCredit === null
     && !(tier.model_quotas ?? []).some(quota => quota.max_credit_per_period !== null)) {
     list.push(t('site.planUnlimitedCredit'))

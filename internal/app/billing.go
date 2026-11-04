@@ -10,6 +10,7 @@ import (
 	"maps"
 	"math"
 	"math/big"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -18,6 +19,8 @@ import (
 const billingScale = 8
 
 const billingMaxAmount = "999999999999.99999999"
+
+var serviceTierNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
 
 type ImagePrice struct {
 	Size    string  `json:"size"`
@@ -134,7 +137,7 @@ func parseDimensionPrices(raw json.RawMessage) (DimensionPrices, error) {
 
 func validateDimensionPrices(prices DimensionPrices) error {
 	for tier, price := range prices.ServiceTiers {
-		if tier != "fast" || !validPricingRate(price.InputPerMillion) || !validPricingRate(price.CachedInputPerMillion) || !validPricingRate(price.OutputPerMillion) {
+		if !serviceTierNamePattern.MatchString(tier) || !validPricingRate(price.InputPerMillion) || !validPricingRate(price.CachedInputPerMillion) || !validPricingRate(price.OutputPerMillion) {
 			return fmt.Errorf("invalid service tier price %q", tier)
 		}
 	}
@@ -330,7 +333,7 @@ func calculateBill(facts UsageFacts, pricing pricingRule, groupMultiplier float6
 			InputPerMillion: pricing.input, CachedInputPerMillion: pricing.cachedInput, OutputPerMillion: pricing.output,
 			DimensionPrices: cloneDimensionPrices(pricing.dimensions),
 		},
-		Exchange:    BillingExchange{Currency: currency, BaseCurrency: "CNY", RateToBase: pricing.exchangeRate},
+		Exchange:    BillingExchange{Currency: currency, BaseCurrency: "POINTS", RateToBase: pricing.exchangeRate},
 		Multipliers: BillingMultipliers{Model: pricing.multiplier, Group: groupMultiplier},
 		Rounding:    BillingRounding{Mode: "HALF_UP", Scale: billingScale},
 	}
@@ -395,7 +398,7 @@ func (snapshot BillingSnapshot) validatePricing() error {
 	if prices.BillingMode != "" && prices.BillingMode != "image" && prices.BillingMode != "token" {
 		return fmt.Errorf("unsupported billing mode %q", prices.BillingMode)
 	}
-	if !validCurrencyCode(prices.Currency) || snapshot.Exchange.Currency != prices.Currency || snapshot.Exchange.BaseCurrency != "CNY" || !validPositiveFinite(snapshot.Exchange.RateToBase) {
+	if !validCurrencyCode(prices.Currency) || snapshot.Exchange.Currency != prices.Currency || (snapshot.Exchange.BaseCurrency != "POINTS" && snapshot.Exchange.BaseCurrency != "CNY") || !validPositiveFinite(snapshot.Exchange.RateToBase) {
 		return fmt.Errorf("invalid billing exchange rate")
 	}
 	if !validPricingRate(prices.InputPerMillion) || !validPricingRate(prices.CachedInputPerMillion) || !validPricingRate(prices.OutputPerMillion) || !validNonNegativeFinite(snapshot.Multipliers.Model) || !validNonNegativeFinite(snapshot.Multipliers.Group) {

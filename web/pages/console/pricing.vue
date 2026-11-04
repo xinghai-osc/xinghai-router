@@ -35,6 +35,7 @@ const form = reactive({
   multiplier: '1',
   currency: 'CNY',
   thinking_prices: '',
+  service_tiers: '',
 })
 
 function openCreate() {
@@ -47,6 +48,7 @@ function openCreate() {
   form.multiplier = '1'
   form.currency = 'CNY'
   form.thinking_prices = ''
+  form.service_tiers = ''
   existingDimensions.value = {}
   dialogOpen.value = true
 }
@@ -61,6 +63,7 @@ function openEdit(rule: Pricing) {
   form.multiplier = String(rule.multiplier)
   form.currency = rule.currency || 'CNY'
   form.thinking_prices = rule.dimension_prices?.thinking_prices ? JSON.stringify(rule.dimension_prices.thinking_prices, null, 2) : ''
+  form.service_tiers = rule.dimension_prices?.service_tiers ? JSON.stringify(rule.dimension_prices.service_tiers, null, 2) : ''
   existingDimensions.value = { ...rule.dimension_prices }
   dialogOpen.value = true
 }
@@ -91,6 +94,7 @@ async function save() {
   }
 
   const thinkingPrices = form.thinking_prices.trim()
+  const serviceTiers = form.service_tiers.trim()
   const dimension_prices: DimensionPrices = { ...existingDimensions.value }
   delete dimension_prices.audio_input_per_million
   delete dimension_prices.audio_output_per_million
@@ -108,6 +112,19 @@ async function save() {
     }
   } else {
     delete dimension_prices.thinking_prices
+  }
+
+  if (serviceTiers) {
+    try {
+      const parsed: unknown = JSON.parse(serviceTiers)
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('invalid')
+      dimension_prices.service_tiers = parsed as DimensionPrices['service_tiers']
+    } catch {
+      formError.value = t('admin.serviceTierPricesInvalid')
+      return
+    }
+  } else {
+    delete dimension_prices.service_tiers
   }
 
   const payload: PricingForm = {
@@ -527,6 +544,9 @@ async function deleteTimeRule(rule: PricingTimeRule) {
           </UiField>
           <UiField :label="t('admin.thinkingPrices')" :hint="t('admin.thinkingPricesHint')">
             <UiTextarea v-model="form.thinking_prices" :placeholder="t('admin.thinkingPricesPlaceholder')" :rows="5" mono />
+          </UiField>
+          <UiField :label="t('admin.serviceTierPrices')" :hint="t('admin.serviceTierPricesHint')">
+            <UiTextarea v-model="form.service_tiers" :placeholder="t('admin.serviceTierPricesPlaceholder')" :rows="5" mono />
           </UiField>
         </div>
       </div>

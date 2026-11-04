@@ -1,0 +1,84 @@
+:root[data-preset='margin'] {
+  --paper: #f5f4ef;
+  --surface: #fffefa;
+  --sunken: #eceee8;
+  --ink: #232c2b;
+  --muted: #63706b;
+  --faint: #78827c;
+  --line: #dce1d8;
+  --line-strong: #becac0;
+  --clay: #2e6b59;
+  --clay-hover: #245947;
+  --clay-soft: #e1ece3;
+  --clay-ink: #ffffff;
+  --success: #347551;
+  --success-soft: #e1eee4;
+  --warn: #946313;
+  --warn-soft: #f4ecd6;
+  --danger: #b64841;
+  --danger-soft: #f8e8e3;
+  --overlay: rgb(23 36 30 / 0.35);
+  --shadow-pop: 0 18px 60px -18px rgb(23 36 30 / 0.25);
+  --shadow-glow: none;
+  --shimmer-highlight: rgb(255 255 255 / 0.65);
+  --page-glow:
+    radial-gradient(ellipse at 5% 5%, rgb(175 210 193 / 0.18), transparent 55%),
+    radial-gradient(ellipse at 95% 25%, rgb(220 205 168 / 0.16), transparent 55%);
+  --ambient-one: #a9c9b2;
+  --ambient-two: #d8c6a0;
+  --ambient-three: #a9c7ce;
+  --glass-panel-opacity: 72%;
+  --glass-blur: 18px;
+  --glass-saturate: 115%;
+  --radius-control-token: 14px;
+  --radius-card-token: 24px;
+  --radius-button-token: 999px;
+  --app-font-display: 'Iowan Old Style', 'Palatino Linotype', 'Noto Serif SC', 'Songti SC', 'STSong', 'SimSun', Georgia, serif;
+  --app-display-weight: 500;
+  --app-display-tracking: -0.035em;
+  --app-display-leading: 1.18;
+}
+
+:root[data-preset='margin'][data-theme='dark'] {
+  --paper: #141b19;
+  --surface: #202b26;
+  --sunken: #19211d;
+  --ink: #e8eee6;
+  --muted: #abb9ae;
+  --faint: #8b9b8f;
+  --line: #35443a;
+  --line-strong: #4b6051;
+  --clay: #a2c8ad;
+  --clay-hover: #b9dbc1;
+  --clay-soft: #2b4032;
+  --clay-ink: #17271c;
+  --success: #94c69f;
+  --success-soft: #263b2b;
+  --warn: #ddc17c;
+  --warn-soft: #3e3522;
+  --danger: #eea095;
+  --danger-soft: #422c28;
+  --overlay: rgb(5 12 8 / 0.65);
+  --shadow-pop: 0 18px 60px -18px rgb(0 0 0 / 0.65);
+  --shimmer-highlight: rgb(223 245 223 / 0.06);
+  --page-glow:
+    radial-gradient(ellipse at 5% 5%, rgb(89 133 101 / 0.13), transparent 55%),
+    radial-gradient(ellipse at 95% 25%, rgb(142 128 79 / 0.08), transparent 55%);
+  --ambient-one: #497856;
+  --ambient-two: #897744;
+  --ambient-three: #416872;
+  --glass-panel-opacity: 84%;
+}
+
+:root[data-preset='margin'] .ui-card-header,
+:root[data-preset='margin'] .ui-card > footer {
+  background-color: transparent;
+}
+
+:root[data-preset='margin'] .ui-table thead {
+  background-color: color-mix(in srgb, var(--sunken) 65%, transparent);
+}
+
+:root[data-preset='margin'] .console-sidebar {
+  border-color: var(--line);
+}

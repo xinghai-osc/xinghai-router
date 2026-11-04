@@ -94,7 +94,7 @@ export default {
   planPerHour: '小時',
   planPerDay: '天',
   planPerWeek: '週',
-  planCredit: '每期贈送 ¥{amount} 額度',
+  planCredit: '每期贈送 {amount} 額度',
   planUnlimitedCredit: '額度無上限',
   planQuotaRequests: '每週期 {count} 次請求',
   planQuotaCredit: '每週期 {amount} 額度',

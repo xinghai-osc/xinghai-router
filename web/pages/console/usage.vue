@@ -275,7 +275,7 @@ const activeRows = computed<UsageRow[]>(() => {
       client_ip: '',
       user_agent: '',
       error: '',
-      key_name: '',
+      key_name: request.key_name,
       subscription: false,
       duration_ms: Math.max(0, now.value - new Date(request.created_at).getTime()),
       first_token_ms: null,

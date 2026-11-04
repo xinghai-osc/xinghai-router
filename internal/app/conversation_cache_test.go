@@ -38,7 +38,7 @@ func TestReadConversationFilesSkipsBodies(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	entries, err := readConversationFiles(dir, createdAt)
+	entries, err := readConversationFiles(dir, createdAt, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,6 +51,30 @@ func TestReadConversationFilesSkipsBodies(t *testing.T) {
 	}
 	if strings.Contains(string(encoded), "payload") {
 		t.Fatal("list summary retained request or response body")
+	}
+}
+
+func TestConversationCacheIndexReusesSnapshotAndAddsEntries(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now()
+	first := conversationFile{ID: "entry-a", Model: "model", CreatedAt: now}
+	if err := writeConversationFile(dir, first); err != nil {
+		t.Fatal(err)
+	}
+	index := newConversationCacheIndex()
+	entries, err := index.get(dir, now, false)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("initial index entries=%d err=%v, want 1 entry", len(entries), err)
+	}
+
+	second := conversationFile{ID: "entry-b", Model: "model", CreatedAt: now.Add(time.Second)}
+	if err := writeConversationFile(dir, second); err != nil {
+		t.Fatal(err)
+	}
+	index.add(conversationCacheSummary{ID: second.ID, Model: second.Model, CreatedAt: second.CreatedAt})
+	entries, err = index.get(dir, now.Add(2*time.Second), false)
+	if err != nil || len(entries) != 2 {
+		t.Fatalf("updated index entries=%d err=%v, want 2 entries", len(entries), err)
 	}
 }
 
@@ -115,5 +139,61 @@ func TestListConversationCachePaginatesDeterministically(t *testing.T) {
 	}
 	if len(page.Data) != 1 || page.Data[0].ID != "entry-a" {
 		t.Fatalf("second page IDs = %#v, want [entry-a]", page.Data)
+	}
+}
+
+func TestRetainConversationCacheReadsOldDays(t *testing.T) {
+	dir := t.TempDir()
+	old := conversationFile{ID: "old-entry", Model: "model", CreatedAt: time.Now().AddDate(0, 0, -10)}
+	if err := writeConversationFile(dir, old); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, err := readConversationFiles(dir, time.Now(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("entries without retention = %d, want 0", len(entries))
+	}
+
+	entries, err = readConversationFiles(dir, time.Now(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].ID != "old-entry" {
+		t.Fatalf("entries with retention = %#v, want old-entry", entries)
+	}
+
+	if _, err := findConversationFile(dir, "old-entry", false); err == nil {
+		t.Fatal("old entry is reachable without retention")
+	}
+	if entry, err := findConversationFile(dir, "old-entry", true); err != nil || entry.ID != "old-entry" {
+		t.Fatalf("old entry with retention = %#v, err = %v", entry, err)
+	}
+}
+
+func TestCleanupConversationCacheDirHonoursRetention(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now()
+	for _, offset := range []int{-2, 0} {
+		day := filepath.Join(dir, now.AddDate(0, 0, offset).Format("2006-01-02"))
+		if err := os.MkdirAll(day, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if removed := cleanupConversationCacheDir(dir, now, true); removed != 0 {
+		t.Fatalf("removed %d directories with retention, want 0", removed)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 2 {
+		t.Fatalf("retained directories = %d, want 2", len(entries))
+	}
+
+	if removed := cleanupConversationCacheDir(dir, now, false); removed != 1 {
+		t.Fatalf("removed %d directories without retention, want 1", removed)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+		t.Fatalf("remaining directories = %d, want 1", len(entries))
 	}
 }

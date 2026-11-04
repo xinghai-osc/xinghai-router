@@ -21,43 +21,44 @@ import (
 var migrations embed.FS
 
 type Service struct {
-	lifecycle             requestLifecycle
-	activeUsage           activeUsageTracker
-	cfg                   Config
-	db                    *pgxpool.Pool
-	httpClient            *http.Client
-	streamClient          *http.Client
-	limiter               rateLimiter
-	ipLimiter             rateLimiter
-	rankingsLimiter       rateLimiter
-	performanceLimiter    rateLimiter
-	background            *backgroundWriter
-	pricingCache          *ttlCache[string, pricingRule]
-	groupCache            *ttlCache[string, float64]
-	groupConcurrencyCache *ttlCache[string, int]
-	userConcurrencyCache  *ttlCache[string, int]
-	groupLimiter          *GroupLimiter
-	userLimiter           *GroupLimiter
-	channelLimiter        *GroupLimiter
-	concurrencyLeases     *concurrencyLeaseManager
-	redisReadiness        *redisLimiter
-	reliabilityData       *ttlCache[struct{}, reliabilitySettings]
-	contentPolicyData     *ttlCache[struct{}, contentPolicySnapshot]
-	conversationCacheData *ttlCache[struct{}, conversationCacheSettings]
-	rankingsCache         *ttlCache[string, rankingsPayload]
-	performanceCache      *ttlCache[string, modelPerformancePayload]
-	channelCache          *ttlCache[channelRouteKey, []channel]
-	channelKeyCache       *ttlCache[int64, []channelKeyCredential]
-	subscriptionCache     *ttlCache[subscriptionRouteKey, subscriptionAccess]
-	channelQuotaCache     *ttlCache[int64, bool]
-	quotaAbsentCache      *ttlCache[quotaRouteKey, struct{}]
-	promptCache           *promptPrefixCache
-	sessionAffinity       *sessionAffinityCache
-	sessionAffinityWrite  sync.Mutex
-	keyTouchCache         *ttlCache[string, struct{}]
-	scheduler             context.CancelFunc
-	migration             migrationStatus
-	migrationCancel       context.CancelFunc
+	lifecycle              requestLifecycle
+	activeUsage            activeUsageTracker
+	cfg                    Config
+	db                     *pgxpool.Pool
+	httpClient             *http.Client
+	streamClient           *http.Client
+	limiter                rateLimiter
+	ipLimiter              rateLimiter
+	rankingsLimiter        rateLimiter
+	performanceLimiter     rateLimiter
+	background             *backgroundWriter
+	pricingCache           *ttlCache[string, pricingRule]
+	groupCache             *ttlCache[string, float64]
+	groupConcurrencyCache  *ttlCache[string, int]
+	userConcurrencyCache   *ttlCache[string, int]
+	groupLimiter           *GroupLimiter
+	userLimiter            *GroupLimiter
+	channelLimiter         *GroupLimiter
+	concurrencyLeases      *concurrencyLeaseManager
+	redisReadiness         *redisLimiter
+	reliabilityData        *ttlCache[struct{}, reliabilitySettings]
+	contentPolicyData      *ttlCache[struct{}, contentPolicySnapshot]
+	conversationCacheData  *ttlCache[struct{}, conversationCacheSettings]
+	conversationCacheIndex *conversationCacheIndex
+	rankingsCache          *ttlCache[string, rankingsPayload]
+	performanceCache       *ttlCache[string, modelPerformancePayload]
+	channelCache           *ttlCache[channelRouteKey, []channel]
+	channelKeyCache        *ttlCache[int64, []channelKeyCredential]
+	subscriptionCache      *ttlCache[subscriptionRouteKey, subscriptionAccess]
+	channelQuotaCache      *ttlCache[int64, bool]
+	quotaAbsentCache       *ttlCache[quotaRouteKey, struct{}]
+	promptCache            *promptPrefixCache
+	sessionAffinity        *sessionAffinityCache
+	sessionAffinityWrite   sync.Mutex
+	keyTouchCache          *ttlCache[string, struct{}]
+	scheduler              context.CancelFunc
+	migration              migrationStatus
+	migrationCancel        context.CancelFunc
 }
 
 func isNoRows(err error) bool { return errors.Is(err, pgx.ErrNoRows) }
@@ -148,37 +149,38 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 	}
 	log.Printf("event=deployment_config mode=%s redis_failure_policy=%s", cfg.DeploymentMode, cfg.RedisFailurePolicy)
 	s := &Service{
-		cfg:                   cfg,
-		db:                    db,
-		httpClient:            newHTTPClient(0),
-		streamClient:          newStreamClient(),
-		limiter:               limits[0],
-		ipLimiter:             limits[1],
-		rankingsLimiter:       limits[2],
-		performanceLimiter:    limits[3],
-		redisReadiness:        redisReadiness,
-		background:            newBackgroundWriter(),
-		pricingCache:          newTTLCache[string, pricingRule](pricingCacheTTL),
-		groupCache:            newTTLCache[string, float64](groupCacheTTL),
-		groupConcurrencyCache: newTTLCache[string, int](groupCacheTTL),
-		userConcurrencyCache:  newTTLCache[string, int](groupCacheTTL),
-		groupLimiter:          NewGroupLimiter(),
-		userLimiter:           NewGroupLimiter(),
-		channelLimiter:        NewGroupLimiter(),
-		reliabilityData:       newTTLCache[struct{}, reliabilitySettings](reliabilityCacheTTL),
-		contentPolicyData:     newTTLCache[struct{}, contentPolicySnapshot](reliabilityCacheTTL),
-		conversationCacheData: newTTLCache[struct{}, conversationCacheSettings](reliabilityCacheTTL),
-		rankingsCache:         newTTLCache[string, rankingsPayload](rankingsCacheTTL),
-		performanceCache:      newTTLCache[string, modelPerformancePayload](performanceCacheTTL),
-		channelCache:          newTTLCache[channelRouteKey, []channel](channelCacheTTL),
-		channelKeyCache:       newTTLCache[int64, []channelKeyCredential](channelCacheTTL),
-		subscriptionCache:     newTTLCache[subscriptionRouteKey, subscriptionAccess](subscriptionCacheTTL),
-		channelQuotaCache:     newTTLCache[int64, bool](quotaCacheTTL),
-		quotaAbsentCache:      newTTLCache[quotaRouteKey, struct{}](quotaCacheTTL),
-		promptCache:           newPromptPrefixCache(cfg.LocalPromptCache, cfg.LocalPromptCacheSize),
-		sessionAffinity:       newSessionAffinityCache(cfg.SessionAffinityTTL, maxSessionAffinityEntries),
-		keyTouchCache:         newTTLCache[string, struct{}](keyTouchInterval),
-		migration:             migrationStatus{mu: &sync.Mutex{}},
+		cfg:                    cfg,
+		db:                     db,
+		httpClient:             newHTTPClient(0),
+		streamClient:           newStreamClient(),
+		limiter:                limits[0],
+		ipLimiter:              limits[1],
+		rankingsLimiter:        limits[2],
+		performanceLimiter:     limits[3],
+		redisReadiness:         redisReadiness,
+		background:             newBackgroundWriter(),
+		pricingCache:           newTTLCache[string, pricingRule](pricingCacheTTL),
+		groupCache:             newTTLCache[string, float64](groupCacheTTL),
+		groupConcurrencyCache:  newTTLCache[string, int](groupCacheTTL),
+		userConcurrencyCache:   newTTLCache[string, int](groupCacheTTL),
+		groupLimiter:           NewGroupLimiter(),
+		userLimiter:            NewGroupLimiter(),
+		channelLimiter:         NewGroupLimiter(),
+		reliabilityData:        newTTLCache[struct{}, reliabilitySettings](reliabilityCacheTTL),
+		contentPolicyData:      newTTLCache[struct{}, contentPolicySnapshot](reliabilityCacheTTL),
+		conversationCacheData:  newTTLCache[struct{}, conversationCacheSettings](reliabilityCacheTTL),
+		conversationCacheIndex: newConversationCacheIndex(),
+		rankingsCache:          newTTLCache[string, rankingsPayload](rankingsCacheTTL),
+		performanceCache:       newTTLCache[string, modelPerformancePayload](performanceCacheTTL),
+		channelCache:           newTTLCache[channelRouteKey, []channel](channelCacheTTL),
+		channelKeyCache:        newTTLCache[int64, []channelKeyCredential](channelCacheTTL),
+		subscriptionCache:      newTTLCache[subscriptionRouteKey, subscriptionAccess](subscriptionCacheTTL),
+		channelQuotaCache:      newTTLCache[int64, bool](quotaCacheTTL),
+		quotaAbsentCache:       newTTLCache[quotaRouteKey, struct{}](quotaCacheTTL),
+		promptCache:            newPromptPrefixCache(cfg.LocalPromptCache, cfg.LocalPromptCacheSize),
+		sessionAffinity:        newSessionAffinityCache(cfg.SessionAffinityTTL, maxSessionAffinityEntries),
+		keyTouchCache:          newTTLCache[string, struct{}](keyTouchInterval),
+		migration:              migrationStatus{mu: &sync.Mutex{}},
 	}
 	if cfg.DeploymentMode == "cluster" {
 		s.concurrencyLeases = &concurrencyLeaseManager{redisURL: cfg.RedisURL, ttl: cfg.ConcurrencyLeaseTTL}

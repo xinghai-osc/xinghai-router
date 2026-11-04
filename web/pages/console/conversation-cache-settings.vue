@@ -10,7 +10,10 @@ const { busy, run } = useAction()
 
 useHead({ title: () => `${t('system.conversationCacheTitle')} · ${site.value.name}` })
 
-const DEFAULTS: ConversationCacheSettings = { conversation_cache_enabled: false }
+const DEFAULTS: ConversationCacheSettings = {
+  conversation_cache_enabled: false,
+  conversation_cache_retain: false,
+}
 
 const { data, pending, error, refresh } = useResource(
   () => endpoints.getConversationCacheSettings(),
@@ -65,10 +68,13 @@ async function save() {
             </UiField>
 
             <UiField
-              :label="t('system.conversationCacheRetention')"
-              :hint="t('system.conversationCacheRetentionHint')"
+              :label="t('system.conversationCacheRetain')"
+              :hint="t('system.conversationCacheRetainHint')"
             >
-              <p class="text-[13px] text-muted">{{ t('system.conversationCacheRetentionHint') }}</p>
+              <UiSwitch
+                v-model="form.conversation_cache_retain"
+                :label="t('system.conversationCacheRetain')"
+              />
             </UiField>
           </div>
         </UiCard>

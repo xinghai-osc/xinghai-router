@@ -21,6 +21,7 @@ import (
 type upstreamRecorder struct {
 	mu       sync.Mutex
 	sessions []string
+	status   int
 }
 
 func (r *upstreamRecorder) record(session string) {
@@ -47,6 +48,10 @@ func affinityUpstream(recorder *upstreamRecorder) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(io.Discard, r.Body)
 		recorder.record(r.Header.Get("x-opencode-session"))
+		if recorder.status != 0 {
+			http.Error(w, `{"error":"channel unavailable"}`, recorder.status)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"id":"chatcmpl-mock","model":"affinity-model","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}}`)
 	}))
@@ -151,6 +156,56 @@ func TestIntegrationSessionAffinityPinsConversationsToOneChannel(t *testing.T) {
 			t.Fatal("two conversations shared a derived session")
 		}
 	})
+}
+
+// TestIntegrationSessionAffinityRetriesBoundChannelErrors checks that a bound
+// channel's non-retryable status fails over and that the successful fallback
+// becomes the session's new affinity.
+func TestIntegrationSessionAffinityRetriesBoundChannelErrors(t *testing.T) {
+	db, _ := integrationPool(t)
+	defer db.Close()
+	resetIntegrationDatabase(t, db)
+	ctx := context.Background()
+	userID, _ := integrationUser(t, db, "session-affinity-error@example.com", 100)
+	secret := "sk-xh-session-affinity-error"
+	integrationKey(t, db, userID, secret)
+
+	recorders := []*upstreamRecorder{{}, {}}
+	channelIDs := make([]int64, len(recorders))
+	for i, recorder := range recorders {
+		upstream := affinityUpstream(recorder)
+		defer upstream.Close()
+		if err := db.QueryRow(ctx, `insert into channels(name,base_url,api_key,models,provider,user_id,priority,weight) values($1,$2,'fake-upstream-key','["affinity-model"]','opencode_go',$3,100,1) returning id`, "affinity-error-"+string(rune('a'+i)), upstream.URL, userID).Scan(&channelIDs[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Exec(ctx, `insert into pricing_rules(id,model,input_per_million,output_per_million) values(gen_random_uuid(),'affinity-model',1,1)`); err != nil {
+		t.Fatal(err)
+	}
+	service := integrationService(t, db)
+	caller := &affinityGatewayCaller{t: t, service: service, secret: secret, recorders: recorders}
+	const session = "ses-affinity-error"
+	body := `{"model":"affinity-model","messages":[{"role":"user","content":"recover"}],"max_tokens":8}`
+	boundIndex := caller.call(session, body)
+	failedChannel := channelIDs[boundIndex]
+	recorders[boundIndex].status = http.StatusBadRequest
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	request.Header.Set("Authorization", "Bearer "+secret)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("x-opencode-session", session)
+	response := httptest.NewRecorder()
+	service.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("failover status=%d body=%s", response.Code, response.Body.String())
+	}
+	target, ok := service.sessionAffinity.get(sessionAffinityKey{session: session, userID: userID, model: "affinity-model"})
+	if !ok || target.channelID == failedChannel {
+		t.Fatalf("affinity target = %+v, found=%v; failed channel=%d", target, ok, failedChannel)
+	}
+	if next := caller.call(session, body); channelIDs[next] != target.channelID {
+		t.Fatalf("next request used channel %d, affinity was rebound to %d", channelIDs[next], target.channelID)
+	}
 }
 
 // TestIntegrationSessionAffinityFailsOverToTheRemainingChannel checks that a pin

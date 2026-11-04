@@ -15,6 +15,7 @@ type activeUsageEntry struct {
 	CreatedAt   time.Time `json:"created_at"`
 	UserID      string    `json:"user_id"`
 	UserName    string    `json:"user_name,omitempty"`
+	KeyName     string    `json:"key_name"`
 	WorkspaceID string    `json:"-"`
 }
 
@@ -23,7 +24,7 @@ type activeUsageTracker struct {
 	entries map[string]activeUsageEntry
 }
 
-func (s *Service) trackActiveUsage(requestID, workspaceID, userID, model string) func() {
+func (s *Service) trackActiveUsage(requestID, workspaceID, userID, keyName, model string) func() {
 	if requestID == "" || workspaceID == "" {
 		return func() {}
 	}
@@ -32,7 +33,7 @@ func (s *Service) trackActiveUsage(requestID, workspaceID, userID, model string)
 	if tracker.entries == nil {
 		tracker.entries = make(map[string]activeUsageEntry)
 	}
-	tracker.entries[requestID] = activeUsageEntry{RequestID: requestID, Model: model, CreatedAt: time.Now(), UserID: userID, WorkspaceID: workspaceID}
+	tracker.entries[requestID] = activeUsageEntry{RequestID: requestID, Model: model, CreatedAt: time.Now(), UserID: userID, KeyName: keyName, WorkspaceID: workspaceID}
 	tracker.mu.Unlock()
 
 	return func() {

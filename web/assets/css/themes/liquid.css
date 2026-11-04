@@ -30,6 +30,9 @@
   --shadow-glow: 0 0 0 1px rgb(10 116 240 / 0.2), 0 10px 30px -8px rgb(10 116 240 / 0.35);
   --page-glow: none;
   --shimmer-highlight: rgb(255 255 255 / 0.7);
+  --ambient-one: rgb(91 181 255 / 0.28);
+  --ambient-two: rgb(165 126 255 / 0.2);
+  --ambient-three: rgb(111 224 198 / 0.18);
 
   --glass-panel-opacity: 100%;
   --glass-blur: 24px;
@@ -72,6 +75,9 @@
     0 1px 2px rgb(0 0 0 / 0.4),
     0 24px 56px -16px rgb(0 0 0 / 0.65);
   --shadow-glow: 0 0 0 1px rgb(78 162 255 / 0.28), 0 10px 32px -8px rgb(78 162 255 / 0.45);
+  --ambient-one: rgb(58 132 255 / 0.24);
+  --ambient-two: rgb(169 103 255 / 0.2);
+  --ambient-three: rgb(43 210 187 / 0.14);
   --shimmer-highlight: rgb(255 255 255 / 0.1);
 
   --glass-rim: rgb(255 255 255 / 0.16);
@@ -98,14 +104,21 @@
   pointer-events: none;
   background-color: var(--paper);
   background-image:
-    radial-gradient(60% 50% at 85% 100%, rgb(148 170 210 / 0.18), transparent 75%),
-    linear-gradient(180deg, rgb(255 255 255 / 0.5), transparent 40%);
+    radial-gradient(42% 42% at 8% 4%, var(--ambient-one), transparent 74%),
+    radial-gradient(38% 42% at 92% 14%, var(--ambient-two), transparent 76%),
+    radial-gradient(48% 42% at 62% 100%, var(--ambient-three), transparent 78%),
+    linear-gradient(180deg, rgb(255 255 255 / 0.52), transparent 42%);
   background-repeat: no-repeat;
+  background-size: 125% 125%;
+  animation: liquid-drift 34s ease-in-out infinite alternate;
 }
 
 :root[data-preset='liquid'][data-theme='dark'] body::before {
   background-image:
-    radial-gradient(60% 50% at 85% 100%, rgb(70 90 140 / 0.18), transparent 75%);
+    radial-gradient(42% 42% at 8% 4%, var(--ambient-one), transparent 74%),
+    radial-gradient(38% 42% at 92% 14%, var(--ambient-two), transparent 76%),
+    radial-gradient(48% 42% at 62% 100%, var(--ambient-three), transparent 78%);
+  background-size: 125% 125%;
 }
 
 /* 玻璃面板：模糊 + 增饱和 + 顶部高光描边 + 斜向光泽。 */
@@ -181,6 +194,18 @@
   outline-offset: 0;
 }
 
+
+@keyframes liquid-drift {
+  from { background-position: 0% 0%; }
+  to { background-position: 7% 4%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-preset='liquid'] body::before {
+    animation: none;
+  }
+}
+
 @media (prefers-reduced-transparency: reduce) {
   :root[data-preset='liquid'] {
     --surface: #ffffff;
@@ -196,6 +221,7 @@
   :root[data-preset='liquid'] .ui-card,
   :root[data-preset='liquid'] .ui-table,
   :root[data-preset='liquid'] .glass-control {
+    background-image: none;
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
   }

@@ -135,7 +135,7 @@ curl -X POST http://localhost:8080/account/payments \
 
 等级承载权益：赠送额度（激活时一次性充值进用户钱包并写入账本 `subscription_topup`，可叠加按量计费）、自动加入分组、模型白名单（留空表示全部模型可用）、每周期最大请求数与最大额度，以及额度耗尽策略。周期价格除了金额与币种，还可以单独覆盖赠送额度、每周期请求数与每周期额度；留空表示继承等级默认值，这是“年付给一年额度、月付给一月额度”的表达方式。
 
-同一等级允许存在多个订阅实例（例如管理员单独发放的多份额度）。普通购买/续费会顺延一个当前有效实例的到期时间，并将其本周期额度重置为所购周期的额度；管理员新增订阅时可创建同等级的独立实例。创建或编辑 API Key 时可绑定其中一个有效实例：绑定后该 Key 只使用该实例的订阅权益与额度，不会借用同等级的其他实例；留空则沿用系统自动选择。订阅期内，对该实例等级白名单内（或白名单为空时的全部模型）的调用会跳过钱包结算，达到本周期上限后按 `overage_policy` 处理。
+同一等级允许存在多个订阅实例（例如管理员单独发放的多份额度）。普通购买/续费会顺延一个当前有效实例的到期时间，并将其本周期额度重置为所购周期的额度；管理员新增订阅时可创建同等级的独立实例。已持有同产品较低等级的有效实例时，购买更高等级会被识别为升级：等级就地切换，计费周期与到期时间不变，只按当前周期剩余时长支付差价（差价为 0 时直接生效，不生成支付订单），本周期额度重置为新等级该周期的额度并补发等级间额度差额。创建或编辑 API Key 时可绑定其中一个有效实例：绑定后该 Key 只使用该实例的订阅权益与额度，不会借用同等级的其他实例；留空则沿用系统自动选择。订阅期内，对该实例等级白名单内（或白名单为空时的全部模型）的调用会跳过钱包结算，达到本周期上限后按 `overage_policy` 处理。
 
 订阅相关 API：
 
@@ -152,6 +152,9 @@ curl -X POST http://localhost:8080/account/subscriptions \
 curl -X POST http://localhost:8080/account/subscriptions/balance \
   -b cookies.txt -c cookies.txt -H 'X-Xinghai-Request: 1' -H 'Content-Type: application/json' \
   -d '{"tier_id":"TIER_UUID","billing_period":"year"}'
+
+# 查询升级报价（非升级场景返回 data: null）
+curl "http://localhost:8080/account/subscription-upgrade?tier_id=TIER_UUID&billing_period=month" -b cookies.txt -c cookies.txt -H 'X-Xinghai-Request: 1'
 
 # 查询我的订阅与订单
 curl http://localhost:8080/account/subscriptions -b cookies.txt -c cookies.txt -H 'X-Xinghai-Request: 1'

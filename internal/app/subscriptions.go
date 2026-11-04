@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"net/url"
 	"sort"
@@ -52,12 +53,15 @@ type subscriptionTier struct {
 }
 
 // subscriptionTierPrice is one billing-period option of a tier. The three amount
-// fields are per-period overrides; an empty value inherits the tier default.
+// fields are per-period overrides; an empty value inherits the tier default. The
+// price is quoted in its own currency (元 for CNY); points_price converts it to
+// the site's point balance at the exchange rate, which a balance purchase charges.
 type subscriptionTierPrice struct {
 	ID                 string   `json:"id"`
 	BillingPeriod      string   `json:"billing_period"`
 	Price              string   `json:"price"`
 	Currency           string   `json:"currency"`
+	PointsPrice        string   `json:"points_price"`
 	CreditAmount       string   `json:"credit_amount"`
 	MaxRequestsPerRule *int64   `json:"max_requests_per_period"`
 	MaxCreditPerRule   *float64 `json:"max_credit_per_period"`
@@ -220,7 +224,7 @@ func (s *Service) loadSubscriptionCatalog(ctx context.Context, includeDisabled b
 		}
 	}
 
-	priceRows, err := s.db.Query(ctx, `select id::text,tier_id::text,billing_period,price::text,currency,coalesce(credit_amount::text,''),max_requests_per_period,max_credit_per_period,enabled,sort_order from subscription_tier_prices where tier_id = any($1) and ($2 or enabled) order by tier_id,sort_order,billing_period`, tierOrder, includeDisabled)
+	priceRows, err := s.db.Query(ctx, `select p.id::text,p.tier_id::text,p.billing_period,p.price::text,p.currency,coalesce(p.credit_amount::text,''),p.max_requests_per_period,p.max_credit_per_period,p.enabled,p.sort_order,coalesce(round(p.price*e.points_per_unit,2)::text,p.price::text) from subscription_tier_prices p left join exchange_rates e on e.currency=p.currency and e.enabled where p.tier_id = any($1) and ($2 or p.enabled) order by p.tier_id,p.sort_order,p.billing_period`, tierOrder, includeDisabled)
 	if err != nil {
 		return nil, err
 	}
@@ -228,7 +232,7 @@ func (s *Service) loadSubscriptionCatalog(ctx context.Context, includeDisabled b
 	for priceRows.Next() {
 		var price subscriptionTierPrice
 		var tierID string
-		if err = priceRows.Scan(&price.ID, &tierID, &price.BillingPeriod, &price.Price, &price.Currency, &price.CreditAmount, &price.MaxRequestsPerRule, &price.MaxCreditPerRule, &price.Enabled, &price.SortOrder); err != nil {
+		if err = priceRows.Scan(&price.ID, &tierID, &price.BillingPeriod, &price.Price, &price.Currency, &price.CreditAmount, &price.MaxRequestsPerRule, &price.MaxCreditPerRule, &price.Enabled, &price.SortOrder, &price.PointsPrice); err != nil {
 			return nil, err
 		}
 		if tier := tierIndex[tierID]; tier != nil {
@@ -1010,6 +1014,7 @@ type tierPurchase struct {
 	BillingPeriod string
 	PriceID       string
 	Price         string
+	PointsPrice   string
 	Currency      string
 	GroupID       string
 	OveragePolicy string
@@ -1019,13 +1024,332 @@ func (s *Service) loadTierPurchase(ctx context.Context, q interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }, tierID, billingPeriod string, enabledOnly bool) (tierPurchase, error) {
 	var p tierPurchase
-	err := q.QueryRow(ctx, `select t.id::text,t.level,t.name,s.id::text,s.name,coalesce(t.group_id::text,''),t.overage_policy,coalesce(pr.id::text,''),coalesce(pr.billing_period,$2),coalesce(pr.price::text,'0.00'),coalesce(pr.currency,'CNY') from subscription_tiers t join subscriptions s on s.id=t.subscription_id left join subscription_tier_prices pr on pr.tier_id=t.id and pr.billing_period=$2 where t.id=$1 and (not $3 or (t.enabled and s.enabled and pr.enabled))`, tierID, billingPeriod, enabledOnly).
-		Scan(&p.TierID, &p.TierLevel, &p.TierName, &p.ProductID, &p.ProductName, &p.GroupID, &p.OveragePolicy, &p.PriceID, &p.BillingPeriod, &p.Price, &p.Currency)
+	err := q.QueryRow(ctx, `select t.id::text,t.level,t.name,s.id::text,s.name,coalesce(t.group_id::text,''),t.overage_policy,coalesce(pr.id::text,''),coalesce(pr.billing_period,$2),coalesce(pr.price::text,'0.00'),coalesce(pr.currency,'CNY'),coalesce(round(pr.price*e.points_per_unit,2)::text,pr.price::text,'0.00') from subscription_tiers t join subscriptions s on s.id=t.subscription_id left join subscription_tier_prices pr on pr.tier_id=t.id and pr.billing_period=$2 left join exchange_rates e on e.currency=coalesce(pr.currency,'CNY') and e.enabled where t.id=$1 and (not $3 or (t.enabled and s.enabled and pr.enabled))`, tierID, billingPeriod, enabledOnly).
+		Scan(&p.TierID, &p.TierLevel, &p.TierName, &p.ProductID, &p.ProductName, &p.GroupID, &p.OveragePolicy, &p.PriceID, &p.BillingPeriod, &p.Price, &p.Currency, &p.PointsPrice)
 	if err != nil {
 		return tierPurchase{}, err
 	}
 	p.DisplayName = subscriptionDisplayName(p.ProductName, p.TierName)
+	if cents, _, ok := parsePaymentAmount(p.Price); !ok || cents <= 0 {
+		var period, price, currency, points string
+		fallback := q.QueryRow(ctx, `select p.billing_period,p.price::text,coalesce(p.currency,'CNY'),coalesce(round(p.price*e.points_per_unit,2)::text,p.price::text) from subscription_tier_prices p left join exchange_rates e on e.currency=coalesce(p.currency,'CNY') and e.enabled where p.tier_id=$1 and p.enabled and p.price>0 order by p.sort_order,p.billing_period limit 1`, tierID)
+		if scanErr := fallback.Scan(&period, &price, &currency, &points); scanErr == nil {
+			p.PriceID, p.BillingPeriod, p.Price, p.Currency, p.PointsPrice = "", period, price, currency, points
+		}
+	}
 	return p, nil
+}
+
+// subscriptionUpgrade quotes an in-place upgrade of a running subscription
+// instance to a higher tier of the same product. The instance keeps the period
+// it is already serving; the user pays only the price difference prorated to the
+// time left in that period, and the new tier's quota is granted for the rest of
+// it.
+type subscriptionUpgrade struct {
+	InstanceID    string     `json:"subscription_id"`
+	ProductID     string     `json:"product_id"`
+	FromTierID    string     `json:"from_tier_id"`
+	FromTierName  string     `json:"from_tier_name"`
+	FromDisplay   string     `json:"from_display_name"`
+	FromTierLevel int        `json:"from_tier_level"`
+	ToTierID      string     `json:"to_tier_id"`
+	BillingPeriod string     `json:"billing_period"`
+	Currency      string     `json:"currency"`
+	Amount        string     `json:"amount"`
+	PointsAmount  string     `json:"points_amount"`
+	CreditAmount  string     `json:"credit_amount"`
+	PeriodStart   *time.Time `json:"current_period_start"`
+	PeriodEnd     *time.Time `json:"current_period_end"`
+
+	amountCents int64
+	pointsCents int64
+}
+
+// upgradeFraction reports the share of a running period still ahead of now.
+func upgradeFraction(start, end, now time.Time) float64 {
+	if !end.After(start) || !end.After(now) {
+		return 0
+	}
+	return float64(end.Sub(now)) / float64(end.Sub(start))
+}
+
+// proratedUpgradeCents is the difference to charge for moving a running period
+// from oldCents to newCents, proportional to the time that is left. It never
+// charges for a tier that is not more expensive.
+func proratedUpgradeCents(oldCents, newCents int64, fraction float64) int64 {
+	if fraction <= 0 || newCents <= oldCents {
+		return 0
+	}
+	return int64(math.Round(float64(newCents-oldCents) * fraction))
+}
+
+// proratedUpgradeCredit is the extra subscription credit granted for the rest of
+// the period, rounded to cents.
+func proratedUpgradeCredit(oldCredit, newCredit, fraction float64) float64 {
+	if fraction <= 0 || newCredit <= oldCredit {
+		return 0
+	}
+	return math.Round((newCredit-oldCredit)*fraction*100) / 100
+}
+
+// tierPeriodCredit returns the credit a period of the tier grants: the price
+// override when the period defines one, else the tier default.
+func tierPeriodCredit(ctx context.Context, q interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, tierID, billingPeriod string) (float64, error) {
+	var tierDefault, override string
+	if err := q.QueryRow(ctx, `select coalesce(round(t.credit_amount,2)::text,''),coalesce(round(pr.credit_amount,2)::text,'') from subscription_tiers t left join subscription_tier_prices pr on pr.tier_id=t.id and pr.billing_period=$2 where t.id=$1`, tierID, billingPeriod).Scan(&tierDefault, &override); err != nil {
+		return 0, err
+	}
+	value := override
+	if value == "" {
+		value = tierDefault
+	}
+	credit, _ := parseCreditAmount(value)
+	return credit, nil
+}
+
+// loadSubscriptionUpgrade returns the upgrade the user would get by buying the
+// target tier, or nil when the purchase is a new subscription or a renewal
+// instead. An upgrade needs a running instance of the same product that is
+// billed for the same period at the same currency and sits on a lower tier.
+func (s *Service) loadSubscriptionUpgrade(ctx context.Context, q interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, userID string, purchase tierPurchase) (*subscriptionUpgrade, error) {
+	newCents, _, ok := parsePaymentAmount(purchase.Price)
+	if !ok || newCents <= 0 || purchase.BillingPeriod == "" || purchase.Currency == "" {
+		return nil, nil
+	}
+	upgrade := subscriptionUpgrade{
+		ProductID:     purchase.ProductID,
+		ToTierID:      purchase.TierID,
+		BillingPeriod: purchase.BillingPeriod,
+		Currency:      purchase.Currency,
+	}
+	var oldPrice, productName string
+	err := q.QueryRow(ctx, `select us.id::text,t.id::text,t.name,t.level,s.name,coalesce(us.price::text,''),coalesce(us.billing_period,'month'),us.current_period_start,us.current_period_end from user_subscriptions us join subscription_tiers t on t.id=us.tier_id join subscriptions s on s.id=t.subscription_id where us.user_id=$1 and t.subscription_id=$2 and us.status='active' and us.current_period_start is not null and us.current_period_end>now() and coalesce(us.billing_period,'month')=$3 and coalesce(us.currency,'CNY')=$4 and t.level<$5 order by t.level desc,us.current_period_end desc limit 1`,
+		userID, purchase.ProductID, purchase.BillingPeriod, purchase.Currency, purchase.TierLevel).
+		Scan(&upgrade.InstanceID, &upgrade.FromTierID, &upgrade.FromTierName, &upgrade.FromTierLevel, &productName, &oldPrice, &upgrade.BillingPeriod, &upgrade.PeriodStart, &upgrade.PeriodEnd)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if upgrade.PeriodStart == nil || upgrade.PeriodEnd == nil {
+		return nil, nil
+	}
+	fraction := upgradeFraction(*upgrade.PeriodStart, *upgrade.PeriodEnd, time.Now())
+	if fraction <= 0 {
+		return nil, nil
+	}
+	oldCents, _, ok := parsePaymentAmount(oldPrice)
+	if !ok {
+		oldCents = 0
+	}
+	upgrade.amountCents = proratedUpgradeCents(oldCents, newCents, fraction)
+	upgrade.Amount = formatAmount(upgrade.amountCents)
+	upgrade.pointsCents = upgrade.amountCents
+	if pointsCents, _, ok := parsePaymentAmount(purchase.PointsPrice); ok && pointsCents > 0 {
+		upgrade.pointsCents = int64(math.Round(float64(upgrade.amountCents) * float64(pointsCents) / float64(newCents)))
+	}
+	upgrade.PointsAmount = formatAmount(upgrade.pointsCents)
+	oldCredit, err := tierPeriodCredit(ctx, q, upgrade.FromTierID, upgrade.BillingPeriod)
+	if err != nil {
+		return nil, err
+	}
+	newCredit, err := tierPeriodCredit(ctx, q, purchase.TierID, purchase.BillingPeriod)
+	if err != nil {
+		return nil, err
+	}
+	upgrade.CreditAmount = formatCredit(proratedUpgradeCredit(oldCredit, newCredit, fraction))
+	upgrade.FromDisplay = subscriptionDisplayName(productName, upgrade.FromTierName)
+	return &upgrade, nil
+}
+
+func (s *Service) accountSubscriptionUpgrade(w http.ResponseWriter, r *http.Request) {
+	account := accountFromContext(r)
+	tierID := strings.TrimSpace(r.URL.Query().Get("tier_id"))
+	if tierID == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "tier_id is required")
+		return
+	}
+	billingPeriod := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("billing_period")))
+	if billingPeriod == "" {
+		billingPeriod = "month"
+	}
+	purchase, err := s.loadTierPurchase(r.Context(), s.db, tierID, billingPeriod, true)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", "subscription tier or billing period not found")
+		return
+	}
+	upgrade, err := s.loadSubscriptionUpgrade(r.Context(), s.db, account.userID, purchase)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not load subscription upgrade")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": upgrade})
+}
+
+// activateSubscriptionUpgradeTx switches a running instance to the purchased
+// higher tier without moving its period: the end stays where it is, the quota is
+// reset to the new tier's period amount, and the credit difference between the
+// two tiers is granted pro rata to the time left.
+func (s *Service) activateSubscriptionUpgradeTx(ctx context.Context, tx pgx.Tx, userID, instanceID string, purchase tierPurchase) (string, error) {
+	var tierProductID, tierCredit, groupID string
+	var tierLevel int
+	if err := tx.QueryRow(ctx, `select subscription_id::text,level,coalesce(credit_amount::text,''),coalesce(group_id::text,'') from subscription_tiers where id=$1`, purchase.TierID).Scan(&tierProductID, &tierLevel, &tierCredit, &groupID); err != nil {
+		return "", err
+	}
+	var currentTierID, currentProductID, currency string
+	var currentLevel int
+	var start, end *time.Time
+	if err := tx.QueryRow(ctx, `select us.tier_id::text,t.subscription_id::text,t.level,coalesce(us.currency,'CNY'),us.current_period_start,us.current_period_end from user_subscriptions us join subscription_tiers t on t.id=us.tier_id where us.id=$1 and us.user_id=$2 and us.status='active' and us.current_period_end>now() for update of us`, instanceID, userID).
+		Scan(&currentTierID, &currentProductID, &currentLevel, &currency, &start, &end); err != nil {
+		return "", fmt.Errorf("subscription is not upgradable: %w", err)
+	}
+	if currentProductID != tierProductID || currentLevel >= tierLevel || purchase.BillingPeriod == "" || currency != purchase.Currency || start == nil || end == nil {
+		return "", fmt.Errorf("subscription upgrade no longer applies")
+	}
+	fraction := upgradeFraction(*start, *end, time.Now())
+	if fraction <= 0 {
+		return "", fmt.Errorf("subscription period has ended")
+	}
+	oldCredit, err := tierPeriodCredit(ctx, tx, currentTierID, purchase.BillingPeriod)
+	if err != nil {
+		return "", err
+	}
+	newCredit, err := tierPeriodCredit(ctx, tx, purchase.TierID, purchase.BillingPeriod)
+	if err != nil {
+		return "", err
+	}
+	credit := proratedUpgradeCredit(oldCredit, newCredit, fraction)
+	if _, err = tx.Exec(ctx, `update user_subscriptions set tier_id=$1,billing_period=$2,price=$3,currency=$4,updated_at=now() where id=$5`, purchase.TierID, purchase.BillingPeriod, purchase.Price, purchase.Currency, instanceID); err != nil {
+		return "", err
+	}
+	if err = s.initSubscriptionCountersTx(ctx, tx, instanceID); err != nil {
+		return "", err
+	}
+	if credit > 0 {
+		if err = s.creditWalletTx(ctx, tx, userID, credit, "subscription_topup", instanceID, "Subscription upgrade credit"); err != nil {
+			return "", err
+		}
+	}
+	if groupID != "" {
+		if _, err = tx.Exec(ctx, `insert into user_groups(user_id,group_id) values($1,$2) on conflict do nothing`, userID, groupID); err != nil {
+			return "", err
+		}
+	}
+	return instanceID, nil
+}
+
+// completeFreeUpgrade applies an upgrade whose prorated difference rounds to
+// zero, so no payment order is needed.
+func (s *Service) completeFreeUpgrade(w http.ResponseWriter, r *http.Request, userID string, purchase tierPurchase, upgrade subscriptionUpgrade) {
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not upgrade subscription")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	instanceID, err := s.activateSubscriptionUpgradeTx(r.Context(), tx, userID, upgrade.InstanceID, purchase)
+	if err != nil {
+		writeError(w, http.StatusConflict, "upgrade_unavailable", "subscription can no longer be upgraded")
+		return
+	}
+	if err = tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not upgrade subscription")
+		return
+	}
+	s.audit(r, "subscription.upgraded", "user_subscription", instanceID, map[string]any{"from_tier_id": upgrade.FromTierID, "to_tier_id": upgrade.ToTierID, "billing_period": upgrade.BillingPeriod, "amount": "0.00"})
+	s.subscriptionCache.clear()
+	var balance string
+	_ = s.db.QueryRow(r.Context(), `select coalesce((select balance::text from user_wallets where user_id=$1),'0')`, userID).Scan(&balance)
+	writeJSON(w, http.StatusCreated, map[string]any{"order_no": "", "subscription_id": instanceID, "amount": "0.00", "points": "0.00", "status": "paid", "balance": balance})
+}
+
+func (s *Service) createEpayUpgrade(w http.ResponseWriter, r *http.Request, userID string, purchase tierPurchase, upgrade subscriptionUpgrade, paymentType string, settings epaySettings) {
+	orderID, err := randomID()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not create subscription")
+		return
+	}
+	orderNo := fmt.Sprintf("xhsub%d%s", time.Now().UnixMilli(), strings.ReplaceAll(orderID, "-", "")[:12])
+	if _, err = s.db.Exec(r.Context(), `insert into subscription_orders(id,order_no,subscription_id,user_id,tier_id,plan_name,provider,payment_type,amount,billing_period,period_kind) values($1,$2,$3,$4,$5,$6,'epay',$7,$8,$9,'upgrade')`,
+		orderID, orderNo, upgrade.InstanceID, userID, purchase.TierID, purchase.DisplayName, paymentType, upgrade.Amount, purchase.BillingPeriod); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not create subscription")
+		return
+	}
+	params := url.Values{
+		"pid":          {settings.MerchantID},
+		"type":         {paymentType},
+		"out_trade_no": {orderNo},
+		"notify_url":   {settings.PublicBaseURL + "/api/payments/epay/notify"},
+		"return_url":   {settings.PublicBaseURL + "/console/subscriptions?order=" + url.QueryEscape(orderNo)},
+		"name":         {"Xinghai upgrade: " + purchase.DisplayName},
+		"money":        {upgrade.Amount},
+	}
+	params.Set("sign", epaySign(params, settings.MerchantKey))
+	params.Set("sign_type", "MD5")
+	writeJSON(w, http.StatusCreated, map[string]any{"order_no": orderNo, "amount": upgrade.Amount, "status": "pending", "pay_url": settings.BaseURL + "/submit.php?" + params.Encode()})
+}
+
+func (s *Service) createBalanceUpgrade(w http.ResponseWriter, r *http.Request, userID string, purchase tierPurchase, upgrade subscriptionUpgrade) {
+	orderID, err := randomID()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not create subscription")
+		return
+	}
+	ledgerID, err := randomID()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not create subscription")
+		return
+	}
+	orderNo := fmt.Sprintf("xhsub%d%s", time.Now().UnixMilli(), strings.ReplaceAll(orderID, "-", "")[:12])
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not create subscription")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	if _, err = tx.Exec(r.Context(), `insert into user_wallets(user_id) values($1) on conflict do nothing`, userID); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not create subscription")
+		return
+	}
+	var balanceAfter string
+	err = tx.QueryRow(r.Context(), `update user_wallets set balance=balance-$1::numeric,updated_at=now() where user_id=$2 and balance-reserved >= $1::numeric returning balance::text`, upgrade.PointsAmount, userID).Scan(&balanceAfter)
+	if err == pgx.ErrNoRows {
+		writeError(w, http.StatusConflict, "insufficient_balance", "insufficient available balance")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not create subscription")
+		return
+	}
+	instanceID, err := s.activateSubscriptionUpgradeTx(r.Context(), tx, userID, upgrade.InstanceID, purchase)
+	if err != nil {
+		writeError(w, http.StatusConflict, "upgrade_unavailable", "subscription can no longer be upgraded")
+		return
+	}
+	if _, err = tx.Exec(r.Context(), `insert into subscription_orders(id,order_no,subscription_id,user_id,tier_id,plan_name,provider,payment_type,amount,billing_period,status,period_kind,paid_at) values($1,$2,$3,$4,$5,$6,'wallet','balance',$7,$8,'paid','upgrade',now())`,
+		orderID, orderNo, instanceID, userID, purchase.TierID, purchase.DisplayName, upgrade.Amount, purchase.BillingPeriod); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not create subscription")
+		return
+	}
+	if upgrade.pointsCents > 0 {
+		if _, err = tx.Exec(r.Context(), `insert into wallet_ledger(id,user_id,amount,balance_after,kind,request_id,note) values($1,$2,-$3::numeric,$4,'subscription_purchase',$5,$6)`, ledgerID, userID, upgrade.PointsAmount, balanceAfter, orderNo, "Subscription upgrade"); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "could not create subscription")
+			return
+		}
+	}
+	if err = tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not create subscription")
+		return
+	}
+	s.audit(r, "subscription.upgraded", "user_subscription", instanceID, map[string]any{"order_no": orderNo, "from_tier_id": upgrade.FromTierID, "to_tier_id": upgrade.ToTierID, "billing_period": upgrade.BillingPeriod, "amount": upgrade.Amount})
+	s.notifyAdminsOfPurchase(r.Context(), "subscription", orderNo, userID, upgrade.Amount, purchase.DisplayName)
+	s.subscriptionCache.clear()
+	writeJSON(w, http.StatusCreated, map[string]any{"order_no": orderNo, "subscription_id": instanceID, "amount": upgrade.Amount, "points": upgrade.PointsAmount, "status": "paid", "balance": balanceAfter})
 }
 
 func (s *Service) createSubscription(w http.ResponseWriter, r *http.Request) {
@@ -1061,6 +1385,19 @@ func (s *Service) createSubscription(w http.ResponseWriter, r *http.Request) {
 	}
 	if priceCents, _, ok := parsePaymentAmount(purchase.Price); !ok || priceCents <= 0 {
 		writeError(w, http.StatusBadRequest, "invalid_request", "this subscription period requires a positive price")
+		return
+	}
+	upgrade, err := s.loadSubscriptionUpgrade(r.Context(), s.db, account.userID, purchase)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not create subscription")
+		return
+	}
+	if upgrade != nil {
+		if upgrade.amountCents <= 0 {
+			s.completeFreeUpgrade(w, r, account.userID, purchase, *upgrade)
+			return
+		}
+		s.createEpayUpgrade(w, r, account.userID, purchase, *upgrade, paymentType, settings)
 		return
 	}
 	orderID, err := randomID()
@@ -1126,8 +1463,21 @@ func (s *Service) createBalanceSubscription(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusNotFound, "not_found", "subscription tier or billing period not found")
 		return
 	}
-	if priceCents, _, ok := parsePaymentAmount(purchase.Price); !ok || priceCents <= 0 {
+	if priceCents, _, ok := parsePaymentAmount(purchase.PointsPrice); !ok || priceCents <= 0 {
 		writeError(w, http.StatusBadRequest, "invalid_request", "this subscription period requires a positive price")
+		return
+	}
+	upgrade, err := s.loadSubscriptionUpgrade(r.Context(), s.db, account.userID, purchase)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not create subscription")
+		return
+	}
+	if upgrade != nil {
+		if upgrade.amountCents <= 0 {
+			s.completeFreeUpgrade(w, r, account.userID, purchase, *upgrade)
+			return
+		}
+		s.createBalanceUpgrade(w, r, account.userID, purchase, *upgrade)
 		return
 	}
 	orderID, err := randomID()
@@ -1152,7 +1502,7 @@ func (s *Service) createBalanceSubscription(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	var balanceAfter string
-	err = tx.QueryRow(r.Context(), `update user_wallets set balance=balance-$1::numeric,updated_at=now() where user_id=$2 and balance-reserved >= $1::numeric returning balance::text`, purchase.Price, account.userID).Scan(&balanceAfter)
+	err = tx.QueryRow(r.Context(), `update user_wallets set balance=balance-$1::numeric,updated_at=now() where user_id=$2 and balance-reserved >= $1::numeric returning balance::text`, purchase.PointsPrice, account.userID).Scan(&balanceAfter)
 	if err == pgx.ErrNoRows {
 		writeError(w, http.StatusConflict, "insufficient_balance", "insufficient available balance")
 		return
@@ -1175,7 +1525,7 @@ func (s *Service) createBalanceSubscription(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not create subscription")
 		return
 	}
-	if _, err = tx.Exec(r.Context(), `insert into wallet_ledger(id,user_id,amount,balance_after,kind,request_id,note) values($1,$2,-$3::numeric,$4,'subscription_purchase',$5,$6)`, ledgerID, account.userID, purchase.Price, balanceAfter, orderNo, "Subscription purchase"); err != nil {
+	if _, err = tx.Exec(r.Context(), `insert into wallet_ledger(id,user_id,amount,balance_after,kind,request_id,note) values($1,$2,-$3::numeric,$4,'subscription_purchase',$5,$6)`, ledgerID, account.userID, purchase.PointsPrice, balanceAfter, orderNo, "Subscription purchase"); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not create subscription")
 		return
 	}
@@ -1183,10 +1533,10 @@ func (s *Service) createBalanceSubscription(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not create subscription")
 		return
 	}
-	s.audit(r, "subscription.balance_purchased", "user_subscription", subID, map[string]any{"order_no": orderNo, "tier_id": purchase.TierID, "billing_period": purchase.BillingPeriod, "amount": purchase.Price})
+	s.audit(r, "subscription.balance_purchased", "user_subscription", subID, map[string]any{"order_no": orderNo, "tier_id": purchase.TierID, "billing_period": purchase.BillingPeriod, "amount": purchase.Price, "points": purchase.PointsPrice})
 	s.notifyAdminsOfPurchase(r.Context(), "subscription", orderNo, account.userID, purchase.Price, purchase.DisplayName)
 	s.subscriptionCache.clear()
-	writeJSON(w, http.StatusCreated, map[string]any{"order_no": orderNo, "subscription_id": subID, "amount": purchase.Price, "status": "paid", "balance": balanceAfter})
+	writeJSON(w, http.StatusCreated, map[string]any{"order_no": orderNo, "subscription_id": subID, "amount": purchase.Price, "points": purchase.PointsPrice, "status": "paid", "balance": balanceAfter})
 }
 
 func (s *Service) cancelSubscription(w http.ResponseWriter, r *http.Request) {
@@ -1266,7 +1616,7 @@ func (s *Service) ensureSubscriptionRowTx(ctx context.Context, tx pgx.Tx, userID
 func (s *Service) activateSubscriptionTx(ctx context.Context, tx pgx.Tx, userID string, purchase tierPurchase, opts subscriptionActivation) (string, bool, error) {
 	var tierProductID, tierName, tierCredit, groupID string
 	var tierLevel int
-	if err := tx.QueryRow(ctx, `select subscription_id::text,level,name,coalesce(credit_amount::text,''),coalesce(group_id::text,'') from subscription_tiers where id=$1`, purchase.TierID).Scan(&tierProductID, &tierLevel, &tierName, &tierCredit, &groupID); err != nil {
+	if err := tx.QueryRow(ctx, `select subscription_id::text,level,name,coalesce(round(credit_amount,2)::text,''),coalesce(group_id::text,'') from subscription_tiers where id=$1`, purchase.TierID).Scan(&tierProductID, &tierLevel, &tierName, &tierCredit, &groupID); err != nil {
 		return "", false, err
 	}
 	if purchase.ProductName == "" {
@@ -1280,7 +1630,7 @@ func (s *Service) activateSubscriptionTx(ctx context.Context, tx pgx.Tx, userID 
 	}
 	var priceCredit string
 	var override string
-	if err := tx.QueryRow(ctx, `select coalesce(credit_amount::text,'') from subscription_tier_prices where tier_id=$1 and billing_period=$2`, purchase.TierID, purchase.BillingPeriod).Scan(&override); err == nil && override != "" {
+	if err := tx.QueryRow(ctx, `select coalesce(round(credit_amount,2)::text,'') from subscription_tier_prices where tier_id=$1 and billing_period=$2`, purchase.TierID, purchase.BillingPeriod).Scan(&override); err == nil && override != "" {
 		priceCredit = override
 	}
 	billingPeriod := purchase.BillingPeriod
@@ -1337,7 +1687,7 @@ func (s *Service) activateSubscriptionTx(ctx context.Context, tx pgx.Tx, userID 
 	}
 
 	if renewal {
-		if _, err = tx.Exec(ctx, `update user_subscriptions set status='active',current_period_start=$1,current_period_end=$2,billing_period=$3,price=$4,currency=$5,auto_renew=coalesce($6::boolean,auto_renew),updated_at=now() where id=$7`,
+		if _, err = tx.Exec(ctx, `update user_subscriptions set status='active',cancelled_at=null,current_period_start=$1,current_period_end=$2,billing_period=$3,price=$4,currency=$5,auto_renew=coalesce($6::boolean,auto_renew),updated_at=now() where id=$7`,
 			start, end, billingPeriod, purchase.Price, purchase.Currency, opts.RenewAutoRenew, existingID); err != nil {
 			return "", false, err
 		}
@@ -1381,11 +1731,11 @@ func (s *Service) activateSubscriptionTx(ctx context.Context, tx pgx.Tx, userID 
 // recorded for reconciliation. Returns true when the order was activated by this
 // call.
 func (s *Service) activateSubscriptionOrderTx(ctx context.Context, tx pgx.Tx, orderNo, tradeNo, notifiedAmount string) (bool, error) {
-	var id, subID, userID, planName, status, amountStr string
+	var id, subID, userID, planName, status, amountStr, periodKind string
 	var tierID *string
 	var billingPeriod *string
 	var autoRenew bool
-	err := tx.QueryRow(ctx, `select id::text,subscription_id::text,user_id::text,coalesce(tier_id::text,''),coalesce(plan_name,''),status,amount::text,coalesce(billing_period,'month'),auto_renew from subscription_orders where order_no=$1 and provider='epay' for update`, orderNo).Scan(&id, &subID, &userID, &tierID, &planName, &status, &amountStr, &billingPeriod, &autoRenew)
+	err := tx.QueryRow(ctx, `select id::text,subscription_id::text,user_id::text,coalesce(tier_id::text,''),coalesce(plan_name,''),status,amount::text,coalesce(billing_period,'month'),auto_renew,coalesce(period_kind,'new') from subscription_orders where order_no=$1 and provider='epay' for update`, orderNo).Scan(&id, &subID, &userID, &tierID, &planName, &status, &amountStr, &billingPeriod, &autoRenew, &periodKind)
 	if err != nil {
 		return false, nil
 	}
@@ -1409,6 +1759,12 @@ func (s *Service) activateSubscriptionOrderTx(ctx context.Context, tx pgx.Tx, or
 	}
 	if _, err = tx.Exec(ctx, `update subscription_orders set status='paid',provider_trade_no=$1,paid_at=now(),updated_at=now() where id=$2`, tradeNo, id); err != nil {
 		return false, err
+	}
+	if periodKind == "upgrade" {
+		if _, err = s.activateSubscriptionUpgradeTx(ctx, tx, userID, subID, purchase); err != nil {
+			return false, err
+		}
+		return true, nil
 	}
 	if _, _, err = s.activateSubscriptionTx(ctx, tx, userID, purchase, subscriptionActivation{RenewAutoRenew: &autoRenew, InstanceID: subID}); err != nil {
 		return false, err

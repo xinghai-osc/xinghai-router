@@ -144,10 +144,11 @@ func (s *Service) fetchChannelModels(w http.ResponseWriter, r *http.Request) {
 }
 
 type exchangeRateResponse struct {
-	Currency   string  `json:"currency"`
-	RateToBase float64 `json:"rate_to_base"`
-	Enabled    bool    `json:"enabled"`
-	UpdatedAt  any     `json:"updated_at"`
+	Currency      string  `json:"currency"`
+	RateToBase    float64 `json:"rate_to_base"`
+	PointsPerUnit float64 `json:"points_per_unit"`
+	Enabled       bool    `json:"enabled"`
+	UpdatedAt     any     `json:"updated_at"`
 }
 
 func (s *Service) listExchangeRates(w http.ResponseWriter, r *http.Request) {
@@ -155,7 +156,7 @@ func (s *Service) listExchangeRates(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "database unavailable")
 		return
 	}
-	rows, err := s.db.Query(r.Context(), `select currency,rate_to_base::float8,enabled,updated_at from exchange_rates order by currency`)
+	rows, err := s.db.Query(r.Context(), `select currency,rate_to_base::float8,points_per_unit::float8,enabled,updated_at from exchange_rates order by currency`)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
 		return
@@ -164,7 +165,7 @@ func (s *Service) listExchangeRates(w http.ResponseWriter, r *http.Request) {
 	data := []exchangeRateResponse{}
 	for rows.Next() {
 		var item exchangeRateResponse
-		if err := rows.Scan(&item.Currency, &item.RateToBase, &item.Enabled, &item.UpdatedAt); err != nil {
+		if err := rows.Scan(&item.Currency, &item.RateToBase, &item.PointsPerUnit, &item.Enabled, &item.UpdatedAt); err != nil {
 			writeError(w, http.StatusInternalServerError, "internal_error", "could not read exchange rates")
 			return
 		}
@@ -179,9 +180,10 @@ func (s *Service) listExchangeRates(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) upsertExchangeRate(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Currency   string  `json:"currency"`
-		RateToBase float64 `json:"rate_to_base"`
-		Enabled    *bool   `json:"enabled"`
+		Currency      string  `json:"currency"`
+		RateToBase    float64 `json:"rate_to_base"`
+		PointsPerUnit float64 `json:"points_per_unit"`
+		Enabled       *bool   `json:"enabled"`
 	}
 	if decode(r, &in) != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", "invalid exchange rate")
@@ -195,11 +197,14 @@ func (s *Service) upsertExchangeRate(w http.ResponseWriter, r *http.Request) {
 	if in.Enabled != nil {
 		enabled = *in.Enabled
 	}
-	if !validCurrencyCode(in.Currency) || !validPositiveFinite(in.RateToBase) || in.RateToBase > maxExchangeRate {
+	if in.PointsPerUnit == 0 {
+		in.PointsPerUnit = in.RateToBase
+	}
+	if !validCurrencyCode(in.Currency) || !validPositiveFinite(in.RateToBase) || in.RateToBase > maxExchangeRate || !validPositiveFinite(in.PointsPerUnit) || in.PointsPerUnit > maxExchangeRate {
 		writeError(w, http.StatusBadRequest, "invalid_request", "currency and rate_to_base are invalid")
 		return
 	}
-	if in.Currency == "CNY" && (in.RateToBase != 1 || !enabled) {
+	if in.Currency == "CNY" && !enabled {
 		writeError(w, http.StatusBadRequest, "invalid_request", "CNY must have rate_to_base 1 and remain enabled")
 		return
 	}
@@ -208,7 +213,7 @@ func (s *Service) upsertExchangeRate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var updatedAt any
-	err := s.db.QueryRow(r.Context(), `insert into exchange_rates(currency,rate_to_base,enabled,updated_at) values($1,$2,$3,now()) on conflict(currency) do update set rate_to_base=excluded.rate_to_base,enabled=excluded.enabled,updated_at=now() returning updated_at`, in.Currency, in.RateToBase, enabled).Scan(&updatedAt)
+	err := s.db.QueryRow(r.Context(), `insert into exchange_rates(currency,rate_to_base,points_per_unit,enabled,updated_at) values($1,$2,$3,$4,now()) on conflict(currency) do update set rate_to_base=excluded.rate_to_base,points_per_unit=excluded.points_per_unit,enabled=excluded.enabled,updated_at=now() returning updated_at`, in.Currency, in.RateToBase, in.PointsPerUnit, enabled).Scan(&updatedAt)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", "could not save exchange rate")
 		return
@@ -216,8 +221,8 @@ func (s *Service) upsertExchangeRate(w http.ResponseWriter, r *http.Request) {
 	if s.pricingCache != nil {
 		s.pricingCache.clear()
 	}
-	s.audit(r, "exchange_rate.updated", "exchange_rate", in.Currency, map[string]any{"rate_to_base": in.RateToBase, "enabled": enabled})
-	writeJSON(w, http.StatusOK, exchangeRateResponse{Currency: in.Currency, RateToBase: in.RateToBase, Enabled: enabled, UpdatedAt: updatedAt})
+	s.audit(r, "exchange_rate.updated", "exchange_rate", in.Currency, map[string]any{"rate_to_base": in.RateToBase, "points_per_unit": in.PointsPerUnit, "enabled": enabled})
+	writeJSON(w, http.StatusOK, exchangeRateResponse{Currency: in.Currency, RateToBase: in.RateToBase, PointsPerUnit: in.PointsPerUnit, Enabled: enabled, UpdatedAt: updatedAt})
 }
 
 func (s *Service) listPricing(w http.ResponseWriter, r *http.Request) {
@@ -779,7 +784,7 @@ func (s *Service) listUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	args = append(args, pageSize, offset)
-	query := `select u.id,u.email,u.name,u.role,u.enabled,u.leaderboard_opt_in,u.leaderboard_mask_name,u.data_usage_enabled,u.max_concurrency,u.created_at,coalesce(w.balance,0),coalesce(w.reserved,0),coalesce(array_agg(p.permission) filter (where p.permission is not null), '{}'),coalesce((select array_agg(ug.group_id order by ug.group_id) from user_groups ug where ug.user_id=u.id), '{}'),i.inviter_id,iu.email,iu.name from users u left join user_permissions p on p.user_id=u.id left join user_wallets w on w.user_id=u.id left join invitations i on i.invitee_id=u.id left join users iu on iu.id=i.inviter_id` + where + ` group by u.id,w.balance,w.reserved,i.inviter_id,iu.email,iu.name order by u.created_at desc limit $` + strconv.Itoa(len(args)-1) + ` offset $` + strconv.Itoa(len(args))
+	query := `select u.id,u.email,u.name,u.role,u.enabled,u.leaderboard_opt_in,u.leaderboard_mask_name,u.data_usage_enabled,u.max_concurrency,u.created_at,coalesce(w.balance,0),coalesce(w.reserved,0),greatest(coalesce(w.balance,0)-coalesce(w.reserved,0),0),coalesce(array_agg(p.permission) filter (where p.permission is not null), '{}'),coalesce((select array_agg(ug.group_id order by ug.group_id) from user_groups ug where ug.user_id=u.id), '{}'),i.inviter_id,iu.email,iu.name,coalesce((select jsonb_object_agg(values.currency,values.amount) from (select coalesce(us.currency,'CNY') as currency, sum(coalesce(us.price,0)*greatest(0,extract(epoch from (us.current_period_end-clock_timestamp())))/nullif(extract(epoch from (us.current_period_end-us.current_period_start)),0)) as amount from user_subscriptions us where us.user_id=u.id and us.status='active' and us.current_period_start is not null and us.current_period_end>clock_timestamp() and us.current_period_end>us.current_period_start group by coalesce(us.currency,'CNY')) values), '{}'::jsonb) from users u left join user_permissions p on p.user_id=u.id left join user_wallets w on w.user_id=u.id left join invitations i on i.invitee_id=u.id left join users iu on iu.id=i.inviter_id` + where + ` group by u.id,w.balance,w.reserved,i.inviter_id,iu.email,iu.name order by u.created_at desc limit $` + strconv.Itoa(len(args)-1) + ` offset $` + strconv.Itoa(len(args))
 	rows, err := s.db.Query(r.Context(), query, args...)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
@@ -793,15 +798,16 @@ func (s *Service) listUsers(w http.ResponseWriter, r *http.Request) {
 		var enabled bool
 		var leaderboardOptIn, leaderboardMaskName, dataUsageEnabled bool
 		var maxConcurrency, created any
-		var balance, reserved any
+		var balance, reserved, availableAsset any
+		var subscriptionValues []byte
 		var permissions []string
 		var groups []string
 		var inviterID *int64
 		var inviterEmail, inviterName *string
-		if rows.Scan(&id, &email, &name, &role, &enabled, &leaderboardOptIn, &leaderboardMaskName, &dataUsageEnabled, &maxConcurrency, &created, &balance, &reserved, &permissions, &groups, &inviterID, &inviterEmail, &inviterName) != nil {
+		if rows.Scan(&id, &email, &name, &role, &enabled, &leaderboardOptIn, &leaderboardMaskName, &dataUsageEnabled, &maxConcurrency, &created, &balance, &reserved, &availableAsset, &permissions, &groups, &inviterID, &inviterEmail, &inviterName, &subscriptionValues) != nil {
 			continue
 		}
-		out = append(out, map[string]any{"id": id, "email": email, "name": name, "role": role, "enabled": enabled, "leaderboard_opt_in": leaderboardOptIn, "leaderboard_mask_name": leaderboardMaskName, "data_usage_enabled": dataUsageEnabled, "max_concurrency": maxConcurrency, "balance": balance, "reserved": reserved, "permissions": permissions, "groups": groups, "inviter_id": inviterID, "inviter_email": inviterEmail, "inviter_name": inviterName, "created_at": created})
+		out = append(out, map[string]any{"id": id, "email": email, "name": name, "role": role, "enabled": enabled, "leaderboard_opt_in": leaderboardOptIn, "leaderboard_mask_name": leaderboardMaskName, "data_usage_enabled": dataUsageEnabled, "max_concurrency": maxConcurrency, "balance": balance, "reserved": reserved, "available_asset": availableAsset, "subscription_values": json.RawMessage(subscriptionValues), "permissions": permissions, "groups": groups, "inviter_id": inviterID, "inviter_email": inviterEmail, "inviter_name": inviterName, "created_at": created})
 	}
 	writePaged(w, out, total, page, pageSize)
 }

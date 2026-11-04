@@ -76,6 +76,8 @@ func TestUpdateSiteSettingsRejectsInvalidBeforeDatabase(t *testing.T) {
 	cases := []string{
 		`{}`,
 		`{"name":""}`,
+		`{"name":"Site","points_name":"` + strings.Repeat("p", 25) + `"}`,
+		`{"name":"Site","points_name":"<script>"}`,
 		`{"name":"` + strings.Repeat("n", 101) + `"}`,
 		`{"name":"Site","icon_url":"http://evil.example.com/x"}`,
 		`{"name":"Site","icon_url":"https://cdn.example.com/` + strings.Repeat("a", 2040) + `"}`,

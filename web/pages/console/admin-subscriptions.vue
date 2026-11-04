@@ -107,6 +107,7 @@ async function runExtend() {
     return
   }
   let affected = 0
+  let renewed = 0
   const ok = await run(async () => {
     const result = await endpoints.batchExtendSubscriptions(
       extendTierId.value,
@@ -114,13 +115,15 @@ async function runExtend() {
       extendStatus.value,
     )
     affected = result.affected
+    renewed = result.renewed
   })
   if (!ok) {
     toast.error(t('common.actionFailed'))
     return
   }
-  if (affected > 0) toast.success(t('system.extendDone', { count: affected }))
-  else toast.info(t('system.extendNoop'))
+  if (affected === 0) toast.info(t('system.extendNoop'))
+  else if (renewed > 0) toast.success(t('system.extendDoneRenewed', { count: affected, renewed }))
+  else toast.success(t('system.extendDone', { count: affected }))
   await refresh()
 }
 
@@ -186,6 +189,7 @@ async function resetSubscriptionQuota() {
 
           <UiButton :loading="busy" @click="runExtend">{{ t('system.runExtend') }}</UiButton>
         </div>
+        <p class="mt-3 text-[13px] text-muted">{{ t('system.extendRenewedHint') }}</p>
       </UiCard>
 
       <UiCard v-if="canManage" :title="t('system.resetActiveQuotas')" :description="t('system.resetActiveQuotasLead')">

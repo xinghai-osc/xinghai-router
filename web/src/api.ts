@@ -1,4 +1,4 @@
-export interface User { id: number; email: string; name: string; role: string; enabled: boolean; leaderboard_opt_in: boolean; leaderboard_mask_name: boolean; data_usage_enabled: boolean; max_concurrency: number | null; balance: number; reserved: number; permissions: string[]; groups: string[]; inviter_id: number | null; inviter_email: string | null; inviter_name: string | null; created_at: string }
+export interface User { id: number; email: string; name: string; role: string; enabled: boolean; leaderboard_opt_in: boolean; leaderboard_mask_name: boolean; data_usage_enabled: boolean; max_concurrency: number | null; balance: number; reserved: number; available_asset: number; subscription_values: Record<string, number>; permissions: string[]; groups: string[]; inviter_id: number | null; inviter_email: string | null; inviter_name: string | null; created_at: string }
 export interface Page<T> { data: T[]; total: number; page: number; page_size: number }
 export type WorkspaceRole = 'owner' | 'admin' | 'member'
 export interface Workspace { id: string; name: string; slug: string; owner_id: number; role: WorkspaceRole; is_personal: boolean; created_at: string; updated_at: string }
@@ -48,6 +48,7 @@ export interface RequestLog { request_id: string; user_id: number | null; user_n
 export interface Account { id: number; email: string; name: string; role: string; avatar_url: string; permissions: string[]; balance: number; reserved: number; pending_settlement: number; leaderboard_opt_in: boolean; leaderboard_mask_name: boolean; data_usage_enabled: boolean; must_change_password?: boolean }
 export interface ImagePrice { size: string; quality: string; price: number }
 export interface ThinkingPrice { input_per_million: number; cached_input_per_million: number; output_per_million: number }
+export interface ServiceTierPrice { input_per_million: number; cached_input_per_million: number; output_per_million: number }
 export interface DimensionPrices {
   cache_write_per_million?: number | null
   cache_write_5m_per_million?: number | null
@@ -62,6 +63,7 @@ export interface DimensionPrices {
   tool_per_call?: number | null
   images?: ImagePrice[]
   thinking_prices?: Record<string, ThinkingPrice>
+  service_tiers?: Record<string, ServiceTierPrice>
 }
 export interface UsageFacts {
   input_tokens?: number
@@ -102,7 +104,7 @@ export interface BillingSnapshot {
     output_per_million: number
     dimension_prices: DimensionPrices
   }
-  exchange: { currency: string; base_currency: string; rate_to_base: number }
+  exchange: { currency: string; base_currency: 'POINTS' | 'CNY'; rate_to_base: number }
   multipliers: { model: number; group: number }
   rounding: { mode: 'HALF_UP'; scale: number }
   adjustment?: { reason: string; limit: string; amount: string }
@@ -112,8 +114,8 @@ export interface PricingTier { id: string; model: string; from_tokens: number; i
 export interface PricingTierForm { id?: string; model: string; from_tokens: number; input_per_million: number; cached_input_per_million: number; output_per_million: number }
 export interface PricingTimeRule { id: string; model: string; name: string; start_minute: number; end_minute: number; weekdays: string; input_per_million: number; cached_input_per_million: number; output_per_million: number; enabled: boolean; created_at: string }
 export interface PricingTimeRuleForm { id?: string; model: string; name: string; start_minute: number; end_minute: number; weekdays: string; input_per_million: number; cached_input_per_million: number; output_per_million: number; enabled?: boolean }
-export interface ExchangeRate { currency: string; rate_to_base: number; enabled: boolean; updated_at: string }
-export interface ExchangeRateForm { currency: string; rate_to_base: number; enabled: boolean }
+export interface ExchangeRate { currency: string; rate_to_base: number; points_per_unit: number; enabled: boolean; updated_at: string }
+export interface ExchangeRateForm { currency: string; rate_to_base: number; points_per_unit: number; enabled: boolean }
 export interface CatalogGroup { id: string; name: string; multiplier: number; public: boolean; display_name?: string | null }
 export interface ModelCatalogMetadata {
   description: string | null
@@ -193,7 +195,7 @@ export interface ModelPerformancePoint { timestamp: string; requests: number; fa
 export interface ModelPerformanceSeries { group_id: string; points: ModelPerformancePoint[] }
 export interface ModelPerformance { model: string; window_hours: number; window_start: string; bucket_minutes: number; groups: ModelPerformanceGroup[]; series: ModelPerformanceSeries[]; updated_at: string }
 export interface ModelProvider { id: string; name: string; slug: string; prefixes: string[]; priority: number }
-export interface ActiveUsageRequest { request_id: string; model: string; created_at: string; user_id?: string | number; user_name?: string }
+export interface ActiveUsageRequest { request_id: string; model: string; created_at: string; user_id?: string | number; user_name?: string; key_name: string }
 export interface UsageRecord { request_id: string; model: string; prompt_tokens: number; cached_prompt_tokens: number; completion_tokens: number; cost: string; status: string; created_at: string; client_ip: string; user_agent: string; error: string; key_name: string; subscription: boolean; duration_ms: number; first_token_ms: number | null; group_name: string; usage_facts: UsageFacts | null; billing_snapshot: Partial<BillingSnapshot> | null }
 
 export interface AccountUsageSummary { requests: number; tokens: number; cost: string }
@@ -244,8 +246,8 @@ export interface Rankings { period: string; models: ModelRanking[]; vendors: Ven
 export type FeaturedLocale = 'zh' | 'zh-Hant' | 'en'
 export type FeaturedCopyField = 'badge' | 'title' | 'body' | 'cta'
 export type FeaturedCopy = Record<FeaturedLocale, Record<FeaturedCopyField, string>>
-export interface SiteSettings { name: string; icon_url: string; announcement: string; homepage_video_url?: string; contact_email?: string; api_base_urls: string[]; auto_disable_failed_channels: boolean; maintenance_mode?: boolean; invitations_enabled?: boolean; registration_email_whitelist_enabled?: boolean; registration_email_alias_blocked?: boolean; featured_enabled: boolean; featured_model: string; featured_copy: FeaturedCopy; captcha_provider?: string; geetest_enabled?: boolean; geetest_captcha_id?: string; corptcha_site_id?: string; email_verification_enabled?: boolean; oauth_providers?: string[]; risk_probe?: RiskProbeSettings }
-export interface AdminSiteSettings { name: string; icon_url: string; announcement: string; homepage_video_url: string; contact_email: string; api_base_urls: string[]; auto_disable_failed_channels: boolean; maintenance_mode: boolean; featured_enabled: boolean; featured_model: string; featured_copy: FeaturedCopy; captcha_provider: string; geetest_captcha_id: string; has_geetest_captcha_key: boolean; corptcha_site_id: string; has_corptcha_secret: boolean; smtp_host: string; smtp_port: string; smtp_username: string; has_smtp_password: boolean; smtp_from: string; public_base_url: string; invitations_enabled: boolean; inviter_reward: string; invitee_reward: string; checkin_base_reward: string; checkin_streak_bonus: string; checkin_max_bonus_days: number; registration_email_whitelist_enabled: boolean; registration_email_whitelist: string[]; registration_email_alias_blocked: boolean }
+export interface SiteSettings { name: string; points_name: string; icon_url: string; announcement: string; homepage_video_url?: string; contact_email?: string; api_base_urls: string[]; auto_disable_failed_channels: boolean; maintenance_mode?: boolean; invitations_enabled?: boolean; registration_email_whitelist_enabled?: boolean; registration_email_alias_blocked?: boolean; featured_enabled: boolean; featured_model: string; featured_copy: FeaturedCopy; captcha_provider?: string; geetest_enabled?: boolean; geetest_captcha_id?: string; corptcha_site_id?: string; email_verification_enabled?: boolean; oauth_providers?: string[]; risk_probe?: RiskProbeSettings }
+export interface AdminSiteSettings { name: string; points_name: string; icon_url: string; announcement: string; homepage_video_url: string; contact_email: string; api_base_urls: string[]; auto_disable_failed_channels: boolean; maintenance_mode: boolean; featured_enabled: boolean; featured_model: string; featured_copy: FeaturedCopy; captcha_provider: string; geetest_captcha_id: string; has_geetest_captcha_key: boolean; corptcha_site_id: string; has_corptcha_secret: boolean; smtp_host: string; smtp_port: string; smtp_username: string; has_smtp_password: boolean; smtp_from: string; public_base_url: string; invitations_enabled: boolean; inviter_reward: string; invitee_reward: string; checkin_base_reward: string; checkin_streak_bonus: string; checkin_max_bonus_days: number; registration_email_whitelist_enabled: boolean; registration_email_whitelist: string[]; registration_email_alias_blocked: boolean }
 export interface Notification { id: string; title: string; content: string; enabled: boolean; sort_order: number; created_at: string; updated_at: string }
 export interface NotificationForm { title: string; content: string; enabled: boolean; sort_order: number }
 export interface Invitation { id: string; name: string; email: string; reward: string; inviter_reward_status: string; invitee_reward_status: string; created_at: string }
@@ -256,7 +258,7 @@ export interface ContentPolicyRule { id: string; name: string; term: string; act
 export interface ContentPolicyBatchResult { created: number; skipped: number }
 export interface RequestContentAudit { id: string; request_id: string; user_id: number | null; api_key_id: string; model: string; endpoint: string; decision: 'allow' | 'audit' | 'block'; matched_rule_ids: string[]; request_bytes: number; content_length: number; content_hash: string; excerpt: string; created_at: string }
 
-export interface ConversationCacheSettings { conversation_cache_enabled: boolean }
+export interface ConversationCacheSettings { conversation_cache_enabled: boolean; conversation_cache_retain: boolean }
 
 export interface ConversationLog {
   id: string
@@ -294,8 +296,8 @@ export interface SessionAffinity {
 
 export interface SessionAffinityPurgeResult { ok: boolean; removed: number }
 
-export interface PaymentRedirect { order_no: string; amount: string; status: 'pending'; pay_url: string }
-export interface BalanceSubscriptionResult { order_no: string; subscription_id: string; amount: string; status: 'paid'; balance: string }
+export interface PaymentRedirect { order_no: string; amount: string; status: 'pending' | 'paid'; pay_url?: string; subscription_id?: string }
+export interface BalanceSubscriptionResult { order_no: string; subscription_id: string; amount: string; points: string; status: 'paid'; balance: string }
 
 export interface AccountGroups { data: string[]; groups: Group[]; user_groups: string[]; user_group: string }
 
@@ -423,6 +425,7 @@ export interface SubscriptionTierPrice {
   billing_period: BillingPeriod
   price: string
   currency: string
+  points_price: string
   credit_amount: string
   max_requests_per_period: number | null
   max_credit_per_period: number | null
@@ -495,6 +498,24 @@ export interface UserSubscription {
   reset_card_count: number
 }
 
+/** Quote for moving a running subscription instance to a higher tier of the same product. */
+export interface SubscriptionUpgrade {
+  subscription_id: string
+  product_id: string
+  from_tier_id: string
+  from_tier_name: string
+  from_display_name: string
+  from_tier_level: number
+  to_tier_id: string
+  billing_period: BillingPeriod
+  currency: string
+  amount: string
+  points_amount: string
+  credit_amount: string
+  current_period_start: string | null
+  current_period_end: string | null
+}
+
 export interface SubscriptionOrder {
   id: string
   order_no: string
@@ -507,7 +528,7 @@ export interface SubscriptionOrder {
   billing_period: BillingPeriod
   status: 'pending' | 'paid' | 'failed' | 'expired'
   provider_trade_no?: string
-  period_kind: 'new' | 'renewal'
+  period_kind: 'new' | 'renewal' | 'upgrade'
   paid_at: string | null
   created_at: string
 }
@@ -1188,6 +1209,7 @@ export const endpoints = {
   getAccountSubscriptions: () => get<{ data: UserSubscription[] }>('/account/subscriptions'),
   createAccountSubscription: (tierId: string, billingPeriod: BillingPeriod, paymentType: string, autoRenew: boolean) => post<PaymentRedirect>('/account/subscriptions', { tier_id: tierId, billing_period: billingPeriod, payment_type: paymentType, auto_renew: autoRenew }),
   createBalanceSubscription: (tierId: string, billingPeriod: BillingPeriod) => post<BalanceSubscriptionResult>('/account/subscriptions/balance', { tier_id: tierId, billing_period: billingPeriod }),
+  getSubscriptionUpgradeQuote: (tierId: string, billingPeriod: BillingPeriod) => get<{ data: SubscriptionUpgrade | null }>(`/account/subscription-upgrade?tier_id=${encodeURIComponent(tierId)}&billing_period=${encodeURIComponent(billingPeriod)}`),
   cancelAccountSubscription: (id: string) => send(`/account/subscriptions/${encodeURIComponent(id)}/cancel`, 'POST'),
   getAccountSubscriptionOrders: () => get<{ data: SubscriptionOrder[] }>('/account/subscription-orders'),
   getAccountSubscriptionOrder: (orderNo: string) => get<SubscriptionOrder>(`/account/subscription-orders/${encodeURIComponent(orderNo)}`),
@@ -1362,7 +1384,7 @@ export const endpoints = {
   updateSubscriptionProduct: (id: string, form: SubscriptionProductForm) => send(`/admin/subscription-products/${encodeURIComponent(id)}`, 'PUT', form),
   deleteSubscriptionProduct: (id: string, force = false) => send(`/admin/subscription-products/${encodeURIComponent(id)}${force ? '?force=1' : ''}`, 'DELETE'),
   getAdminSubscriptions: () => get<{ data: AdminSubscription[] }>('/admin/subscriptions'),
-  batchExtendSubscriptions: (tierId: string, days: number, status: 'active' | 'inactive' | 'all') => post<{ affected: number }>('/admin/subscriptions/extend', { tier_id: tierId, days, status }),
+  batchExtendSubscriptions: (tierId: string, days: number, status: 'active' | 'inactive' | 'all') => post<{ affected: number; renewed: number }>('/admin/subscriptions/extend', { tier_id: tierId, days, status }),
   resetActiveSubscriptionQuotas: (status: 'active' | 'inactive' | 'all') => post<{ affected: number; status: string }>('/admin/subscriptions/reset-quotas', { status }),
   resetAdminSubscriptionQuota: (id: string) => post<{ ok: boolean }>(`/admin/subscriptions/${encodeURIComponent(id)}/reset-quotas`),
   getAdminUserSubscriptions: (userId: number) => get<{ data: AdminUserSubscription[] }>(`/admin/users/${encodeURIComponent(userId)}/subscriptions`),

@@ -16,14 +16,14 @@ const rates = useResource(() => endpoints.getAdminExchangeRates(), { data: [] as
 const panelOpen = ref(false)
 const editing = ref(false)
 const formError = ref('')
-const form = reactive({ currency: '', rate_to_base: '1', enabled: true })
-const isBaseCurrency = computed(() => form.currency.trim().toUpperCase() === 'CNY')
+const form = reactive({ currency: '', rate_to_base: '1', points_per_unit: '1', enabled: true })
 
 function openCreate() {
   editing.value = false
   formError.value = ''
   form.currency = ''
   form.rate_to_base = '1'
+  form.points_per_unit = '1'
   form.enabled = true
   panelOpen.value = true
 }
@@ -33,6 +33,7 @@ function openEdit(rate: ExchangeRate) {
   formError.value = ''
   form.currency = rate.currency
   form.rate_to_base = String(rate.rate_to_base)
+  form.points_per_unit = String(rate.points_per_unit)
   form.enabled = rate.enabled
   panelOpen.value = true
 }
@@ -45,12 +46,13 @@ async function save() {
     formError.value = t('admin.currencyInvalid')
     return
   }
-  if (!Number.isFinite(rate) || rate <= 0 || rate > 1_000_000_000) {
+  const pointsPerUnit = Number(form.points_per_unit)
+  if (!Number.isFinite(rate) || rate <= 0 || rate > 1_000_000_000 || !Number.isFinite(pointsPerUnit) || pointsPerUnit <= 0 || pointsPerUnit > 1_000_000_000) {
     formError.value = t('admin.exchangeRateInvalid')
     return
   }
-  const enabled = currency === 'CNY' ? true : form.enabled
-  const payload: ExchangeRateForm = { currency, rate_to_base: currency === 'CNY' ? 1 : rate, enabled }
+  const enabled = form.enabled
+  const payload: ExchangeRateForm = { currency, rate_to_base: rate, points_per_unit: pointsPerUnit, enabled }
   const ok = await run(() => endpoints.saveExchangeRate(payload))
   if (!ok) {
     toast.error(t('common.actionFailed'))
@@ -86,7 +88,7 @@ async function save() {
         <thead>
           <tr>
             <th>{{ t('admin.currency') }}</th>
-            <th class="num">{{ t('admin.rateToBase') }}</th>
+            <th class="num">{{ t('admin.pointsPerUnit') }}</th>
             <th>{{ t('common.status') }}</th>
             <th>{{ t('common.updatedAt') }}</th>
             <th v-if="canManage">{{ t('common.actions') }}</th>
@@ -95,7 +97,7 @@ async function save() {
         <tbody>
           <tr v-for="rate in rates.data.value.data" :key="rate.currency">
             <td class="font-mono font-medium text-ink">{{ rate.currency }}</td>
-            <td class="num">{{ rate.rate_to_base }}</td>
+            <td class="num">{{ rate.points_per_unit }}</td>
             <td><UiBadge :tone="rate.enabled ? 'success' : 'neutral'" dot>{{ rate.enabled ? t('common.enabled') : t('common.disabled') }}</UiBadge></td>
             <td class="text-muted whitespace-nowrap">{{ formatDateTime(rate.updated_at) }}</td>
             <td v-if="canManage"><UiButton variant="ghost" size="sm" @click="openEdit(rate)">{{ t('common.edit') }}</UiButton></td>
@@ -111,9 +113,12 @@ async function save() {
           <UiInput v-model="form.currency" mono maxlength="8" :disabled="editing" />
         </UiField>
         <UiField :label="t('admin.rateToBase')" :hint="t('admin.rateToBaseHint')" required>
-          <UiInput v-model="form.rate_to_base" type="number" min="0" step="any" mono :disabled="isBaseCurrency" />
+          <UiInput v-model="form.rate_to_base" type="number" min="0" step="any" mono />
         </UiField>
-        <UiField :label="t('common.status')"><UiSwitch v-model="form.enabled" :disabled="isBaseCurrency" /></UiField>
+        <UiField :label="t('admin.pointsPerUnit')" :hint="t('admin.pointsPerUnitHint')" required>
+          <UiInput v-model="form.points_per_unit" type="number" min="0" step="any" mono />
+        </UiField>
+        <UiField :label="t('common.status')"><UiSwitch v-model="form.enabled" /></UiField>
       </div>
       <template #footer>
         <UiButton variant="secondary" @click="panelOpen = false">{{ t('common.cancel') }}</UiButton>

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { CreditCard, Wallet } from 'lucide-vue-next'
 import { endpoints, type PaymentMethod, type PaymentOrder } from '~/src/api'
-import { formatDateTime, formatMoney } from '~/src/format'
+import { formatCNY, formatDateTime, formatMoney } from '~/src/format'
 
 definePageMeta({ layout: 'console', middleware: 'console-auth' })
 
@@ -52,7 +52,7 @@ async function submit() {
 
   let payUrl = ''
   const ok = await run(async () => {
-    payUrl = (await endpoints.createAccountPayment(value.toFixed(2), method.value)).pay_url
+    payUrl = (await endpoints.createAccountPayment(value.toFixed(2), method.value)).pay_url ?? ''
   })
   if (!ok) { toast.error(t('common.actionFailed')); return }
 
@@ -115,7 +115,7 @@ async function submit() {
                 variant="secondary"
                 size="sm"
                 @click="pick(value)"
-              >{{ formatMoney(value, 0) }}</UiButton>
+              >{{ formatCNY(value, 0) }}</UiButton>
             </div>
           </div>
 
@@ -161,7 +161,7 @@ async function submit() {
             <tbody>
               <tr v-for="order in payments.data" :key="order.order_no">
                 <td><code class="font-mono text-[13px] text-muted">{{ order.order_no }}</code></td>
-                <td class="num font-medium">{{ formatMoney(order.amount) }}</td>
+                <td class="num font-medium">{{ formatCNY(order.amount) }}</td>
                 <td class="text-muted">{{ order.payment_type }}</td>
                 <td><ConsoleUserStatusBadge :status="order.status" /></td>
                 <td class="text-muted">{{ formatDateTime(order.paid_at) }}</td>

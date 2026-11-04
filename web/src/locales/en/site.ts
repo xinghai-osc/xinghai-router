@@ -94,7 +94,7 @@ export default {
   planPerHour: 'hour',
   planPerDay: 'day',
   planPerWeek: 'week',
-  planCredit: '¥{amount} credit each period',
+  planCredit: '{amount} credit each period',
   planUnlimitedCredit: 'Unlimited credit',
   planQuotaRequests: '{count} requests per period',
   planQuotaCredit: '{amount} credit per period',

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -260,21 +261,32 @@ func (s *Service) adminUpdateSubscription(w http.ResponseWriter, r *http.Request
 		}
 		remainingCredit = in.RemainingCredit
 	}
+	if renewsExpiredSubscription(in.Status, origStatus, endTime, time.Now()) {
+		// Moving an expired subscription's period end into the future is a
+		// renewal; leaving the status expired made that edit a no-op.
+		status = "active"
+	}
+	reactivating := status == "active" && origStatus != "active"
 	tx, err := s.db.Begin(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not update subscription")
 		return
 	}
 	defer tx.Rollback(r.Context())
-	if _, err = tx.Exec(r.Context(), `update user_subscriptions set status=$1,current_period_start=$2,current_period_end=$3,auto_renew=$4,remaining_requests=$5,remaining_credit=$6,updated_at=now() where id=$7`, status, start, end, autoRenew, remainingRequests, remainingCredit, id); err != nil {
+	if _, err = tx.Exec(r.Context(), `update user_subscriptions set status=$1,current_period_start=$2,current_period_end=$3,auto_renew=$4,remaining_requests=$5,remaining_credit=$6,cancelled_at=case when $8::boolean then null else cancelled_at end,updated_at=now() where id=$7`, status, start, end, autoRenew, remainingRequests, remainingCredit, id, reactivating); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not update subscription")
 		return
 	}
-	if status == "active" && origStatus != "active" {
+	if reactivating {
 		// Reactivating a subscription starts a fresh period, so refill its quota
-		// counters (a subscription manually activated from pending has none yet).
+		// counters (a subscription manually activated from pending has none yet)
+		// and hand back the tier group that expiry revoked.
 		if err = s.initSubscriptionCountersTx(r.Context(), tx, id); err != nil {
 			writeError(w, http.StatusInternalServerError, "internal_error", "could not reset subscription quota")
+			return
+		}
+		if err = s.grantSubscriptionGroupTx(r.Context(), tx, id); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "could not restore subscription group")
 			return
 		}
 	}
@@ -413,27 +425,80 @@ func (s *Service) batchExtendSubscriptions(w http.ResponseWriter, r *http.Reques
 			return
 		}
 	}
-	ext := `update user_subscriptions set current_period_end = case when current_period_end is null or current_period_end <= now() then now() + $1::interval else current_period_end + $1::interval end, updated_at = now() where ` + statusClause
 	days := fmt.Sprintf("%d days", in.Days)
-	var affected int64
-	if tierID != "" {
-		tag, err := s.db.Exec(r.Context(), ext+` and tier_id=$2`, days, tierID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "internal_error", fmt.Sprintf("could not extend subscriptions: %v", err))
-			return
-		}
-		affected = tag.RowsAffected()
-	} else {
-		tag, err := s.db.Exec(r.Context(), ext, days)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "internal_error", fmt.Sprintf("could not extend subscriptions: %v", err))
-			return
-		}
-		affected = tag.RowsAffected()
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not extend subscriptions")
+		return
 	}
-	s.audit(r, "subscription.batch_extended", "subscription_tier", tierID, map[string]any{"days": in.Days, "status": in.Status, "affected": affected})
+	defer tx.Rollback(r.Context())
+	ext := `update user_subscriptions set current_period_end = case when current_period_end is null or current_period_end <= now() then now() + $1::interval else current_period_end + $1::interval end, updated_at = now() where ` + statusClause
+	args := []any{days}
+	if tierID != "" {
+		ext += ` and tier_id::text=$2`
+		args = append(args, tierID)
+	}
+	ext += ` returning id::text,status,current_period_end`
+	rows, err := tx.Query(r.Context(), ext, args...)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", fmt.Sprintf("could not extend subscriptions: %v", err))
+		return
+	}
+	var affected int64
+	var renewed []string
+	for rows.Next() {
+		var id, rowStatus string
+		var end *time.Time
+		if err = rows.Scan(&id, &rowStatus, &end); err != nil {
+			rows.Close()
+			writeError(w, http.StatusInternalServerError, "internal_error", fmt.Sprintf("could not extend subscriptions: %v", err))
+			return
+		}
+		affected++
+		// Extending an expired subscription is a renewal: promote it once the
+		// new period end is in the future, otherwise the extension grants nothing.
+		if extendsIntoActive(rowStatus, in.Days, end, time.Now()) {
+			renewed = append(renewed, id)
+		}
+	}
+	rows.Close()
+	if err = rows.Err(); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", fmt.Sprintf("could not extend subscriptions: %v", err))
+		return
+	}
+	for _, id := range renewed {
+		if err = s.reactivateSubscriptionTx(r.Context(), tx, id); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", fmt.Sprintf("could not renew subscriptions: %v", err))
+			return
+		}
+	}
+	if err = tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not extend subscriptions")
+		return
+	}
+	s.audit(r, "subscription.batch_extended", "subscription_tier", tierID, map[string]any{"days": in.Days, "status": in.Status, "affected": affected, "renewed": len(renewed)})
 	s.subscriptionCache.clear()
-	writeJSON(w, http.StatusOK, map[string]any{"affected": affected})
+	writeJSON(w, http.StatusOK, map[string]any{"affected": affected, "renewed": len(renewed)})
+}
+
+// reactivateSubscriptionTx promotes a subscription to active for a fresh period:
+// refill its period quota and restore the tier group that expiry revoked.
+func (s *Service) reactivateSubscriptionTx(ctx context.Context, tx pgx.Tx, id string) error {
+	if _, err := tx.Exec(ctx, `update user_subscriptions set status='active',cancelled_at=null,updated_at=now() where id=$1`, id); err != nil {
+		return err
+	}
+	if err := s.initSubscriptionCountersTx(ctx, tx, id); err != nil {
+		return err
+	}
+	return s.grantSubscriptionGroupTx(ctx, tx, id)
+}
+
+// grantSubscriptionGroupTx restores a subscription holder's membership in the
+// tier's group. Expiry revokes subscription-bound groups, so a renewal has to
+// put the membership back or a key that relies on it stays unable to use the tier.
+func (s *Service) grantSubscriptionGroupTx(ctx context.Context, tx pgx.Tx, id string) error {
+	_, err := tx.Exec(ctx, `insert into user_groups(user_id,group_id) select us.user_id,t.group_id from user_subscriptions us join subscription_tiers t on t.id=us.tier_id where us.id=$1 and t.group_id is not null on conflict do nothing`, id)
+	return err
 }
 
 func (s *Service) resetActiveSubscriptionQuotas(w http.ResponseWriter, r *http.Request) {
@@ -495,4 +560,20 @@ func adminSubscriptionTime(v any) *time.Time {
 		return nil
 	}
 	return &t
+}
+
+// renewsExpiredSubscription reports whether an admin edit turns an expired
+// subscription back on: the caller did not choose a status itself and either
+// moved the period end into the future or cleared it (no expiry).
+func renewsExpiredSubscription(requestedStatus *string, currentStatus string, end *time.Time, now time.Time) bool {
+	if requestedStatus != nil || currentStatus != "expired" {
+		return false
+	}
+	return end == nil || end.After(now)
+}
+
+// extendsIntoActive reports whether a batch extension renews an expired
+// subscription: a forward extension that leaves the period end in the future.
+func extendsIntoActive(status string, days int, end *time.Time, now time.Time) bool {
+	return days > 0 && status == "expired" && end != nil && end.After(now)
 }

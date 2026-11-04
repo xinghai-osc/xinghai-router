@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Users } from 'lucide-vue-next'
 import { endpoints, type AdminUserSubscription, type BillingPeriod, type Group, type SubscriptionProduct, type User, type UserBatchUpdateForm, type UserCreate, type UserUpdate } from '~/src/api'
-import { formatDateTime, formatMoney, formatNumber } from '~/src/format'
+import { formatCurrency, formatDateTime, formatMoney, formatNumber } from '~/src/format'
 import { periodLabel, tierOptions, tierPrices } from '~/src/subscriptions'
 import { canAuthorizeUser, canManageUser } from '~/src/user-permissions'
 
@@ -448,9 +448,7 @@ const subForm = reactive({
 const subFormError = ref('')
 
 function money(value: number | string | null | undefined, currency?: string): string {
-  const formatted = formatMoney(value)
-  const code = (currency ?? '').trim().toUpperCase()
-  return code && code !== 'CNY' && code !== 'RMB' ? `${formatted} ${code}` : formatted
+  return formatCurrency(value, currency)
 }
 
 const subTierOptions = computed(() => tierOptions(subProducts.value))
@@ -723,7 +721,10 @@ async function issueResetCards() {
             <th>{{ t('admin.role') }}</th>
             <th>{{ t('common.status') }}</th>
             <th class="num">{{ t('admin.balance') }}</th>
-            <th class="num">{{ t('admin.maxConcurrency') }}</th>
+                         <th class="num">{{ t('admin.availableAsset') }}</th>
+             <th class="num">{{ t('admin.subscriptionValue') }}</th>
+             <th class="num">{{ t('admin.maxConcurrency') }}</th>
+
             <th>{{ t('admin.groups') }}</th>
             <th>{{ t('common.createdAt') }}</th>
             <th v-if="canManage || canAdjustWallet">{{ t('common.actions') }}</th>
@@ -753,6 +754,9 @@ async function issueResetCards() {
               </UiBadge>
             </td>
             <td class="num">{{ formatMoney(user.balance) }}</td>
+             <td class="num">{{ formatMoney(user.available_asset) }}</td>
+             <td class="num">{{ Object.entries(user.subscription_values).map(([currency, value]) => `${formatMoney(value)} ${currency}`).join(', ') || t('common.none') }}</td>
+
             <td class="num">{{ user.max_concurrency ?? t('admin.concurrencyPlaceholder') }}</td>
             <td>
               <div v-if="user.groups.length" class="flex flex-wrap gap-1">
@@ -995,7 +999,7 @@ async function issueResetCards() {
               <UiField :label="t('admin.periodStart')">
                 <UiInput v-model="subForm.start_at" type="datetime-local" />
               </UiField>
-              <UiField :label="t('admin.periodEnd')">
+              <UiField :label="t('admin.periodEnd')" :hint="editingSub?.status === 'expired' ? t('admin.renewExpiredHint') : ''">
                 <UiInput v-model="subForm.end_at" type="datetime-local" />
               </UiField>
             </div>

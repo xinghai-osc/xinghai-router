@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -625,8 +626,30 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 		writeError(w, http.StatusForbidden, "model_not_allowed", "this API key is not allowed to use this model")
 		return
 	}
-	needsConsent, err := s.requiresDataTransferConsent(ctx, key.userID, model)
-	if err != nil {
+	if maxTokens > maxGatewayMaxTokens {
+		s.logReject(ctx, model, 400, "invalid_request", started)
+		writeError(w, 400, "invalid_request", "max_tokens must be at most 200000")
+		return
+	}
+	var needsConsent bool
+	var consentErr, quotaErr error
+	var subscriptionAccess subscriptionAccess
+	var preflight sync.WaitGroup
+	preflight.Add(3)
+	go func() {
+		defer preflight.Done()
+		needsConsent, consentErr = s.requiresDataTransferConsent(ctx, key.userID, model)
+	}()
+	go func() {
+		defer preflight.Done()
+		quotaErr = s.checkQuota(ctx, key, model)
+	}()
+	go func() {
+		defer preflight.Done()
+		subscriptionAccess = s.subscriptionCoversModel(ctx, key, model)
+	}()
+	preflight.Wait()
+	if consentErr != nil {
 		s.logReject(ctx, model, http.StatusInternalServerError, "internal_error", started)
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not verify data transfer consent")
 		return
@@ -647,12 +670,7 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 	if imageOptions.path == "" && s.promptCache != nil && s.promptCache.enabled && upstreamFormatOnly(ctx) != "jev" {
 		normalized = normalizedPrompt(body)
 	}
-	if maxTokens > maxGatewayMaxTokens {
-		s.logReject(ctx, model, 400, "invalid_request", started)
-		writeError(w, 400, "invalid_request", "max_tokens must be at most 200000")
-		return
-	}
-	if err := s.checkQuota(ctx, key, model); err != nil {
+	if quotaErr != nil {
 		s.logReject(ctx, model, 429, "quota_exceeded", started)
 		writeError(w, 429, "quota_exceeded", "request quota exceeded")
 		return
@@ -662,11 +680,6 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 	pricing := freezePricing(s.pricingFor(ctx, model), started)
 	pricing.thinkingLevel = requestThinkingLevel(body)
 	pricing.serviceTier = requestServiceTier(body)
-	if pricing.serviceTier != "" && !strings.HasPrefix(strings.ToLower(model), "gpt-") {
-		s.logReject(ctx, model, http.StatusBadRequest, "invalid_service_tier", started)
-		writeError(w, http.StatusBadRequest, "invalid_service_tier", "fast service tier is only supported for GPT models")
-		return
-	}
 	if _, err := calculateBill(UsageFacts{}, pricing, 1); err != nil {
 		s.logReject(ctx, model, 402, "pricing_unavailable", started)
 		writeError(w, 402, "pricing_unavailable", "no enabled pricing rule for this model")
@@ -693,7 +706,6 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 			return
 		}
 	}
-	subscriptionAccess := s.subscriptionCoversModel(ctx, key, model)
 	ctx = context.WithValue(ctx, subscriptionCoveredKey{}, subscriptionAccess)
 	var reserved reservation
 	if subscriptionAccess.Covered {
@@ -746,7 +758,7 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 	}
 	defer releaseConcurrency()
 	ctx = leaseCtx
-	stopTracking := s.trackActiveUsage(requestID(ctx), key.workspaceID, key.userID, model)
+	stopTracking := s.trackActiveUsage(requestID(ctx), key.workspaceID, key.userID, key.keyName, model)
 	defer stopTracking()
 	channels, err := s.channelsForModel(ctx, key, model)
 	if err != nil {
@@ -824,8 +836,12 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 	if mediaOptions.kind != "" {
 		identity.stable = false
 	}
+	var affinityChannelID int64
 	if identity.stable {
 		affinity.session = identity.session
+		if pinned, ok := s.sessionAffinity.get(affinity); ok {
+			affinityChannelID = pinned.channelID
+		}
 		retryChannels = s.applySessionAffinity(affinity, retryChannels)
 	}
 	// Keep the runtime bounded even if an old or manually modified database row
@@ -1038,7 +1054,7 @@ tryChannels:
 				i--
 				continue
 			}
-			if err == nil && !reliability.retryable(resp.StatusCode) {
+			if err == nil && !reliability.retryable(resp.StatusCode) && !(affinityChannelID != 0 && ch.id == affinityChannelID && len(retryChannels) > 1) {
 				// The upstream status is not configured as retryable, so retrying
 				// other channels cannot help. The failure is still counted and the
 				// auto-disable rules still apply, so fall through to the shared

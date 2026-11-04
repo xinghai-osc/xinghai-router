@@ -180,6 +180,7 @@ export default {
   plan: '套餐',
   periodStart: '開始時間',
   periodEnd: '結束時間',
+  renewExpiredHint: '把已過期訂閱的結束時間改到未來會重新啟用它，並重設本期額度、恢復綁定的分組。',
   autoRenew: '自動續費',
   void: '作廢',
   delete: '刪除',

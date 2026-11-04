@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { RefreshCw, ShoppingCart } from 'lucide-vue-next'
 import { endpoints, type OrderRecord } from '~/src/api'
-import { formatDateTime, formatMoney } from '~/src/format'
+import { formatCNY, formatDateTime } from '~/src/format'
 
 definePageMeta({ layout: 'console', middleware: 'console-auth' })
 
@@ -64,7 +64,7 @@ function typeLabel(order: OrderRecord): string {
                   </UiBadge>
                 </td>
                 <td class="text-muted">{{ order.plan_name || '—' }}</td>
-                <td class="num font-medium">{{ formatMoney(order.amount) }}</td>
+                <td class="num font-medium">{{ formatCNY(order.amount) }}</td>
                 <td class="text-muted">{{ order.payment_type }}</td>
                 <td><ConsoleUserStatusBadge :status="order.status" /></td>
                 <td class="text-muted">{{ formatDateTime(order.paid_at) }}</td>

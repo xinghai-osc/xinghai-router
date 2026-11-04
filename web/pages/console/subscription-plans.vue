@@ -4,7 +4,7 @@ import {
   ApiError, clearPublicCache, endpoints,
   type Group, type SubscriptionProduct, type SubscriptionProductForm, type SubscriptionTier,
 } from '~/src/api'
-import { formatMoney, formatNumber } from '~/src/format'
+import { formatCurrency, formatNumber } from '~/src/format'
 import { periodLabel, sortProducts, sortTiers, tierPrices } from '~/src/subscriptions'
 
 definePageMeta({ layout: 'console', middleware: 'console-auth' })
@@ -47,7 +47,7 @@ function priceSummary(tier: SubscriptionTier): string {
   const prices = tierPrices(tier)
   if (!prices.length) return '—'
   return prices
-    .map(price => `${periodLabel(t, price.billing_period, 'system')} ${formatMoney(price.price)}`)
+    .map(price => `${periodLabel(t, price.billing_period, 'system')} ${formatCurrency(price.price, price.currency)}`)
     .join(' · ')
 }
 

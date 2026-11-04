@@ -9,9 +9,10 @@ import {
   type SubscriptionProduct,
   type SubscriptionTier,
   type SubscriptionTierPrice,
+  type SubscriptionUpgrade,
   type UserSubscription,
 } from '~/src/api'
-import { formatDateTime, formatMoney, formatNumber } from '~/src/format'
+import { formatCNY, formatCurrency, formatDateTime, formatMoney, formatNumber } from '~/src/format'
 import {
   effectiveAmounts,
   periodLabel,
@@ -70,9 +71,7 @@ const method = ref('balance')
 const autoRenew = ref(true)
 
 function money(value: number | string | null | undefined, currency?: string): string {
-  const formatted = formatMoney(value)
-  const code = (currency ?? '').trim().toUpperCase()
-  return code && code !== 'CNY' && code !== 'RMB' ? `${formatted} ${code}` : formatted
+  return formatCurrency(value, currency)
 }
 
 const sortedProducts = computed(() => sortProducts(products.value.data))
@@ -98,10 +97,59 @@ const selectedPrice = computed<SubscriptionTierPrice | null>(() => {
   return priceFor(tier, period) ?? null
 })
 
+const upgradeQuote = ref<SubscriptionUpgrade | null>(null)
+const quotePending = ref(false)
+let quoteToken = 0
+
+const activeInstances = computed(() => subscriptions.value.data.filter((instance) => {
+  if (instance.status !== 'active' || !instance.current_period_end) return false
+  return new Date(instance.current_period_end).getTime() > Date.now()
+}))
+
+// The running instance a tier purchase would upgrade: same product, lower tier,
+// and a same-currency price for the period that instance is already serving.
+function upgradeSourceFor(tier: SubscriptionTier): UserSubscription | null {
+  const candidates = activeInstances.value.filter((instance) => {
+    if (instance.subscription_id !== tier.subscription_id || instance.tier_level >= tier.level) return false
+    const price = tierPrices(tier).find(item => item.billing_period === instance.billing_period)
+    return Boolean(price) && (price?.currency ?? 'CNY') === (instance.currency || 'CNY')
+  })
+  return candidates.sort((a, b) => b.tier_level - a.tier_level)[0] ?? null
+}
+
+const selectedUpgradeSource = computed(() => (selectedTier.value ? upgradeSourceFor(selectedTier.value) : null))
+const upgrading = computed(() => upgradeQuote.value !== null)
+
+async function refreshUpgradeQuote() {
+  const token = ++quoteToken
+  const tier = selectedTier.value
+  const period = selectedPeriod.value
+  if (!subscribeOpen.value || !tier || !period || !selectedUpgradeSource.value) {
+    upgradeQuote.value = null
+    quotePending.value = false
+    return
+  }
+  quotePending.value = true
+  try {
+    const result = await endpoints.getSubscriptionUpgradeQuote(tier.id, period)
+    if (token === quoteToken) upgradeQuote.value = result.data
+  } catch {
+    if (token === quoteToken) upgradeQuote.value = null
+  } finally {
+    if (token === quoteToken) quotePending.value = false
+  }
+}
+
+watch([subscribeOpen, selectedTierId, selectedPeriod], refreshUpgradeQuote)
+
 const periodOptions = computed(() => {
   const tier = selectedTier.value
+  const upgrade = selectedUpgradeSource.value
   if (!tier) return []
-  return tierPrices(tier).map(price => ({
+  const prices = upgrade
+    ? tierPrices(tier).filter(price => price.billing_period === upgrade.billing_period)
+    : tierPrices(tier)
+  return prices.map(price => ({
     value: price.billing_period,
     label: `${money(price.price, price.currency)} / ${periodLabel(t, price.billing_period, 'console')}`,
   }))
@@ -111,6 +159,7 @@ interface AvailableTier {
   product: SubscriptionProduct
   tier: SubscriptionTier
   prices: SubscriptionTierPrice[]
+  upgrade: UserSubscription | null
 }
 
 const availableTiers = computed<AvailableTier[]>(() => {
@@ -119,7 +168,7 @@ const availableTiers = computed<AvailableTier[]>(() => {
     for (const tier of sortTiers(product.tiers ?? [])) {
       if (!tier.enabled) continue
       const prices = tierPrices(tier)
-      if (prices.length) list.push({ product, tier, prices })
+      if (prices.length) list.push({ product, tier, prices, upgrade: upgradeSourceFor(tier) })
     }
   }
   return list
@@ -131,22 +180,33 @@ const methodOptions = computed(() => [
   ...payments.value.payment_methods.map(entry => ({ value: entry.code, label: entry.name })),
 ])
 const payingWithBalance = computed(() => method.value === 'balance')
-const purchaseAmount = computed(() => Number(selectedPrice.value?.price ?? 0))
-const balanceSufficient = computed(() => availableBalance.value >= purchaseAmount.value)
+const purchasePoints = computed(() => (upgrading.value
+  ? Number(upgradeQuote.value?.points_amount ?? 0)
+  : Number(selectedPrice.value?.points_price ?? selectedPrice.value?.price ?? 0)))
+const balanceSufficient = computed(() => availableBalance.value >= purchasePoints.value)
 const canSubscribe = computed(() => methodOptions.value.length > 0)
-const canConfirm = computed(() => Boolean(selectedPrice.value) && Boolean(method.value))
+const canConfirm = computed(() => Boolean(selectedPrice.value) && Boolean(method.value)
+  && !quotePending.value && !(selectedUpgradeSource.value !== null && upgradeQuote.value === null))
+const confirmLabel = computed(() => {
+  if (upgrading.value) return payingWithBalance.value ? t('console.upgradePayBalance') : t('console.upgrade')
+  return payingWithBalance.value ? t('console.payBalanceAndActivate') : t('console.subscribe')
+})
+const panelTitle = computed(() => {
+  if (selectedTierLabel.value) {
+    return t(upgrading.value ? 'console.upgradeTitle' : 'console.subscribeTitle', { name: selectedTierLabel.value })
+  }
+  return upgrading.value ? t('console.upgrade') : t('console.subscribe')
+})
 
 watch(methodOptions, (options) => {
   if (!options.some(option => option.value === method.value)) method.value = options[0]?.value ?? 'balance'
 })
 
-watch(selectedTierId, () => {
-  const tier = selectedTier.value
-  const prices = tier ? tierPrices(tier) : []
-  if (!prices.some(price => price.billing_period === selectedPeriod.value)) {
-    selectedPeriod.value = prices[0]?.billing_period ?? ''
+watch(periodOptions, (options) => {
+  if (!options.some(option => option.value === selectedPeriod.value)) {
+    selectedPeriod.value = options[0]?.value ?? ''
   }
-})
+}, { immediate: true })
 
 function queryParam(value: unknown): string {
   if (Array.isArray(value)) return typeof value[0] === 'string' ? value[0] : ''
@@ -176,11 +236,30 @@ function statusLabel(status: string): string {
   return SUB_STATUS_KEYS[status] ? t(SUB_STATUS_KEYS[status]) : status
 }
 
+function orderKindLabel(kind: string): string {
+  if (kind === 'upgrade') return t('console.orderKindUpgrade')
+  return kind === 'renewal' ? t('console.orderKindRenewal') : t('console.orderKindNew')
+}
+
+// The next tier of the same product that sells the instance's current period.
+function nextTierFor(subscription: UserSubscription): SubscriptionTier | null {
+  const product = sortedProducts.value.find(entry => entry.id === subscription.subscription_id)
+  const tier = findTier(subscription.tier_id)
+  if (!product || !tier) return null
+  return sortTiers(product.tiers ?? []).find(entry => entry.enabled && entry.level > tier.level
+    && entry.prices.some(price => price.enabled && price.billing_period === subscription.billing_period)) ?? null
+}
+
+function openUpgrade(subscription: UserSubscription) {
+  const tier = nextTierFor(subscription)
+  if (tier) openSubscribe(tier.id, subscription.billing_period)
+}
+
 function tierBenefits(tier: SubscriptionTier, price?: SubscriptionTierPrice): string[] {
   const list: string[] = []
   const amounts = effectiveAmounts(tier, price)
   if (amounts.creditAmount) {
-    list.push(t('console.planCredit', { amount: Number(amounts.creditAmount).toFixed(2) }))
+    list.push(t('console.planCredit', { amount: formatMoney(amounts.creditAmount) }))
   } else if (amounts.maxCredit === null
     && !(tier.model_quotas ?? []).some(quota => quota.max_credit_per_period !== null)) {
     list.push(t('console.planUnlimitedCredit'))
@@ -267,6 +346,9 @@ function openSubscribe(tierId?: string, period?: BillingPeriod) {
     : prices[0]?.billing_period ?? ''
   method.value = 'balance'
   autoRenew.value = false
+  quoteToken += 1
+  quotePending.value = false
+  upgradeQuote.value = null
   subscribeOpen.value = true
 }
 
@@ -281,23 +363,33 @@ async function confirmSubscribe() {
   if (!tier || !price || !method.value) return
   const period = price.billing_period
 
+  const wasUpgrading = upgrading.value
+
   if (payingWithBalance.value) {
     if (!balanceSufficient.value) return
     const ok = await run(() => endpoints.createBalanceSubscription(tier.id, period))
     if (!ok) { toast.error(t('common.actionFailed')); return }
     subscribeOpen.value = false
-    toast.success(t('console.balancePurchaseSuccess'))
+    toast.success(wasUpgrading ? t('console.upgradeSuccess') : t('console.balancePurchaseSuccess'))
     await Promise.all([refreshSubs(), refreshOrders(), loadAccount(true)])
     return
   }
 
   let payUrl = ''
+  let paid = false
   const ok = await run(async () => {
-    payUrl = (await endpoints.createAccountSubscription(tier.id, period, method.value, autoRenew.value)).pay_url
+    const result = await endpoints.createAccountSubscription(tier.id, period, method.value, autoRenew.value)
+    payUrl = result.pay_url ?? ''
+    paid = result.status === 'paid'
   })
   if (!ok) { toast.error(t('common.actionFailed')); return }
 
   subscribeOpen.value = false
+  if (paid) {
+    toast.success(t('console.upgradeSuccess'))
+    await Promise.all([refreshSubs(), refreshOrders(), loadAccount(true)])
+    return
+  }
   const opened = window.open(payUrl, '_blank', 'noopener')
   if (opened) toast.success(t('console.subscribeRedirect'))
   else toast.warn(t('console.popupBlocked'))
@@ -413,6 +505,11 @@ async function confirmReset() {
               <div class="flex items-center justify-between gap-3">
                 <div class="flex items-center gap-2">
                   <UiButton
+                    v-if="subscription.status === 'active' && nextTierFor(subscription)"
+                    size="sm"
+                    @click="openUpgrade(subscription)"
+                  >{{ t('console.upgrade') }}</UiButton>
+                  <UiButton
                     v-if="subscription.status === 'active' || subscription.status === 'pending'"
                     variant="secondary"
                     size="sm"
@@ -494,13 +591,18 @@ async function confirmReset() {
                 </li>
               </ul>
 
-              <UiButton
-                block
-                :disabled="!canSubscribe"
-                @click="openSubscribe(entry.tier.id, entry.prices[0]?.billing_period)"
-              >
-                {{ t('console.subscribe') }}
-              </UiButton>
+              <div class="space-y-2">
+                <p v-if="entry.upgrade" class="text-[13px] text-muted">
+                  {{ t('console.upgradeFrom') }} · {{ entry.upgrade.display_name }}
+                </p>
+                <UiButton
+                  block
+                  :disabled="!canSubscribe"
+                  @click="openSubscribe(entry.tier.id, entry.prices[0]?.billing_period)"
+                >
+                  {{ entry.upgrade ? t('console.upgrade') : t('console.subscribe') }}
+                </UiButton>
+              </div>
             </article>
           </div>
         </ConsoleUserDataState>
@@ -535,10 +637,10 @@ async function confirmReset() {
               <tr v-for="order in orders.data" :key="order.id">
                 <td><code class="font-mono text-[13px] text-muted">{{ order.order_no }}</code></td>
                 <td class="font-medium">{{ order.plan_name }}</td>
-                <td class="num">{{ formatMoney(order.amount) }}</td>
+                <td class="num">{{ formatCNY(order.amount) }}</td>
                 <td class="text-muted">{{ order.payment_type }}</td>
                 <td class="text-muted">
-                  {{ order.period_kind === 'renewal' ? t('console.orderKindRenewal') : t('console.orderKindNew') }}
+                  {{ orderKindLabel(order.period_kind) }}
                 </td>
                 <td><ConsoleUserStatusBadge :status="order.status" /></td>
                 <td class="text-muted">{{ formatDateTime(order.paid_at) }}</td>
@@ -553,7 +655,7 @@ async function confirmReset() {
     <UiSlidePanel
       v-model:open="subscribeOpen"
       size="sm"
-      :title="selectedTierLabel ? t('console.subscribeTitle', { name: selectedTierLabel }) : t('console.subscribe')"
+      :title="panelTitle"
     >
       <div class="space-y-4">
         <UiField :label="t('console.tier')" required>
@@ -572,7 +674,19 @@ async function confirmReset() {
           />
         </UiField>
 
-        <div class="space-y-1.5 rounded-card border border-line bg-sunken p-4 text-[13px]">
+        <div v-if="upgrading" class="space-y-1.5 rounded-card border border-line bg-sunken p-4 text-[13px]">
+          <div class="flex justify-between gap-3">
+            <span class="text-muted">{{ t('console.upgradeFrom') }}</span>
+            <span class="text-ink">{{ upgradeQuote?.from_display_name }}</span>
+          </div>
+          <div class="flex justify-between gap-3">
+            <span class="text-muted">{{ t('console.upgradeAmount') }}</span>
+            <span class="numeric text-ink">{{ money(upgradeQuote?.amount, upgradeQuote?.currency) }}</span>
+          </div>
+          <p class="text-faint">{{ t('console.upgradeHint') }}</p>
+          <p v-if="Number(upgradeQuote?.amount ?? 0) <= 0" class="text-faint">{{ t('console.upgradeFree') }}</p>
+        </div>
+        <div v-else class="space-y-1.5 rounded-card border border-line bg-sunken p-4 text-[13px]">
           <p class="text-muted">{{ t('console.renewalHint') }}</p>
           <p class="text-faint">{{ t('console.subscriptionMergedHint') }}</p>
         </div>
@@ -591,22 +705,26 @@ async function confirmReset() {
             <span class="numeric text-ink">{{ formatMoney(availableBalance) }}</span>
           </div>
           <div class="flex justify-between gap-3">
-            <span class="text-muted">{{ t('console.purchaseAmount') }}</span>
-            <span class="numeric text-ink">{{ money(selectedPrice?.price, selectedPrice?.currency) }}</span>
+            <span class="text-muted">{{ upgrading ? t('console.upgradeAmount') : t('console.purchaseAmount') }}</span>
+            <span class="numeric text-ink">{{ upgrading ? money(upgradeQuote?.amount, upgradeQuote?.currency) : money(selectedPrice?.price, selectedPrice?.currency) }}</span>
+          </div>
+          <div class="flex justify-between gap-3">
+            <span class="text-muted">{{ t('console.balanceDeduction') }}</span>
+            <span class="numeric text-ink">{{ formatMoney(purchasePoints) }}</span>
           </div>
           <div v-if="balanceSufficient" class="flex justify-between gap-3 border-t border-line pt-3">
             <span class="text-muted">{{ t('console.balanceAfterPurchase') }}</span>
-            <span class="numeric text-ink">{{ formatMoney(availableBalance - purchaseAmount) }}</span>
+            <span class="numeric text-ink">{{ formatMoney(availableBalance - purchasePoints) }}</span>
           </div>
           <UiAlert v-else tone="warn">
-            {{ t('console.insufficientBalance', { amount: formatMoney(purchaseAmount - availableBalance) }) }}
+            {{ t('console.insufficientBalance', { amount: formatMoney(purchasePoints - availableBalance) }) }}
             <UiButton to="/console/wallet" variant="link" size="sm" class="ml-1 h-auto p-0">
               {{ t('console.topUpToContinue') }}
             </UiButton>
           </UiAlert>
         </div>
 
-        <UiField v-else :label="t('console.autoRenew')">
+        <UiField v-else-if="!upgrading" :label="t('console.autoRenew')">
           <UiSwitch v-model="autoRenew" :label="t('console.autoRenew')" />
         </UiField>
       </div>
@@ -614,7 +732,7 @@ async function confirmReset() {
       <template #footer>
         <UiButton variant="secondary" @click="subscribeOpen = false">{{ t('common.cancel') }}</UiButton>
         <UiButton :loading="busy" :disabled="!canConfirm || (payingWithBalance && !balanceSufficient)" @click="confirmSubscribe">
-          {{ payingWithBalance ? t('console.payBalanceAndActivate') : t('console.subscribe') }}
+          {{ confirmLabel }}
         </UiButton>
       </template>
     </UiSlidePanel>

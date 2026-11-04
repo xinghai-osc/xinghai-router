@@ -257,7 +257,14 @@ func (s *Service) createAccountPayment(w http.ResponseWriter, r *http.Request) {
 	randomPart := strings.ReplaceAll(id, "-", "")[:12]
 	orderNo := fmt.Sprintf("xh%d%s", time.Now().UnixMilli(), randomPart)
 	account := accountFromContext(r)
-	_, err = s.db.Exec(r.Context(), `insert into payment_orders(id,order_no,user_id,provider,payment_type,amount) values($1,$2,$3,'epay',$4,$5)`, id, orderNo, account.userID, paymentType, amount)
+	_, err = s.db.Exec(r.Context(), `insert into payment_orders(id,order_no,user_id,provider,payment_type,amount,points_amount) select $1,$2,$3,'epay',$4,$5,$5*points_per_unit from exchange_rates where currency='CNY' and enabled`, id, orderNo, account.userID, paymentType, amount)
+	if err == nil {
+		var exists bool
+		_ = s.db.QueryRow(r.Context(), `select exists(select 1 from payment_orders where order_no=$1)`, orderNo).Scan(&exists)
+		if !exists {
+			err = fmt.Errorf("CNY points rate is not configured")
+		}
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not create payment order")
 		return
@@ -349,8 +356,8 @@ func (s *Service) epayNotify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(r.Context())
-	var id, userID, amount, status string
-	err = tx.QueryRow(r.Context(), `select id,user_id,amount::text,status from payment_orders where order_no=$1 and provider='epay' for update`, r.Form.Get("out_trade_no")).Scan(&id, &userID, &amount, &status)
+	var id, userID, amount, pointsAmount, status string
+	err = tx.QueryRow(r.Context(), `select id,user_id,amount::text,points_amount::text,status from payment_orders where order_no=$1 and provider='epay' for update`, r.Form.Get("out_trade_no")).Scan(&id, &userID, &amount, &pointsAmount, &status)
 	if err == nil {
 		if amount != notifiedAmount {
 			http.Error(w, "fail", http.StatusBadRequest)
@@ -374,7 +381,7 @@ func (s *Service) epayNotify(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var balance string
-		if err = tx.QueryRow(r.Context(), `update user_wallets set balance=balance+$1::numeric,updated_at=now() where user_id=$2 returning balance::text`, amount, userID).Scan(&balance); err != nil {
+		if err = tx.QueryRow(r.Context(), `update user_wallets set balance=balance+$1::numeric,updated_at=now() where user_id=$2 returning balance::text`, pointsAmount, userID).Scan(&balance); err != nil {
 			http.Error(w, "fail", http.StatusInternalServerError)
 			return
 		}
@@ -383,7 +390,7 @@ func (s *Service) epayNotify(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "fail", http.StatusInternalServerError)
 			return
 		}
-		if _, err = tx.Exec(r.Context(), `insert into wallet_ledger(id,user_id,amount,balance_after,kind,request_id,note) values($1,$2,$3,$4,'topup',$5,$6)`, ledgerID, userID, amount, balance, r.Form.Get("out_trade_no"), "Epay top-up"); err != nil {
+		if _, err = tx.Exec(r.Context(), `insert into wallet_ledger(id,user_id,amount,balance_after,kind,request_id,note) values($1,$2,$3,$4,'topup',$5,$6)`, ledgerID, userID, pointsAmount, balance, r.Form.Get("out_trade_no"), "Epay top-up"); err != nil {
 			http.Error(w, "fail", http.StatusInternalServerError)
 			return
 		}

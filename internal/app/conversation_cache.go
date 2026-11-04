@@ -9,11 +9,13 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
 type conversationCacheSettings struct {
 	Enabled bool `json:"conversation_cache_enabled"`
+	Retain  bool `json:"conversation_cache_retain"`
 }
 
 // conversationFile is the on-disk JSON shape of one cached conversation.
@@ -48,6 +50,59 @@ type conversationCacheSummary struct {
 	CreatedAt    time.Time `json:"created_at"`
 }
 
+type conversationCacheIndex struct {
+	mu      sync.Mutex
+	entries []conversationCacheSummary
+	loaded  time.Time
+}
+
+const conversationCacheIndexTTL = 15 * time.Second
+
+func newConversationCacheIndex() *conversationCacheIndex {
+	return &conversationCacheIndex{}
+}
+
+func (i *conversationCacheIndex) invalidate() {
+	if i == nil {
+		return
+	}
+	i.mu.Lock()
+	i.loaded = time.Time{}
+	i.mu.Unlock()
+}
+
+func (i *conversationCacheIndex) add(entry conversationCacheSummary) {
+	if i == nil {
+		return
+	}
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	for _, existing := range i.entries {
+		if existing.ID == entry.ID {
+			return
+		}
+	}
+	i.entries = append(i.entries, entry)
+}
+
+func (i *conversationCacheIndex) get(dir string, now time.Time, retain bool) ([]conversationCacheSummary, error) {
+	if i == nil {
+		return readConversationFiles(dir, now, retain)
+	}
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if !i.loaded.IsZero() && now.Sub(i.loaded) < conversationCacheIndexTTL {
+		return i.entries, nil
+	}
+	entries, err := readConversationFiles(dir, now, retain)
+	if err != nil {
+		return nil, err
+	}
+	i.entries = entries
+	i.loaded = now
+	return i.entries, nil
+}
+
 func (s *Service) conversationCacheDir() string {
 	return s.cfg.ConversationCacheDir
 }
@@ -65,12 +120,17 @@ func (s *Service) conversationCacheSettings(ctx context.Context) conversationCac
 }
 
 func (s *Service) loadConversationCacheSettings(ctx context.Context) conversationCacheSettings {
-	var enabled bool
-	err := s.db.QueryRow(ctx, `select conversation_cache_enabled from site_settings where id=true`).Scan(&enabled)
-	if err != nil {
-		return conversationCacheSettings{}
+	settings, _ := s.readConversationCacheSettings(ctx)
+	return settings
+}
+
+func (s *Service) readConversationCacheSettings(ctx context.Context) (conversationCacheSettings, error) {
+	var settings conversationCacheSettings
+	if s.db == nil {
+		return settings, nil
 	}
-	return conversationCacheSettings{Enabled: enabled}
+	err := s.db.QueryRow(ctx, `select conversation_cache_enabled, conversation_cache_retain from site_settings where id=true`).Scan(&settings.Enabled, &settings.Retain)
+	return settings, err
 }
 
 func (s *Service) getConversationCacheSettings(w http.ResponseWriter, r *http.Request) {
@@ -80,6 +140,7 @@ func (s *Service) getConversationCacheSettings(w http.ResponseWriter, r *http.Re
 func (s *Service) updateConversationCacheSettings(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Enabled *bool `json:"conversation_cache_enabled"`
+		Retain  *bool `json:"conversation_cache_retain"`
 	}
 	if decode(r, &in) != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", "invalid conversation cache settings")
@@ -89,14 +150,20 @@ func (s *Service) updateConversationCacheSettings(w http.ResponseWriter, r *http
 	if in.Enabled != nil {
 		current.Enabled = *in.Enabled
 	}
-	if _, err := s.db.Exec(r.Context(), `update site_settings set conversation_cache_enabled=$1, updated_at=now() where id=true`, current.Enabled); err != nil {
+	if in.Retain != nil {
+		current.Retain = *in.Retain
+	}
+	if _, err := s.db.Exec(r.Context(), `update site_settings set conversation_cache_enabled=$1, conversation_cache_retain=$2, updated_at=now() where id=true`, current.Enabled, current.Retain); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not save conversation cache settings")
 		return
 	}
 	if s.conversationCacheData != nil {
 		s.conversationCacheData.clear()
 	}
-	s.audit(r, "conversation_cache.updated", "site_settings", "conversation_cache", map[string]any{"enabled": current.Enabled})
+	if s.conversationCacheIndex != nil {
+		s.conversationCacheIndex.invalidate()
+	}
+	s.audit(r, "conversation_cache.updated", "site_settings", "conversation_cache", map[string]any{"enabled": current.Enabled, "retain": current.Retain})
 	writeJSON(w, http.StatusOK, current)
 }
 
@@ -136,6 +203,15 @@ func (s *Service) storeConversationCache(ctx context.Context, key keyContext, mo
 	go func() {
 		if err := writeConversationFile(s.cfg.ConversationCacheDir, entry); err != nil {
 			log.Printf("conversation cache write: %v", err)
+			return
+		}
+		if s.conversationCacheIndex != nil {
+			s.conversationCacheIndex.add(conversationCacheSummary{
+				ID: entry.ID, RequestID: entry.RequestID, UserID: entry.UserID,
+				APIKeyID: entry.APIKeyID, Model: entry.Model, StatusCode: entry.StatusCode,
+				Stream: entry.Stream, DurationMS: entry.DurationMS, FirstTokenMS: entry.FirstTokenMS,
+				CreatedAt: entry.CreatedAt,
+			})
 		}
 	}()
 }
@@ -193,12 +269,12 @@ func (s *Service) listConversationCache(w http.ResponseWriter, r *http.Request) 
 	if v := q.Get("end"); v != "" {
 		end, _ = time.Parse(time.RFC3339, v)
 	}
-	entries, err := readConversationFiles(s.conversationCacheDir(), time.Now())
+	entries, err := s.conversationCacheIndex.get(s.conversationCacheDir(), time.Now(), s.conversationCacheSettings(r.Context()).Retain)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not read conversation cache")
 		return
 	}
-	filtered := entries[:0]
+	filtered := make([]conversationCacheSummary, 0, len(entries))
 	for _, e := range entries {
 		if userFilter != "" && e.UserID != userFilter {
 			continue
@@ -253,7 +329,7 @@ func (s *Service) getConversationCacheDetail(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusBadRequest, "invalid_request", "invalid conversation id")
 		return
 	}
-	entry, err := findConversationFile(s.conversationCacheDir(), id)
+	entry, err := findConversationFile(s.conversationCacheDir(), id, s.conversationCacheSettings(r.Context()).Retain)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "not_found", "conversation not found")
 		return
@@ -275,9 +351,10 @@ func (s *Service) getConversationCacheDetail(w http.ResponseWriter, r *http.Requ
 }
 
 // readConversationFiles walks the cache directory and returns every record that
-// is still within the retention window (today plus the immediately preceding day,
-// so deletions at midnight never race an in-flight write).
-func readConversationFiles(dir string, today time.Time) ([]conversationCacheSummary, error) {
+// is still within the retention window (today plus the immediately preceding two
+// days, so deletions at midnight never race an in-flight write). When retain is
+// on the cleanup keeps older days, so every dated directory is read.
+func readConversationFiles(dir string, today time.Time, retain bool) ([]conversationCacheSummary, error) {
 	var entries []conversationCacheSummary
 	dayDirs, err := os.ReadDir(dir)
 	if err != nil {
@@ -287,8 +364,16 @@ func readConversationFiles(dir string, today time.Time) ([]conversationCacheSumm
 		return nil, err
 	}
 	keep := map[string]bool{}
-	for offset := -2; offset <= 0; offset++ {
-		keep[today.AddDate(0, 0, offset).Format("2006-01-02")] = true
+	if retain {
+		for _, day := range dayDirs {
+			if day.IsDir() && validConversationCacheDay(day.Name()) {
+				keep[day.Name()] = true
+			}
+		}
+	} else {
+		for offset := -2; offset <= 0; offset++ {
+			keep[today.AddDate(0, 0, offset).Format("2006-01-02")] = true
+		}
 	}
 	for _, day := range dayDirs {
 		if !day.IsDir() || !keep[day.Name()] {
@@ -317,27 +402,51 @@ func readConversationFiles(dir string, today time.Time) ([]conversationCacheSumm
 	return entries, nil
 }
 
-func findConversationFile(dir, id string) (conversationFile, error) {
+func validConversationCacheDay(name string) bool {
+	_, err := time.Parse("2006-01-02", name)
+	return err == nil
+}
+
+func findConversationFile(dir, id string, retain bool) (conversationFile, error) {
 	var zero conversationFile
 	today := time.Now()
-	var lastErr error
-	for offset := 0; offset >= -2; offset-- {
-		dayDir := filepath.Join(dir, today.AddDate(0, 0, offset).Format("2006-01-02"))
-		data, err := os.ReadFile(filepath.Join(dayDir, id+".json"))
-		if err == nil {
-			var e conversationFile
-			if json.Unmarshal(data, &e) == nil {
-				return e, nil
+	days := make([]string, 0, 3)
+	if retain {
+		if entries, err := os.ReadDir(dir); err == nil {
+			for _, entry := range entries {
+				if entry.IsDir() && validConversationCacheDay(entry.Name()) {
+					days = append(days, entry.Name())
+				}
 			}
+			sort.Sort(sort.Reverse(sort.StringSlice(days)))
+		}
+	} else {
+		for offset := 0; offset >= -2; offset-- {
+			days = append(days, today.AddDate(0, 0, offset).Format("2006-01-02"))
+		}
+	}
+	var lastErr error
+	for _, day := range days {
+		data, err := os.ReadFile(filepath.Join(dir, day, id+".json"))
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		var e conversationFile
+		if err := json.Unmarshal(data, &e); err != nil {
 			return zero, err
 		}
-		lastErr = err
+		return e, nil
+	}
+	if lastErr == nil {
+		lastErr = os.ErrNotExist
 	}
 	return zero, lastErr
 }
 
 // startConversationCacheCleanup deletes day directories that have aged past the
-// retention window, scheduled to run at midnight.
+// retention window, scheduled to run at midnight. When the admin enabled history
+// retention the cleanup keeps every record instead.
 func (s *Service) startConversationCacheCleanup(ctx context.Context) {
 	go func() {
 		for {
@@ -360,14 +469,32 @@ func (s *Service) cleanupConversationCache(ctx context.Context) {
 	if dir == "" {
 		return
 	}
-	today := time.Now()
+	settings, err := s.readConversationCacheSettings(ctx)
+	if err != nil {
+		// Deleting on an unknown retention setting could discard history the
+		// operator asked to keep, so a failed read leaves the records alone.
+		log.Printf("conversation cache cleanup: could not read settings, skipping: %v", err)
+		return
+	}
+	if settings.Retain {
+		log.Printf("conversation cache cleanup: retention enabled, keeping records in %s", dir)
+	}
+	if removed := cleanupConversationCacheDir(dir, time.Now(), settings.Retain); removed > 0 {
+		log.Printf("conversation cache cleanup: removed %d stale day directories in %s", removed, dir)
+	}
+}
+
+func cleanupConversationCacheDir(dir string, today time.Time, retain bool) int64 {
+	if retain {
+		return 0
+	}
 	var removed int64
 	dayDirs, err := os.ReadDir(dir)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			log.Printf("conversation cache cleanup: %v", err)
 		}
-		return
+		return 0
 	}
 	for _, day := range dayDirs {
 		if !day.IsDir() {
@@ -381,9 +508,7 @@ func (s *Service) cleanupConversationCache(ctx context.Context) {
 			removed++
 		}
 	}
-	if removed > 0 {
-		log.Printf("conversation cache cleanup: removed %d stale day directories in %s", removed, dir)
-	}
+	return removed
 }
 
 func conversationSummary(e conversationCacheSummary) map[string]any {

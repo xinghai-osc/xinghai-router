@@ -1,3 +1,4 @@
+import { setPointsName } from '~/src/format'
 import { endpoints, type FeaturedCopy, type FeaturedLocale, type SiteSettings } from '~/src/api'
 
 function emptyFeaturedCopy(): FeaturedCopy {
@@ -20,6 +21,7 @@ function mergeFeaturedCopy(value: Partial<FeaturedCopy> | null | undefined): Fea
 let siteSettingsRequest: Promise<void> | null = null
 
 const FALLBACK: Omit<SiteSettings, 'name'> = {
+  points_name: '积分',
   icon_url: '',
   announcement: '',
   homepage_video_url: '',
@@ -50,10 +52,12 @@ export function useSiteSettings() {
           ...defaults,
           ...remote,
           name: remote.name || defaults.name,
+          points_name: remote.points_name || '积分',
           featured_enabled: remote.featured_enabled ?? defaults.featured_enabled,
           featured_model: remote.featured_model ?? defaults.featured_model,
           featured_copy: mergeFeaturedCopy(remote.featured_copy),
         }
+        setPointsName(settings.value.points_name)
         loaded.value = true
       } catch {
         loaded.value = false

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { RefreshCw, ShoppingCart } from 'lucide-vue-next'
 import { endpoints, type AdminOrder } from '~/src/api'
-import { formatDateTime, formatMoney } from '~/src/format'
+import { formatCNY, formatDateTime } from '~/src/format'
 
 definePageMeta({ layout: 'console', middleware: 'console-auth' })
 
@@ -51,7 +51,7 @@ function typeLabel(order: AdminOrder) {
                 <td><div class="font-medium text-ink">{{ order.user_name }}</div><div class="text-[12px] text-muted">{{ order.user_email }}</div></td>
                 <td><UiBadge :tone="order.order_type === 'subscription' ? 'clay' : 'neutral'">{{ typeLabel(order) }}</UiBadge></td>
                 <td class="text-muted">{{ order.plan_name || t('common.none') }}</td>
-                <td class="num font-medium">{{ formatMoney(order.amount) }}</td>
+                <td class="num font-medium">{{ formatCNY(order.amount) }}</td>
                 <td><ConsoleUserStatusBadge :status="order.status" /></td>
                 <td class="text-muted whitespace-nowrap">{{ formatDateTime(order.created_at) }}</td>
               </tr>

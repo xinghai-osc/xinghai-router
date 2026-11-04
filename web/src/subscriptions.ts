@@ -1,4 +1,5 @@
 import type { BillingPeriod, SubscriptionProduct, SubscriptionTier, SubscriptionTierPrice } from './api'
+import { formatCurrency } from './format'
 
 export const BILLING_PERIODS: BillingPeriod[] = ['hour', 'day', 'week', 'month', 'year']
 
@@ -114,7 +115,7 @@ export function tierPriceOptions(products: SubscriptionProduct[], includeDisable
         options.push({
           value: `${tier.id}:${price.billing_period}`,
           tierId: tier.id,
-          label: `${tierDisplayName(product.name, tier.name)} · ${price.price} ${price.currency}`,
+          label: `${tierDisplayName(product.name, tier.name)} · ${formatCurrency(price.price, price.currency)}`,
           period: price.billing_period,
           price,
         })
