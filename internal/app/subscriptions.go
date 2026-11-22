@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"fmt"
-	"log"
 	"math"
 	"net/http"
 	"net/url"
@@ -1263,6 +1262,7 @@ func (s *Service) completeFreeUpgrade(w http.ResponseWriter, r *http.Request, us
 	}
 	s.audit(r, "subscription.upgraded", "user_subscription", instanceID, map[string]any{"from_tier_id": upgrade.FromTierID, "to_tier_id": upgrade.ToTierID, "billing_period": upgrade.BillingPeriod, "amount": "0.00"})
 	s.subscriptionCache.clear()
+	s.invalidateAPIKeyContext()
 	var balance string
 	_ = s.db.QueryRow(r.Context(), `select coalesce((select balance::text from user_wallets where user_id=$1),'0')`, userID).Scan(&balance)
 	writeJSON(w, http.StatusCreated, map[string]any{"order_no": "", "subscription_id": instanceID, "amount": "0.00", "points": "0.00", "status": "paid", "balance": balance})
@@ -1536,6 +1536,9 @@ func (s *Service) createBalanceSubscription(w http.ResponseWriter, r *http.Reque
 	s.audit(r, "subscription.balance_purchased", "user_subscription", subID, map[string]any{"order_no": orderNo, "tier_id": purchase.TierID, "billing_period": purchase.BillingPeriod, "amount": purchase.Price, "points": purchase.PointsPrice})
 	s.notifyAdminsOfPurchase(r.Context(), "subscription", orderNo, account.userID, purchase.Price, purchase.DisplayName)
 	s.subscriptionCache.clear()
+	if purchase.GroupID != "" {
+		s.invalidateAPIKeyContext()
+	}
 	writeJSON(w, http.StatusCreated, map[string]any{"order_no": orderNo, "subscription_id": subID, "amount": purchase.Price, "points": purchase.PointsPrice, "status": "paid", "balance": balanceAfter})
 }
 
@@ -1866,13 +1869,16 @@ type subscriptionAccess struct {
 // so the settle path can decrement exactly that counter. The returned
 // OveragePolicy tells the gateway whether to fall through to wallet billing
 // ('allow_wallet') or reject ('block') once the quota is used up.
-func (s *Service) subscriptionCoversModel(ctx context.Context, key keyContext, model string) subscriptionAccess {
-	access, err := s.loadSubscriptionCoversModel(ctx, key, model)
-	if err != nil {
-		log.Printf("subscriptionCoversModel: %v", err)
-		return subscriptionAccess{Covered: false, OveragePolicy: "allow_wallet"}
+func (s *Service) subscriptionCoversModel(ctx context.Context, key keyContext, model string) (subscriptionAccess, error) {
+	cacheKey := subscriptionRouteKey{
+		userID:         key.userID,
+		groupID:        key.groupID,
+		model:          model,
+		subscriptionID: key.subscriptionID,
 	}
-	return access
+	return s.subscriptionCache.get(ctx, cacheKey, func(ctx context.Context) (subscriptionAccess, error) {
+		return s.loadSubscriptionCoversModel(ctx, key, model)
+	})
 }
 
 func (s *Service) loadSubscriptionCoversModel(ctx context.Context, key keyContext, model string) (subscriptionAccess, error) {
@@ -1894,18 +1900,18 @@ func (s *Service) loadSubscriptionCoversModel(ctx context.Context, key keyContex
 		left join subscription_tier_prices pr on pr.tier_id=t.id and pr.billing_period=us.billing_period
 		left join subscription_tier_model_quotas mq on mq.tier_id=t.id and mq.model=$2
 		left join user_subscription_model_usage uq on uq.subscription_id=us.id and uq.model=$2
-		where us.user_id::text=$1 and us.status='active' and (us.current_period_end is null or us.current_period_end > now())
-		  and ($4='' or us.id::text=$4)
-		  and (t.group_id::text=$3
-		    or (t.group_id is null and ($3='' or exists(select 1 from user_groups ug where ug.user_id::text=$1 and ug.group_id::text=$3)))
-		    or exists(select 1 from user_groups ug where ug.user_id::text=$1 and ug.group_id=t.group_id))
+		where us.user_id=$1::bigint and us.status='active' and (us.current_period_end is null or us.current_period_end > now())
+		  and ($4='' or us.id=nullif($4,'')::uuid)
+		  and (t.group_id=nullif($3,'')::uuid
+		    or (t.group_id is null and ($3='' or exists(select 1 from user_groups ug where ug.user_id=$1::bigint and ug.group_id=nullif($3,'')::uuid)))
+		    or exists(select 1 from user_groups ug where ug.user_id=$1::bigint and ug.group_id=t.group_id))
 		  and (coalesce(array_length(t.model_whitelist,1),0)=0 or $2 = any(t.model_whitelist))
 	)
 	select coalesce((select bool_or(req_ok and credit_ok) from candidates), false),
 	       (select id from candidates order by (req_ok and credit_ok) desc, level desc, product_sort, created_at desc limit 1),
 	       coalesce((select overage_policy from candidates order by (req_ok and credit_ok) desc, level desc, product_sort, created_at desc limit 1), 'allow_wallet')`, key.userID, model, key.groupID, key.subscriptionID).Scan(&access.Covered, &subscriptionID, &access.OveragePolicy)
 	if err != nil {
-		return subscriptionAccess{Covered: false, OveragePolicy: "allow_wallet"}, err
+		return subscriptionAccess{}, err
 	}
 	if subscriptionID != nil {
 		access.SubscriptionID = *subscriptionID

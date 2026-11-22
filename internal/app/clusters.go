@@ -204,7 +204,7 @@ func (s *Service) updateInstance(w http.ResponseWriter, r *http.Request) {
 	}
 	id := r.PathValue("instanceId")
 	clusterID := r.PathValue("id")
-	tag, err := s.db.Exec(r.Context(), `update cluster_instances set name=$3,address=$4,metadata=coalesce($5,metadata),enabled=coalesce($6,enabled) where id=$1 and cluster_id=$2`, id, clusterID, v.Name, v.Address, metadata, v.Enabled)
+	tag, err := s.db.Exec(r.Context(), `update cluster_instances set name=$3,address=$4,metadata=coalesce($5,metadata),enabled=coalesce($6,enabled) where id=$1 and cluster_id=$2 and ssh_host=''`, id, clusterID, v.Name, v.Address, metadata, v.Enabled)
 	if err != nil {
 		writeInstanceMutationError(w, err, "could not update instance")
 		return
@@ -235,7 +235,7 @@ func (s *Service) listAllInstances(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"data": out})
 }
 func (s *Service) deleteInstance(w http.ResponseWriter, r *http.Request) {
-	tag, err := s.db.Exec(r.Context(), `delete from cluster_instances where id=$1 and cluster_id=$2`, r.PathValue("instanceId"), r.PathValue("id"))
+	tag, err := s.db.Exec(r.Context(), `delete from cluster_instances where id=$1 and cluster_id=$2 and ssh_host=''`, r.PathValue("instanceId"), r.PathValue("id"))
 	if err != nil {
 		writeError(w, 500, "internal_error", "could not delete instance")
 		return

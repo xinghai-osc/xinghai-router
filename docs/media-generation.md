@@ -8,9 +8,9 @@
 
 | 方法与路径（相对基础地址） | 请求 | 成功响应 |
 | --- | --- | --- |
-| `POST /audio/speech` | JSON，包含 `model`、`input`、`voice` | 音频二进制，请保存为文件 |
-| `POST /audio/transcriptions` | multipart，包含 `model`、音频 `file` | `json` 或 `verbose_json` |
-| `POST /audio/translations` | multipart，包含 `model`、音频 `file` | `json` 或 `verbose_json` |
+| `POST /audio/speech`（TTS） | JSON，包含 `model`、`input`、`voice` | 二进制音频，可边接收边播放或保存 |
+| `POST /audio/transcriptions`（ASR） | multipart，包含 `model`、音频 `file` | 按 `response_format` 返回 JSON、文本或字幕 |
+| `POST /audio/translations` | multipart，包含 `model`、音频 `file` | 按 `response_format` 返回 JSON、文本或字幕 |
 | `POST /videos` | JSON 或 multipart，包含 `model`、`prompt` | 异步任务 JSON，包含任务 ID 和状态 |
 | `GET /videos/{id}` | 使用创建任务的同一 API 密钥 | 任务状态 JSON |
 | `GET /videos/{id}/content` | 使用创建任务的同一 API 密钥 | 视频内容二进制 |
@@ -19,28 +19,21 @@
 
 ### 定价与额度预留
 
-价格使用模型的定价币种，并遵循现有汇率、模型倍率和分组倍率。管理员在控制台定价编辑器配置以下维度。留空表示未配置，`0` 表示明确的零价格。
+管理员需为公共模型启用定价规则。使用钱包时，网关在转发前预留余额。TTS 按每 4 个输入字符估算 1 个输入 Token，向上取整。ASR 和翻译按 `max_audio_seconds` 每秒估算 100 个输入 Token，并加上提示词的字符数。字符按 Unicode 码点计数。
 
-| 操作 | 必需或适用的计费维度 | 结算依据 |
-| --- | --- | --- |
-| 语音合成 | `audio_per_million_characters` | 输入文本的 Unicode 码点数，不是字节数或可见字符簇数 |
-| 音频转写/翻译：时长模式 | `audio_per_second` | 上游计量的音频秒数 |
-| 音频转写/翻译：Token 模式 | 明确配置 `audio_input_per_million`，且不配置 `audio_per_second`；输出音频价格为 `audio_output_per_million` | 上游报告的文本/音频 Token 用量 |
-| 视频创建 | `video_per_second` | 请求的 `seconds`，省略时为 4 秒 |
+结算采用上游报告的 Token 用量，并释放未使用的预留。纯音频、文本和字幕响应通常没有 Token 用量，此时仍返回结果，账单记为 `missing_usage`，金额为零。需要按量计费的 ASR 模型应选用能返回 Token 用量的 JSON 格式。
 
-音频转写和翻译支持网关专用 multipart 字段 `max_audio_seconds`：可选，默认 `600`，范围 `1`–`3600` 秒。该字段在转发上游前移除。网关会先根据上传文件结构计算时长并确认未超上限，再调用上游。请按录音的完整时长设置上限，不能只按希望处理的片段设置。
+音频转写和翻译可设置 `max_audio_seconds`，默认 600 秒，范围 1–3600 秒。网关校验上传文件时长后移除该字段。请按完整录音的时长设置上限。
 
-配置 `audio_per_second` 时，网关按上限秒数预留，再按实测秒数结算。未配置秒价时，必须明确配置音频输入 Token 价格：预留估算按每秒各 100 个文本输入、文本输出、音频输入、音频输出 Tokens 计算，并计入文本提示词，保守地合计这四项价格。结算后释放未使用的预留额度。缺失计量数据、实测时长超过上限或计量费用超过预留报价的响应会被拒绝。
-
-视频在上游接受创建任务时按请求秒数计费；返回的任务尚未完成也会计费。状态轮询和内容下载不额外收费。任务之后失败暂不自动退款，需要运营人员按实际情况处理。网关不会自动重试视频创建 POST，避免重复创建和重复消耗；客户端收到超时或不确定结果时，也不应盲目重试。
+视频任务在上游接受创建请求时结算。状态轮询和内容下载不额外收费。任务之后失败暂不自动退款，需要运营人员按实际情况处理。网关不会自动重试视频创建请求，以免重复创建任务。
 
 ### 能力边界与运营注意事项
 
-- 语音合成目前要求非空 `input` 和 `voice`，输入最多 4096 个 Unicode 码点。返回的是音频二进制，不是 JSON 或 SSE。
+- 语音合成的 `input` 为 1–4096 个 Unicode 码点，`voice` 可填上游音色名或自定义音色对象，如 `{"id":"voice_123"}`。`response_format` 指定输出音频格式，如 `mp3`。
 - 音频文件仅支持普通 RIFF WAV 的 PCM（8/16/24/32 位）或 IEEE 浮点（32/64 位），以及 MPEG 1/2/2.5 Layer III MP3。网关根据 WAV 样本或 MP3 帧计算时长，不信任 MP3 标签中的时长声明。压缩或 extensible WAV、M4A、Ogg、FLAC、损坏/截断文件会在转发前被拒绝。MP3 支持 VBR、ID3v2 前置标签和 ID3v1 尾部标签；不支持 free-format 或中途改变采样率/声道的流。
-- 音频转写/翻译仅支持 `json` 和 `verbose_json`，不支持 `text`、SRT、VTT 或流式响应。时长计费模型应使用能够返回时长的格式，通常为 `verbose_json`；Token 计费模型必须返回可计量用量。
+- 转写和翻译的 `response_format` 可选 `json`（默认）、`verbose_json`、`diarized_json`、`text`、`srt` 或 `vtt`。具体格式取决于上游模型。JSON 响应中的 `text` 为转写或翻译结果，其他字段随上游返回。
 - 不支持媒体 SSE。视频通过异步任务状态查询跟踪进度，不通过聊天流式接口获取结果。
-- multipart 请求由客户端库生成 `Content-Type` 和 boundary。每个字段名唯一；转写/翻译使用 `file`，视频参考文件使用 `input_reference`，音频上传还受上述 WAV/MP3 格式限制；视频参考图格式由上游决定。
+- 由客户端库生成 multipart 的 `Content-Type` 和 boundary。转写和翻译使用 `file` 上传音频。时间戳粒度等数组选项可重复传入，例如 `-F 'timestamp_granularities[]=word' -F 'timestamp_granularities[]=segment'`。模型和文件各传一次。视频参考文件使用 `input_reference`。
 - 媒体上传沿用 `IMAGE_MAX_BODY_BYTES` 限制，默认 50 MiB；同时受请求读取超时约束。不能把录音秒数上限视为文件大小限制。
 - 视频 `seconds` 必须为 1–3600 的整数；上游模型通常有更严格的时长与尺寸范围。
 - 视频任务只允许创建它的同一用户、同一工作区和同一 API 密钥访问。同一账户下的另一把密钥也不能读取。保留网关返回的任务 ID，不要自行替换为上游内部 ID。
@@ -56,9 +49,9 @@ Use the SDK base URL shown in the console and a Xinghai Router API key with `Aut
 
 | Method and path, relative to the base URL | Request | Successful response |
 | --- | --- | --- |
-| `POST /audio/speech` | JSON with `model`, `input`, `voice` | Binary audio; save it to a file |
-| `POST /audio/transcriptions` | Multipart with `model` and audio `file` | `json` or `verbose_json` |
-| `POST /audio/translations` | Multipart with `model` and audio `file` | `json` or `verbose_json` |
+| `POST /audio/speech` (TTS) | JSON with `model`, `input`, `voice` | Binary audio for playback or saving as it arrives |
+| `POST /audio/transcriptions` (ASR) | Multipart with `model` and audio `file` | JSON, plain text or subtitles according to `response_format` |
+| `POST /audio/translations` | Multipart with `model` and audio `file` | JSON, plain text or subtitles according to `response_format` |
 | `POST /videos` | JSON or multipart with `model`, `prompt` | Asynchronous task JSON with ID and status |
 | `GET /videos/{id}` | Same API key that created the task | Task status JSON |
 | `GET /videos/{id}/content` | Same API key that created the task | Binary video content |
@@ -67,28 +60,21 @@ Choose a public model available to the API key's group. The gateway maps it to t
 
 ### Pricing and reservations
 
-Prices use the model currency and the existing exchange rate, model multiplier and group multiplier. Configure these dimensions in the console pricing editor. Blank means unconfigured; `0` is an explicit zero price.
+Enable a pricing rule for the public model. For wallet-funded requests, the gateway reserves funds before forwarding. TTS reserves one input token per four input characters, rounded up. ASR and translation reserve 100 input tokens per second of `max_audio_seconds`, plus one per prompt character. Characters are counted as Unicode code points.
 
-| Operation | Pricing dimension | Metering |
-| --- | --- | --- |
-| Speech | `audio_per_million_characters` | Input Unicode code points, not bytes or grapheme clusters |
-| Transcription/translation: duration mode | `audio_per_second` | Upstream-reported audio seconds |
-| Transcription/translation: token mode | Explicit `audio_input_per_million`, with `audio_per_second` unset; `audio_output_per_million` applies to audio output | Upstream text/audio token usage |
-| Video creation | `video_per_second` | Requested `seconds`, default 4 |
+The gateway settles upstream-reported token usage and releases unused funds. Binary audio, plain text and subtitles usually carry no token usage. These responses are delivered and recorded as `missing_usage` with a zero charge. For metered ASR, use a model and JSON response format that report token usage.
 
-Transcription and translation accept the gateway-only multipart field `max_audio_seconds`. It is optional, defaults to `600`, accepts values from `1` to `3600` seconds, and is removed before forwarding upstream. The gateway calculates duration from the uploaded file structure and checks the ceiling before calling the upstream. Set it to cover the entire recording.
+Transcription and translation accept the optional multipart field `max_audio_seconds`. It defaults to 600 seconds and accepts values from 1 to 3600. The gateway checks the uploaded file's duration and removes the field before forwarding. Set it to cover the full recording.
 
-When `audio_per_second` is configured, the gateway reserves the ceiling duration and settles measured seconds. Otherwise an explicit audio input token price is required. The conservative token quote reserves 100 tokens per second in each of the text input, text output, audio input and audio output dimensions, sums their prices, and includes the text prompt. Unused reservation is released at final settlement. Missing metering, measured duration over the ceiling or measured cost above the quote causes the response to be rejected.
-
-Video creation is billed when the upstream accepts the task, even while generation is pending. Polling and downloading add no charge. Later asynchronous failures do not trigger automatic refunds; operators must handle adjustments as appropriate. The gateway does not automatically retry video creation POST requests. Clients should also avoid blind retries after a timeout or ambiguous result, since another task could be created.
+Video creation is settled when the upstream accepts the task. Polling and downloading add no charge. Later asynchronous failures do not trigger automatic refunds. The gateway does not retry video creation automatically because a retry could create a second task.
 
 ### Limits and operational behavior
 
-- Speech requires nonempty `input` and `voice`; input is limited to 4096 Unicode code points. It returns binary audio, not JSON or SSE.
+- Speech accepts 1–4096 Unicode code points in `input`. Set `voice` to an upstream voice name or a custom voice object such as `{"id":"voice_123"}`. Use `response_format` to request an audio format such as `mp3`.
 - Audio files must be ordinary RIFF WAV with PCM (8/16/24/32-bit) or IEEE float (32/64-bit), or MPEG 1/2/2.5 Layer III MP3. Duration comes from WAV samples or MP3 frames, not an MP3 metadata duration claim. Compressed/extensible WAV, M4A, Ogg, FLAC and corrupt/truncated files are rejected before forwarding. MP3 supports VBR, leading ID3v2 and trailing ID3v1 tags; free-format MP3 and streams that change sample rate or channel count are unsupported.
-- Transcription/translation only support `json` and `verbose_json`, not text, SRT, VTT or streaming responses. Duration-priced models need a format that returns duration, usually `verbose_json`; token-priced models must return measurable usage.
+- Transcription and translation accept `json` (default), `verbose_json`, `diarized_json`, `text`, `srt` and `vtt` as `response_format`, subject to upstream model support. JSON responses carry the transcript or translation in `text`, along with any additional fields from the upstream.
 - Media SSE is unsupported. Follow video progress through the task status endpoint.
-- Let the client library set multipart `Content-Type` and boundary. Field names must be unique. Use `file` for transcription/translation and `input_reference` for video reference uploads. Audio uploads also have the WAV/MP3 restrictions above; supported video reference image formats depend on the upstream.
+- Let the client library set multipart `Content-Type` and the boundary. Upload audio in `file` and send the model and file once each. Array options can be repeated, for example `-F 'timestamp_granularities[]=word' -F 'timestamp_granularities[]=segment'`. Video reference uploads use `input_reference`.
 - Media uploads use `IMAGE_MAX_BODY_BYTES`, default 50 MiB, and the request-body timeout. The recording duration ceiling is separate from the upload size limit.
 - Video `seconds` must be an integer from 1 to 3600. Individual upstream models may allow a much smaller set of durations and sizes.
 - Task access requires the exact creating user, workspace and API key. Another key belonging to the same account cannot retrieve it. Keep the task ID returned by the gateway; do not substitute an upstream internal ID.
@@ -123,8 +109,10 @@ curl --fail --show-error "$XINGHAI_BASE_URL/audio/transcriptions" \
   -F 'model=YOUR_AUDIO_MODEL' \
   -F 'file=@input.mp3' \
   -F 'max_audio_seconds=60' \
-  -F 'response_format=verbose_json'
+  -F 'response_format=json'
 ```
+
+如需字幕，将最后一行改为 `-F 'response_format=srt' --output transcript.srt`。 / To save subtitles, change the last line to `-F 'response_format=srt' --output transcript.srt`.
 
 JSON 创建视频。/ Create a video with JSON.
 

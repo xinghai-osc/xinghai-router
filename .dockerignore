@@ -1,7 +1,28 @@
+# Version control, local secrets, and generated dependencies
 .git
 .env
-web/node_modules
+.env.*
+**/node_modules
 web/.nuxt
 web/.output
 web/dist
+llm-adapter/node_modules
+
+# Local evidence, screenshots, archives, and temporary files
+evidence
+.agents
+.zcode
+/llm-adapter
+/router
+/card.png
+*.tar
+*.tar.gz
 *.log
+*.tmp
+.tmp-*
+web/tmp.*
+web/test-*.png
+web/--host
+
+# Runtime data
+data

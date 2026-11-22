@@ -1,4 +1,4 @@
-import { DEFAULT_LOCALE, LOCALES, MESSAGES, type Locale } from '~/src/locales'
+import { DEFAULT_LOCALE, LOCALES, defaultMessages, loadMessages, messages, type Locale } from '~/src/locales'
 
 export const LOCALE_STORAGE_KEY = 'xinghai.locale'
 
@@ -21,6 +21,7 @@ function interpolate(template: string, params?: Record<string, string | number>)
 
 export function useI18n() {
   const locale = useState<Locale>('locale', () => DEFAULT_LOCALE)
+  const requestedLocale = useState<Locale>('requested-locale', () => locale.value)
 
   /**
    * Translate a dot-separated key such as `site.heroTitleLine1`.
@@ -29,15 +30,23 @@ export function useI18n() {
    */
   function t(key: string, params?: Record<string, string | number>): string {
     const path = key.split('.')
-    const hit = lookup(MESSAGES[locale.value] as Dictionary, path)
-      ?? lookup(MESSAGES[DEFAULT_LOCALE] as Dictionary, path)
+    const hit = lookup(messages[locale.value] ?? defaultMessages, path)
+      ?? lookup(defaultMessages, path)
     return typeof hit === 'string' ? interpolate(hit, params) : key
   }
 
-  function setLocale(next: Locale) {
+  async function setLocale(next: Locale) {
+    requestedLocale.value = next
+    if (!messages[next]) {
+      try {
+        await loadMessages(next)
+      } catch {
+        return
+      }
+      if (requestedLocale.value !== next) return
+    }
     locale.value = next
     if (!import.meta.client) return
-    localStorage.setItem(LOCALE_STORAGE_KEY, next)
     if (next === 'zh') {
       document.documentElement.lang = 'zh-CN'
     } else if (next === 'zh-Hant') {
@@ -45,6 +54,7 @@ export function useI18n() {
     } else {
       document.documentElement.lang = 'en'
     }
+    try { localStorage.setItem(LOCALE_STORAGE_KEY, next) } catch { return }
   }
 
   function toggleLocale() {
@@ -53,9 +63,10 @@ export function useI18n() {
 
   function initializeLocale() {
     if (!import.meta.client) return
-    const stored = localStorage.getItem(LOCALE_STORAGE_KEY) as Locale | null
-    if (stored && stored in MESSAGES) {
-      setLocale(stored)
+    const stored = localStorage.getItem(LOCALE_STORAGE_KEY)
+    const saved = LOCALES.find(item => item.value === stored)
+    if (saved) {
+      setLocale(saved.value)
       return
     }
     const navLang = navigator.language.toLowerCase()

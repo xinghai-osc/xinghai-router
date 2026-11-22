@@ -225,11 +225,14 @@ export default {
   reliabilitySaved: '可靠性设置已保存',
 
   conversationCacheTitle: '对话缓存设置',
-  conversationCacheLead: '开启后，网关会记录用户对话的请求与响应；默认保留 24 小时并在每天 0 点自动清空，也可以保留全部历史。',
+  conversationCacheLead: '开启后，网关会记录用户对话的请求与响应。默认从每条记录的创建时间起保留 24 小时，到期后不可查询，过期记录每分钟清理一次。',
   conversationCacheEnabled: '启用对话缓存',
   conversationCacheEnabledHint: '开启后所有通过网关的对话请求都会被记录。',
-  conversationCacheRetain: '保留历史对话',
-  conversationCacheRetainHint: '开启后不再每天 0 点自动删除，历史记录会一直保留；关闭时记录仅保留 24 小时。请留意磁盘占用。',
+  conversationCacheRetain: '永久保存历史对话',
+  conversationCacheRetainHint: '开启后永久保存记录，保留时长不生效；关闭后按设置的时长保留。请留意磁盘占用。',
+  conversationCacheRetentionHours: '保留时长（小时）',
+  conversationCacheRetentionHoursHint: '默认 24 小时，可填写 1–87600 的整数。按每条记录的创建时间计算，缩短时长也会影响已有记录，超过新时长的记录将不可查询并被清理。',
+  conversationCacheRetentionHoursInvalid: '请填写 1–87600 之间的整数小时数，不能为空。',
   conversationCacheSaved: '对话缓存设置已保存',
 
   paymentTitle: '支付设置',

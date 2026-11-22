@@ -310,6 +310,7 @@ func (s *Service) deleteWorkspace(w http.ResponseWriter, r *http.Request) {
 		writeWorkspaceError(w, err, "could not archive workspace")
 		return
 	}
+	s.invalidateAPIKeyContext()
 	s.audit(r, "workspace.archived", "workspace", v.ID, nil)
 	w.WriteHeader(204)
 }
@@ -489,6 +490,7 @@ func (s *Service) removeWorkspaceMember(w http.ResponseWriter, r *http.Request) 
 		writeWorkspaceError(w, err, "could not remove workspace member")
 		return
 	}
+	s.invalidateAPIKeyContext()
 	s.audit(r, "workspace.member_removed", "workspace", v.ID, map[string]any{"user_id": m.UserID})
 	w.WriteHeader(204)
 }

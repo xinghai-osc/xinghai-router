@@ -1,4 +1,6 @@
 export default {
+  marginLabel: '映間',
+  marginHint: '編輯式排版 · 暖紙與青綠玻璃',
   liquidLabel: '液態玻璃',
   liquidHint: '通透折射 · 柔光流體底',
   newapiLabel: '清新藍',

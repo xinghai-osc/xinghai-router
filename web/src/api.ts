@@ -199,6 +199,7 @@ export interface ActiveUsageRequest { request_id: string; model: string; created
 export interface UsageRecord { request_id: string; model: string; prompt_tokens: number; cached_prompt_tokens: number; completion_tokens: number; cost: string; status: string; created_at: string; client_ip: string; user_agent: string; error: string; key_name: string; subscription: boolean; duration_ms: number; first_token_ms: number | null; group_name: string; usage_facts: UsageFacts | null; billing_snapshot: Partial<BillingSnapshot> | null }
 
 export interface AccountUsageSummary { requests: number; tokens: number; cost: string }
+export interface AccountUsageStats { requests: number; tokens: number; cost: number; rpm: number; tpm: number }
 export interface DailyUsageRecord { day: string; requests: number; prompt_tokens: number; completion_tokens: number }
 export interface ActivityLog { id: string; type: 'request' | 'login' | 'register' | 'logout' | 'topup' | 'operation'; action: string; user_id: number | null; user_name: string; model: string; group_id: string; group_name: string; status_code: number | null; duration_ms: number | null; first_token_ms: number | null; prompt_tokens: number; completion_tokens: number; total_tokens: number; cost: number; details: Record<string, unknown>; created_at: string }
 export interface LedgerEntry { id: string; amount: string; balance_after: string; kind: string; request_id: string | null; note: string | null; created_at: string; settlement_status: 'not_applicable' | 'pending' | 'processing' | 'settled' | 'failed'; settlement_date: string | null; settled_at: string | null; settlement_error?: string; daily?: boolean; business_date?: string | null; call_count?: number }
@@ -258,7 +259,7 @@ export interface ContentPolicyRule { id: string; name: string; term: string; act
 export interface ContentPolicyBatchResult { created: number; skipped: number }
 export interface RequestContentAudit { id: string; request_id: string; user_id: number | null; api_key_id: string; model: string; endpoint: string; decision: 'allow' | 'audit' | 'block'; matched_rule_ids: string[]; request_bytes: number; content_length: number; content_hash: string; excerpt: string; created_at: string }
 
-export interface ConversationCacheSettings { conversation_cache_enabled: boolean; conversation_cache_retain: boolean }
+export interface ConversationCacheSettings { conversation_cache_enabled: boolean; conversation_cache_retain: boolean; conversation_cache_retention_hours: number }
 
 export interface ConversationLog {
   id: string
@@ -334,6 +335,8 @@ export interface UsageLog {
 }
 
 export interface UsageStats {
+  rpm: number
+  tpm: number
   total_requests: number
   success_count: number
   error_count: number
@@ -1169,9 +1172,13 @@ export interface MigrationStatus {
  * PUT /admin/site-settings rejects unknown fields, so the read-only `has_*`
  * indicators must not be echoed back in the update body.
  */
+type RecoverySetting = 'smtp_host' | 'smtp_port' | 'smtp_username' | 'smtp_from' | 'public_base_url'
+type RewardSetting = 'inviter_reward' | 'invitee_reward' | 'checkin_base_reward' | 'checkin_streak_bonus'
 export type SiteSettingsForm =
-  Omit<AdminSiteSettings, 'has_geetest_captcha_key' | 'has_corptcha_secret' | 'has_smtp_password'>
-  & { geetest_captcha_key: string; corptcha_secret: string; smtp_password: string }
+  Omit<AdminSiteSettings, 'has_geetest_captcha_key' | 'has_corptcha_secret' | 'has_smtp_password' | RecoverySetting | RewardSetting>
+  & Partial<Pick<AdminSiteSettings, RecoverySetting>>
+  & Record<RewardSetting, number>
+  & { geetest_captcha_key: string; corptcha_secret: string; smtp_password?: string }
 
 export interface LegalVersions { terms_version: string; privacy_version: string }
 export interface LegalConsent extends LegalVersions { accepted_at: string | null }
@@ -1194,7 +1201,7 @@ export const endpoints = {
   updateWorkspaceMember: (id: string, userId: number, role: 'admin' | 'member') => put<WorkspaceMember>(`/account/workspaces/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`, { role }),
   removeWorkspaceMember: (id: string, userId: number) => send(`/account/workspaces/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`, 'DELETE'),
   getAccountKeys: () => get<{ data: ApiKey[] }>('/account/keys'),
-  getAccountUsage: (query = '') => get<{ data: UsageRecord[] }>(`/account/usage${query}`),
+  getAccountUsage: (query = '') => get<{ data: UsageRecord[]; stats: AccountUsageStats }>(`/account/usage${query}`),
   getActiveAccountUsage: () => get<{ data: ActiveUsageRequest[] }>('/account/usage/active'),
   getActiveAdminUsage: () => get<{ data: ActiveUsageRequest[] }>('/admin/usage-active'),
   getAccountUsageDaily: (days: number, offsetMinutes: number) => get<{ data: DailyUsageRecord[] }>(`/account/usage/daily?days=${days}&offset=${offsetMinutes}`),

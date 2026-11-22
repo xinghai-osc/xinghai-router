@@ -344,5 +344,8 @@ func (s *Service) batchUpdateUsers(w http.ResponseWriter, r *http.Request) {
 	if update.groupsSet {
 		s.invalidateChannels()
 	}
+	if update.enabled != nil || update.dataUsageEnabled != nil || update.groupsSet {
+		s.invalidateAPIKeyContext()
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"affected": len(targets), "user_ids": update.userIDs})
 }

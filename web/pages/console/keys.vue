@@ -17,21 +17,30 @@ const { data: keys, pending, error, refresh } = useResource(
   () => endpoints.getAccountKeys(),
   { data: [] as ApiKey[] },
 )
-const { data: groups } = useResource(
+const { data: groups, pending: groupsPending, error: groupsError, load: loadGroups } = useResource(
   () => endpoints.getAccountGroups(),
   { data: [] as string[], groups: [] as Group[] },
+  { immediate: false },
 )
-const { data: subscriptions } = useResource(
+const { data: subscriptions, pending: subscriptionsPending, error: subscriptionsError, load: loadSubscriptions } = useResource(
   () => endpoints.getAccountSubscriptions(),
   { data: [] as UserSubscription[] },
+  { immediate: false },
 )
-const { data: catalog } = useResource(
+const { data: catalog, pending: catalogPending, error: catalogError, load: loadCatalog } = useResource(
   () => endpoints.getModelCatalog(),
   { data: [] as CatalogModel[] },
+  { immediate: false },
 )
 const { busy, run } = useAction()
 
 const formOpen = ref(false)
+const optionsError = computed(() => groupsError.value || subscriptionsError.value || catalogError.value)
+function loadFormOptions() {
+  return Promise.all([loadGroups(), loadSubscriptions(), loadCatalog()])
+}
+watch(formOpen, (open) => { if (open) void loadFormOptions() })
+
 const secretOpen = ref(false)
 const revealOpen = ref(false)
 const revokeOpen = ref(false)
@@ -88,7 +97,8 @@ const quotaFormError = ref('')
 const quotaForm = reactive({ window: 'day' as 'day' | 'month' | 'total', maxRequests: '', maxTokens: '', maxCost: '' })
 const keyQuota = useResource(
   () => editing.value && formOpen.value ? endpoints.getKeyQuota(editing.value.id) : Promise.resolve({ limits: [], usage: [] } as KeyQuota),
-  { data: { limits: [], usage: [] } as KeyQuota },
+  { limits: [], usage: [] } as KeyQuota,
+  { immediate: false },
 )
 
 const QUOTA_WINDOWS = computed(() => [
@@ -481,9 +491,14 @@ onMounted(() => { if (route.query.create) openCreate() })
           <UiInput v-model="form.expiresOn" type="date" />
         </UiField>
 
+        <UiAlert v-if="optionsError" tone="danger" :title="t('common.loadFailed')">
+          {{ optionsError }}
+          <UiButton type="button" variant="link" size="sm" @click="loadFormOptions()">{{ t('common.retry') }}</UiButton>
+        </UiAlert>
         <UiField :label="t('console.group')">
           <UiSelect
             v-model="form.groupId"
+            :disabled="groupsPending"
             :options="groupOptions"
             :placeholder="t('common.selectPlaceholder')"
           />
@@ -495,6 +510,7 @@ onMounted(() => { if (route.query.create) openCreate() })
         <UiField :label="t('console.keySubscription')" :hint="t('console.keySubscriptionHint')">
           <UiSelect
             v-model="form.subscriptionId"
+            :disabled="subscriptionsPending"
             :options="subscriptionOptions"
             :placeholder="t('common.selectPlaceholder')"
           />
@@ -515,6 +531,7 @@ onMounted(() => { if (route.query.create) openCreate() })
         <UiField :label="t('console.keyAllowedModelsPick')">
           <UiSelect
             v-model="catalogModel"
+            :disabled="catalogPending"
             :options="catalogModelOptions"
             :placeholder="t('console.keyAllowedModelsPick')"
           />

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"strings"
@@ -75,8 +76,8 @@ func TestNewRedisClientParseOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer client.close()
-	if client.conn != nil || client.perMinute != 60 || client.db != 2 || client.username != "named-user" || client.password != "fake-password" {
-		t.Fatalf("unexpected parse-only client configuration: connected=%v perMinute=%d db=%d", client.conn != nil, client.perMinute, client.db)
+	if client.idle != nil || client.perMinute != 60 || client.db != 2 || client.username != "named-user" || client.password != "fake-password" {
+		t.Fatalf("unexpected parse-only client configuration: initialized=%v perMinute=%d db=%d", client.idle != nil, client.perMinute, client.db)
 	}
 }
 
@@ -177,7 +178,9 @@ func TestRedisCommandNoRetryAfterAmbiguousWrite(t *testing.T) {
 func newStalledRedisClient(t *testing.T) (*redisLimiter, <-chan struct{}, <-chan struct{}) {
 	t.Helper()
 	conn, peer := net.Pipe()
-	client := &redisLimiter{conn: conn, reader: bufio.NewReader(conn), timeout: 5 * time.Second}
+	client := &redisLimiter{timeout: 5 * time.Second}
+	client.init()
+	client.idle <- redisConnection{Conn: conn, reader: bufio.NewReader(conn)}
 	received := make(chan struct{})
 	finished := make(chan struct{})
 	go func() {
@@ -376,4 +379,157 @@ func TestRedisCloseInterruptsIOAndIsPermanent(t *testing.T) {
 	if _, err := client.command(context.Background(), "PING"); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("closed client attempted reconnection: %v", err)
 	}
+}
+
+func TestRedisRateLimitConcurrentAdmission(t *testing.T) {
+	const requests = 32
+	const limit = 11
+	started := make(chan struct{}, requests)
+	release := make(chan struct{})
+	var count atomic.Int64
+	server := startLimiterTestRedis(t, "127.0.0.1:0", func(args []string) string {
+		if args[0] == "SCRIPT" {
+			return "+" + strings.Repeat("a", 40) + "\r\n"
+		}
+		if len(args) != 5 || args[0] != "EVALSHA" || args[3] != "xh:rl:same-key" {
+			return "-ERR unexpected command\r\n"
+		}
+		started <- struct{}{}
+		<-release
+		return fmt.Sprintf(":%d\r\n", count.Add(1))
+	})
+	client, err := newRedisClient(server.url(), limit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.close()
+	unblock := sync.OnceFunc(func() { close(release) })
+	defer unblock()
+	type admission struct {
+		allowed bool
+		err     error
+	}
+	results := make(chan admission, requests)
+	for range requests {
+		go func() {
+			allowed, err := client.tryAllow("same-key")
+			results <- admission{allowed, err}
+		}()
+	}
+	for range redisPoolSize {
+		waitRedisTestCommand(t, started)
+	}
+	unblock()
+	admitted := 0
+	for range requests {
+		result := <-results
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		if result.allowed {
+			admitted++
+		}
+	}
+	if count.Load() != requests || admitted != limit {
+		t.Fatalf("counted=%d admitted=%d", count.Load(), admitted)
+	}
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	if got := len(server.conns); got != redisPoolSize {
+		t.Fatalf("open connections=%d want=%d", got, redisPoolSize)
+	}
+}
+
+func TestRedisRateLimitNoReplayAfterScriptReload(t *testing.T) {
+	var executions atomic.Int64
+	var flushed atomic.Bool
+	server := startLimiterTestRedis(t, "127.0.0.1:0", func(args []string) string {
+		switch args[0] {
+		case "SCRIPT":
+			return "+" + strings.Repeat("a", 40) + "\r\n"
+		case "EVALSHA":
+			if !flushed.Swap(true) {
+				return "-NOSCRIPT no script\r\n"
+			}
+			executions.Add(1)
+			return ""
+		case "EVAL":
+			executions.Add(1)
+			return ":2\r\n"
+		default:
+			return "-ERR unexpected command\r\n"
+		}
+	})
+	client, err := newRedisClient(server.url(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.close()
+	if _, err := client.tryAllow("key"); err == nil || executions.Load() != 1 {
+		t.Fatalf("ambiguous increment executed %d times, err=%v", executions.Load(), err)
+	}
+}
+
+func TestRedisCloseInterruptsConcurrentCommands(t *testing.T) {
+	started := make(chan struct{}, redisPoolSize)
+	release := make(chan struct{})
+	server := startLimiterTestRedis(t, "127.0.0.1:0", func(args []string) string {
+		started <- struct{}{}
+		<-release
+		return "+PONG\r\n"
+	})
+	client, err := newRedisClient(server.url(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.close()
+	defer close(release)
+	results := make(chan error, redisPoolSize*2)
+	for range cap(results) {
+		go func() {
+			_, err := client.command(context.Background(), "PING")
+			results <- err
+		}()
+	}
+	for range redisPoolSize {
+		waitRedisTestCommand(t, started)
+	}
+	closed := make(chan struct{})
+	go func() {
+		client.close()
+		close(closed)
+	}()
+	waitRedisTestCommand(t, closed)
+	for range cap(results) {
+		if err := <-results; !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("closed pool command error=%v", err)
+		}
+	}
+}
+
+func BenchmarkRedisRateLimitParallel(b *testing.B) {
+	server := startLimiterTestRedis(b, "127.0.0.1:0", func(args []string) string {
+		if args[0] == "SCRIPT" {
+			return "+" + strings.Repeat("a", 40) + "\r\n"
+		}
+		time.Sleep(time.Millisecond)
+		return ":1\r\n"
+	})
+	client, err := newRedisClient(server.url(), 60)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer client.close()
+	if _, err := client.tryAllow("key"); err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			if allowed, err := client.tryAllow("key"); err != nil || !allowed {
+				b.Errorf("allowed=%v err=%v", allowed, err)
+				return
+			}
+		}
+	})
 }

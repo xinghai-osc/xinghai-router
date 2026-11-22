@@ -452,6 +452,9 @@ func (s *Service) redeemCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.subscriptionCache.clear()
+	if tierID != "" {
+		s.invalidateAPIKeyContext()
+	}
 	s.audit(r, "redemption_code.redeemed", "redemption_code", id, map[string]any{"reward_type": rewardType, "amount": amountStr, "tier_id": tierID})
 	writeJSON(w, http.StatusOK, result)
 }

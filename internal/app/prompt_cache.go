@@ -23,9 +23,14 @@ type promptPrefixCache struct {
 	enabled bool
 	size    int
 	// index bounds matches to recent prompts only.
-	grace time.Duration
-	// entries per model, most-recently-stored last.
-	entries map[string][]promptCacheEntry
+	grace   time.Duration
+	entries map[string]*modelPromptCache
+}
+
+type modelPromptCache struct {
+	entries []promptCacheEntry
+	next    int
+	count   int
 }
 
 type promptCacheEntry struct {
@@ -39,7 +44,7 @@ func newPromptPrefixCache(enabled bool, size int) *promptPrefixCache {
 	if max < 1 || max > 1<<16 {
 		max = 4096
 	}
-	return &promptPrefixCache{enabled: enabled, size: max, grace: 30 * time.Minute, entries: map[string][]promptCacheEntry{}}
+	return &promptPrefixCache{enabled: enabled, size: max, grace: 30 * time.Minute, entries: map[string]*modelPromptCache{}}
 }
 
 // cached scans the model's entries and returns a cached-token estimate for the
@@ -52,14 +57,23 @@ func (c *promptPrefixCache) cached(model, normalized string, promptTokens int64)
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	bucket := c.entries[model]
+	if bucket == nil {
+		return 0
+	}
 	now := time.Now()
 	best := int64(0)
-	prune := c.entries[model][:0]
-	for _, e := range c.entries[model] {
+	for remaining := bucket.count; remaining > 0; remaining-- {
+		i := bucket.next - remaining
+		if i < 0 {
+			i += c.size
+		}
+		e := bucket.entries[i]
 		if now.Sub(e.stored) > c.grace {
+			bucket.entries[i] = promptCacheEntry{}
+			bucket.count--
 			continue
 		}
-		prune = append(prune, e)
 		if e.key == "" || e.tokens <= 0 {
 			continue
 		}
@@ -71,7 +85,6 @@ func (c *promptPrefixCache) cached(model, normalized string, promptTokens int64)
 			best = shared
 		}
 	}
-	c.entries[model] = prune
 	if promptTokens > 0 && best > promptTokens {
 		best = promptTokens
 	}
@@ -87,11 +100,19 @@ func (c *promptPrefixCache) store(model, normalized string, tokens int64) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	list := append(append([]promptCacheEntry{}, c.entries[model]...), promptCacheEntry{key: normalized, tokens: tokens, stored: time.Now()})
-	if len(list) > c.size {
-		list = list[len(list)-c.size:]
+	bucket := c.entries[model]
+	if bucket == nil {
+		bucket = &modelPromptCache{}
+		c.entries[model] = bucket
 	}
-	c.entries[model] = list
+	entry := promptCacheEntry{key: normalized, tokens: tokens, stored: time.Now()}
+	if bucket.next == len(bucket.entries) {
+		bucket.entries = append(bucket.entries, entry)
+	} else {
+		bucket.entries[bucket.next] = entry
+	}
+	bucket.next = (bucket.next + 1) % c.size
+	bucket.count = min(bucket.count+1, c.size)
 }
 
 // normalizedPrompt renders the chat messages of a request body into a stable key

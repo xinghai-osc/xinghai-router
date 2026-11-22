@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -21,6 +22,7 @@ import (
 var migrations embed.FS
 
 type Service struct {
+	configListenerReady    atomic.Bool
 	lifecycle              requestLifecycle
 	activeUsage            activeUsageTracker
 	cfg                    Config
@@ -42,6 +44,7 @@ type Service struct {
 	concurrencyLeases      *concurrencyLeaseManager
 	redisReadiness         *redisLimiter
 	reliabilityData        *ttlCache[struct{}, reliabilitySettings]
+	maintenanceData        *ttlCache[struct{}, bool]
 	contentPolicyData      *ttlCache[struct{}, contentPolicySnapshot]
 	conversationCacheData  *ttlCache[struct{}, conversationCacheSettings]
 	conversationCacheIndex *conversationCacheIndex
@@ -56,6 +59,9 @@ type Service struct {
 	sessionAffinity        *sessionAffinityCache
 	sessionAffinityWrite   sync.Mutex
 	keyTouchCache          *ttlCache[string, struct{}]
+	apiKeyCache            *ttlCache[string, keyContext]
+	modelConsentCache      *ttlCache[string, bool]
+	userConsentCache       *ttlCache[string, bool]
 	scheduler              context.CancelFunc
 	migration              migrationStatus
 	migrationCancel        context.CancelFunc
@@ -167,6 +173,7 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 		userLimiter:            NewGroupLimiter(),
 		channelLimiter:         NewGroupLimiter(),
 		reliabilityData:        newTTLCache[struct{}, reliabilitySettings](reliabilityCacheTTL),
+		maintenanceData:        newTTLCache[struct{}, bool](reliabilityCacheTTL),
 		contentPolicyData:      newTTLCache[struct{}, contentPolicySnapshot](reliabilityCacheTTL),
 		conversationCacheData:  newTTLCache[struct{}, conversationCacheSettings](reliabilityCacheTTL),
 		conversationCacheIndex: newConversationCacheIndex(),
@@ -180,13 +187,24 @@ func New(ctx context.Context, cfg Config) (*Service, error) {
 		promptCache:            newPromptPrefixCache(cfg.LocalPromptCache, cfg.LocalPromptCacheSize),
 		sessionAffinity:        newSessionAffinityCache(cfg.SessionAffinityTTL, maxSessionAffinityEntries),
 		keyTouchCache:          newTTLCache[string, struct{}](keyTouchInterval),
+		apiKeyCache:            newTTLCache[string, keyContext](apiKeyCacheTTL),
+		modelConsentCache:      newTTLCache[string, bool](groupCacheTTL),
+		userConsentCache:       newTTLCache[string, bool](groupCacheTTL),
 		migration:              migrationStatus{mu: &sync.Mutex{}},
 	}
 	if cfg.DeploymentMode == "cluster" {
-		s.concurrencyLeases = &concurrencyLeaseManager{redisURL: cfg.RedisURL, ttl: cfg.ConcurrencyLeaseTTL}
+		s.concurrencyLeases, err = newConcurrencyLeaseManager(cfg.RedisURL, cfg.ConcurrencyLeaseTTL)
+		if err != nil {
+			s.background.close()
+			db.Close()
+			return nil, fmt.Errorf("initialize concurrency leases: %w", err)
+		}
 	}
 	if err := s.bootstrapAdmin(ctx); err != nil {
 		s.background.close()
+		if s.concurrencyLeases != nil {
+			s.concurrencyLeases.client.close()
+		}
 		db.Close()
 		return nil, fmt.Errorf("bootstrap admin: %w", err)
 	}
@@ -232,6 +250,9 @@ func (s *Service) Close() {
 	}
 	s.flushSessionAffinity()
 	s.background.close()
+	if s.concurrencyLeases != nil {
+		s.concurrencyLeases.client.close()
+	}
 	if s.limiter != nil {
 		s.limiter.close()
 	}

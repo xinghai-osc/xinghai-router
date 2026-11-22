@@ -47,7 +47,11 @@ usePageSeo({
         </div>
 
         <div class="mt-12">
-          <SitePlanCards :products="products" :loading="plansLoading || !plansStarted" :error="plansError" @retry="loadPlans(true)" />
+          <Suspense v-if="plansStarted">
+            <LazySitePlanCards :products="products" :loading="plansLoading" :error="plansError" @retry="loadPlans(true)" />
+            <template #fallback><SiteDataLoader /></template>
+          </Suspense>
+          <SiteDataLoader v-else />
         </div>
       </div>
     </section>

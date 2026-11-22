@@ -41,6 +41,11 @@ const (
 	performanceCacheTTL = 30 * time.Second
 	// keyTouchInterval is how often api_keys.last_used_at is refreshed for a busy key.
 	keyTouchInterval = time.Minute
+	// apiKeyCacheTTL bounds how long a bearer token's key context is reused before
+	// the lookup re-reads the database. Writers that revoke or edit keys clear the
+	// cache eagerly, so the TTL is only a safety net; it mainly bounds how long a
+	// stale context can survive a missed invalidation path.
+	apiKeyCacheTTL = 15 * time.Second
 )
 
 type cacheEntry[V any] struct {
@@ -397,7 +402,12 @@ func (s *Service) groupMultiplierFor(ctx context.Context, groupID string) float6
 }
 
 func (s *Service) groupConcurrencyLimitFor(ctx context.Context, groupID string) int {
-	limit, err := s.groupConcurrencyCache.get(ctx, groupID, func(ctx context.Context) (int, error) {
+	limit, _ := s.cachedGroupConcurrencyLimit(ctx, groupID)
+	return limit
+}
+
+func (s *Service) cachedGroupConcurrencyLimit(ctx context.Context, groupID string) (int, error) {
+	return s.groupConcurrencyCache.get(ctx, groupID, func(ctx context.Context) (int, error) {
 		var limit sql.NullInt64
 		if err := s.db.QueryRow(ctx, `select max_concurrency from groups where id=$1`, groupID).Scan(&limit); err != nil {
 			if isNoRows(err) {
@@ -410,10 +420,6 @@ func (s *Service) groupConcurrencyLimitFor(ctx context.Context, groupID string) 
 		}
 		return int(limit.Int64), nil
 	})
-	if err != nil {
-		return 0
-	}
-	return limit
 }
 
 func (s *Service) userConcurrencyLimitFor(ctx context.Context, userID string) int {

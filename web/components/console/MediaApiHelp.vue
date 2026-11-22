@@ -28,7 +28,7 @@ const samples = computed(() => {
       label: t(operation === 'transcriptions' ? 'console.mediaTranscription' : 'console.mediaTranslation'),
       hint: t('console.mediaTranscriptionHint'),
       code: command([request(`/audio/${operation}`), auth,
-        "  -F 'model=YOUR_AUDIO_MODEL'", "  -F 'file=@input.mp3'", "  -F 'max_audio_seconds=60'", "  -F 'response_format=verbose_json'"]),
+        "  -F 'model=YOUR_AUDIO_MODEL'", "  -F 'file=@input.mp3'", "  -F 'max_audio_seconds=60'", "  -F 'response_format=json'"]),
     })),
     {
       value: 'video-json', label: t('console.mediaVideoJson'), hint: t('console.mediaVideoCreateHint'),

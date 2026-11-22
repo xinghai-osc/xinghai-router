@@ -30,7 +30,7 @@ func TestIntegrationClusterConcurrencyAdmission(t *testing.T) {
 	a, b := integrationService(t, db), integrationService(t, db)
 	for _, s := range []*Service{a, b} {
 		s.cfg.DeploymentMode = "cluster"
-		s.concurrencyLeases = &concurrencyLeaseManager{redisURL: redisURL, ttl: 5 * time.Second}
+		s.concurrencyLeases = testLeaseManager(t, redisURL, 5*time.Second)
 		s.userConcurrencyCache = newTTLCache[string, int](time.Hour)
 		s.userConcurrencyCache.store(userID, 1000)
 	}
@@ -62,6 +62,16 @@ func TestIntegrationClusterConcurrencyAdmission(t *testing.T) {
 	if _, _, _, err := b.acquireRequestConcurrency(cancelled, key); err == nil {
 		t.Fatal("failed DB read interpreted as unlimited")
 	}
+	b.configListenerReady.Store(true)
+	b.userConcurrencyCache.store(userID, 2)
+	b.groupConcurrencyCache = newTTLCache[string, int](time.Minute)
+	if userMax, groupMax, err := b.concurrencyLimitsFor(context.Background(), key); err != nil || userMax != 2 || groupMax != 1 {
+		t.Fatalf("connected listener limits: user=%d group=%d err=%v", userMax, groupMax, err)
+	}
+	b.groupConcurrencyCache.invalidate(groupID)
+	if _, _, err := b.concurrencyLimitsFor(cancelled, key); err == nil {
+		t.Fatal("failed group lookup interpreted as unlimited")
+	}
 }
 
 func TestIntegrationClusterGatewayRejectionReleasesReservation(t *testing.T) {
@@ -76,7 +86,7 @@ func TestIntegrationClusterGatewayRejectionReleasesReservation(t *testing.T) {
 	}
 	s := integrationService(t, db)
 	s.cfg.DeploymentMode = "cluster"
-	s.concurrencyLeases = &concurrencyLeaseManager{redisURL: redisURL, ttl: 5 * time.Second}
+	s.concurrencyLeases = testLeaseManager(t, redisURL, 5*time.Second)
 	s.pricingCache.store("cluster-model", pricingRule{found: true, input: 1, output: 1, multiplier: 1, exchangeRate: 1, currency: "CNY"})
 	key := keyContext{userID: userID, keyID: keyID}
 	_, release, scope, err := s.acquireRequestConcurrency(context.Background(), key)
@@ -91,7 +101,7 @@ func TestIntegrationClusterGatewayRejectionReleasesReservation(t *testing.T) {
 	}{{"limit", 429, "user_concurrency_exceeded"}, {"outage", 503, "concurrency_unavailable"}} {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.name == "outage" {
-				s.concurrencyLeases = &concurrencyLeaseManager{redisURL: "redis://127.0.0.1:1", ttl: 5 * time.Second}
+				s.concurrencyLeases = testLeaseManager(t, "redis://127.0.0.1:1", 5*time.Second)
 			}
 			requestID, err := randomID()
 			if err != nil {

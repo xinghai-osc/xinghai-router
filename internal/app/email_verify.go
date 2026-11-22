@@ -22,9 +22,12 @@ const (
 )
 
 // sendEmail delivers an HTML message through the configured SMTP server.
-// Port 465 uses implicit TLS; other ports upgrade via STARTTLS when offered.
+// Port 465 uses implicit TLS. Other ports must offer STARTTLS before any message or authentication is sent.
 func (s *Service) sendEmail(ctx context.Context, to, subject, html string) error {
-	cfg := s.loadSystemConfig(ctx)
+	cfg, err := s.checkedSystemConfig(ctx)
+	if err != nil {
+		return err
+	}
 	addr := cfg.SMTPHost + ":" + cfg.SMTPPort
 	from := cfg.SMTPFrom
 	message := strings.Join([]string{
@@ -53,10 +56,11 @@ func (s *Service) sendEmail(ctx context.Context, to, subject, html string) error
 		if err != nil {
 			return fmt.Errorf("smtp connect failed: %w", err)
 		}
-		if ok, _ := client.Extension("STARTTLS"); ok {
-			if err := client.StartTLS(&tls.Config{ServerName: cfg.SMTPHost}); err != nil {
-				return fmt.Errorf("smtp starttls failed: %w", err)
-			}
+		if ok, _ := client.Extension("STARTTLS"); !ok {
+			return fmt.Errorf("smtp server does not support STARTTLS")
+		}
+		if err := client.StartTLS(&tls.Config{ServerName: cfg.SMTPHost, MinVersion: tls.VersionTLS12}); err != nil {
+			return fmt.Errorf("smtp starttls failed: %w", err)
 		}
 	}
 	defer client.Close()
@@ -103,7 +107,12 @@ func hashEmailCode(email, code string) string {
 }
 
 func (s *Service) sendEmailCode(w http.ResponseWriter, r *http.Request) {
-	if !s.loadSystemConfig(r.Context()).emailVerificationEnabled() {
+	sys, configErr := s.checkedSystemConfig(r.Context())
+	if configErr != nil {
+		writeError(w, http.StatusServiceUnavailable, "security_config_unavailable", "security configuration is unavailable")
+		return
+	}
+	if !sys.emailVerificationEnabled() {
 		writeError(w, http.StatusNotFound, "not_found", "email verification is not enabled")
 		return
 	}
@@ -215,7 +224,10 @@ func (s *Service) verifyEmailCode(ctx context.Context, email, code string) error
 // notifyLogin emails the account owner about a successful sign-in. It is best-effort
 // and asynchronous: delivery failures are logged and never affect the login response.
 func (s *Service) notifyLogin(parent context.Context, email string, meta requestMetadataInfo) {
-	if strings.TrimSpace(email) == "" || !s.loadSystemConfig(parent).emailVerificationEnabled() {
+	if strings.TrimSpace(email) == "" {
+		return
+	}
+	if cfg, err := s.checkedSystemConfig(parent); err != nil || !cfg.emailVerificationEnabled() {
 		return
 	}
 	go func() {

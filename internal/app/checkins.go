@@ -120,6 +120,7 @@ func (s *Service) accountCheckin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if decision.Action == "ban" {
+		s.invalidateAPIKeyContext()
 		writeError(w, http.StatusForbidden, "account_restricted", "account is restricted")
 		return
 	}

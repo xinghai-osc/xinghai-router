@@ -547,6 +547,8 @@ export default {
   usageEmptyBody: '調整篩選條件，或等待新的請求進來。',
   requestsEmptyTitle: '沒有請求日誌',
   requestsEmptyBody: '最近 100 條請求會顯示在這裡。',
+  statRpm: '平均 RPM',
+  statTpm: '平均 TPM',
   statRequests: '請求數',
   statSuccess: '成功',
   statErrors: '失敗',

@@ -503,6 +503,7 @@ func TestUpsertPricingRejectsInvalidValuesBeforeDatabaseAccess(t *testing.T) {
 		`{"model":"m","input_per_million":-1,"cached_input_per_million":0,"output_per_million":1}`,
 		`{"model":"m","input_per_million":1,"cached_input_per_million":0,"output_per_million":1,"multiplier":-1}`,
 		`{"model":"m","input_per_million":1,"cached_input_per_million":0,"output_per_million":1,"multiplier":"nan"}`,
+		`{"model":"m","input_per_million":1,"cached_input_per_million":0,"output_per_million":1,"multiplier":0}`,
 		`{"model":"m","input_per_million":1,"cached_input_per_million":0,"output_per_million":1,"multiplier":1000.01}`,
 		`{"model":"m","input_per_million":1000000.01,"cached_input_per_million":0,"output_per_million":1}`,
 		`{"model":"` + strings.Repeat("m", 201) + `","input_per_million":1,"cached_input_per_million":0,"output_per_million":1}`,
@@ -521,6 +522,7 @@ func TestCreateAndUpdateGroupRejectInvalidMultipliers(t *testing.T) {
 		`{"name":"g","multiplier":-1}`,
 		`{"name":"g","multiplier":"nan"}`,
 		`{"name":"g","multiplier":"Inf"}`,
+		`{"name":"g","multiplier":0}`,
 		`{"name":"g","multiplier":1000.01}`,
 	} {
 		recorder := httptest.NewRecorder()
@@ -534,6 +536,7 @@ func TestCreateAndUpdateGroupRejectInvalidMultipliers(t *testing.T) {
 		`{"multiplier":-1}`,
 		`{"multiplier":"nan"}`,
 		`{"multiplier":"-Inf"}`,
+		`{"multiplier":0}`,
 		`{"multiplier":1001}`,
 	} {
 		recorder := httptest.NewRecorder()
@@ -550,6 +553,7 @@ func TestBatchUpdateGroupsRejectsInvalidBeforeDatabaseAccess(t *testing.T) {
 		`{"groups":[]}`,
 		`{"groups":[{"id":"g1","multiplier":-1}]}`,
 		`{"groups":[{"id":"g1","multiplier":"nan"}]}`,
+		`{"groups":[{"id":"g1","multiplier":0}]}`,
 		`{"groups":[{"id":"g1","multiplier":1001}]}`,
 		`{"groups":[{"id":"","multiplier":1}]}`,
 		`{"groups":[{"id":"g1","multiplier":1,"max_concurrency":-1}]}`,
@@ -597,16 +601,16 @@ func TestValidFiniteHelpers(t *testing.T) {
 	if !validPositiveFinite(0.01) || validPositiveFinite(0) || validPositiveFinite(math.Inf(-1)) {
 		t.Fatal("unexpected positive finite validation")
 	}
-	if !validGroupMultiplier(0) || !validGroupMultiplier(maxGroupMultiplier) {
+	if !validGroupMultiplier(0.01) || !validGroupMultiplier(1) || !validGroupMultiplier(maxGroupMultiplier) {
 		t.Fatal("boundary group multipliers must be valid")
 	}
-	if validGroupMultiplier(-0.01) || validGroupMultiplier(maxGroupMultiplier+0.01) || validGroupMultiplier(math.NaN()) {
+	if validGroupMultiplier(0) || validGroupMultiplier(-0.01) || validGroupMultiplier(maxGroupMultiplier+0.01) || validGroupMultiplier(math.NaN()) {
 		t.Fatal("out-of-range group multipliers must be invalid")
 	}
-	if !validPricingMultiplier(0) || !validPricingMultiplier(0.01) || !validPricingMultiplier(maxPricingMultiplier) {
-		t.Fatal("boundary pricing multipliers must be valid, including zero")
+	if !validPricingMultiplier(0.01) || !validPricingMultiplier(1) || !validPricingMultiplier(maxPricingMultiplier) {
+		t.Fatal("boundary pricing multipliers must be valid")
 	}
-	if validPricingMultiplier(-0.01) || validPricingMultiplier(maxPricingMultiplier+0.01) {
+	if validPricingMultiplier(0) || validPricingMultiplier(-0.01) || validPricingMultiplier(maxPricingMultiplier+0.01) {
 		t.Fatal("out-of-range pricing multipliers must be invalid")
 	}
 	if !validPricingRate(0) || !validPricingRate(maxPricingRate) || validPricingRate(maxPricingRate+1) {

@@ -1,3 +1,9 @@
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 x-router: &router
   image: ${ROUTER_IMAGE:?set ROUTER_IMAGE to an immutable release tag or digest}
   build:
@@ -5,6 +11,7 @@ x-router: &router
     dockerfile: Dockerfile
     target: router
   restart: unless-stopped
+  logging: *default-logging
   stop_signal: SIGTERM
   stop_grace_period: ${ROUTER_STOP_GRACE_PERIOD:-24h}
   environment:
@@ -12,6 +19,7 @@ x-router: &router
     REDIS_URL: ${REDIS_URL:?set REDIS_URL to the shared Redis database}
     ENCRYPTION_KEY: ${ENCRYPTION_KEY:?set ENCRYPTION_KEY to the existing encryption key}
     DEPLOYMENT_MODE: cluster
+    NODE_DEPLOYMENT_TARGETS: ${NODE_DEPLOYMENT_TARGETS:-[]}
     REDIS_FAILURE_POLICY: deny
     LOCAL_PROMPT_CACHE: "false"
     CONCURRENCY_LEASE_TTL: ${CONCURRENCY_LEASE_TTL:-30s}
@@ -71,6 +79,7 @@ services:
 
   haproxy:
     image: ${HAPROXY_IMAGE:-haproxy:3.0-alpine}
+    logging: *default-logging
     restart: unless-stopped
     ports:
       - "${ROLLING_BIND_ADDR:-127.0.0.1}:${ROLLING_PORT:-8080}:8080"

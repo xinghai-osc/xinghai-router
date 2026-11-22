@@ -1,17 +1,46 @@
 <script setup lang="ts">
-import { clearPublicCache, endpoints, type AdminSiteSettings, type FeaturedCopy } from '~/src/api'
+import { clearPublicCache, endpoints, type AdminSiteSettings, type FeaturedCopy, type SiteSettingsForm } from '~/src/api'
 
 definePageMeta({ layout: 'console', middleware: 'console-auth' })
 const { t } = useI18n()
+const { isAdmin } = useAccount()
 function emptyFeaturedCopy(): FeaturedCopy { return { zh: { badge: '', title: '', body: '', cta: '' }, 'zh-Hant': { badge: '', title: '', body: '', cta: '' }, en: { badge: '', title: '', body: '', cta: '' } } }
 const { settings: site } = useSiteSettings(); const { toast } = useToast(); const { busy, run } = useAction()
 useHead({ title: () => `${t('system.siteSettingsTitle')} · ${site.value.name}` })
 const EMPTY: AdminSiteSettings = { name: '', points_name: '积分', icon_url: '', announcement: '', homepage_video_url: '', contact_email: '', api_base_urls: [], auto_disable_failed_channels: false, maintenance_mode: false, featured_enabled: true, featured_model: '', featured_copy: emptyFeaturedCopy(), captcha_provider: '', geetest_captcha_id: '', has_geetest_captcha_key: false, corptcha_site_id: '', has_corptcha_secret: false, smtp_host: '', smtp_port: '', smtp_username: '', has_smtp_password: false, smtp_from: '', public_base_url: '', invitations_enabled: false, inviter_reward: '0', invitee_reward: '0', checkin_base_reward: '1', checkin_streak_bonus: '0.1', checkin_max_bonus_days: 7, registration_email_whitelist_enabled: false, registration_email_whitelist: [], registration_email_alias_blocked: false }
 const { data, pending, error, refresh } = useResource(() => endpoints.getAdminSiteSettings(), { ...EMPTY })
-const form = reactive({ name: '', points_name: '积分', icon_url: '', announcement: '', homepage_video_url: '', contact_email: '', maintenance_mode: false, auto_disable_failed_channels: false, api_base_urls: '', captcha_provider: '', geetest_captcha_id: '', corptcha_site_id: '', smtp_host: '', smtp_port: '', smtp_username: '', smtp_from: '', public_base_url: '', invitations_enabled: false, inviter_reward: '0', invitee_reward: '0', checkin_base_reward: '1', checkin_streak_bonus: '0.1', checkin_max_bonus_days: 7, registration_email_whitelist_enabled: false, registration_email_whitelist: '', registration_email_alias_blocked: false, featured_enabled: true, featured_model: '', featured_copy: emptyFeaturedCopy() })
+const form = reactive({ name: '', points_name: '积分', icon_url: '', announcement: '', homepage_video_url: '', contact_email: '', maintenance_mode: false, auto_disable_failed_channels: false, api_base_urls: '', captcha_provider: '', geetest_captcha_id: '', corptcha_site_id: '', invitations_enabled: false, inviter_reward: '0', invitee_reward: '0', checkin_base_reward: '1', checkin_streak_bonus: '0.1', checkin_max_bonus_days: 7, registration_email_whitelist_enabled: false, registration_email_whitelist: '', registration_email_alias_blocked: false, featured_enabled: true, featured_model: '', featured_copy: emptyFeaturedCopy() })
+const recovery = reactive({ smtp_host: '', smtp_port: '', smtp_username: '', smtp_from: '', public_base_url: '' })
+const recoveryFields = ['smtp_host', 'smtp_port', 'smtp_username', 'smtp_from', 'public_base_url'] as const
 const geetestKey = ref(''); const corptchaSecret = ref(''); const smtpPassword = ref('')
-watch(data, next => { Object.assign(form, { name: next.name, points_name: next.points_name, icon_url: next.icon_url, announcement: next.announcement, homepage_video_url: next.homepage_video_url ?? '', contact_email: next.contact_email, maintenance_mode: next.maintenance_mode, api_base_urls: (next.api_base_urls ?? []).join('\n'), auto_disable_failed_channels: next.auto_disable_failed_channels, captcha_provider: next.captcha_provider, geetest_captcha_id: next.geetest_captcha_id, corptcha_site_id: next.corptcha_site_id, smtp_host: next.smtp_host, smtp_port: next.smtp_port, smtp_username: next.smtp_username, smtp_from: next.smtp_from, public_base_url: next.public_base_url, invitations_enabled: next.invitations_enabled, inviter_reward: next.inviter_reward, invitee_reward: next.invitee_reward, checkin_base_reward: next.checkin_base_reward, checkin_streak_bonus: next.checkin_streak_bonus, checkin_max_bonus_days: next.checkin_max_bonus_days, registration_email_whitelist_enabled: next.registration_email_whitelist_enabled, registration_email_whitelist: next.registration_email_whitelist.join('\n'), registration_email_alias_blocked: next.registration_email_alias_blocked, featured_enabled: next.featured_enabled ?? true, featured_model: next.featured_model ?? '', featured_copy: JSON.parse(JSON.stringify(next.featured_copy ?? emptyFeaturedCopy())) }); geetestKey.value = ''; corptchaSecret.value = ''; smtpPassword.value = '' }, { immediate: true })
-async function save() { const payload = { ...form, api_base_urls: form.api_base_urls.split(/\r?\n/), registration_email_whitelist: form.registration_email_whitelist.split(/\r?\n/), inviter_reward: Number(form.inviter_reward), invitee_reward: Number(form.invitee_reward), checkin_base_reward: Number(form.checkin_base_reward), checkin_streak_bonus: Number(form.checkin_streak_bonus), geetest_captcha_key: geetestKey.value, corptcha_secret: corptchaSecret.value, smtp_password: smtpPassword.value, featured_copy: form.featured_copy } as never; const ok = await run(() => endpoints.updateAdminSiteSettings(payload)); if (!ok) { toast.error(t('common.actionFailed')); return }; clearPublicCache('site-settings'); toast.success(t('system.siteSettingsSaved')); await refresh() }
+watch(data, next => { Object.assign(form, { name: next.name, points_name: next.points_name, icon_url: next.icon_url, announcement: next.announcement, homepage_video_url: next.homepage_video_url ?? '', contact_email: next.contact_email, maintenance_mode: next.maintenance_mode, api_base_urls: (next.api_base_urls ?? []).join('\n'), auto_disable_failed_channels: next.auto_disable_failed_channels, captcha_provider: next.captcha_provider, geetest_captcha_id: next.geetest_captcha_id, corptcha_site_id: next.corptcha_site_id, invitations_enabled: next.invitations_enabled, inviter_reward: next.inviter_reward, invitee_reward: next.invitee_reward, checkin_base_reward: next.checkin_base_reward, checkin_streak_bonus: next.checkin_streak_bonus, checkin_max_bonus_days: next.checkin_max_bonus_days, registration_email_whitelist_enabled: next.registration_email_whitelist_enabled, registration_email_whitelist: next.registration_email_whitelist.join('\n'), registration_email_alias_blocked: next.registration_email_alias_blocked, featured_enabled: next.featured_enabled ?? true, featured_model: next.featured_model ?? '', featured_copy: JSON.parse(JSON.stringify(next.featured_copy ?? emptyFeaturedCopy())) }); for (const field of recoveryFields) recovery[field] = next[field]; geetestKey.value = ''; corptchaSecret.value = ''; smtpPassword.value = '' }, { immediate: true })
+async function save() {
+  const payload: SiteSettingsForm = {
+    ...form,
+    api_base_urls: form.api_base_urls.split(/\r?\n/),
+    registration_email_whitelist: form.registration_email_whitelist.split(/\r?\n/),
+    inviter_reward: Number(form.inviter_reward),
+    invitee_reward: Number(form.invitee_reward),
+    checkin_base_reward: Number(form.checkin_base_reward),
+    checkin_streak_bonus: Number(form.checkin_streak_bonus),
+    geetest_captcha_key: geetestKey.value,
+    corptcha_secret: corptchaSecret.value,
+  }
+  if (isAdmin.value) {
+    for (const field of recoveryFields) {
+      if (recovery[field] !== data.value[field]) payload[field] = recovery[field]
+    }
+    if (smtpPassword.value.trim()) payload.smtp_password = smtpPassword.value
+  }
+  const ok = await run(() => endpoints.updateAdminSiteSettings(payload))
+  if (!ok) {
+    toast.error(t('common.actionFailed'))
+    return
+  }
+  clearPublicCache('site-settings')
+  toast.success(t('system.siteSettingsSaved'))
+  await refresh()
+}
 </script>
 
 <template>
@@ -35,7 +64,7 @@ async function save() { const payload = { ...form, api_base_urls: form.api_base_
             <UiField :label="t('system.maintenanceMode')" :hint="t('system.maintenanceModeHint')"><UiSwitch v-model="form.maintenance_mode" :label="t('system.maintenanceMode')" /></UiField>
             <UiField :label="t('system.autoDisableFailedChannels')" :hint="t('system.autoDisableFailedChannelsHint')"><UiSwitch v-model="form.auto_disable_failed_channels" :label="t('system.autoDisableFailedChannels')" /></UiField>
             <UiField :label="t('system.apiBaseUrls')" :hint="t('system.apiBaseUrlsHint')" class="md:col-span-2"><UiTextarea v-model="form.api_base_urls" :placeholder="t('system.apiBaseUrlsPlaceholder')" :rows="3" /></UiField>
-            <UiField :label="t('system.publicBaseUrl')" :hint="t('system.publicBaseUrlHint')" class="md:col-span-2"><UiInput v-model="form.public_base_url" type="url" /></UiField>
+            <UiField v-if="isAdmin" :label="t('system.publicBaseUrl')" :hint="t('system.publicBaseUrlHint')" class="md:col-span-2"><UiInput v-model="recovery.public_base_url" type="url" /></UiField>
           </div>
         </UiCard>
 
@@ -49,13 +78,13 @@ async function save() { const payload = { ...form, api_base_urls: form.api_base_
           </div>
         </UiCard>
 
-        <UiCard :title="t('system.smtp')">
+        <UiCard v-if="isAdmin" :title="t('system.smtp')">
           <div class="grid gap-4 md:grid-cols-2">
-            <UiField :label="t('system.smtpHost')" :hint="t('system.smtpHostHint')"><UiInput v-model="form.smtp_host" /></UiField>
-            <UiField :label="t('system.smtpPort')" :hint="t('system.smtpPortHint')"><UiInput v-model="form.smtp_port" inputmode="numeric" /></UiField>
-            <UiField :label="t('system.smtpUsername')" :hint="t('system.smtpUsernameHint')"><UiInput v-model="form.smtp_username" autocomplete="username" /></UiField>
+            <UiField :label="t('system.smtpHost')" :hint="t('system.smtpHostHint')"><UiInput v-model="recovery.smtp_host" /></UiField>
+            <UiField :label="t('system.smtpPort')" :hint="t('system.smtpPortHint')"><UiInput v-model="recovery.smtp_port" inputmode="numeric" /></UiField>
+            <UiField :label="t('system.smtpUsername')" :hint="t('system.smtpUsernameHint')"><UiInput v-model="recovery.smtp_username" autocomplete="username" /></UiField>
             <UiField :label="t('system.smtpPassword')" :hint="`${t('system.secretWriteOnlyHint')} ${data.has_smtp_password ? t('system.configured') : t('system.notConfigured')}`"><UiInput v-model="smtpPassword" type="password" autocomplete="new-password" /></UiField>
-            <UiField :label="t('system.smtpFrom')" :hint="t('system.smtpFromHint')"><UiInput v-model="form.smtp_from" type="email" /></UiField>
+            <UiField :label="t('system.smtpFrom')" :hint="t('system.smtpFromHint')"><UiInput v-model="recovery.smtp_from" type="email" /></UiField>
           </div>
         </UiCard>
 

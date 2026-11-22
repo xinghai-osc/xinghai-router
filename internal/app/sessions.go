@@ -81,18 +81,44 @@ func (s *Service) consoleSecurity(next http.Handler) http.Handler {
 
 func (s *Service) requireRecentAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store")
-		if !consoleRequestAllowed(r) {
-			writeError(w, http.StatusForbidden, "csrf_failed", "same-origin console request required")
-			return
+		if recentAdminOrUserAuth(w, r) {
+			next(w, r)
 		}
-		account := accountFromContext(r)
-		if account.reauthenticatedAt == nil || time.Since(*account.reauthenticatedAt) < 0 || time.Since(*account.reauthenticatedAt) >= recentAuthDuration {
-			writeError(w, http.StatusForbidden, "reauthentication_required", "verify your password again before accessing sensitive data")
-			return
-		}
-		next(w, r)
 	}
+}
+
+func recentAdminOrUserAuth(w http.ResponseWriter, r *http.Request) bool {
+	w.Header().Set("Cache-Control", "no-store")
+	if !consoleRequestAllowed(r) {
+		writeError(w, http.StatusForbidden, "csrf_failed", "same-origin console request required")
+		return false
+	}
+	account, _ := r.Context().Value(accountContextKey{}).(accountContext)
+	if account.reauthenticatedAt != nil {
+		age := time.Since(*account.reauthenticatedAt)
+		if age >= 0 && age < recentAuthDuration {
+			return true
+		}
+	}
+	writeError(w, http.StatusForbidden, "reauthentication_required", "verify your password again before accessing sensitive data")
+	return false
+}
+
+func recentAdministrator(w http.ResponseWriter, r *http.Request) bool {
+	account, _ := r.Context().Value(accountContextKey{}).(accountContext)
+	if account.role != "admin" {
+		writeError(w, http.StatusForbidden, "forbidden", "administrator role required")
+		return false
+	}
+	return recentAdminOrUserAuth(w, r)
+}
+
+func (s *Service) adminMutation(next http.HandlerFunc) http.Handler {
+	return s.account(func(w http.ResponseWriter, r *http.Request) {
+		if recentAdministrator(w, r) {
+			next(w, r)
+		}
+	})
 }
 
 func (s *Service) reauthenticate(w http.ResponseWriter, r *http.Request) {

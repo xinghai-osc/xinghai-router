@@ -25,7 +25,10 @@ func (s *Service) notifyAdminsOfPurchase(parent context.Context, kind, orderNo, 
 }
 
 func (s *Service) sendPurchaseNotifications(ctx context.Context, kind, orderNo, userID, amount, planName string) error {
-	cfg := s.loadSystemConfig(ctx)
+	cfg, err := s.checkedSystemConfig(ctx)
+	if err != nil {
+		return err
+	}
 	if !cfg.emailVerificationEnabled() {
 		return nil
 	}

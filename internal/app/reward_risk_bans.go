@@ -140,6 +140,7 @@ func (s *Service) unbanRewardUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not unblock user")
 		return
 	}
+	s.invalidateAPIKeyContext()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "user_id": target.userID, "case_id": activeCaseID, "enabled": true})
 }
 

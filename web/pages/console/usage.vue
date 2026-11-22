@@ -3,7 +3,7 @@ import { CalendarDays, ChevronDown, KeyRound, Search } from 'lucide-vue-next'
 import {
   PopoverContent, PopoverPortal, PopoverRoot, PopoverTrigger,
 } from 'reka-ui'
-import { endpoints, type ActiveUsageRequest, type UsageLog, type UsageRecord, type UsageStats } from '~/src/api'
+import { endpoints, type AccountUsageStats, type ActiveUsageRequest, type UsageLog, type UsageRecord, type UsageStats } from '~/src/api'
 import { formatCompact, formatDateTime, formatMoney, formatNumber, shortId } from '~/src/format'
 
 definePageMeta({ layout: 'console', middleware: 'console-auth' })
@@ -19,8 +19,10 @@ const adminView = ref(false)
 const usageQuery = ref('')
 const { data: usage, pending, error, refresh: refreshUsage } = useResource(
   () => endpoints.getAccountUsage(usageQuery.value),
-  { data: [] as UsageRecord[] },
+  { data: [] as UsageRecord[], stats: { cost: 0, requests: 0, tokens: 0, rpm: 0, tpm: 0 } as AccountUsageStats },
+  { immediate: false },
 )
+onMounted(commitClientFilters)
 
 const { data: activeUsage, error: activeUsageError, refresh: refreshActiveUsage } = useResource(
   () => adminView.value ? endpoints.getActiveAdminUsage() : endpoints.getActiveAccountUsage(),
@@ -135,34 +137,6 @@ function applyRangePreset(preset: (typeof DATE_PRESETS)[number]) {
 
 const advancedActiveCount = computed(() => [key.value.trim(), requestId.value.trim()].filter(Boolean).length)
 
-const filtered = computed(() => {
-  const keyword = (value: string) => value.trim().toLowerCase()
-  const needleModel = keyword(applied.model)
-  const needleGroup = keyword(applied.group)
-  const needleKey = keyword(applied.key)
-  const needleRequestId = keyword(applied.requestId)
-  return usage.value.data.filter((record) => {
-    if (applied.status && (applied.status === 'in_progress' || record.status !== applied.status)) return false
-    if (needleModel && !record.model.toLowerCase().includes(needleModel)) return false
-    if (needleGroup && !(record.group_name || '').toLowerCase().includes(needleGroup)) return false
-    if (needleKey && !(record.key_name || '').toLowerCase().includes(needleKey)) return false
-    if (needleRequestId && !record.request_id.toLowerCase().includes(needleRequestId)) return false
-    const created = new Date(record.created_at)
-    if (range.start && created < range.start) return false
-    if (range.end && created > range.end) return false
-    return true
-  })
-})
-
-const stats = computed(() => filtered.value.reduce(
-  (sum, record) => ({
-    cost: sum.cost + Number(record.cost ?? 0),
-    requests: sum.requests + 1,
-    tokens: sum.tokens + record.prompt_tokens + record.completion_tokens,
-  }),
-  { cost: 0, requests: 0, tokens: 0 },
-))
-
 const userId = ref('')
 const page = ref(1)
 const pageSize = ref('50')
@@ -189,18 +163,15 @@ function adminLogsQuery(): string {
 }
 
 function adminStatsQuery(): string {
-  const params = new URLSearchParams()
-  if (userId.value.trim()) params.set('user_id', userId.value.trim())
-  if (model.value.trim()) params.set('model', model.value.trim())
-  const start = toRfc3339(range.start)
-  if (start) params.set('start', start)
-  const end = toRfc3339(range.end)
-  if (end) params.set('end', end)
-  const query = params.toString()
-  return query ? `?${query}` : ''
+  const params = new URLSearchParams(adminLogsQuery())
+  params.delete('page')
+  params.delete('page_size')
+  return `?${params.toString()}`
 }
 
 const EMPTY_STATS: UsageStats = {
+  rpm: 0,
+  tpm: 0,
   total_requests: 0,
   success_count: 0,
   error_count: 0,
@@ -216,8 +187,9 @@ const EMPTY_STATS: UsageStats = {
 const adminUsage = useResource(
   () => endpoints.getUsageLogs(adminLogsQuery()),
   { data: [] as UsageLog[], total: 0, page: 1, page_size: 50 },
+  { immediate: false },
 )
-const adminStats = useResource(() => endpoints.getUsageStats(adminStatsQuery()), EMPTY_STATS)
+const adminStats = useResource(() => endpoints.getUsageStats(adminStatsQuery()), EMPTY_STATS, { immediate: false })
 
 const totalPages = computed(() => Math.max(1, Math.ceil(adminUsage.data.value.total / Math.max(1, adminUsage.data.value.page_size))))
 
@@ -294,7 +266,7 @@ const rows = computed<UsageRow[]>(() => {
     const history = adminUsage.data.value.data.map(normalizeRow)
     return status.value ? history : [...activeRows.value, ...history].sort((a, b) => b.created_at.localeCompare(a.created_at))
   }
-  return [...activeRows.value, ...filtered.value].sort((a, b) => b.created_at.localeCompare(a.created_at))
+  return [...activeRows.value, ...usage.value.data].sort((a, b) => b.created_at.localeCompare(a.created_at))
 })
 
 const displayStats = computed(() => {
@@ -304,10 +276,15 @@ const displayStats = computed(() => {
       cost: Number(admin.total_cost ?? 0),
       requests: admin.total_requests,
       tokens: admin.total_tokens,
+      rpm: admin.rpm,
+      tpm: admin.tpm,
     }
   }
-  return stats.value
+  return usage.value.stats
 })
+
+const statsPending = computed(() => adminView.value ? adminStats.pending.value : pending.value)
+const statsError = computed(() => adminView.value ? adminStats.error.value : error.value)
 
 const filtersActive = computed(() => Boolean(
   model.value.trim() || group.value.trim() || key.value.trim()
@@ -359,9 +336,8 @@ async function resetFilters() {
   applied.key = ''
   applied.requestId = ''
   applied.status = ''
-  usageQuery.value = ''
   if (adminView.value) await applyAdminFilters()
-  else void refreshUsage()
+  else commitClientFilters()
 }
 
 async function setAdminView(on: boolean) {
@@ -521,6 +497,22 @@ const clientTarget = ref<UsageRow | null>(null)
               <span class="text-muted">{{ t('console.tokens') }}</span>
               <span class="numeric font-semibold text-ink">{{ formatCompact(displayStats.tokens) }}</span>
             </span>
+            <UiTooltip :content="t('console.usageRateHint')">
+              <span tabindex="0" class="inline-flex h-7 items-center gap-2 rounded-md border border-line bg-surface px-2.5 text-xs">
+                <span class="h-3.5 w-0.5 rounded-full bg-success" />
+                <span class="text-muted">{{ t('console.averageRpm') }}</span>
+                <UiSkeleton v-if="statsPending" class="h-3 w-10" />
+                <span v-else class="numeric font-semibold text-ink">{{ statsError ? '—' : formatNumber(displayStats.rpm) }}</span>
+              </span>
+            </UiTooltip>
+            <UiTooltip :content="t('console.usageRateHint')">
+              <span tabindex="0" class="inline-flex h-7 items-center gap-2 rounded-md border border-line bg-surface px-2.5 text-xs">
+                <span class="h-3.5 w-0.5 rounded-full bg-warn" />
+                <span class="text-muted">{{ t('console.averageTpm') }}</span>
+                <UiSkeleton v-if="statsPending" class="h-3 w-10" />
+                <span v-else class="numeric font-semibold text-ink">{{ statsError ? '—' : formatNumber(displayStats.tpm) }}</span>
+              </span>
+            </UiTooltip>
             <span v-if="adminView" class="inline-flex h-7 items-center gap-2 rounded-md border border-line bg-surface px-2.5 text-xs">
               <span class="h-3.5 w-0.5 rounded-full bg-success" />
               <span class="text-muted">{{ t('admin.statSuccess') }}</span>
@@ -545,6 +537,7 @@ const clientTarget = ref<UsageRow | null>(null)
         </div>
       </div>
 
+      <UiAlert v-if="adminView && adminStats.error.value" tone="danger" :title="t('common.loadFailed')">{{ adminStats.error.value }}</UiAlert>
       <UiAlert v-if="activeUsageError" tone="danger" :title="t('common.loadFailed')">{{ activeUsageError }}</UiAlert>
       <ConsoleUserDataState
         :pending="adminView ? adminUsage.pending.value : pending"

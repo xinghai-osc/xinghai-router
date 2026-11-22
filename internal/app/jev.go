@@ -263,7 +263,7 @@ func (s *Service) jevCompletions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "invalid_request", "API key required")
 		return
 	}
-	policyCtx := markContentPolicyEvaluated(withContentPolicyRequest(r.Context(), body, "/v1/systemone"))
+	policyCtx := r.Context()
 	snapshot := s.contentPolicy(policyCtx)
 	result := s.evaluateContentPolicy(snapshot, jevPolicyBody(request))
 	s.recordContentAudit(policyCtx, key, request.Model, "/v1/systemone", len(body), result, snapshot.Settings)

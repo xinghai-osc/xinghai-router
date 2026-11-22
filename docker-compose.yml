@@ -1,3 +1,9 @@
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   router:
     build:
@@ -5,16 +11,21 @@ services:
       dockerfile: Dockerfile
       target: router
     restart: unless-stopped
+    logging: *default-logging
     stop_grace_period: ${ROUTER_STOP_GRACE_PERIOD:-24h}
     environment:
       DATABASE_URL: postgres://router:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/router?sslmode=disable
       REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD}@redis:6379/0}
       DEPLOYMENT_MODE: ${DEPLOYMENT_MODE:-single}
+      NODE_DEPLOYMENT_TARGETS: ${NODE_DEPLOYMENT_TARGETS:-[]}
       REDIS_FAILURE_POLICY: ${REDIS_FAILURE_POLICY:-}
       CONCURRENCY_LEASE_TTL: ${CONCURRENCY_LEASE_TTL:-30s}
       LOCAL_PROMPT_CACHE: ${LOCAL_PROMPT_CACHE:-true}
       LOCAL_PROMPT_CACHE_SIZE: ${LOCAL_PROMPT_CACHE_SIZE:-4096}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:?set ENCRYPTION_KEY in .env}
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-}
+      BOOTSTRAP_ADMIN_NAME: ${BOOTSTRAP_ADMIN_NAME:-}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
       CHANNEL_CREDENTIAL_STORAGE: ${CHANNEL_CREDENTIAL_STORAGE:-plaintext}
       WS_MAX_MESSAGE_BYTES: ${WS_MAX_MESSAGE_BYTES:-2097152}
@@ -63,6 +74,7 @@ services:
       args:
         NUXT_PUBLIC_SITE_URL: ${NUXT_PUBLIC_SITE_URL:-}
     restart: unless-stopped
+    logging: *default-logging
     environment:
       API_INTERNAL_URL: http://router:8080
       WEB_TRUSTED_PROXIES: ${WEB_TRUSTED_PROXIES:-}
@@ -84,6 +96,7 @@ services:
   postgres:
     image: postgres:17-alpine
     restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_DB: router
       POSTGRES_USER: router
@@ -99,10 +112,21 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    logging: *default-logging
     command:
       - redis-server
       - --appendonly
       - "yes"
+      - --appendfsync
+      - everysec
+      - --no-appendfsync-on-rewrite
+      - "yes"
+      - --auto-aof-rewrite-percentage
+      - "100"
+      - --auto-aof-rewrite-min-size
+      - 64mb
+      - --save
+      - ""
       - --requirepass
       - ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}
     volumes:

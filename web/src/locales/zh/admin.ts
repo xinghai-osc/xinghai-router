@@ -633,6 +633,8 @@ export default {
   usageEmptyBody: '调整筛选条件，或等待新的请求进来。',
   requestsEmptyTitle: '没有请求日志',
   requestsEmptyBody: '最近 100 条请求会显示在这里。',
+  statRpm: '平均 RPM',
+  statTpm: '平均 TPM',
   statRequests: '请求数',
   statSuccess: '成功',
   statErrors: '失败',

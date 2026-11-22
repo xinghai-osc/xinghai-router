@@ -394,6 +394,49 @@ func TestIntegrationQueryPerformanceUsageStats(t *testing.T) {
 	if rows := fetchLogs("stats_%"); len(rows) != 1 || rows[0].Model != "stats_%_model" {
 		t.Fatalf("literal wildcard model filter returned %#v", rows)
 	}
+
+	at := end.AddDate(0, 1, 0)
+	for i, model := range []string{" stats-model ", "stats-model", ""} {
+		row := base
+		row.created, row.requestID, row.model = at, fmt.Sprintf("stats-page-%d", i), model
+		if model == "" {
+			row.channelID, row.withUsage = 0, false
+		}
+		queryPerformanceInsertUsage(t, db, row)
+	}
+	for _, dimension := range []struct{ groupBy, key, name string }{
+		{"model", "stats-model", "stats-model"},
+		{"channel", strconv.FormatInt(channelID, 10), "stats-channel-0"},
+	} {
+		query := url.Values{"start": {at.Format(time.RFC3339)}, "end": {at.Format(time.RFC3339)}, "group_by": {dimension.groupBy}, "page_size": {"1"}}
+		for page := 1; page <= 3; page++ {
+			query.Set("page", strconv.Itoa(page))
+			result := fetch(query)
+			assertNumbers(result, map[string]float64{"page": float64(page), "page_size": 1, "total": 2})
+			data := result["data"].([]any)
+			if page == 3 {
+				if len(data) != 0 {
+					t.Fatalf("%s out-of-range page=%v", dimension.groupBy, data)
+				}
+				continue
+			}
+			if len(data) != 1 {
+				t.Fatalf("%s page %d=%v", dimension.groupBy, page, data)
+			}
+			row := data[0].(map[string]any)
+			if page == 1 {
+				if row["key"] != dimension.key || row["name"] != dimension.name {
+					t.Fatalf("%s dimension=%v", dimension.groupBy, row)
+				}
+				assertNumbers(row, map[string]float64{"requests": 2, "total_tokens": 30, "prompt_tokens": 20, "completion_tokens": 10, "cache_hit_tokens": 4, "uncached_input_tokens": 16, "cache_write_tokens": 0, "cache_hit_rate": 20, "cost": 0.5})
+			} else {
+				if row["key"] != "" || row["name"] != "" {
+					t.Fatalf("%s empty dimension=%v", dimension.groupBy, row)
+				}
+				assertNumbers(row, map[string]float64{"requests": 1, "total_tokens": 15, "cache_hit_rate": 0, "cost": 0})
+			}
+		}
+	}
 }
 
 func TestIntegrationQueryPerformanceIndexes(t *testing.T) {
@@ -436,6 +479,51 @@ func TestIntegrationQueryPerformanceIndexes(t *testing.T) {
 	}
 	if applied != 1 {
 		t.Fatalf("migration recorded %d times, want 1", applied)
+	}
+}
+
+func TestIntegrationQueryPerformanceSiteSettings(t *testing.T) {
+	db, dsn := integrationPool(t)
+	defer db.Close()
+	resetIntegrationDatabase(t, db)
+	ctx := context.Background()
+	_, err := db.Exec(ctx, `update site_settings set captcha_provider='corptcha',corptcha_site_id='test-site',
+		corptcha_secret_encrypted=$1,smtp_host='test.example',reward_risk_settings='{"webrtc_enabled":false}' where id=true`, mustCrypt(t, "test-secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tracer := &queryPerformanceTracer{}
+	config.ConnConfig.Tracer = tracer
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	s := integrationService(t, pool)
+	s.cfg.SMTPFrom = "test@example.com"
+	w := httptest.NewRecorder()
+	s.siteSettings(w, httptest.NewRequest(http.MethodGet, "/site-settings", nil))
+	if w.Code != http.StatusOK || tracer.queries != 2 {
+		t.Fatalf("site settings returned status %d in %d queries", w.Code, tracer.queries)
+	}
+	var result struct {
+		Provider string `json:"captcha_provider"`
+		SiteID   string `json:"corptcha_site_id"`
+		Email    bool   `json:"email_verification_enabled"`
+		Probe    struct {
+			Enabled bool     `json:"enabled"`
+			URLs    []string `json:"stun_urls"`
+		} `json:"risk_probe"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Provider != "corptcha" || result.SiteID != "test-site" || !result.Email || result.Probe.Enabled || !reflect.DeepEqual(result.Probe.URLs, defaultRewardRiskSettings().STUNURLs) {
+		t.Fatalf("unexpected settings: %+v", result)
 	}
 }
 

@@ -20,14 +20,16 @@ import (
 )
 
 type oauthRewardRiskInput struct {
-	Signals    rewardRiskSignals
-	Provider   string
-	StateNonce string
+	Signals      rewardRiskSignals
+	Provider     string
+	StateNonce   string
+	RebindUserID string
 }
 
 var errOAuthEmailNotVerified = errors.New("refusing to use an unverified email for account matching or binding")
 var errOAuthEmailVerificationRequired = errors.New("existing account requires email recovery before OAuth login")
 var errOAuthEmailNotAllowed = errors.New("email is not allowed to register")
+var errOAuthRebindRequired = errors.New("local reauthentication is required before reconnecting this OAuth identity")
 
 // oauthStateCookie binds an OAuth authorize request to the browser that started
 // it, so a callback for one user cannot be replayed into another browser. It is
@@ -207,7 +209,14 @@ func (s *Service) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not process OAuth login")
 		return
 	}
-	userID, err := s.findOrCreateOAuthUser(r.Context(), provider, providerUserID, userEmail, emailVerified, userName, userAvatar, &oauthRewardRiskInput{Signals: signals, Provider: provider, StateNonce: stateNonce})
+	var rebindUserID string
+	if account, ok := r.Context().Value(accountContextKey{}).(accountContext); ok && account.userID != "" && account.reauthenticatedAt != nil {
+		age := time.Since(*account.reauthenticatedAt)
+		if age >= 0 && age < recentAuthDuration {
+			rebindUserID = account.userID
+		}
+	}
+	userID, err := s.findOrCreateOAuthUser(r.Context(), provider, providerUserID, userEmail, emailVerified, userName, userAvatar, &oauthRewardRiskInput{Signals: signals, Provider: provider, StateNonce: stateNonce, RebindUserID: rebindUserID})
 	if err != nil {
 		if errors.Is(err, errRiskAccountRestricted) {
 			writeError(w, http.StatusForbidden, "account_restricted", "account is restricted")
@@ -227,6 +236,10 @@ func (s *Service) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		}
 		if errors.Is(err, errOAuthEmailNotAllowed) {
 			writeError(w, http.StatusForbidden, "email_not_allowed", "this email is not allowed to register")
+			return
+		}
+		if errors.Is(err, errOAuthRebindRequired) {
+			writeError(w, http.StatusConflict, "oauth_rebind_required", "reauthenticate locally before reconnecting this OAuth identity")
 			return
 		}
 		log.Printf("oauth findOrCreateOAuthUser: %v", err)
@@ -263,6 +276,10 @@ func (s *Service) findOrCreateOAuthUser(ctx context.Context, provider, providerU
 	email = strings.ToLower(strings.TrimSpace(email))
 	emailVerified = emailVerified && email != "" && validEmail(email)
 	created := false
+	rebindUserID := ""
+	if len(riskInputs) > 0 && riskInputs[0] != nil {
+		rebindUserID = strings.TrimSpace(riskInputs[0].RebindUserID)
+	}
 	err = tx.QueryRow(ctx, `select c.user_id,u.enabled,u.password_hash is not null,u.email_verified_at,u.email from user_oauth_connections c join users u on u.id=c.user_id where c.provider=$1 and c.provider_user_id=$2 for update of u`, provider, providerUserID).Scan(&userID, &enabled, &hasPassword, &verifiedAt, &localEmail)
 	if err != nil && err != pgx.ErrNoRows {
 		return "", err
@@ -298,6 +315,18 @@ func (s *Service) findOrCreateOAuthUser(ctx context.Context, provider, providerU
 			}
 			if !emailVerified {
 				return "", errOAuthEmailNotVerified
+			}
+			var revoked bool
+			if err = tx.QueryRow(ctx, `select exists(select 1 from user_oauth_revocations where user_id=$1 and provider=$2 and provider_user_id=$3)`, userID, provider, providerUserID).Scan(&revoked); err != nil {
+				return "", err
+			}
+			if revoked && rebindUserID != userID {
+				return "", errOAuthRebindRequired
+			}
+			if revoked {
+				if _, err = tx.Exec(ctx, `delete from user_oauth_revocations where user_id=$1 and provider=$2 and provider_user_id=$3`, userID, provider, providerUserID); err != nil {
+					return "", err
+				}
 			}
 		} else {
 			var whitelistEnabled, aliasBlocked bool
@@ -593,11 +622,37 @@ func (s *Service) listOAuthConnections(w http.ResponseWriter, r *http.Request) {
 func (s *Service) unlinkOAuthConnection(w http.ResponseWriter, r *http.Request) {
 	account := accountFromContext(r)
 	provider := r.PathValue("provider")
-	_, err := s.db.Exec(r.Context(), `delete from user_oauth_connections where user_id=$1 and provider=$2`, account.userID, provider)
+	tx, err := s.db.Begin(r.Context())
 	if err != nil {
 		writeError(w, 500, "internal_error", "could not unlink OAuth connection")
 		return
 	}
-	s.audit(r, "oauth.connection_unlinked", "user", account.userID, map[string]any{"provider": provider})
+	defer tx.Rollback(r.Context())
+	var providerUserID string
+	if err = tx.QueryRow(r.Context(), `select provider_user_id from user_oauth_connections where user_id=$1 and provider=$2 for update`, account.userID, provider).Scan(&providerUserID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "not_found", "OAuth connection not found")
+		} else {
+			writeError(w, 500, "internal_error", "could not unlink OAuth connection")
+		}
+		return
+	}
+	if _, err = tx.Exec(r.Context(), `insert into user_oauth_revocations(user_id,provider,provider_user_id,revoked_at) values($1,$2,$3,now()) on conflict(user_id,provider,provider_user_id) do update set revoked_at=excluded.revoked_at`, account.userID, provider, providerUserID); err != nil {
+		writeError(w, 500, "internal_error", "could not record OAuth revocation")
+		return
+	}
+	if _, err = tx.Exec(r.Context(), `delete from user_oauth_connections where user_id=$1 and provider=$2`, account.userID, provider); err != nil {
+		writeError(w, 500, "internal_error", "could not unlink OAuth connection")
+		return
+	}
+	if _, err = tx.Exec(r.Context(), `delete from user_sessions where user_id=$1`, account.userID); err != nil {
+		writeError(w, 500, "internal_error", "could not revoke OAuth sessions")
+		return
+	}
+	if err = tx.Commit(r.Context()); err != nil {
+		writeError(w, 500, "internal_error", "could not unlink OAuth connection")
+		return
+	}
+	s.audit(r, "oauth.connection_unlinked", "user", account.userID, map[string]any{"provider": provider, "sessions_revoked": true})
 	w.WriteHeader(http.StatusNoContent)
 }

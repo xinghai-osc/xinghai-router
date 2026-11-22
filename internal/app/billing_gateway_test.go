@@ -76,12 +76,20 @@ func TestImageUploadBytesDoNotAffectReservation(t *testing.T) {
 	}
 }
 
-func TestPartialStreamFactsEstimateOnlyMissingOutput(t *testing.T) {
+func TestIncompleteStreamBillKeepsObservedFactsForReconciliation(t *testing.T) {
 	var st streamStats
 	parseSSEUsage([]byte(`{"type":"message_start","message":{"usage":{"input_tokens":10,"cache_read_input_tokens":20,"cache_creation_input_tokens":30,"output_tokens":0}}}`), &st)
-	completeStreamFacts(&st, []byte(`{"messages":[]}`), 100)
-	if st.facts.InputTokens != 10 || st.facts.CacheReadTokens != 20 || st.facts.CacheWriteTokens != 30 || st.facts.OutputTokens != 100 || st.facts.UsageSource != "upstream_and_request_estimate" {
-		t.Fatalf("partial facts=%+v", st.facts)
+	price := pricingRule{found: true, input: 1, output: 2, multiplier: 1, exchangeRate: 1}
+	bill := incompleteStreamBill(st, price, 1, 45, "upstream_stream_error", subscriptionAccess{Covered: true, SubscriptionID: "sub"})
+	if bill.Status != "missing_usage" || bill.Cost != 0 || bill.Amount != "0.00000000" || bill.Usage.InputTokens != 10 || bill.Usage.CacheReadTokens != 20 || bill.Usage.CacheWriteTokens != 30 || bill.Usage.OutputTokens != 0 {
+		t.Fatalf("pending bill=%+v", bill)
+	}
+	if obs := bill.StreamObservation; obs == nil || !obs.InputReported || obs.OutputReported || obs.DeliveredBytes != 45 || obs.ErrorCode != "upstream_stream_error" || obs.SubscriptionID != "sub" {
+		t.Fatalf("stream observation=%+v", obs)
+	}
+	bill = incompleteStreamBill(streamStats{}, price, 1, 24, "", subscriptionAccess{SubscriptionID: "exhausted"})
+	if bill.Status != "missing_usage" || bill.Usage.UsageSource != "missing" || bill.Cost != 0 || bill.StreamObservation.SubscriptionID != "" {
+		t.Fatalf("missing stream bill=%+v", bill)
 	}
 }
 

@@ -19,6 +19,7 @@ import (
 type mediaGatewayOptions struct {
 	path            string
 	contentType     string
+	responseFormat  string
 	kind            string
 	minimaxNative   bool
 	facts           UsageFacts
@@ -96,6 +97,7 @@ func parseMediaRequest(body []byte, contentType, kind string) (string, []byte, m
 		}
 		reader := multipart.NewReader(bytes.NewReader(body), params["boundary"])
 		seen := map[string]bool{}
+		arrays := map[string][]string{}
 		for {
 			part, err := reader.NextPart()
 			if err == io.EOF {
@@ -105,9 +107,10 @@ func parseMediaRequest(body []byte, contentType, kind string) (string, []byte, m
 				return fail("invalid multipart body")
 			}
 			name := part.FormName()
-			if name == "" || seen[name] {
+			array := kind == "transcription" && transcriptionArrayField(name)
+			if name == "" || seen[name] && !array {
 				part.Close()
-				return fail("multipart fields must have unique names")
+				return fail("missing or duplicate multipart field name")
 			}
 			seen[name] = true
 			if part.FileName() != "" {
@@ -134,7 +137,14 @@ func parseMediaRequest(body []byte, contentType, kind string) (string, []byte, m
 			if err != nil || len(value) > 64<<10 || !utf8.Valid(value) {
 				return fail("invalid or oversized multipart field")
 			}
-			fields[name], _ = json.Marshal(string(value))
+			if array {
+				arrays[name] = append(arrays[name], string(value))
+			} else {
+				fields[name], _ = json.Marshal(string(value))
+			}
+		}
+		for name, values := range arrays {
+			fields[name], _ = json.Marshal(values)
 		}
 	default:
 		return fail("Content-Type must be application/json or multipart/form-data")
@@ -154,7 +164,7 @@ func parseMediaRequest(body []byte, contentType, kind string) (string, []byte, m
 	switch kind {
 	case "speech":
 		input := text("input")
-		if strings.TrimSpace(input) == "" || !utf8.ValidString(input) || utf8.RuneCountInString(input) > 4096 || strings.TrimSpace(text("voice")) == "" {
+		if strings.TrimSpace(input) == "" || !utf8.ValidString(input) || utf8.RuneCountInString(input) > 4096 || !validSpeechVoice(fields["voice"]) {
 			return fail("input (1-4096 characters) and voice are required")
 		}
 		if format := text("stream_format"); format != "" && format != "audio" {
@@ -180,8 +190,11 @@ func parseMediaRequest(body []byte, contentType, kind string) (string, []byte, m
 		if !hasFile {
 			return fail("an audio file is required")
 		}
-		if format := text("response_format"); format != "" && format != "json" && format != "verbose_json" {
-			return fail("audio response_format must be json or verbose_json for usage accounting")
+		options.responseFormat = text("response_format")
+		switch options.responseFormat {
+		case "", "json", "verbose_json", "diarized_json", "text", "srt", "vtt":
+		default:
+			return fail("audio response_format must be json, verbose_json, diarized_json, text, srt, or vtt")
 		}
 	case "video":
 		if strings.TrimSpace(text("prompt")) == "" {
@@ -214,6 +227,26 @@ func parseMediaRequest(body []byte, contentType, kind string) (string, []byte, m
 	return model, policyBody, options, nil
 }
 
+func transcriptionArrayField(name string) bool {
+	switch strings.TrimSuffix(name, "[]") {
+	case "timestamp_granularities", "include", "known_speaker_names", "known_speaker_references", "languages":
+		return true
+	default:
+		return false
+	}
+}
+
+func validSpeechVoice(raw json.RawMessage) bool {
+	var name string
+	if json.Unmarshal(raw, &name) == nil {
+		return strings.TrimSpace(name) != ""
+	}
+	var voice struct {
+		ID string `json:"id"`
+	}
+	return json.Unmarshal(raw, &voice) == nil && strings.TrimSpace(voice.ID) != ""
+}
+
 func (o mediaGatewayOptions) responseFacts(body []byte, contentType string, pricing pricingRule) (UsageFacts, error) {
 	switch o.kind {
 	case "speech":
@@ -225,6 +258,12 @@ func (o mediaGatewayOptions) responseFacts(body []byte, contentType string, pric
 	case "video":
 		return parseUsageFacts(body), nil
 	case "transcription":
+		if o.transcriptContentType() != "application/json" {
+			if !o.validTextTranscription(body, contentType) {
+				return UsageFacts{}, fmt.Errorf("upstream did not return the requested text transcription")
+			}
+			return UsageFacts{UsageSource: "missing"}, nil
+		}
 		var response struct {
 			Text     *string  `json:"text"`
 			Duration *float64 `json:"duration"`

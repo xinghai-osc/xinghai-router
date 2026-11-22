@@ -633,6 +633,8 @@ export default {
   usageEmptyBody: 'Adjust the filters, or wait for new requests to arrive.',
   requestsEmptyTitle: 'No request logs',
   requestsEmptyBody: 'The 100 most recent requests will show up here.',
+  statRpm: 'Avg. RPM',
+  statTpm: 'Avg. TPM',
   statRequests: 'Requests',
   statSuccess: 'Successful',
   statErrors: 'Failed',

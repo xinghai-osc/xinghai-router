@@ -40,6 +40,10 @@ type contentPolicyRule struct {
 	CaseSensitive bool
 	Enabled       bool
 	Priority      int
+	// normalizedTerm is the rule's term pre-normalized with its own case
+	// sensitivity, computed once when the snapshot is loaded instead of on
+	// every evaluated request.
+	normalizedTerm string
 }
 
 type contentPolicySnapshot struct {
@@ -53,32 +57,6 @@ type contentPolicyResult struct {
 	Excerpt        string
 	ContentHash    string
 	ContentLength  int
-}
-
-type contentPolicyRequestKey struct{}
-type contentPolicyEvaluatedKey struct{}
-
-type contentPolicyRequest struct {
-	body     []byte
-	endpoint string
-}
-
-func withContentPolicyRequest(ctx context.Context, body []byte, endpoint string) context.Context {
-	return context.WithValue(ctx, contentPolicyRequestKey{}, contentPolicyRequest{body: body, endpoint: endpoint})
-}
-
-func contentPolicyRequestFromContext(ctx context.Context) (contentPolicyRequest, bool) {
-	request, ok := ctx.Value(contentPolicyRequestKey{}).(contentPolicyRequest)
-	return request, ok
-}
-
-func markContentPolicyEvaluated(ctx context.Context) context.Context {
-	return context.WithValue(ctx, contentPolicyEvaluatedKey{}, true)
-}
-
-func contentPolicyAlreadyEvaluated(ctx context.Context) bool {
-	evaluated, _ := ctx.Value(contentPolicyEvaluatedKey{}).(bool)
-	return evaluated
 }
 
 type contentPolicyRuleInput struct {
@@ -125,6 +103,7 @@ func (s *Service) loadContentPolicy(ctx context.Context) (contentPolicySnapshot,
 	for rows.Next() {
 		var rule contentPolicyRule
 		if rows.Scan(&rule.ID, &rule.Name, &rule.Term, &rule.Action, &rule.CaseSensitive, &rule.Enabled, &rule.Priority) == nil {
+			rule.normalizedTerm = normalizePolicyText(rule.Term, rule.CaseSensitive)
 			snapshot.Rules = append(snapshot.Rules, rule)
 		}
 	}
@@ -245,6 +224,12 @@ func (s *Service) contentHash(value string) string {
 }
 
 func (s *Service) evaluateContentPolicy(snapshot contentPolicySnapshot, body []byte) contentPolicyResult {
+	// With auditing off and no storage requested, nothing can be recorded and
+	// no rule can match, so the full-body extraction and normalization are
+	// skipped entirely. This is the default configuration.
+	if snapshot.Settings.Mode == "off" && snapshot.Settings.StoreMode == "none" {
+		return contentPolicyResult{Decision: "allow", MatchedRuleIDs: []string{}}
+	}
 	text := extractPolicyText(body)
 	result := contentPolicyResult{Decision: "allow", MatchedRuleIDs: []string{}, ContentLength: len([]byte(text))}
 	normalized := normalizePolicyText(text, false)
@@ -264,7 +249,12 @@ func (s *Service) evaluateContentPolicy(snapshot contentPolicySnapshot, body []b
 		if !rule.Enabled {
 			continue
 		}
-		term := normalizePolicyText(rule.Term, rule.CaseSensitive)
+		term := rule.normalizedTerm
+		if term == "" && rule.Term != "" {
+			// Rules built outside loadContentPolicy (tests, direct construction)
+			// carry no pre-normalized term; derive it on the spot.
+			term = normalizePolicyText(rule.Term, rule.CaseSensitive)
+		}
 		if term == "" || !strings.Contains(normalizePolicyText(text, rule.CaseSensitive), term) {
 			continue
 		}
@@ -291,7 +281,6 @@ func (s *Service) evaluateContentPolicy(snapshot contentPolicySnapshot, body []b
 	}
 	return result
 }
-
 func containsString(values []string, target string) bool {
 	for _, value := range values {
 		if value == target {
@@ -330,10 +319,7 @@ func (s *Service) enforceContentPolicy(ctx context.Context, key keyContext, mode
 	snapshot := s.contentPolicy(ctx)
 	result := s.evaluateContentPolicy(snapshot, body)
 	s.recordContentAudit(ctx, key, model, endpoint, len(body), result, snapshot.Settings)
-	if result.Decision == "block" {
-		return false, markContentPolicyEvaluated(ctx)
-	}
-	return true, markContentPolicyEvaluated(withContentPolicyRequest(ctx, body, endpoint))
+	return result.Decision != "block", ctx
 }
 
 func (s *Service) getContentPolicySettings(w http.ResponseWriter, r *http.Request) {

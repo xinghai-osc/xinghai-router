@@ -61,8 +61,13 @@ func (s *Service) register(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	sys, configErr := s.checkedSystemConfig(r.Context())
+	if configErr != nil {
+		writeError(w, http.StatusServiceUnavailable, "security_config_unavailable", "security configuration is unavailable")
+		return
+	}
 	var emailVerifiedAt *time.Time
-	if s.loadSystemConfig(r.Context()).emailVerificationEnabled() {
+	if sys.emailVerificationEnabled() {
 		if strings.TrimSpace(in.Code) == "" {
 			writeError(w, http.StatusBadRequest, "code_required", "the email verification code is required")
 			return
@@ -180,6 +185,7 @@ func (s *Service) register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if decision.Action == "ban" {
+		s.invalidateAPIKeyContext()
 		writeError(w, http.StatusForbidden, "account_restricted", "account is restricted")
 		return
 	}
@@ -518,6 +524,7 @@ func (s *Service) createAccountKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not create API key")
 		return
 	}
+	s.invalidateAPIKeyContext()
 	s.audit(r, "api_key.created", "api_key", id, map[string]any{"user_id": account.userID, "name": name, "self_service": true, "allowed_models": allowedModels})
 	writeJSON(w, http.StatusCreated, map[string]any{"id": id, "name": name, "key": secret, "expires_at": expires, "group_id": groupID, "subscription_id": subscriptionID, "allowed_models": allowedModels})
 }
@@ -545,6 +552,7 @@ func (s *Service) setAccountKeyGroup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not update API key group")
 		return
 	}
+	s.invalidateAPIKeyContext()
 	s.audit(r, "api_key.group_changed", "api_key", r.PathValue("id"), map[string]any{"group_id": groupID, "self_service": true})
 	writeJSON(w, http.StatusOK, map[string]any{"group_id": groupID})
 }
@@ -604,6 +612,7 @@ func (s *Service) updateAccountKey(w http.ResponseWriter, r *http.Request) {
 	if err := s.db.QueryRow(r.Context(), `select coalesce(allowed_models,'{}') from api_keys where id=$1`, r.PathValue("id")).Scan(&currentModels); err != nil {
 		currentModels = []string{}
 	}
+	s.invalidateAPIKeyContext()
 	s.audit(r, "api_key.updated", "api_key", r.PathValue("id"), map[string]any{"name": name, "expires_at": expires, "group_id": groupID, "subscription_id": subscriptionID, "self_service": true})
 	writeJSON(w, http.StatusOK, map[string]any{"id": r.PathValue("id"), "name": name, "expires_at": expires, "group_id": groupID, "subscription_id": subscriptionID, "allowed_models": currentModels})
 }
@@ -632,6 +641,7 @@ func (s *Service) setAccountKeyModels(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "API key not found")
 		return
 	}
+	s.invalidateAPIKeyContext()
 	s.audit(r, "api_key.models_changed", "api_key", r.PathValue("id"), map[string]any{"allowed_models": allowedModels, "self_service": true})
 	writeJSON(w, http.StatusOK, map[string]any{"id": r.PathValue("id"), "allowed_models": allowedModels})
 }
@@ -652,6 +662,7 @@ func (s *Service) revokeAccountKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "API key not found")
 		return
 	}
+	s.invalidateAPIKeyContext()
 	s.audit(r, "api_key.revoked", "api_key", keyID, map[string]any{"self_service": true})
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -742,20 +753,7 @@ func (s *Service) accountUsage(w http.ResponseWriter, r *http.Request) {
 	keyName := strings.TrimSpace(r.URL.Query().Get("key_name"))
 	status := strings.TrimSpace(r.URL.Query().Get("status"))
 	requestID := strings.TrimSpace(r.URL.Query().Get("request_id"))
-	startStr := strings.TrimSpace(r.URL.Query().Get("start"))
-	endStr := strings.TrimSpace(r.URL.Query().Get("end"))
-
-	var start, end *time.Time
-	if startStr != "" {
-		if t, err := time.Parse(time.RFC3339, startStr); err == nil {
-			start = &t
-		}
-	}
-	if endStr != "" {
-		if t, err := time.Parse(time.RFC3339, endStr); err == nil {
-			end = &t
-		}
-	}
+	window := newUsageRateWindow(r, time.Now())
 
 	args := []any{account.workspaceID}
 	argIdx := 2
@@ -766,18 +764,18 @@ func (s *Service) accountUsage(w http.ResponseWriter, r *http.Request) {
 		argIdx++
 	}
 	if groupName != "" {
-		where = append(where, "coalesce(coalesce(g.display_name, g.name),'') ilike $"+strconv.Itoa(argIdx))
-		args = append(args, "%"+groupName+"%")
+		where = append(where, "coalesce(coalesce(g.display_name, g.name),'') ilike $"+strconv.Itoa(argIdx)+likeEscapeClause)
+		args = append(args, "%"+escapeLikePattern(groupName)+"%")
 		argIdx++
 	}
 	if keyName != "" {
-		where = append(where, "ak.name ilike $"+strconv.Itoa(argIdx))
-		args = append(args, "%"+keyName+"%")
+		where = append(where, "ak.name ilike $"+strconv.Itoa(argIdx)+likeEscapeClause)
+		args = append(args, "%"+escapeLikePattern(keyName)+"%")
 		argIdx++
 	}
 	if requestID != "" {
-		where = append(where, "rl.request_id ilike $"+strconv.Itoa(argIdx))
-		args = append(args, requestID+"%")
+		where = append(where, "rl.request_id ilike $"+strconv.Itoa(argIdx)+likeEscapeClause)
+		args = append(args, escapeLikePattern(requestID)+"%")
 		argIdx++
 	}
 	if status == "success" {
@@ -786,22 +784,32 @@ func (s *Service) accountUsage(w http.ResponseWriter, r *http.Request) {
 		where = append(where, "ur.status is null and (rl.status_code>=400 or coalesce(rl.error_code,'')<>'')")
 	} else if status == "settled" {
 		where = append(where, "ur.status='settled'")
+	} else if status == "in_progress" {
+		where = append(where, "false")
 	}
-	if start != nil {
+	limited := len(where) == 1 && !window.filtered
+	if window.start != nil {
 		where = append(where, "rl.created_at>=$"+strconv.Itoa(argIdx))
-		args = append(args, *start)
+		args = append(args, *window.start)
 		argIdx++
 	}
-	if end != nil {
-		where = append(where, "rl.created_at<=$"+strconv.Itoa(argIdx))
-		args = append(args, *end)
-		argIdx++
+	where = append(where, "rl.created_at<=$"+strconv.Itoa(argIdx))
+	args = append(args, window.end)
+	from := ` from request_logs rl left join usage_records ur on ur.request_id=rl.request_id left join api_keys ak on ak.id=rl.api_key_id left join groups g on g.id=rl.group_id where ` + strings.Join(where, " and ")
+	var requests, tokens int64
+	var cost float64
+	var first *time.Time
+	if err := s.db.QueryRow(r.Context(), `select count(*),coalesce(sum(coalesce(rl.prompt_tokens,0)+coalesce(rl.completion_tokens,0)),0),coalesce(sum(ur.cost),0),min(rl.created_at)`+from, args...).Scan(&requests, &tokens, &cost, &first); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
+		return
 	}
+	rpm, tpm := window.rates(requests, tokens, first)
+	stats := map[string]any{"requests": requests, "tokens": tokens, "cost": cost, "rpm": rpm, "tpm": tpm}
 
 	// With filters the client expects the full matching set; without them keep
 	// the original recent-100 default.
-	query := `select rl.request_id,rl.model,coalesce(rl.prompt_tokens,0),coalesce(ur.cached_prompt_tokens,0),coalesce(rl.completion_tokens,0),coalesce(ur.cost,0),case when ur.status is not null then ur.status when rl.status_code>=400 or rl.error_code is not null then 'failed' else 'success' end,rl.created_at,rl.client_ip,rl.user_agent,case when rl.error_code is not null or rl.status_code>=400 then rl.error_detail else '' end,coalesce(ak.name,''),rl.subscription_covered,rl.duration_ms,rl.first_token_ms,coalesce(coalesce(g.display_name, g.name),''),coalesce(ur.usage_facts,'{}'::jsonb),coalesce(ur.billing_snapshot,'{}'::jsonb) from request_logs rl left join usage_records ur on ur.request_id=rl.request_id left join api_keys ak on ak.id=rl.api_key_id left join groups g on g.id=rl.group_id where ` + strings.Join(where, " and ") + ` order by rl.created_at desc`
-	if len(where) == 1 {
+	query := `select rl.request_id,rl.model,coalesce(rl.prompt_tokens,0),coalesce(ur.cached_prompt_tokens,0),coalesce(rl.completion_tokens,0),coalesce(ur.cost,0),case when ur.status is not null then ur.status when rl.status_code>=400 or rl.error_code is not null then 'failed' else 'success' end,rl.created_at,rl.client_ip,rl.user_agent,case when rl.error_code is not null or rl.status_code>=400 then rl.error_detail else '' end,coalesce(ak.name,''),rl.subscription_covered,rl.duration_ms,rl.first_token_ms,coalesce(coalesce(g.display_name, g.name),''),coalesce(ur.usage_facts,'{}'::jsonb),coalesce(ur.billing_snapshot,'{}'::jsonb)` + from + ` order by rl.created_at desc`
+	if limited {
 		query += " limit 100"
 	}
 	rows, err := s.db.Query(r.Context(), query, args...)
@@ -822,7 +830,11 @@ func (s *Service) accountUsage(w http.ResponseWriter, r *http.Request) {
 			data = append(data, map[string]any{"request_id": requestID, "model": model, "prompt_tokens": prompt, "cached_prompt_tokens": cached, "completion_tokens": completion, "cost": cost, "status": status, "created_at": created, "client_ip": clientIP, "user_agent": userAgent, "error": errorDetail, "key_name": keyName, "subscription": subscriptionCovered, "duration_ms": durationMs, "first_token_ms": firstTokenMs, "group_name": groupName, "usage_facts": facts, "billing_snapshot": snapshot})
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": data})
+	if err := rows.Err(); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": data, "stats": stats})
 }
 
 func (s *Service) accountLedger(w http.ResponseWriter, r *http.Request) {

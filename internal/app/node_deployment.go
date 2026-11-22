@@ -203,6 +203,11 @@ func (s *Service) createNode(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "invalid node or SSH configuration")
 		return
 	}
+	deploy := in.Deploy == nil || *in.Deploy
+	if deploy && !s.cfg.approvesNodeTarget(in.deploymentTarget()) {
+		writeNodeDeploymentError(w, errNodeTargetDenied)
+		return
+	}
 	secret, passphrase, err := s.encryptNodeCredentials(in)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not protect SSH credentials")
@@ -213,13 +218,12 @@ func (s *Service) createNode(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not create node")
 		return
 	}
-	deploy := in.Deploy == nil || *in.Deploy
 	status := "idle"
 	if deploy {
 		status = "pending"
 	}
 	clusterID := r.PathValue("id")
-	tag, err := s.db.Exec(r.Context(), `insert into cluster_instances(id,cluster_id,name,address,metadata,enabled,ssh_host,ssh_port,ssh_user,ssh_auth_method,ssh_secret,ssh_passphrase,ssh_host_key,deploy_path,router_image,deploy_status,deploy_message) select $1,id,$3,'{}',$4,true,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15 from clusters where id=$2`, id, clusterID, in.Name, in.Address, in.SSHHost, in.SSHPort, in.SSHUser, in.SSHAuthMethod, secret, passphrase, in.SSHHostKey, in.DeployPath, in.RouterImage, status, statusMessage(status))
+	tag, err := s.db.Exec(r.Context(), `insert into cluster_instances(id,cluster_id,name,address,metadata,enabled,ssh_host,ssh_port,ssh_user,ssh_auth_method,ssh_secret,ssh_passphrase,ssh_host_key,deploy_path,router_image,deploy_status,deploy_message) select $1,id,$3,$4,'{}'::jsonb,true,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15 from clusters where id=$2`, id, clusterID, in.Name, in.Address, in.SSHHost, in.SSHPort, in.SSHUser, in.SSHAuthMethod, secret, passphrase, in.SSHHostKey, in.DeployPath, in.RouterImage, status, statusMessage(status))
 	if err != nil {
 		writeInstanceMutationError(w, err, "could not create node")
 		return
@@ -249,9 +253,19 @@ func (s *Service) updateNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not update node")
+		return
+	}
+	defer tx.Rollback(r.Context())
 	var old nodeRecord
-	if err := s.db.QueryRow(r.Context(), `select name,address,ssh_host,ssh_port,ssh_user,ssh_auth_method,ssh_secret,ssh_passphrase,ssh_host_key,deploy_path,router_image from cluster_instances where id=$1`, id).Scan(&old.Name, &old.Address, &old.SSHHost, &old.SSHPort, &old.SSHUser, &old.SSHAuthMethod, &old.SSHSecret, &old.SSHPassphrase, &old.SSHHostKey, &old.DeployPath, &old.RouterImage); err != nil {
-		writeError(w, http.StatusNotFound, "not_found", "node not found")
+	if err := tx.QueryRow(r.Context(), `select name,address,ssh_host,ssh_port,ssh_user,ssh_auth_method,ssh_secret,ssh_passphrase,ssh_host_key,deploy_path,router_image,deploy_status from cluster_instances where id=$1 for update`, id).Scan(&old.Name, &old.Address, &old.SSHHost, &old.SSHPort, &old.SSHUser, &old.SSHAuthMethod, &old.SSHSecret, &old.SSHPassphrase, &old.SSHHostKey, &old.DeployPath, &old.RouterImage, &old.DeployStatus); err != nil {
+		writeNodeDeploymentError(w, err)
+		return
+	}
+	if old.DeployStatus == "pending" || old.DeployStatus == "running" {
+		writeNodeDeploymentError(w, errNodeDeploymentRunning)
 		return
 	}
 	if in.Name == "" {
@@ -281,13 +295,18 @@ func (s *Service) updateNode(w http.ResponseWriter, r *http.Request) {
 	if in.RouterImage == "" {
 		in.RouterImage = old.RouterImage
 	}
-	newCredential := in.SSHPassword != "" || in.SSHPrivateKey != ""
-	if in.SSHAuthMethod != old.SSHAuthMethod && !newCredential {
-		writeError(w, http.StatusBadRequest, "invalid_request", "new SSH credentials are required")
-		return
-	}
 	if err := normalizeNodeInput(&in, false); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", "invalid node or SSH configuration")
+		return
+	}
+	newCredential := in.SSHPassword != "" || in.SSHPrivateKey != ""
+	if old.needsNewSSHCredential(in) && !newCredential {
+		writeError(w, http.StatusBadRequest, "invalid_request", "new SSH credentials are required for the changed SSH destination or authentication method")
+		return
+	}
+	deploy := in.Deploy != nil && *in.Deploy
+	if deploy && !s.cfg.approvesNodeTarget(in.deploymentTarget()) {
+		writeNodeDeploymentError(w, errNodeTargetDenied)
 		return
 	}
 	secret, passphrase := old.SSHSecret, old.SSHPassphrase
@@ -306,16 +325,22 @@ func (s *Service) updateNode(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	_, err := s.db.Exec(r.Context(), `update cluster_instances set name=$2,address=$3,ssh_host=$4,ssh_port=$5,ssh_user=$6,ssh_auth_method=$7,ssh_secret=$8,ssh_passphrase=$9,ssh_host_key=$10,deploy_path=$11,router_image=$12 where id=$1`, id, in.Name, in.Address, in.SSHHost, in.SSHPort, in.SSHUser, in.SSHAuthMethod, secret, passphrase, in.SSHHostKey, in.DeployPath, in.RouterImage)
+	_, err = tx.Exec(r.Context(), `update cluster_instances set name=$2,address=$3,ssh_host=$4,ssh_port=$5,ssh_user=$6,ssh_auth_method=$7,ssh_secret=$8,ssh_passphrase=$9,ssh_host_key=$10,deploy_path=$11,router_image=$12 where id=$1`, id, in.Name, in.Address, in.SSHHost, in.SSHPort, in.SSHUser, in.SSHAuthMethod, secret, passphrase, in.SSHHostKey, in.DeployPath, in.RouterImage)
 	if err != nil {
 		writeInstanceMutationError(w, err, "could not update node")
 		return
 	}
-	if in.Deploy != nil && *in.Deploy {
-		if err := s.queueNodeDeployment(r.Context(), id); err != nil {
-			writeError(w, http.StatusInternalServerError, "internal_error", "could not queue deployment")
+	if deploy {
+		if err := markNodeDeploymentPending(r.Context(), tx, id); err != nil {
+			writeNodeDeploymentError(w, err)
 			return
 		}
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not update node")
+		return
+	}
+	if deploy {
 		go s.processNodeDeployment(context.Background(), id)
 	}
 	s.audit(r, "node.updated", "cluster_instance", id, map[string]any{"name": in.Name, "ssh_host": in.SSHHost, "ssh_user": in.SSHUser})
@@ -340,15 +365,7 @@ func (s *Service) deleteNode(w http.ResponseWriter, r *http.Request) {
 func (s *Service) deployNode(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if err := s.queueNodeDeployment(r.Context(), id); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			writeError(w, http.StatusNotFound, "not_found", "node not found or SSH is not configured")
-			return
-		}
-		if errors.Is(err, errNodeDeploymentRunning) {
-			writeError(w, http.StatusConflict, "deployment_running", "deployment is already running")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "internal_error", "could not queue deployment")
+		writeNodeDeploymentError(w, err)
 		return
 	}
 	s.audit(r, "node.deployment_queued", "cluster_instance", id, nil)
@@ -358,35 +375,53 @@ func (s *Service) deployNode(w http.ResponseWriter, r *http.Request) {
 
 var errNodeDeploymentRunning = errors.New("node deployment already running")
 
+func writeNodeDeploymentError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		writeError(w, http.StatusNotFound, "not_found", "node not found or SSH is not configured")
+	case errors.Is(err, errNodeTargetDenied):
+		writeError(w, http.StatusForbidden, "node_target_not_approved", errNodeTargetDenied.Error())
+	case errors.Is(err, errNodeDeploymentRunning):
+		writeError(w, http.StatusConflict, "deployment_running", "deployment is pending or running")
+	default:
+		writeError(w, http.StatusInternalServerError, "internal_error", "node operation failed")
+	}
+}
+
 func (s *Service) queueNodeDeployment(ctx context.Context, id string) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var target nodeDeploymentTarget
 	var status string
-	err := s.db.QueryRow(ctx, `update cluster_instances set deploy_status='pending',deploy_message='deployment queued',deploy_started_at=null,deploy_finished_at=null where id=$1 and ssh_host<>'' and ssh_secret<>'' and deploy_status<>'running' returning deploy_status`, id).Scan(&status)
-	if err == nil {
-		return nil
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
+	err = tx.QueryRow(ctx, `select ssh_host,ssh_port,ssh_user,ssh_host_key,router_image,deploy_status from cluster_instances where id=$1 and ssh_host<>'' and ssh_secret<>'' for update`, id).Scan(&target.SSHHost, &target.SSHPort, &target.SSHUser, &target.SSHHostKey, &target.RouterImage, &status)
+	if err != nil {
 		return err
 	}
-	var current string
-	if err := s.db.QueryRow(ctx, `select deploy_status from cluster_instances where id=$1 and ssh_host<>'' and ssh_secret<>''`, id).Scan(&current); errors.Is(err, pgx.ErrNoRows) {
-		return pgx.ErrNoRows
-	} else if err != nil {
-		return err
-	} else if current == "running" {
+	if !s.cfg.approvesNodeTarget(target) {
+		return errNodeTargetDenied
+	}
+	if status == "running" {
 		return errNodeDeploymentRunning
 	}
-	return pgx.ErrNoRows
+	if err := markNodeDeploymentPending(ctx, tx, id); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func markNodeDeploymentPending(ctx context.Context, tx pgx.Tx, id string) error {
+	_, err := tx.Exec(ctx, `update cluster_instances set deploy_status='pending',deploy_message='deployment queued',deploy_started_at=null,deploy_finished_at=null where id=$1`, id)
+	return err
 }
 
 func (s *Service) processNodeDeployment(parent context.Context, id string) {
 	ctx, cancel := context.WithTimeout(parent, nodeDeploymentTimeout)
 	defer cancel()
 	var n nodeRecord
-	if err := s.db.QueryRow(ctx, `select id,cluster_id,name,address,ssh_host,ssh_port,ssh_user,ssh_auth_method,ssh_secret,ssh_passphrase,ssh_host_key,deploy_path,router_image from cluster_instances where id=$1`, id).Scan(&n.ID, &n.ClusterID, &n.Name, &n.Address, &n.SSHHost, &n.SSHPort, &n.SSHUser, &n.SSHAuthMethod, &n.SSHSecret, &n.SSHPassphrase, &n.SSHHostKey, &n.DeployPath, &n.RouterImage); err != nil {
-		return
-	}
-	var startedAt time.Time
-	if err := s.db.QueryRow(ctx, `update cluster_instances set deploy_status='running',deploy_message='deployment started',deploy_started_at=now(),deploy_finished_at=null where id=$1 and deploy_status='pending' returning deploy_started_at`, id).Scan(&startedAt); err != nil {
+	if err := s.db.QueryRow(ctx, `update cluster_instances set deploy_status='running',deploy_message='deployment started',deploy_started_at=now(),deploy_finished_at=null where id=$1 and deploy_status='pending' returning id,cluster_id,name,address,ssh_host,ssh_port,ssh_user,ssh_auth_method,ssh_secret,ssh_passphrase,ssh_host_key,deploy_path,router_image`, id).Scan(&n.ID, &n.ClusterID, &n.Name, &n.Address, &n.SSHHost, &n.SSHPort, &n.SSHUser, &n.SSHAuthMethod, &n.SSHSecret, &n.SSHPassphrase, &n.SSHHostKey, &n.DeployPath, &n.RouterImage); err != nil {
 		return
 	}
 	secret, err := crypt(s.cfg.EncryptionKey, n.SSHSecret, true)
@@ -432,6 +467,9 @@ func nodeDeploymentError(err error, secrets ...string) string {
 }
 
 func (s *Service) deployNodeOverSSH(ctx context.Context, n nodeRecord, credential, passphrase string) error {
+	if !s.cfg.approvesNodeTarget(n.deploymentTarget()) {
+		return errNodeTargetDenied
+	}
 	var auth ssh.AuthMethod
 	if n.SSHAuthMethod == "password" {
 		auth = ssh.Password(credential)

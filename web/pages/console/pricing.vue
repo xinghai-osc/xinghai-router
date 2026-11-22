@@ -540,7 +540,7 @@ async function deleteTimeRule(rule: PricingTimeRule) {
             <UiInput v-model="form.output_per_million" type="number" mono />
           </UiField>
           <UiField :label="t('admin.modelMultiplier')" :hint="t('admin.modelMultiplierHint')" required>
-            <UiInput v-model="form.multiplier" type="number" min="0" max="1000" step="any" mono />
+            <UiInput v-model="form.multiplier" type="number" min="0.000001" max="1000" step="any" mono />
           </UiField>
           <UiField :label="t('admin.thinkingPrices')" :hint="t('admin.thinkingPricesHint')">
             <UiTextarea v-model="form.thinking_prices" :placeholder="t('admin.thinkingPricesPlaceholder')" :rows="5" mono />

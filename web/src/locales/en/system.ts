@@ -223,11 +223,14 @@ export default {
   reliabilitySaved: 'Reliability settings saved',
 
   conversationCacheTitle: 'Conversation cache',
-  conversationCacheLead: 'When enabled, the gateway records each conversation request and response. Records are kept for 24 hours and cleared at midnight by default, or kept in full.',
+  conversationCacheLead: 'When enabled, the gateway records each conversation request and response. By default, each record is kept for 24 hours from its creation time. Expired records cannot be queried and are cleaned up every minute.',
   conversationCacheEnabled: 'Enable conversation cache',
   conversationCacheEnabledHint: 'Every proxied conversation is recorded.',
-  conversationCacheRetain: 'Keep conversation history',
-  conversationCacheRetainHint: 'When enabled, records are no longer deleted at midnight and history is kept indefinitely; when disabled, records are kept for 24 hours. Watch disk usage.',
+  conversationCacheRetain: 'Keep conversation history forever',
+  conversationCacheRetainHint: 'When enabled, records are kept indefinitely and the retention period does not apply. When disabled, the configured retention period applies. Watch disk usage.',
+  conversationCacheRetentionHours: 'Retention period (hours)',
+  conversationCacheRetentionHoursHint: 'Defaults to 24 hours. Enter an integer from 1 to 87600. Retention is measured from each record’s creation time. Shortening the period also affects existing records: those older than the new period can no longer be queried and will be deleted.',
+  conversationCacheRetentionHoursInvalid: 'Enter a whole number of hours from 1 to 87600. This field cannot be empty.',
   conversationCacheSaved: 'Conversation cache settings saved',
 
   paymentTitle: 'Payment settings',

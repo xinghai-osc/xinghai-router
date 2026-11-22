@@ -24,7 +24,7 @@ type limiterTestRedis struct {
 	workers  sync.WaitGroup
 }
 
-func startLimiterTestRedis(t *testing.T, addr string, handler func([]string) string) *limiterTestRedis {
+func startLimiterTestRedis(t testing.TB, addr string, handler func([]string) string) *limiterTestRedis {
 	t.Helper()
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {

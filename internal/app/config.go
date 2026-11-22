@@ -50,6 +50,7 @@ type Config struct {
 	HTTPMaxHeaderBytes       int
 	ChannelCredentialStorage string
 	SessionCookieSecure      bool
+	nodeDeploymentTargets    map[nodeDeploymentTarget]struct{}
 }
 
 // GeetestEnabled reports whether Geetest CAPTCHA verification is configured.
@@ -84,6 +85,11 @@ func isInsecureEncryptionKey(key string) bool {
 
 func LoadConfig() (Config, error) {
 	c := Config{DatabaseURL: os.Getenv("DATABASE_URL"), RedisURL: os.Getenv("REDIS_URL"), EncryptionKey: os.Getenv("ENCRYPTION_KEY"), ListenAddr: env("LISTEN_ADDR", ":8080"), RateLimitPerMinute: 60, IPRateLimitPerMinute: envInt("IP_RATE_LIMIT_PER_MINUTE", 10), DBMaxConns: envInt("DB_MAX_CONNS", 0), TrustedProxies: strings.TrimSpace(os.Getenv("TRUSTED_PROXIES")), GeetestCaptchaID: os.Getenv("GEETEST_CAPTCHA_ID"), GeetestCaptchaKey: os.Getenv("GEETEST_CAPTCHA_KEY"), CaptchaProvider: strings.ToLower(strings.TrimSpace(os.Getenv("CAPTCHA_PROVIDER"))), CorptchaSiteID: os.Getenv("CORPTCHA_SITE_ID"), CorptchaSecret: os.Getenv("CORPTCHA_SECRET"), SMTPHost: os.Getenv("SMTP_HOST"), SMTPPort: env("SMTP_PORT", "465"), SMTPUsername: os.Getenv("SMTP_USERNAME"), SMTPPassword: os.Getenv("SMTP_PASSWORD"), SMTPFrom: os.Getenv("SMTP_FROM"), ConversationCacheDir: env("CONVERSATION_CACHE_DIR", "data/conversations"), LocalPromptCache: envBool("LOCAL_PROMPT_CACHE", true), LocalPromptCacheSize: envInt("LOCAL_PROMPT_CACHE_SIZE", 4096), BootstrapAdminEmail: strings.ToLower(strings.TrimSpace(os.Getenv("BOOTSTRAP_ADMIN_EMAIL"))), BootstrapAdminName: strings.TrimSpace(os.Getenv("BOOTSTRAP_ADMIN_NAME")), BootstrapAdminPass: os.Getenv("BOOTSTRAP_ADMIN_PASSWORD")}
+	var err error
+	c.nodeDeploymentTargets, err = parseNodeDeploymentTargets(os.Getenv("NODE_DEPLOYMENT_TARGETS"))
+	if err != nil {
+		return c, fmt.Errorf("NODE_DEPLOYMENT_TARGETS: %w", err)
+	}
 	c.DeploymentMode = os.Getenv("DEPLOYMENT_MODE")
 	c.RedisFailurePolicy = os.Getenv("REDIS_FAILURE_POLICY")
 	c.SessionAffinityDir = env("SESSION_AFFINITY_DIR", "data/sessions")

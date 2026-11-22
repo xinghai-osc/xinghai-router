@@ -40,11 +40,15 @@ func defaultRewardRiskSettings() rewardRiskSettings {
 }
 
 func loadRewardRiskSettings(ctx context.Context, q riskQueryer) (rewardRiskSettings, error) {
-	cfg := defaultRewardRiskSettings()
 	var raw []byte
 	if err := q.QueryRow(ctx, `select reward_risk_settings from site_settings where id=true`).Scan(&raw); err != nil {
-		return cfg, err
+		return defaultRewardRiskSettings(), err
 	}
+	return decodeRewardRiskSettings(raw)
+}
+
+func decodeRewardRiskSettings(raw []byte) (rewardRiskSettings, error) {
+	cfg := defaultRewardRiskSettings()
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		return cfg, fmt.Errorf("decode reward risk settings: %w", err)
 	}

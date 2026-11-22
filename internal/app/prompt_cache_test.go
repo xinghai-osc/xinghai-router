@@ -1,6 +1,10 @@
 package app
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+	"time"
+)
 
 func TestNormalizedPrompt(t *testing.T) {
 	body := []byte(`{"model":"m","messages":[{"role":"system","content":"be brief"},{"role":"user","content":"hello  world"}]}`)
@@ -51,4 +55,61 @@ func TestPromptPrefixCacheDisabled(t *testing.T) {
 	if got := c.cached("m", `{"role":"user","content":"hi"}`, 100); got != 0 {
 		t.Fatalf("disabled cache must not match, got %d", got)
 	}
+}
+
+func TestPromptPrefixCacheEvictsOldestAfterWrap(t *testing.T) {
+	cache := newPromptPrefixCache(true, 3)
+	for _, key := range []string{"a", "b", "c", "d", "e", "f", "g"} {
+		cache.store("model", key, 10)
+		if got := cache.cached("model", key, 10); got != 10 {
+			t.Fatalf("new entry %q matched %d tokens", key, got)
+		}
+	}
+	for _, key := range []string{"a", "b", "c", "d"} {
+		if got := cache.cached("model", key, 10); got != 0 {
+			t.Fatalf("evicted entry %q matched %d tokens", key, got)
+		}
+	}
+	for _, key := range []string{"e", "f", "g"} {
+		if got := cache.cached("model", key, 10); got != 10 {
+			t.Fatalf("retained entry %q matched %d tokens", key, got)
+		}
+	}
+}
+
+func TestPromptPrefixCacheExpiresEntriesAcrossWrap(t *testing.T) {
+	cache := newPromptPrefixCache(true, 3)
+	for _, key := range []string{"a", "b", "c", "d", "e"} {
+		cache.store("model", key, 10)
+	}
+	bucket := cache.entries["model"]
+	for i, entry := range bucket.entries {
+		if entry.key == "c" || entry.key == "d" {
+			bucket.entries[i].stored = time.Now().Add(-2 * cache.grace)
+		}
+	}
+	if got := cache.cached("model", "c", 10); got != 0 || bucket.count != 1 {
+		t.Fatalf("expired entry matched %d tokens, %d entries retained", got, bucket.count)
+	}
+	cache.store("model", "f", 10)
+	cache.store("model", "g", 10)
+	for _, key := range []string{"e", "f", "g"} {
+		if got := cache.cached("model", key, 10); got != 10 {
+			t.Fatalf("live entry %q matched %d tokens", key, got)
+		}
+	}
+}
+
+func BenchmarkPromptPrefixCacheStoreFull(b *testing.B) {
+	cache := newPromptPrefixCache(true, 4096)
+	for i := range cache.size {
+		cache.store("model", fmt.Sprintf("prompt %d", i), 100)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			cache.store("model", "next prompt", 100)
+		}
+	})
 }

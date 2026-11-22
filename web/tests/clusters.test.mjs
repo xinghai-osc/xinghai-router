@@ -8,18 +8,22 @@ import { compileScript, compileTemplate, parse } from 'vue/compiler-sfc'
 import { renderToString } from 'vue/server-renderer'
 
 const root = new URL('../', import.meta.url)
-const pageSource = await readFile(new URL('pages/console/clusters.vue', root), 'utf8')
+
 const apiSource = await readFile(new URL('src/api.ts', root), 'utf8')
 const resourceSource = await readFile(new URL('composables/useResource.ts', root), 'utf8')
-const { descriptor } = parse(pageSource)
-const script = compileScript(descriptor, { id: 'clusters-test' })
-const template = compileTemplate({
-  id: 'clusters-test',
-  filename: 'clusters.vue',
-  source: descriptor.template.content,
-  compilerOptions: { bindingMetadata: script.bindings },
-})
-assert.deepEqual(template.errors, [])
+async function compilePage(name) {
+  const filename = `${name}.vue`
+  const { descriptor } = parse(await readFile(new URL(`pages/console/${filename}`, root), 'utf8'))
+  const script = compileScript(descriptor, { id: name })
+  const template = compileTemplate({
+    id: name, filename, source: descriptor.template.content,
+    compilerOptions: { bindingMetadata: script.bindings },
+  })
+  assert.deepEqual(template.errors, [])
+  return { script, template }
+}
+const clusterPage = await compilePage('clusters')
+const sitePage = await compilePage('site-settings')
 
 function evaluate(source, context) {
   context.exports = {}
@@ -42,21 +46,25 @@ const cluster = {
 const instance = {
   id: 'instance-a', cluster_id: cluster.id, name: 'Instance A',
   address: 'https://instance.example.test', endpoint: 'https://instance.example.test',
-  enabled: false, created_at: '',
+  enabled: false, created_at: '', deploy_status: 'idle', ssh_host: 'example.test',
+  ssh_port: 22, ssh_user: 'router', ssh_host_key: 'SHA256:fixture', ssh_auth_method: 'password',
+  deploy_path: '/srv/router', router_image: 'router:test',
 }
 
-function fixture(allowed = true) {
+function fixture(allowed = true, admin = true, { script, template } = clusterPage) {
   const calls = []
   const messages = []
   const mounted = []
   let respond = url => json(url === '/api/admin/clusters' ? { data: [cluster] }
-    : url === '/api/admin/instances' ? { data: [instance] } : { id: 'created' })
+    : url === '/api/admin/nodes' ? { data: [instance] } : { id: 'created' })
   const context = vm.createContext({
     ...vue, Error, Headers, Response,
     onMounted: callback => mounted.push(callback),
     definePageMeta: () => {},
     useI18n: () => ({ t: key => key }),
-    useAccount: () => ({ can: () => allowed }),
+    useAccount: () => ({ can: () => allowed, isAdmin: vue.ref(admin) }),
+    useSiteSettings: () => ({ settings: vue.ref({ name: 'Test' }) }),
+    useHead: () => {},
     useToast: () => ({ toast: {
       success: message => messages.push(['success', message]),
       error: message => messages.push(['error', message]),
@@ -68,13 +76,13 @@ function fixture(allowed = true) {
     },
   })
   const api = evaluate(apiSource, context)
-  Object.assign(context, evaluate(resourceSource, context))
   context.require = name => {
     if (name === 'vue') return vue
-    if (name === '~/src/api') return api
+    if (name === '~/src/api' || name === '../src/api') return api
     if (name === 'lucide-vue-next') return { Server: { render: () => vue.h('span') } }
     throw new Error(`Unexpected module ${name}`)
   }
+  Object.assign(context, evaluate(resourceSource, context))
   const component = evaluate(script.content, context).default
   const render = evaluate(template.code, context).render
   const state = component.setup({}, { expose: () => {} })
@@ -82,7 +90,7 @@ function fixture(allowed = true) {
   async function html() {
     const app = vue.createSSRApp({ ...component, setup: () => state, render })
     const container = { setup: (_, { slots }) => () => vue.h('div', slots.default?.()) }
-    for (const name of ['UiCard', 'UiTable', 'UiButton', 'UiField']) app.component(name, container)
+    for (const name of ['UiCard', 'UiTable', 'UiButton', 'UiField', 'UiBadge', 'UiTextarea', 'UiSwitch', 'ConsoleSystemGate']) app.component(name, container)
     app.component('UiAlert', { props: ['title'], setup: props => () => vue.h('div', { role: 'alert' }, props.title) })
     app.component('UiEmptyState', { props: ['title'], setup: props => () => vue.h('div', { 'data-empty': '' }, props.title) })
     app.component('UiSkeleton', { render: () => vue.h('div', { 'data-loading': '' }) })
@@ -147,7 +155,7 @@ test('accounts without system.manage do not fetch cluster resources', async () =
   assert.match(await f.html(), /admin.noAccessTitle/)
 })
 
-test('instance creation validates its cluster and address and sends the nested API contract', async () => {
+test('node creation validates its cluster and SSH configuration and sends the deployment request', async () => {
   const f = fixture()
   await f.mount()
   f.state.tab.value = 'instances'
@@ -158,19 +166,21 @@ test('instance creation validates its cluster and address and sends the nested A
   assert.deepEqual(f.messages.at(-1), ['error', 'admin.clusterRequired'])
   f.state.form.cluster_id = cluster.id
   await f.state.save()
-  assert.deepEqual(f.messages.at(-1), ['error', 'admin.instanceAddressRequired'])
+  assert.deepEqual(f.messages.at(-1), ['error', 'admin.nodeSSHRequired'])
   assert.equal(f.calls.filter(call => call.method !== 'GET').length, 0)
-  f.state.form.endpoint = ' https://new.example.test '
+  Object.assign(f.state.form, { endpoint: ' https://new.example.test ', ssh_host: 'new.example.test', ssh_user: 'router', ssh_host_key: 'SHA256:fixture', ssh_password: 'fixture' })
   await f.state.save()
-  assert.deepEqual(f.calls.find(call => call.method === 'POST'), {
-    url: '/api/admin/clusters/cluster-a/instances', method: 'POST',
-    body: { name: 'New instance', address: 'https://new.example.test' },
-  })
+  const created = f.calls.find(call => call.method === 'POST')
+  assert.equal(created.url, '/api/admin/clusters/cluster-a/nodes')
+  assert.equal(created.body.name, 'New instance')
+  assert.equal(created.body.ssh_host, 'new.example.test')
+  assert.equal(created.body.address, 'https://new.example.test')
+  assert.equal(created.body.deploy, true)
   assert.equal(f.state.open.value, false)
   assert.equal(f.calls.filter(call => call.method === 'GET').length, 4)
 })
 
-test('instance editing and deletion retain the original cluster and use matching nested URLs', async () => {
+test('node edits, deployment and deletion use the dedicated node APIs', async () => {
   const f = fixture()
   await f.mount()
   f.state.edit(instance)
@@ -178,12 +188,14 @@ test('instance editing and deletion retain the original cluster and use matching
   f.state.form.cluster_id = 'different-cluster'
   f.state.tab.value = 'clusters'
   await f.state.save()
-  assert.deepEqual(f.calls.find(call => call.method === 'PUT'), {
-    url: '/api/admin/clusters/cluster-a/instances/instance-a', method: 'PUT',
-    body: { name: 'Renamed instance', address: instance.address },
-  })
+  const updated = f.calls.find(call => call.method === 'PUT')
+  assert.equal(updated.url, '/api/admin/nodes/instance-a')
+  assert.equal(updated.body.name, 'Renamed instance')
+  assert.equal(updated.body.deploy, false)
+  await f.state.deploy(instance)
+  assert.equal(f.calls.find(call => call.method === 'POST').url, '/api/admin/nodes/instance-a/deploy')
   await f.state.remove(instance)
-  assert.equal(f.calls.find(call => call.method === 'DELETE').url, '/api/admin/clusters/cluster-a/instances/instance-a')
+  assert.equal(f.calls.find(call => call.method === 'DELETE').url, '/api/admin/nodes/instance-a')
 })
 
 test('cluster edits preserve unexposed fields and failed mutations remain visible', async () => {
@@ -215,4 +227,58 @@ test('instance path parameters are URL-encoded and sync reports a queued task', 
   assert.equal(f.calls[2].url, f.calls[1].url)
   await f.state.sync(cluster)
   assert.deepEqual(f.messages.at(-1), ['success', 'admin.clusterSyncQueued'])
+})
+
+
+test('system operators can inspect nodes but cannot create, edit, deploy or delete them', async () => {
+  const f = fixture(true, false)
+  await f.mount()
+  assert.match(await f.html(), /admin.create/)
+  f.state.tab.value = 'instances'
+  const html = await f.html()
+  assert.match(html, /Instance A/)
+  assert.doesNotMatch(html, /admin\.(create|edit|nodeDeploy<|delete)/)
+  f.state.create()
+  f.state.edit(instance)
+  assert.equal(f.state.open.value, false)
+  f.state.formTab.value = 'instances'
+  Object.assign(f.state.form, instance)
+  await f.state.save()
+  await f.state.remove(instance)
+  await f.state.deploy(instance)
+  assert.equal(f.calls.filter(call => call.method !== 'GET').length, 0)
+})
+
+for (const admin of [false, true]) {
+  test(`${admin ? 'admin' : 'operator'} ordinary site updates omit every recovery field`, async () => {
+    const f = fixture(true, admin, sitePage)
+    const saved = { ...f.state.data.value, smtp_host: 'mail.example.test', public_base_url: 'https://example.test' }
+    f.respond(() => json(saved))
+    await f.mount()
+    const html = await f.html()
+    if (admin) assert.match(html, /system.smtpPassword/)
+    else assert.doesNotMatch(html, /system.smtpPassword|system.publicBaseUrl/)
+    if (!admin) {
+      f.state.recovery.smtp_host = 'other.example.test'
+      f.state.smtpPassword.value = 'fixture'
+    }
+    f.state.form.name = 'Updated'
+    await f.state.save()
+    const body = f.calls.find(call => call.method === 'PUT').body
+    assert.equal(body.name, 'Updated')
+    assert.deepEqual(Object.keys(body).filter(key => key.startsWith('smtp_') || key === 'public_base_url'), [])
+  })
+}
+
+test('admin recovery changes transmit only modified fields, including deliberate clears', async () => {
+  const f = fixture(true, true, sitePage)
+  f.respond(() => json({ ...f.state.data.value, smtp_host: 'mail.example.test', public_base_url: 'https://example.test' }))
+  await f.mount()
+  f.state.recovery.public_base_url = ''
+  f.state.smtpPassword.value = 'fixture'
+  await f.state.save()
+  const body = f.calls.find(call => call.method === 'PUT').body
+  assert.deepEqual(Object.keys(body).filter(key => key.startsWith('smtp_') || key === 'public_base_url').sort(), ['public_base_url', 'smtp_password'])
+  assert.equal(body.public_base_url, '')
+  assert.equal(body.smtp_password, 'fixture')
 })

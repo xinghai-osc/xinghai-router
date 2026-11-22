@@ -8,6 +8,7 @@
 - 基于用户会话、管理员角色和细粒度权限保护的管理 API。
 - 多工作空间：个人/团队空间切换、成员角色管理、API 密钥与用量隔离；钱包和订阅仍归个人，平台管理沿用全站权限。详见[多工作空间说明](docs/workspaces.md)。
 - OpenAI-compatible `GET /v1/models`、`POST /v1/chat/completions`、`POST /v1/responses`，Anthropic-compatible `POST /v1/messages`，以及 TypeSafe-compatible `POST /v1/systemone`。
+- OpenAI 兼容语音中转支持 `POST /v1/audio/transcriptions`（ASR，上传 WAV 或 MP3）和 `POST /v1/audio/speech`（TTS，返回音频）。[接入与 cURL 示例](docs/media-generation.md)
 - 透明 SSE、每 Key 每分钟基础限流、请求 ID、安全响应头、panic 恢复、模型别名和同优先级权重路由。
 - 渠道支持独立的并发上限（`channels.max_concurrency`，留空或 0 表示不限）：达到上限的渠道只被跳过并改用其他可用渠道；全部候选渠道都满时返回 429 `channel_concurrency_exceeded`，不会把渠道繁忙记为渠道失败。
 - 控制台“并发监控”页实时显示渠道、用户与分组的并发占用（`GET /admin/concurrency`，需 `logs.read`），页面打开时每 5 秒自动刷新；未设置上限的实体只要有请求进行中也会列出。单实例模式下计数来自本进程；集群模式下已设上限的实体取自共享 Redis 租约、覆盖全部副本，未设上限的实体因为没有租约可共享而只统计本副本，页面对两者分别标注。
@@ -37,7 +38,7 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-The web console is available at `http://localhost:3000`; the OpenAI/Anthropic gateway is available at `http://localhost:8080`. PostgreSQL and Redis are internal-only (no published ports). Data paths default to `/mnt/data/AI-Router/{postgres,redis}` and can be overridden with `POSTGRES_DATA_PATH` / `REDIS_DATA_PATH`. Redis requires a password (`REDIS_PASSWORD`); the router receives `REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0` by default. Migrations run automatically when the router starts. User id 1 is reserved for the administrator; claim it by setting `BOOTSTRAP_ADMIN_EMAIL` (and optionally `BOOTSTRAP_ADMIN_PASSWORD`) in `.env` before the first start. Self-registrations always create normal user accounts and can never claim admin.
+The web console is available at `http://localhost:3000`; the OpenAI/Anthropic gateway is available at `http://localhost:8080`. PostgreSQL and Redis are internal-only (no published ports). Data paths default to `/mnt/data/AI-Router/{postgres,redis}` and can be overridden with `POSTGRES_DATA_PATH` / `REDIS_DATA_PATH`. Redis requires a password (`REDIS_PASSWORD`); the router receives `REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0` by default. Migrations run automatically when the router starts. On a fresh install, set both `BOOTSTRAP_ADMIN_EMAIL` and a unique `BOOTSTRAP_ADMIN_PASSWORD` before the first start to claim reserved user id 1. Change the password on first sign-in and remove the bootstrap variables from the deployment. Public registrations create normal user accounts.
 
 For an external reverse-proxy network (e.g. Baota `baota_net`):
 
@@ -47,6 +48,16 @@ docker compose -f docker-compose.yml -f docker-compose.baota.yml up -d --build
 ```
 
 Stop the stack with `docker compose down` (use `docker compose down -v` only when intentionally deleting named volumes).
+
+### SSH 节点部署许可
+
+`NODE_DEPLOYMENT_TARGETS` 是由部署方设置的 JSON 数组。默认 `[]` 禁止通过 SSH 下发节点配置；如仅登记节点，创建时显式传 `deploy: false`。部署会向获准主机发送数据库、Redis 连接串和集群加密密钥。请通过可信渠道确认 SSH 主机指纹和镜像摘要，然后在每个负责部署的控制端副本上配置同一份列表并重新创建或重启服务。
+
+```dotenv
+NODE_DEPLOYMENT_TARGETS='[{"ssh_host":"node.example.com","ssh_port":22,"ssh_user":"deploy","ssh_host_key":"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","router_image":"ghcr.io/xinghai-osc/xinghai-router@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]'
+```
+
+示例中的指纹和摘要仅用于展示格式。登记时的主机、端口、用户、指纹和完整镜像引用必须与同一条记录逐项匹配。已有节点若使用 `:latest` 等标签，须先更新为获准的摘要引用。修改 SSH 主机、端口、用户、指纹或认证方式时，须在同一请求中提交该目标的 SSH 密码或私钥。移除绑定并重启负责部署的副本，可阻止之后的部署；已下发的凭据需在相应系统单独轮换。
 
 ### 单实例与多副本部署边界
 
@@ -393,7 +404,7 @@ Use this before exposing the stack on a public host.
 ### Secrets and identity
 
 1. Copy `.env.example` to `.env` and set unique values for `ENCRYPTION_KEY` (≥24 characters, not a documented placeholder), `POSTGRES_PASSWORD` (URL-safe), and `REDIS_PASSWORD`. Compose and the router refuse insecure/missing secrets. **Never rotate `ENCRYPTION_KEY` without re-encrypting provider and payment secrets** — lost keys make ciphertext unrecoverable.
-2. Set `BOOTSTRAP_ADMIN_EMAIL` (and ideally `BOOTSTRAP_ADMIN_PASSWORD`) in `.env` before the first start to claim the reserved administrator account. Self-registrations create `role=user` accounts and can never claim admin. Later registrations also create `role=user` accounts unless an administrator promotes them.
+2. Set `BOOTSTRAP_ADMIN_EMAIL` and `BOOTSTRAP_ADMIN_PASSWORD` before the first registration on a fresh database. Bootstrap closes permanently after initializing reserved id 1. Upgrades with existing accounts retain their current identities and administration settings. Remove the bootstrap settings from every replica before upgrading. Drain old router versions before applying migrations 146 and 147 so all replicas use the same recovery protocol. Ask users with pending password resets to request a fresh link after the upgrade. Each new link belongs to a specific account and expires on a password, email, role, or account activation change.
 3. Prefer enabling Geetest and/or SMTP email verification for public registration (`GEETEST_*`, `SMTP_*` or admin site settings).
 
 ### Network and TLS

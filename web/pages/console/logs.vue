@@ -141,15 +141,13 @@ function logsQuery(): string {
 
 function statsQuery(): string {
   const params = filterParams()
-  // usage-stats has no channel/group/status filters; drop what it would ignore.
-  params.delete('channel_id')
-  params.delete('group_id')
-  params.delete('status')
   const query = params.toString()
   return query ? `?${query}` : ''
 }
 
 const EMPTY_STATS: UsageStats = {
+  rpm: 0,
+  tpm: 0,
   total_requests: 0,
   success_count: 0,
   error_count: 0,
@@ -164,9 +162,20 @@ const EMPTY_STATS: UsageStats = {
 
 const usage = useResource(() => endpoints.getUsageLogs(logsQuery()), {
   data: [] as UsageLog[], total: 0, page: 1, page_size: 50,
+}, { immediate: false })
+const stats = useResource(() => endpoints.getUsageStats(statsQuery()), EMPTY_STATS, { immediate: false })
+const requests = useResource(() => endpoints.getRequestLogs(), { data: [] as RequestLog[] }, { immediate: false })
+
+onMounted(() => {
+  watch([allowed, tab], ([canRead, activeTab]) => {
+    if (!canRead) return
+    if (activeTab === 'usage') {
+      void Promise.all([usage.load(), stats.load()])
+    } else {
+      void requests.load()
+    }
+  }, { immediate: true })
 })
-const stats = useResource(() => endpoints.getUsageStats(statsQuery()), EMPTY_STATS)
-const requests = useResource(() => endpoints.getRequestLogs(), { data: [] as RequestLog[] })
 
 const totalPages = computed(() => Math.max(1, Math.ceil(usage.data.value.total / Math.max(1, usage.data.value.page_size))))
 
@@ -179,6 +188,8 @@ const statTiles = computed(() => [
   { key: 'statCompletionTokens', value: formatCompact(stats.data.value.completion_tokens) },
   { key: 'statTotalTokens', value: formatCompact(stats.data.value.total_tokens) },
   { key: 'statCost', value: formatMoney(stats.data.value.total_cost, 4) },
+  { key: 'statRpm', value: formatNumber(stats.data.value.rpm), hint: t('console.usageRateHint') },
+  { key: 'statTpm', value: formatNumber(stats.data.value.tpm), hint: t('console.usageRateHint') },
   { key: 'statAvgDuration', value: t('admin.durationMs', { value: Math.round(stats.data.value.avg_duration_ms) }) },
   { key: 'statAvgFirstToken', value: stats.data.value.avg_first_token_ms == null ? t('common.none') : t('admin.firstTokenMs', { value: Math.round(stats.data.value.avg_first_token_ms) }) },
 ])
@@ -235,11 +246,15 @@ const detailOpen = computed({
   <div v-else class="space-y-4">
     <UiTabs v-model="tab" :items="tabs">
       <div v-if="tab === 'usage'" class="space-y-4 pt-4">
+        <UiAlert v-if="stats.error.value" tone="danger" :title="t('common.loadFailed')">{{ stats.error.value }}</UiAlert>
         <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <div v-for="tile in statTiles" :key="tile.key" class="rounded-card border border-line bg-surface px-4 py-3">
-            <p class="text-2xs text-muted">{{ t(`admin.${tile.key}`) }}</p>
+            <UiTooltip v-if="tile.hint" :content="tile.hint">
+              <p tabindex="0" class="w-fit text-2xs text-muted">{{ t(`admin.${tile.key}`) }}</p>
+            </UiTooltip>
+            <p v-else class="text-2xs text-muted">{{ t(`admin.${tile.key}`) }}</p>
             <UiSkeleton v-if="stats.pending.value" class="mt-2 h-5 w-20" />
-            <p v-else class="numeric mt-1 text-lg text-ink">{{ tile.value }}</p>
+            <p v-else class="numeric mt-1 text-lg text-ink">{{ stats.error.value ? '—' : tile.value }}</p>
           </div>
         </div>
 

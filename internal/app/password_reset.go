@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"html"
 	"net/http"
@@ -9,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 const passwordResetTTL = 30 * time.Minute
@@ -51,7 +54,12 @@ func normalizeTrustedPublicOrigin(base string) (string, error) {
 }
 
 func (s *Service) requestPasswordReset(w http.ResponseWriter, r *http.Request) {
-	if !s.loadSystemConfig(r.Context()).emailVerificationEnabled() {
+	sys, configErr := s.checkedSystemConfig(r.Context())
+	if configErr != nil {
+		writeError(w, http.StatusServiceUnavailable, "security_config_unavailable", "security configuration is unavailable")
+		return
+	}
+	if !sys.emailVerificationEnabled() {
 		writeError(w, http.StatusNotFound, "not_found", "password reset is not enabled")
 		return
 	}
@@ -82,37 +90,12 @@ func (s *Service) requestPasswordReset(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "public_url_unavailable", "password reset links are not configured")
 		return
 	}
-	var userID string
-	if err := s.db.QueryRow(ctx, `select id from users where email=$1 and enabled`, email).Scan(&userID); err != nil {
-		// Always return the same success shape so callers cannot probe whether
-		// an address is registered. Nothing is sent for unknown accounts.
+	userID, token, err := s.issuePasswordResetToken(ctx, email)
+	if errors.Is(err, pgx.ErrNoRows) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "sent"})
 		return
 	}
-	token, err := randomSecret("xh_reset_")
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "could not create reset token")
-		return
-	}
-	// Atomically consume any existing active token and insert the new one so
-	// concurrent requests never leave two valid tokens. The transaction is
-	// committed before sending the email — if the email fails, the token is
-	// already stored but the user simply re-requests.
-	tx, err := s.db.Begin(ctx)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "could not create reset token")
-		return
-	}
-	defer tx.Rollback(ctx)
-	if _, err = tx.Exec(ctx, `update password_reset_tokens set consumed_at=now() where email=$1 and consumed_at is null`, email); err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "could not create reset token")
-		return
-	}
-	if _, err = tx.Exec(ctx, `insert into password_reset_tokens(email, token_hash, expires_at) values($1, $2, $3)`, email, hashSecret(token), time.Now().Add(passwordResetTTL)); err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "could not create reset token")
-		return
-	}
-	if err = tx.Commit(ctx); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not create reset token")
 		return
 	}
@@ -133,6 +116,30 @@ func (s *Service) requestPasswordReset(w http.ResponseWriter, r *http.Request) {
 	}
 	s.auditActor(r, userID, "account.password_reset_requested", "user", userID, nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "sent"})
+}
+
+func (s *Service) issuePasswordResetToken(ctx context.Context, email string) (string, string, error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return "", "", err
+	}
+	defer tx.Rollback(ctx)
+	var userID string
+	var version int64
+	if err := tx.QueryRow(ctx, `select id,credential_version from users where email=$1 and enabled for update`, email).Scan(&userID, &version); err != nil {
+		return "", "", err
+	}
+	token, err := randomSecret("xh_reset_")
+	if err != nil {
+		return "", "", err
+	}
+	if _, err := tx.Exec(ctx, `update password_reset_tokens set consumed_at=now() where user_id=$1 and consumed_at is null`, userID); err != nil {
+		return "", "", err
+	}
+	if _, err := tx.Exec(ctx, `insert into password_reset_tokens(user_id,credential_version,email,token_hash,expires_at) values($1,$2,$3,$4,$5)`, userID, version, email, hashSecret(token), time.Now().Add(passwordResetTTL)); err != nil {
+		return "", "", err
+	}
+	return userID, token, tx.Commit(ctx)
 }
 
 func (s *Service) confirmPasswordReset(w http.ResponseWriter, r *http.Request) {
@@ -168,17 +175,25 @@ func (s *Service) confirmPasswordReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(ctx)
-	// Lock the token row with FOR UPDATE so concurrent confirmations are
-	// serialized: the second one sees consumed_at is no longer null and fails.
-	var email string
-	var expiresAt time.Time
-	if err := tx.QueryRow(ctx, `select email, expires_at from password_reset_tokens where token_hash=$1 and consumed_at is null order by created_at desc limit 1 for update`, tokenHash).Scan(&email, &expiresAt); err != nil || time.Now().After(expiresAt) {
+	var userID string
+	var version int64
+	var wasVerified bool
+	err = tx.QueryRow(ctx, `select u.id,u.credential_version,u.email_verified_at is not null from users u join password_reset_tokens t on t.user_id=u.id and t.credential_version=u.credential_version
+		where t.token_hash=$1 and t.consumed_at is null and t.expires_at>clock_timestamp() and u.enabled for update of u`, tokenHash).Scan(&userID, &version, &wasVerified)
+	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusBadRequest, "invalid_token", "this reset link is invalid or has expired")
 		return
 	}
-	var userID string
-	var wasVerified bool
-	if err := tx.QueryRow(ctx, `select id,email_verified_at is not null from users where email=$1 and enabled for update`, email).Scan(&userID, &wasVerified); err != nil {
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not verify reset token")
+		return
+	}
+	claimed, err := tx.Exec(ctx, `update password_reset_tokens set consumed_at=now() where token_hash=$1 and user_id=$2 and credential_version=$3 and consumed_at is null and expires_at>clock_timestamp()`, tokenHash, userID, version)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not consume reset token")
+		return
+	}
+	if claimed.RowsAffected() != 1 {
 		writeError(w, http.StatusBadRequest, "invalid_token", "this reset link is invalid or has expired")
 		return
 	}
@@ -200,14 +215,11 @@ func (s *Service) confirmPasswordReset(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if _, err = tx.Exec(ctx, `update password_reset_tokens set consumed_at=now() where token_hash=$1`, tokenHash); err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "could not consume reset token")
-		return
-	}
 	if err = tx.Commit(ctx); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not reset password")
 		return
 	}
+	s.invalidateAPIKeyContext()
 	s.auditActor(r, userID, "account.password_reset", "user", userID, map[string]any{"sessions_revoked": true, "api_keys_revoked": true, "oauth_connections_revoked": !wasVerified})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }

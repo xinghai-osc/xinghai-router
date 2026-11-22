@@ -74,7 +74,7 @@ func TestIntegrationAuthPreHijackRecovery(t *testing.T) {
 		t.Fatalf("consumed code enabled prehijack: %v", err)
 	}
 	token := "xh_reset_fake_recovery_token"
-	rewardRiskExec(t, s, `insert into password_reset_tokens(email,token_hash,expires_at) values('victim@example.test',$1,now()+interval '30 minutes')`, hashSecret(token))
+	rewardRiskExec(t, s, `insert into password_reset_tokens(user_id,credential_version,email,token_hash,expires_at) select id,credential_version,email,$1,now()+interval '30 minutes' from users where email='victim@example.test'`, hashSecret(token))
 	body := fmt.Sprintf(`{"token":%q,"password":"genuine-password"}`, token)
 	rewardRiskJSON(t, authSecurityRequest(s, "POST", "/auth/password-reset/confirm", body, nil), http.StatusOK)
 	if got := rewardRiskCount(t, s, `select count(*) from users where id=$1 and email_verified_at is not null`, userID); got != 1 {
@@ -113,7 +113,29 @@ func TestIntegrationAuthPreHijackRecovery(t *testing.T) {
 	}
 }
 
-func TestIntegrationAuthVerificationSources(t *testing.T) {
+func TestIntegrationOAuthUnlinkRequiresLocalReauthentication(t *testing.T) {
+	s := integrationService(t, rewardRiskIntegrationPool(t))
+	ctx := context.Background()
+	userID, _ := integrationUser(t, s.db, "oauth-rebind@example.test", 0)
+	if _, err := s.db.Exec(ctx, `update users set email_verified_at=now() where id=$1`, userID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(ctx, `insert into user_oauth_revocations(user_id,provider,provider_user_id) values($1,'github','rebind-1')`, userID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.findOrCreateOAuthUser(ctx, "github", "rebind-1", "oauth-rebind@example.test", true, "user", ""); !errors.Is(err, errOAuthRebindRequired) {
+		t.Fatalf("revoked OAuth identity was rebound without local auth: %v", err)
+	}
+	matched, err := s.findOrCreateOAuthUser(ctx, "github", "rebind-1", "oauth-rebind@example.test", true, "user", "", &oauthRewardRiskInput{RebindUserID: userID})
+	if err != nil || matched != userID {
+		t.Fatalf("locally reauthenticated OAuth identity did not rebind: user=%s err=%v", matched, err)
+	}
+	var count int
+	if err := s.db.QueryRow(ctx, `select count(*) from user_oauth_connections where user_id=$1 and provider='github' and provider_user_id='rebind-1'`, userID).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("OAuth binding count=%d err=%v", count, err)
+	}
+}
+func TestIntegrationAuthOAuthEmailVerification(t *testing.T) {
 	s := integrationService(t, rewardRiskIntegrationPool(t))
 	ctx := context.Background()
 	s.cfg.SMTPHost, s.cfg.SMTPFrom = "unused.invalid", "unused@example.test"
@@ -176,7 +198,7 @@ func TestIntegrationAuthResetPasswordlessAndVerifiedAccounts(t *testing.T) {
 			rewardRiskExec(t, s, `insert into user_oauth_connections(user_id,provider,provider_user_id) values($1,'github',$2)`, id, id)
 			integrationKey(t, s.db, id, "sk-xh-reset-passwordless-"+id)
 			token := "xh_reset_fake_" + id
-			rewardRiskExec(t, s, `insert into password_reset_tokens(email,token_hash,expires_at) values($1,$2,now()+interval '30 minutes')`, email, hashSecret(token))
+			rewardRiskExec(t, s, `insert into password_reset_tokens(user_id,credential_version,email,token_hash,expires_at) select id,credential_version,email,$2,now()+interval '30 minutes' from users where email=$1`, email, hashSecret(token))
 			body := fmt.Sprintf(`{"token":%q,"password":"new-password123"}`, token)
 			rewardRiskJSON(t, authSecurityRequest(s, "POST", "/auth/password-reset/confirm", body, nil), http.StatusOK)
 			var passwordHash string
@@ -279,13 +301,13 @@ func TestIntegrationAuthTrustedOrigins(t *testing.T) {
 func TestIntegrationAuthResetExpiredAndConcurrent(t *testing.T) {
 	s := integrationService(t, rewardRiskIntegrationPool(t))
 	id, _ := integrationUser(t, s.db, "reset-race@example.test", 0)
-	rewardRiskExec(t, s, `insert into password_reset_tokens(email,token_hash,expires_at) values('reset-race@example.test',$1,$2)`, hashSecret("fake-expired"), time.Now().Add(-time.Minute))
+	rewardRiskExec(t, s, `insert into password_reset_tokens(user_id,credential_version,email,token_hash,expires_at) select id,credential_version,email,$1,$2 from users where email='reset-race@example.test'`, hashSecret("fake-expired"), time.Now().Add(-time.Minute))
 	rewardRiskJSON(t, authSecurityRequest(s, "POST", "/auth/password-reset/confirm", `{"token":"fake-expired","password":"new-password123"}`, nil), http.StatusBadRequest)
 	if got := rewardRiskCount(t, s, `select count(*) from users where id=$1 and email_verified_at is not null`, id); got != 0 {
 		t.Fatal("expired token verified email")
 	}
 	rewardRiskExec(t, s, `update password_reset_tokens set consumed_at=now() where email='reset-race@example.test'`)
-	rewardRiskExec(t, s, `insert into password_reset_tokens(email,token_hash,expires_at) values('reset-race@example.test',$1,now()+interval '30 minutes')`, hashSecret("fake-concurrent"))
+	rewardRiskExec(t, s, `insert into password_reset_tokens(user_id,credential_version,email,token_hash,expires_at) select id,credential_version,email,$1,now()+interval '30 minutes' from users where email='reset-race@example.test'`, hashSecret("fake-concurrent"))
 	responses := rewardRiskParallel(t, 2, func() *httptest.ResponseRecorder {
 		return authSecurityRequest(s, "POST", "/auth/password-reset/confirm", `{"token":"fake-concurrent","password":"new-password123"}`, nil)
 	})
@@ -375,7 +397,7 @@ func TestIntegrationAuthRecoveryRollsBackOnRevocationFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	rewardRiskExec(t, s, `insert into user_oauth_connections(user_id,provider,provider_user_id) values($1,'github','rollback')`, id)
-	rewardRiskExec(t, s, `insert into password_reset_tokens(email,token_hash,expires_at) values('rollback@example.test',$1,now()+interval '30 minutes')`, hashSecret("fake-rollback"))
+	rewardRiskExec(t, s, `insert into password_reset_tokens(user_id,credential_version,email,token_hash,expires_at) select id,credential_version,email,$1,now()+interval '30 minutes' from users where email='rollback@example.test'`, hashSecret("fake-rollback"))
 	rewardRiskExec(t, s, `create function reject_test_key_revocation() returns trigger language plpgsql as $$ begin raise exception 'test revocation failure'; end $$; create trigger reject_test_key_revocation before update on api_keys for each row execute function reject_test_key_revocation()`)
 	w := authSecurityRequest(s, "POST", "/auth/password-reset/confirm", `{"token":"fake-rollback","password":"new-password123"}`, nil)
 	rewardRiskJSON(t, w, http.StatusInternalServerError)

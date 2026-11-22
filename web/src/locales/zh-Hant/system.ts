@@ -212,6 +212,17 @@ export default {
   autoDisableKeywordsHint: '逗號分隔；上游錯誤信息包含任一關鍵詞時自動停用該渠道。',
   reliabilitySaved: '可靠性設定已保存',
 
+  conversationCacheTitle: '對話快取設定',
+  conversationCacheLead: '開啟後，閘道會記錄使用者對話的請求與回應。預設從每筆記錄的建立時間起保留 24 小時，到期後無法查詢，過期記錄每分鐘清理一次。',
+  conversationCacheEnabled: '啟用對話快取',
+  conversationCacheEnabledHint: '開啟後所有透過閘道的對話請求都會被記錄。',
+  conversationCacheRetain: '永久儲存歷史對話',
+  conversationCacheRetainHint: '開啟後永久儲存記錄，保留時長不生效；關閉後依設定的時長保留。請留意磁碟用量。',
+  conversationCacheRetentionHours: '保留時長（小時）',
+  conversationCacheRetentionHoursHint: '預設 24 小時，可填寫 1–87600 的整數。依每筆記錄的建立時間計算，縮短時長也會影響既有記錄，超過新時長的記錄將無法查詢並被清理。',
+  conversationCacheRetentionHoursInvalid: '請填寫 1–87600 之間的整數小時數，不可留空。',
+  conversationCacheSaved: '對話快取設定已儲存',
+
   paymentTitle: '支付設定',
   paymentLead: '配置易支付商戶信息與對用戶開放的支付方式。',
   paymentEnabled: '啟用支付',

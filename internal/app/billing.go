@@ -93,17 +93,18 @@ type BillingAdjustment struct {
 }
 
 type BillingSnapshot struct {
-	Usage          UsageFacts         `json:"usage"`
-	Cost           float64            `json:"cost"`
-	Amount         string             `json:"amount"`
-	ComputedAmount string             `json:"computed_amount"`
-	Status         string             `json:"status"`
-	Error          string             `json:"error,omitempty"`
-	Pricing        BillingPricing     `json:"pricing"`
-	Exchange       BillingExchange    `json:"exchange"`
-	Multipliers    BillingMultipliers `json:"multipliers"`
-	Rounding       BillingRounding    `json:"rounding"`
-	Adjustment     *BillingAdjustment `json:"adjustment,omitempty"`
+	StreamObservation *streamObservation `json:"stream_observation,omitempty"`
+	Usage             UsageFacts         `json:"usage"`
+	Cost              float64            `json:"cost"`
+	Amount            string             `json:"amount"`
+	ComputedAmount    string             `json:"computed_amount"`
+	Status            string             `json:"status"`
+	Error             string             `json:"error,omitempty"`
+	Pricing           BillingPricing     `json:"pricing"`
+	Exchange          BillingExchange    `json:"exchange"`
+	Multipliers       BillingMultipliers `json:"multipliers"`
+	Rounding          BillingRounding    `json:"rounding"`
+	Adjustment        *BillingAdjustment `json:"adjustment,omitempty"`
 }
 
 func parseDimensionPrices(raw json.RawMessage) (DimensionPrices, error) {

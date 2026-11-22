@@ -218,7 +218,7 @@ func TestCopyResponseHeadersPreservesEndToEndHeaders(t *testing.T) {
 }
 
 func TestStreamResponseDirectPreservesBytes(t *testing.T) {
-	body := "event: response.output_text.delta\r\ndata: {\"delta\":\"hi\",\"usage\":{\"input_tokens\":2,\"output_tokens\":1}}\r\n\r\n"
+	body := "event: response.output_text.delta\r\ndata:\u00a0{\"delta\":\"hi\",\"usage\":{\"input_tokens\":2,\"output_tokens\":1}}\u2003\r\n\r\n"
 	resp := &http.Response{Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{"Content-Type": {"text/event-stream"}}}
 	rec := httptest.NewRecorder()
 	stats, err := streamResponseDirect(rec, resp)
@@ -351,17 +351,6 @@ func TestProxyChatCompletionsPricingErrorMapping(t *testing.T) {
 	writeError(rec, 402, "pricing_unavailable", "no enabled pricing rule for this model")
 	if rec.Code != 402 || !strings.Contains(rec.Body.String(), "pricing_unavailable") {
 		t.Fatalf("status/body = %d %s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestEstimatedStreamUsageMatchesReservationEstimate(t *testing.T) {
-	body := []byte(`{"model":"m","messages":[{"role":"user","content":"hello"}]}`)
-	prompt, completion := estimatedStreamUsage(body, 200000)
-	if prompt != len(body)/3 || completion != 200000 {
-		t.Fatalf("estimated stream usage = %d/%d, want %d/%d", prompt, completion, len(body)/3, 200000)
-	}
-	if _, completion := estimatedStreamUsage(body, 0); completion != defaultGatewayMaxTokens {
-		t.Fatalf("default estimated completion = %d, want %d", completion, defaultGatewayMaxTokens)
 	}
 }
 

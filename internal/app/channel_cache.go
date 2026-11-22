@@ -14,9 +14,10 @@ type channelRouteKey struct {
 // model. Coverage is scoped to the key's group: only subscriptions whose plan is
 // bound to that group (or to no group for an ungrouped key) may be consumed.
 type subscriptionRouteKey struct {
-	userID  string
-	groupID string
-	model   string
+	userID         string
+	groupID        string
+	model          string
+	subscriptionID string
 }
 
 // quotaRouteKey identifies a key's quota absence status. The cache is used only

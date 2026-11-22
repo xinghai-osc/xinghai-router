@@ -131,22 +131,22 @@ const heatmapActiveDays = computed(() => heatmap.value.filter(point => point.req
 
 const quickLinks = computed(() => [
   { to: '/console/keys?create=1', icon: KeyRound, tone: 'bg-clay-soft text-clay', title: t('console.quickCreateKey'), hint: t('console.quickCreateKeyHint') },
-  { to: '/console/wallet', icon: Wallet, tone: 'bg-success-soft text-success', title: t('console.quickTopUp'), hint: t('console.quickTopUpHint') },
-  { to: '/console/usage', icon: Activity, tone: 'bg-warn-soft text-warn', title: t('console.quickUsage'), hint: t('console.quickUsageHint') },
+  { to: '/console/wallet', icon: Wallet, tone: 'bg-clay-soft text-clay', title: t('console.quickTopUp'), hint: t('console.quickTopUpHint') },
+  { to: '/console/usage', icon: Activity, tone: 'bg-clay-soft text-clay', title: t('console.quickUsage'), hint: t('console.quickUsageHint') },
   { to: '/console/ledger', icon: ReceiptText, tone: 'bg-clay-soft text-clay', title: t('console.quickLedger'), hint: t('console.quickLedgerHint') },
 ])
 </script>
 
 <template>
-  <div class="space-y-6 lg:space-y-8">
-    <section class="border-b border-line pb-6 lg:pb-8">
-      <div class="flex flex-col gap-5 2xl:flex-row 2xl:items-center 2xl:justify-between">
+  <div class="console-overview space-y-8 lg:space-y-10">
+    <section class="border-b border-line/80 pb-8 lg:pb-10">
+      <div class="flex flex-col gap-7 2xl:flex-row 2xl:items-end 2xl:justify-between">
         <div class="min-w-0 max-w-2xl">
-          <p class="mb-2 text-xs font-semibold text-clay">{{ t('console.overviewTitle') }}</p>
-          <h2 class="text-2xl leading-snug font-semibold tracking-tight text-ink [overflow-wrap:anywhere] sm:text-3xl">
+          <p class="mb-4 text-2xs font-semibold tracking-[0.18em] text-clay uppercase">{{ t('console.overviewTitle') }}</p>
+          <h2 class="display text-4xl leading-[1.2] tracking-tight text-ink [overflow-wrap:anywhere] sm:text-5xl xl:text-[3.25rem]">
             {{ accountName ? t('console.overviewWelcome', { name: accountName }) : t('console.overviewWelcomeFallback') }}
           </h2>
-          <p class="mt-2 text-sm leading-6 text-muted">{{ t('console.overviewDescription') }}</p>
+          <p class="mt-4 max-w-xl text-sm leading-7 text-muted">{{ t('console.overviewDescription') }}</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 2xl:shrink-0">
           <UiButton variant="ghost" :loading="dashboardRefreshing" :aria-label="t('console.overviewRefresh')" @click="refreshDashboard">
@@ -178,71 +178,69 @@ const quickLinks = computed(() => [
           <UiButton variant="secondary" size="sm" @click="refreshSummary()">{{ t('console.overviewRetry') }}</UiButton>
         </div>
       </UiAlert>
-      <div class="grid gap-6 2xl:grid-cols-2">
-        <div class="min-w-0 space-y-3">
-          <h2 class="text-sm font-semibold text-ink">{{ t('console.overviewFundsTitle') }}</h2>
-          <div class="grid grid-cols-2 gap-3 [&>*:first-child]:col-span-2 sm:grid-cols-3 sm:[&>*:first-child]:col-span-1">
-            <ConsoleUserStatCard
+      <div class="grid gap-5 2xl:grid-cols-2">
+        <div class="min-w-0 rounded-[1.5rem] border border-line/80 bg-surface/70 p-5 sm:p-7">
+          <h2 class="mb-6 text-2xs font-semibold tracking-[0.12em] text-muted uppercase">{{ t('console.overviewFundsTitle') }}</h2>
+          <div class="grid grid-cols-2 gap-6 [&>*:first-child]:col-span-2 sm:grid-cols-3 sm:[&>*:first-child]:col-span-1">
+            <ConsoleUserOverviewMetric
               :label="t('console.balance')"
               :value="accountError ? t('console.overviewUnavailable') : formatMoney(account?.balance ?? 0)"
               :hint="t('console.balanceHint')"
               :icon="Wallet"
               :loading="!account && !accountError"
-              tone="success"
+              featured
             />
-            <ConsoleUserStatCard
+            <ConsoleUserOverviewMetric
               :label="t('console.reserved')"
               :value="accountError ? t('console.overviewUnavailable') : formatMoney(account?.reserved ?? 0)"
               :hint="t('console.reservedHint')"
               :icon="Lock"
               :loading="!account && !accountError"
-              tone="warn"
             />
-            <ConsoleUserStatCard
+            <ConsoleUserOverviewMetric
               :label="t('console.pendingSettlement')"
               :value="accountError ? t('console.overviewUnavailable') : formatMoney(account?.pending_settlement ?? 0)"
               :hint="t('console.pendingSettlementHint')"
               :icon="ReceiptText"
               :loading="!account && !accountError"
-              tone="warn"
             />
           </div>
         </div>
-        <div class="min-w-0 space-y-3">
-          <h2 class="text-sm font-semibold text-ink">{{ t('console.overviewUsageTitle') }}</h2>
-          <div class="grid grid-cols-2 gap-3 [&>*:first-child]:col-span-2 sm:grid-cols-3 sm:[&>*:first-child]:col-span-1">
-            <ConsoleUserStatCard
+        <div class="min-w-0 rounded-[1.5rem] border border-line/80 bg-surface/70 p-5 sm:p-7">
+          <h2 class="mb-6 text-2xs font-semibold tracking-[0.12em] text-muted uppercase">{{ t('console.overviewUsageTitle') }}</h2>
+          <div class="grid grid-cols-2 gap-6 [&>*:first-child]:col-span-2 sm:grid-cols-3 sm:[&>*:first-child]:col-span-1">
+            <ConsoleUserOverviewMetric
               :label="t('console.periodRequests')"
               :value="summaryError ? t('console.overviewUnavailable') : formatNumber(summary.requests)"
               :hint="t('console.overviewRequestsHint')"
               :icon="Activity"
               :loading="!mounted || summaryPending"
             />
-            <ConsoleUserStatCard
+            <ConsoleUserOverviewMetric
               :label="t('console.periodTokens')"
               :value="summaryError ? t('console.overviewUnavailable') : formatCompact(summary.tokens)"
               :hint="t('console.overviewTokensHint')"
               :icon="ChartColumn"
               :loading="!mounted || summaryPending"
             />
-            <ConsoleUserStatCard
+            <ConsoleUserOverviewMetric
               :label="t('console.periodSpend')"
               :value="summaryError ? t('console.overviewUnavailable') : formatMoney(summary.cost)"
               :hint="t('console.overviewSpendHint')"
               :icon="Coins"
               :loading="!mounted || summaryPending"
-              tone="success"
+              featured
             />
           </div>
         </div>
       </div>
     </section>
 
-    <div class="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(18rem,22rem)]">
+    <div class="grid items-start gap-6 xl:grid-cols-[minmax(0,1.7fr)_minmax(17rem,1fr)]">
       <div class="min-w-0 space-y-6">
-        <UiCard :title="t('console.dailyTokens')" :description="t('console.dailyTokensHint')">
+        <UiCard class="overview-panel" :title="t('console.dailyTokens')" :description="t('console.dailyTokensHint')">
           <template #actions>
-            <span class="rounded-control border border-line bg-sunken px-2.5 py-1 text-xs font-medium text-muted">{{ t('console.overviewChartRange') }}</span>
+            <span class="rounded-full border border-line bg-paper px-3 py-1.5 text-2xs font-medium text-muted">{{ t('console.overviewChartRange') }}</span>
           </template>
           <div v-if="!mounted || pending" class="min-h-56" :aria-busy="true">
             <UiSkeleton :rows="6" />
@@ -257,7 +255,7 @@ const quickLinks = computed(() => [
           <div v-else class="space-y-5">
             <div>
               <p class="text-xs text-muted">{{ t('console.overviewChartTotal') }}</p>
-              <p class="numeric mt-1 text-2xl font-semibold tracking-tight text-ink [overflow-wrap:anywhere]">{{ formatNumber(dailyTokensTotal) }}</p>
+              <p class="numeric mt-2 text-4xl font-medium tracking-tight text-ink [overflow-wrap:anywhere]">{{ formatNumber(dailyTokensTotal) }}</p>
             </div>
             <ConsoleUserTokenChart :points="daily" />
           </div>
@@ -268,38 +266,16 @@ const quickLinks = computed(() => [
             </UiButton>
           </template>
         </UiCard>
-
-        <div ref="heatmapTarget" class="min-w-0">
-          <UiCard :title="t('console.callHeatmap')" :description="t('console.callHeatmapHint')">
-            <template #actions>
-              <span v-if="heatmapStarted && !heatmapPending && !heatmapError" class="numeric max-w-full rounded-control bg-clay-soft px-2.5 py-1 text-xs font-medium text-clay [overflow-wrap:anywhere]">
-                {{ t('console.heatmapTotal', { count: formatNumber(heatmapTotal) }) }}
-              </span>
-            </template>
-            <div v-if="!heatmapStarted || heatmapPending" class="min-h-40" :aria-busy="true">
-              <UiSkeleton :rows="5" />
-            </div>
-            <UiAlert v-else-if="heatmapError" tone="danger" :title="t('console.heatmapError')">
-              <p class="[overflow-wrap:anywhere]">{{ heatmapError }}</p>
-              <UiButton class="mt-3" variant="secondary" size="sm" @click="refreshHeatmap()">{{ t('console.overviewRetry') }}</UiButton>
-            </UiAlert>
-            <div v-else class="space-y-3">
-              <ConsoleUserCallHeatmap :points="heatmap" />
-              <p v-if="heatmapTotal === 0" class="rounded-control bg-sunken px-3 py-2 text-xs leading-5 text-muted">{{ t('console.overviewHeatmapEmpty') }}</p>
-              <p v-else class="text-xs text-muted">{{ t('console.heatmapActiveDays', { count: heatmapActiveDays }) }}</p>
-            </div>
-          </UiCard>
-        </div>
       </div>
       <div class="min-w-0 space-y-6">
-        <UiCard :title="t('console.quickActions')" :description="t('console.overviewQuickActionsHint')" flush>
-          <ul class="space-y-1 p-2">
+        <UiCard class="overview-panel" :title="t('console.quickActions')" :description="t('console.overviewQuickActionsHint')" flush>
+          <ul class="space-y-1 px-3 pb-4">
             <li v-for="link in quickLinks" :key="link.to">
               <NuxtLink
                 :to="link.to"
-                class="group flex items-center gap-3 rounded-control px-3 py-3 transition-colors duration-150 ease-out hover:bg-sunken focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-clay sm:px-4"
+                class="group flex items-center gap-4 rounded-xl px-3 py-4 transition-colors duration-150 ease-out hover:bg-sunken focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-clay sm:px-4"
               >
-                <span class="flex size-9 shrink-0 items-center justify-center rounded-control" :class="link.tone">
+                <span class="flex size-10 shrink-0 items-center justify-center rounded-full" :class="link.tone">
                   <component :is="link.icon" class="size-4" aria-hidden="true" />
                 </span>
                 <span class="min-w-0 flex-1">
@@ -311,20 +287,66 @@ const quickLinks = computed(() => [
             </li>
           </ul>
         </UiCard>
-
-        <UiCard :title="t('console.apiEndpoint')" :description="t('console.apiEndpointHint')">
-          <div class="space-y-3">
-            <p class="text-xs font-medium text-muted">{{ t('console.overviewBaseUrl') }}</p>
-            <code class="block min-w-0 whitespace-pre-wrap rounded-control border border-line bg-sunken px-3 py-3 font-mono text-[13px] leading-6 text-ink [overflow-wrap:anywhere]">{{ endpointUrl }}</code>
-            <ConsoleUserCopyButton :value="endpointUrl" :label="t('console.overviewCopyEndpoint')" :success-message="t('console.endpointCopied')" />
-            <ConsoleMiniMaxApiHelp :base-url="endpointUrls[0]!" />
-            <ConsoleMediaApiHelp :base-url="endpointUrls[0]!" />
-          </div>
-          <template #footer>
-            <p class="text-xs leading-5 text-muted">{{ t('console.overviewEndpointNote') }}</p>
-          </template>
-        </UiCard>
       </div>
     </div>
+
+    <div ref="heatmapTarget" class="min-w-0">
+      <UiCard class="overview-panel" :title="t('console.callHeatmap')" :description="t('console.callHeatmapHint')">
+        <template #actions>
+          <span v-if="heatmapStarted && !heatmapPending && !heatmapError" class="numeric max-w-full rounded-control bg-clay-soft px-2.5 py-1 text-xs font-medium text-clay [overflow-wrap:anywhere]">
+            {{ t('console.heatmapTotal', { count: formatNumber(heatmapTotal) }) }}
+          </span>
+        </template>
+        <div v-if="!heatmapStarted || heatmapPending" class="min-h-40" :aria-busy="true">
+          <UiSkeleton :rows="5" />
+        </div>
+        <UiAlert v-else-if="heatmapError" tone="danger" :title="t('console.heatmapError')">
+          <p class="[overflow-wrap:anywhere]">{{ heatmapError }}</p>
+          <UiButton class="mt-3" variant="secondary" size="sm" @click="refreshHeatmap()">{{ t('console.overviewRetry') }}</UiButton>
+        </UiAlert>
+        <div v-else class="space-y-3">
+          <ConsoleUserCallHeatmap :points="heatmap" />
+          <p v-if="heatmapTotal === 0" class="rounded-control bg-sunken px-3 py-2 text-xs leading-5 text-muted">{{ t('console.overviewHeatmapEmpty') }}</p>
+          <p v-else class="text-xs text-muted">{{ t('console.heatmapActiveDays', { count: heatmapActiveDays }) }}</p>
+        </div>
+      </UiCard>
+    </div>
+
+    <UiCard class="overview-panel" :title="t('console.apiEndpoint')" :description="t('console.apiEndpointHint')">
+      <div class="space-y-3">
+        <p class="text-xs font-medium text-muted">{{ t('console.overviewBaseUrl') }}</p>
+        <code class="block min-w-0 whitespace-pre-wrap rounded-control border border-line bg-sunken px-3 py-3 font-mono text-[13px] leading-6 text-ink [overflow-wrap:anywhere]">{{ endpointUrl }}</code>
+        <ConsoleUserCopyButton :value="endpointUrl" :label="t('console.overviewCopyEndpoint')" :success-message="t('console.endpointCopied')" />
+        <ConsoleMiniMaxApiHelp :base-url="endpointUrls[0]!" />
+        <ConsoleMediaApiHelp :base-url="endpointUrls[0]!" />
+      </div>
+      <template #footer>
+        <p class="text-xs leading-5 text-muted">{{ t('console.overviewEndpointNote') }}</p>
+      </template>
+    </UiCard>
   </div>
 </template>
+
+<style scoped>
+.overview-panel {
+  border-radius: 1.5rem;
+  background: color-mix(in srgb, var(--surface) 75%, transparent);
+}
+
+.overview-panel :deep(.ui-card-header) {
+  border-bottom: 0;
+  background: transparent;
+  padding-top: 1.75rem;
+}
+
+.overview-panel :deep(.ui-card-header h2) {
+  font-family: var(--app-font-display);
+  font-size: 1.4rem;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.overview-panel :deep(footer) {
+  background: transparent;
+}
+</style>

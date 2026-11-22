@@ -222,12 +222,12 @@ func TestIntegrationSubscriptionAPIContract(t *testing.T) {
 	if _, err := db.Exec(ctx, `update user_subscriptions set remaining_requests=0 where id=$1`, first.ID); err != nil {
 		t.Fatal(err)
 	}
-	boundAccess := s.subscriptionCoversModel(ctx, loadedKey, "gpt-4o")
+	boundAccess := requireSubscriptionAccess(t, s, ctx, loadedKey, "gpt-4o")
 	if boundAccess.Covered {
 		t.Fatal("bound key borrowed the other same-tier instance after its own quota ran out")
 	}
 	loadedKey.subscriptionID = ""
-	autoAccess := s.subscriptionCoversModel(ctx, loadedKey, "gpt-4o")
+	autoAccess := requireSubscriptionAccess(t, s, ctx, loadedKey, "gpt-4o")
 	if !autoAccess.Covered || autoAccess.SubscriptionID == first.ID {
 		t.Fatalf("unbound key did not select the other instance: %+v", autoAccess)
 	}

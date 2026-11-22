@@ -12,14 +12,27 @@ web_url="http://127.0.0.1:${WEB_PORT:-13000}"
 : "${BOOTSTRAP_ADMIN_EMAIL:=e2e-admin@example.test}"
 : "${BOOTSTRAP_ADMIN_PASSWORD:=router-e2e-password}"
 export POSTGRES_PASSWORD REDIS_PASSWORD ENCRYPTION_KEY BOOTSTRAP_ADMIN_EMAIL BOOTSTRAP_ADMIN_PASSWORD
-export POSTGRES_DATA_PATH="${POSTGRES_DATA_PATH:-${TMPDIR:-/tmp}/xinghai-router-postgres-${project}}"
-export REDIS_DATA_PATH="${REDIS_DATA_PATH:-${TMPDIR:-/tmp}/xinghai-router-redis-${project}}"
 : "${ROUTER_PORT:=18080}"
 : "${WEB_PORT:=13000}"
 export ROUTER_PORT WEB_PORT
 
+generated_data_root=""
+if [[ -z ${POSTGRES_DATA_PATH+x} || -z ${REDIS_DATA_PATH+x} ]]; then
+  generated_data_root=$(mktemp -d "${TMPDIR:-/tmp}/xinghai-router-compose.XXXXXX")
+fi
+if [[ -z ${POSTGRES_DATA_PATH+x} ]]; then
+  POSTGRES_DATA_PATH="$generated_data_root/postgres"
+fi
+if [[ -z ${REDIS_DATA_PATH+x} ]]; then
+  REDIS_DATA_PATH="$generated_data_root/redis"
+fi
+export POSTGRES_DATA_PATH REDIS_DATA_PATH
+
 cleanup() {
   docker compose -p "$project" down --remove-orphans || true
+  if [[ -n "$generated_data_root" && "${KEEP_TEST_DATA:-0}" != 1 ]]; then
+    rm -rf -- "$generated_data_root"
+  fi
 }
 trap cleanup EXIT
 

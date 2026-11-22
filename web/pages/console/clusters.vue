@@ -5,7 +5,7 @@ import { endpoints, type Cluster, type Node, type NodeForm } from '~/src/api'
 definePageMeta({ layout: 'console', middleware: 'console-auth' })
 
 const { t } = useI18n()
-const { can } = useAccount()
+const { can, isAdmin } = useAccount()
 const { toast } = useToast()
 const { busy, error: actionError, run } = useAction()
 
@@ -66,7 +66,7 @@ function resetNodeSecrets() {
 }
 
 function edit(item: Cluster | Node) {
-  if (busy.value) return
+  if (busy.value || ('cluster_id' in item && !isAdmin.value)) return
   formTab.value = 'cluster_id' in item ? 'instances' : 'clusters'
   editing.value = item
   form.name = item.name
@@ -87,7 +87,7 @@ function edit(item: Cluster | Node) {
 }
 
 function create() {
-  if (busy.value) return
+  if (busy.value || (tab.value === 'instances' && !isAdmin.value)) return
   formTab.value = tab.value
   editing.value = null
   form.name = ''
@@ -124,7 +124,7 @@ function nodeBody(deploy: boolean): NodeForm {
 }
 
 async function save() {
-  if (busy.value) return
+  if (busy.value || (formTab.value === 'instances' && !isAdmin.value)) return
   const name = form.name.trim()
   if (!name) {
     toast.error(t('admin.nameRequired'))
@@ -176,7 +176,7 @@ async function save() {
 }
 
 async function remove(item: Cluster | Node) {
-  if (busy.value || !confirm(t('admin.confirmDelete'))) return
+  if (busy.value || ('cluster_id' in item && !isAdmin.value) || !confirm(t('admin.confirmDelete'))) return
   const ok = await run(() => 'cluster_id' in item
     ? endpoints.deleteAdminNode(item.id)
     : endpoints.deleteAdminCluster(item.id))
@@ -201,7 +201,7 @@ async function sync(item: Cluster) {
 }
 
 async function deploy(item: Node) {
-  if (busy.value) return
+  if (busy.value || !isAdmin.value) return
   const ok = await run(() => endpoints.deployAdminNode(item.id))
   if (!ok) {
     toast.error(actionError.value || t('common.actionFailed'))
@@ -233,7 +233,7 @@ function deploymentLabel(status: Node['deploy_status']) {
         </div>
         <p class="mt-2 text-muted">{{ t('admin.clustersLead') }}</p>
       </div>
-      <UiButton :disabled="busy" @click="create">{{ t('admin.create') }}</UiButton>
+      <UiButton v-if="tab === 'clusters' || isAdmin" :disabled="busy" @click="create">{{ t('admin.create') }}</UiButton>
     </div>
 
     <UiTabs v-model="tab" :items="[{ value: 'clusters', label: t('admin.clusters') }, { value: 'instances', label: t('admin.instances') }]" />
@@ -252,7 +252,7 @@ function deploymentLabel(status: Node['deploy_status']) {
             <th v-if="tab === 'instances'">{{ t('admin.clusterName') }}</th>
             <th>{{ t('admin.endpoint') }}</th>
             <th v-if="tab === 'instances'">{{ t('admin.nodeDeployment') }}</th>
-            <th>{{ t('common.actions') }}</th>
+            <th v-if="tab === 'clusters' || isAdmin">{{ t('common.actions') }}</th>
           </tr>
         </thead>
         <tbody>
@@ -278,7 +278,7 @@ function deploymentLabel(status: Node['deploy_status']) {
               <td>{{ clusterNames.get(item.cluster_id) || item.cluster_name }}</td>
               <td>{{ item.address || t('common.none') }}</td>
               <td><UiBadge :tone="deploymentTone(item.deploy_status)" dot>{{ deploymentLabel(item.deploy_status) }}</UiBadge><p v-if="item.deploy_message" class="mt-1 max-w-xs truncate text-xs text-muted">{{ item.deploy_message }}</p></td>
-              <td class="text-right">
+              <td v-if="isAdmin" class="text-right">
                 <UiButton size="sm" variant="ghost" :disabled="busy || item.deploy_status === 'running'" @click="edit(item)">{{ t('admin.edit') }}</UiButton>
                 <UiButton size="sm" variant="secondary" :disabled="busy || item.deploy_status === 'running'" @click="deploy(item)">{{ t('admin.nodeDeploy') }}</UiButton>
                 <UiButton size="sm" variant="danger" :disabled="busy" @click="remove(item)">{{ t('admin.delete') }}</UiButton>
@@ -289,7 +289,7 @@ function deploymentLabel(status: Node['deploy_status']) {
       </UiTable>
     </UiCard>
 
-    <UiDialog v-model:open="open" :title="editing ? t('admin.edit') : t('admin.create')">
+    <UiDialog v-if="formTab === 'clusters' || isAdmin" v-model:open="open" :title="editing ? t('admin.edit') : t('admin.create')">
       <div class="max-h-[70vh] space-y-4 overflow-y-auto pr-1">
         <UiAlert v-if="actionError" tone="danger" :title="actionError" />
         <UiAlert v-if="formTab === 'instances'" tone="warn" :title="t('admin.nodeSecurityNotice')" />

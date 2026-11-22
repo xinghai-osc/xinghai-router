@@ -271,7 +271,7 @@ func (s *Service) upsertPricing(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !validPricingMultiplier(in.Multiplier) {
-		writeError(w, 400, "invalid_request", "multiplier must be between 0 inclusive and 1000")
+		writeError(w, 400, "invalid_request", "multiplier must be greater than 0 and at most 1000")
 		return
 	}
 	var dimensions any
@@ -1201,6 +1201,9 @@ func (s *Service) updateUser(w http.ResponseWriter, r *http.Request) {
 	if _, ok := changed["groups"]; ok {
 		s.invalidateChannels()
 	}
+	if in.Enabled != nil || in.DataUsageEnabled != nil || in.Groups != nil || in.ID != nil {
+		s.invalidateAPIKeyContext()
+	}
 	writeJSON(w, 200, map[string]any{"id": userIDNumber(userID), "updated": changed})
 }
 
@@ -1315,12 +1318,12 @@ func (s *Service) myGroups(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) createGroup(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Name           string  `json:"name"`
-		DisplayName    string  `json:"display_name"`
-		Description    string  `json:"description"`
-		Multiplier     float64 `json:"multiplier"`
-		MaxConcurrency int     `json:"max_concurrency"`
-		Public         bool    `json:"public"`
+		Name           string   `json:"name"`
+		DisplayName    string   `json:"display_name"`
+		Description    string   `json:"description"`
+		Multiplier     *float64 `json:"multiplier"`
+		MaxConcurrency int      `json:"max_concurrency"`
+		Public         bool     `json:"public"`
 	}
 	if decode(r, &in) != nil {
 		writeError(w, 400, "invalid_request", "name is required")
@@ -1341,21 +1344,21 @@ func (s *Service) createGroup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_request", "description must be 500 characters or fewer")
 		return
 	}
-	if in.Multiplier == 0 {
-		in.Multiplier = 1
+	if in.Multiplier == nil {
+		in.Multiplier = ptrFloat(1)
 	}
-	if !validGroupMultiplier(in.Multiplier) {
-		writeError(w, 400, "invalid_request", "multiplier must be between 0 and 1000")
+	if !validGroupMultiplier(*in.Multiplier) {
+		writeError(w, 400, "invalid_request", "multiplier must be greater than 0 and at most 1000")
 		return
 	}
 	id, _ := randomID()
-	_, err := s.db.Exec(r.Context(), `insert into groups(id,name,display_name,description,multiplier,max_concurrency,"public") values($1,$2,nullif($3,''),nullif($4,''),$5,$6,$7)`, id, name, displayName, description, in.Multiplier, in.MaxConcurrency, in.Public)
+	_, err := s.db.Exec(r.Context(), `insert into groups(id,name,display_name,description,multiplier,max_concurrency,"public") values($1,$2,nullif($3,''),nullif($4,''),$5,$6,$7)`, id, name, displayName, description, *in.Multiplier, in.MaxConcurrency, in.Public)
 	if err != nil {
 		writeError(w, 409, "conflict", "group name already exists")
 		return
 	}
-	s.audit(r, "group.created", "group", id, map[string]any{"name": name, "display_name": displayName, "description": description, "multiplier": in.Multiplier, "max_concurrency": in.MaxConcurrency, "public": in.Public})
-	writeJSON(w, 201, map[string]any{"id": id, "name": name, "display_name": nullStr(displayName), "description": nullStr(description), "multiplier": in.Multiplier, "max_concurrency": in.MaxConcurrency, "public": in.Public})
+	s.audit(r, "group.created", "group", id, map[string]any{"name": name, "display_name": displayName, "description": description, "multiplier": *in.Multiplier, "max_concurrency": in.MaxConcurrency, "public": in.Public})
+	writeJSON(w, 201, map[string]any{"id": id, "name": name, "display_name": nullStr(displayName), "description": nullStr(description), "multiplier": *in.Multiplier, "max_concurrency": in.MaxConcurrency, "public": in.Public})
 }
 
 func (s *Service) importGroups(w http.ResponseWriter, r *http.Request) {
@@ -1377,7 +1380,7 @@ func (s *Service) importGroups(w http.ResponseWriter, r *http.Request) {
 	for name, multiplier := range values {
 		name = strings.TrimSpace(name)
 		if !validGroupName(name) || !validGroupMultiplier(multiplier) {
-			writeError(w, 400, "invalid_request", "group names must be 1-100 characters and multipliers must be between 0 and 1000")
+			writeError(w, 400, "invalid_request", "group names must be 1-100 characters and multipliers must be greater than 0 and at most 1000")
 			return
 		}
 		id, _ := randomID()
@@ -1404,7 +1407,7 @@ func (s *Service) updateGroup(w http.ResponseWriter, r *http.Request) {
 		Description    *string `json:"description"`
 	}
 	if decode(r, &in) != nil || !validGroupMultiplier(in.Multiplier) {
-		writeError(w, 400, "invalid_request", "multiplier must be between 0 and 1000")
+		writeError(w, 400, "invalid_request", "multiplier must be greater than 0 and at most 1000")
 		return
 	}
 	displayName := ptrString(in.DisplayName)
@@ -1424,6 +1427,7 @@ func (s *Service) updateGroup(w http.ResponseWriter, r *http.Request) {
 	}
 	s.groupCache.invalidate(r.PathValue("id"))
 	s.groupConcurrencyCache.invalidate(r.PathValue("id"))
+	s.invalidateAPIKeyContext()
 	s.audit(r, "group.updated", "group", r.PathValue("id"), map[string]any{"multiplier": in.Multiplier, "max_concurrency": in.MaxConcurrency, "public": in.Public, "display_name": displayName, "description": description})
 	writeJSON(w, 200, map[string]any{"id": r.PathValue("id"), "multiplier": in.Multiplier, "max_concurrency": in.MaxConcurrency, "public": in.Public, "display_name": displayName, "description": description})
 }
@@ -1454,7 +1458,7 @@ func (s *Service) batchUpdateGroups(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !validGroupMultiplier(update.Multiplier) {
-			writeError(w, 400, "invalid_request", "multiplier must be between 0 and 1000")
+			writeError(w, 400, "invalid_request", "multiplier must be greater than 0 and at most 1000")
 			return
 		}
 		if update.MaxConcurrency < 0 {
@@ -1493,6 +1497,7 @@ func (s *Service) batchUpdateGroups(w http.ResponseWriter, r *http.Request) {
 		s.groupCache.invalidate(update.ID)
 		s.groupConcurrencyCache.invalidate(update.ID)
 	}
+	s.invalidateAPIKeyContext()
 	s.audit(r, "groups.batch_updated", "group", "batch", map[string]any{"count": affected})
 	writeJSON(w, 200, map[string]any{"affected": affected})
 }
@@ -1510,6 +1515,7 @@ func (s *Service) deleteGroup(w http.ResponseWriter, r *http.Request) {
 	}
 	s.groupCache.invalidate(id)
 	s.groupConcurrencyCache.invalidate(id)
+	s.invalidateAPIKeyContext()
 	s.audit(r, "group.deleted", "group", id, nil)
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -1705,6 +1711,9 @@ func (s *Service) setGroups(w http.ResponseWriter, r *http.Request, table, colum
 		writeError(w, 500, "internal_error", "could not update groups")
 		return
 	}
+	if table == "user_groups" {
+		s.invalidateAPIKeyContext()
+	}
 	s.audit(r, entityType+".groups_changed", entityType, entity, map[string]any{"groups": refs})
 	writeJSON(w, 200, map[string]any{"groups": refs, "group_ids": sortedKeys(resolved)})
 }
@@ -1763,7 +1772,7 @@ func validPricePerQuotaUnit(value float64) bool {
 }
 
 func validGroupMultiplier(value float64) bool {
-	return validNonNegativeFinite(value) && value <= maxGroupMultiplier
+	return validPositiveFinite(value) && value <= maxGroupMultiplier
 }
 
 func validWalletAdjustAmount(value float64) bool {
@@ -1789,7 +1798,7 @@ func validQuotaCost(value *float64) bool {
 }
 
 func validPricingMultiplier(value float64) bool {
-	return validNonNegativeFinite(value) && value <= maxPricingMultiplier
+	return validPositiveFinite(value) && value <= maxPricingMultiplier
 }
 
 func validPricingRate(value float64) bool {
@@ -1933,6 +1942,10 @@ func ptrString(p *string) any {
 		return nil
 	}
 	return strings.TrimSpace(*p)
+}
+
+func ptrFloat(value float64) *float64 {
+	return &value
 }
 
 func validChannelName(name string) bool {
@@ -2185,6 +2198,7 @@ func (s *Service) createKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "internal_error", "could not create API key")
 		return
 	}
+	s.invalidateAPIKeyContext()
 	s.audit(r, "api_key.created", "api_key", id, map[string]any{"user_id": userID, "name": name, "subscription_id": subscriptionID, "allowed_models": allowedModels})
 	writeJSON(w, 201, map[string]any{"id": id, "name": name, "key": secret, "expires_at": expires, "group_id": groupID, "subscription_id": subscriptionID, "allowed_models": allowedModels})
 }
@@ -2247,6 +2261,7 @@ func (s *Service) setKeyGroup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "internal_error", "could not update API key group")
 		return
 	}
+	s.invalidateAPIKeyContext()
 	s.audit(r, "api_key.group_changed", "api_key", r.PathValue("id"), map[string]any{"group_id": groupID})
 	writeJSON(w, 200, map[string]any{"group_id": groupID})
 }
@@ -2274,6 +2289,7 @@ func (s *Service) setKeyModels(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "not_found", "API key not found")
 		return
 	}
+	s.invalidateAPIKeyContext()
 	s.audit(r, "api_key.models_changed", "api_key", r.PathValue("id"), map[string]any{"allowed_models": allowedModels})
 	writeJSON(w, 200, map[string]any{"id": r.PathValue("id"), "allowed_models": allowedModels})
 }
@@ -2283,6 +2299,7 @@ func (s *Service) revokeKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "not_found", "API key not found")
 		return
 	}
+	s.invalidateAPIKeyContext()
 	s.audit(r, "api_key.revoked", "api_key", r.PathValue("id"), nil)
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -2460,6 +2477,13 @@ func (s *Service) createChannel(w http.ResponseWriter, r *http.Request) {
 	for _, key := range keys {
 		if !validChannelAPIKey(key) {
 			writeError(w, 400, "invalid_request", "api_key must be 1-4096 characters")
+			return
+		}
+	}
+	if in.ModelRoutes != nil {
+		account := accountFromContext(r)
+		if !accountHasPermission(account, "routes.manage") {
+			writeError(w, http.StatusForbidden, "forbidden", "missing permission: routes.manage")
 			return
 		}
 	}
@@ -2758,6 +2782,13 @@ func (s *Service) updateChannel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_request", "base_url must be 1-2048 characters and use HTTP or HTTPS")
 		return
 	}
+	if in.ModelRoutes != nil {
+		account := accountFromContext(r)
+		if !accountHasPermission(account, "routes.manage") {
+			writeError(w, http.StatusForbidden, "forbidden", "missing permission: routes.manage")
+			return
+		}
+	}
 	for i := range in.ModelRoutes {
 		in.ModelRoutes[i].PublicModel = strings.TrimSpace(in.ModelRoutes[i].PublicModel)
 		in.ModelRoutes[i].UpstreamModel = strings.TrimSpace(in.ModelRoutes[i].UpstreamModel)
@@ -2881,26 +2912,28 @@ func (s *Service) updateChannel(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := tx.Commit(r.Context()); err != nil {
-		writeError(w, 500, "internal_error", "could not update channel")
-		return
-	}
 	if in.ModelRoutes != nil {
-		if _, derr := s.db.Exec(r.Context(), `delete from model_routes where channel_id=$1`, channelID); derr != nil {
+		if _, err := tx.Exec(r.Context(), `delete from model_routes where channel_id=$1`, channelID); err != nil {
 			writeError(w, 500, "internal_error", "could not update model routes")
 			return
 		}
 		for _, rt := range in.ModelRoutes {
-			if rt.Weight == 0 {
-				rt.Weight = 100
+			rid, idErr := randomID()
+			if idErr != nil {
+				writeError(w, 500, "internal_error", "could not create model route")
+				return
 			}
-			rid, _ := randomID()
-			if _, err = s.db.Exec(r.Context(), `insert into model_routes(id,public_model,upstream_model,channel_id,priority,weight,hidden) values($1,$2,$3,$4,$5,$6,$7)`, rid, rt.PublicModel, rt.UpstreamModel, channelID, rt.Priority, rt.Weight, rt.Hidden); err != nil {
+			if _, err = tx.Exec(r.Context(), `insert into model_routes(id,public_model,upstream_model,channel_id,priority,weight,hidden) values($1,$2,$3,$4,$5,$6,$7)`, rid, rt.PublicModel, rt.UpstreamModel, channelID, rt.Priority, rt.Weight, rt.Hidden); err != nil {
 				writeError(w, 400, "invalid_request", "could not create model route")
 				return
 			}
 		}
 	}
+	if err = tx.Commit(r.Context()); err != nil {
+		writeError(w, 500, "internal_error", "could not update channel")
+		return
+	}
+
 	detail := map[string]any{"name": in.Name, "models": in.Models, "provider": in.Provider, "key_type": in.KeyType}
 	if maxConcurrencySet {
 		detail["max_concurrency"] = maxConcurrency
@@ -2967,6 +3000,57 @@ func decodeUpstreamUsageWindows(raw []byte) []upstreamUsageWindow {
 	return windows
 }
 
+// channelListPageQuery selects one page of channels plus the per-row data that is
+// cheap to join (owner, groups, key count, the best upstream balance). The page is
+// materialised before the joins so no per-channel work runs for rows outside it.
+const channelListPageQuery = `with page as (select c.id,c.name,c.base_url,c.models,c.test_model,c.enabled,c.auto_disabled,c.disabled_reason,c.priority,c.weight,c.max_concurrency,c.last_checked_at,c.last_error,c.created_at,c.updated_at,c.provider,c.key_type,c.auto_disable,c.shared_data_only,c.request_overrides,c.ua_pool,c.upstream_path,c.upstream_format,c.user_id from channels c order by c.priority desc,c.id limit $1 offset $2) select p.id,p.name,p.base_url,p.models,p.test_model,p.enabled,p.auto_disabled,p.disabled_reason,p.priority,p.weight,p.max_concurrency,p.last_checked_at,p.last_error,p.created_at,p.updated_at,coalesce((select array_agg(cg.group_id order by cg.group_id) from channel_groups cg where cg.channel_id=p.id), '{}'),p.provider,p.key_type,(select count(*) from channel_api_keys ak where ak.channel_id=p.id and ak.enabled),p.auto_disable,p.shared_data_only,p.request_overrides,p.ua_pool,p.upstream_path,p.upstream_format,coalesce(u.id::text,''),coalesce(u.email,''),coalesce(u.name,''),cb.balance,cb.used,cb.total,coalesce(cb.currency,'USD'),cb.usage,coalesce(cb.supported,false),coalesce(cb.error,''),cb.fetched_at from page p left join users u on u.id=p.user_id left join lateral (select cb.balance,cb.used,cb.total,cb.currency,cb.usage,cb.supported,cb.error,cb.fetched_at from channel_balances cb join channel_api_keys k on k.id=cb.key_id and k.enabled where cb.channel_id=p.id order by k.priority desc nulls last,k.created_at limit 1) cb on true order by p.priority desc,p.id`
+
+type channelListRow struct {
+	id              int64
+	name            string
+	base            string
+	models          []byte
+	testModel       string
+	enabled         bool
+	autoDisabled    bool
+	disabledReason  string
+	priority        int
+	weight          int
+	maxConcurrency  *int
+	lastChecked     any
+	lastError       any
+	created         any
+	updated         any
+	groups          []string
+	provider        string
+	keyType         string
+	keyCount        int
+	autoDisable     bool
+	sharedDataOnly  bool
+	overrides       []byte
+	uaPool          []byte
+	upstreamPath    string
+	upstreamFormat  string
+	userID          string
+	userEmail       string
+	userName        string
+	balance         *float64
+	usedBalance     *float64
+	totalBalance    *float64
+	balanceCurrency string
+	usageJSON       []byte
+	balanceOK       bool
+	balanceError    string
+	balanceFetched  any
+}
+
+type channelUsageTotals struct {
+	avgDuration   float64
+	avgFirstToken *float64
+	usedRequests  int64
+	usedTokens    int64
+}
+
 func (s *Service) listChannels(w http.ResponseWriter, r *http.Request) {
 	page, pageSize, offset := listPage(r)
 	var total int
@@ -2974,75 +3058,95 @@ func (s *Service) listChannels(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "internal_error", "query failed")
 		return
 	}
-	rows, err := s.db.Query(r.Context(), `select c.id,c.name,c.base_url,c.models,c.test_model,c.enabled,c.auto_disabled,c.disabled_reason,c.priority,c.weight,c.max_concurrency,c.last_checked_at,c.last_error,c.created_at,c.updated_at,coalesce((select array_agg(cg.group_id order by cg.group_id) from channel_groups cg where cg.channel_id=c.id), '{}'),c.provider,c.key_type,(select count(*) from channel_api_keys ak where ak.channel_id=c.id and ak.enabled),c.auto_disable,c.shared_data_only,c.request_overrides,c.ua_pool,c.upstream_path,c.upstream_format,coalesce(u.id::text,''),coalesce(u.email,''),coalesce(u.name,''),coalesce(agg.avg_duration_ms,0),agg.avg_first_token_ms,coalesce(agg.used_requests,0),coalesce(agg.used_tokens,0),cb.balance,cb.used,cb.total,coalesce(cb.currency,'USD'),cb.usage,coalesce(cb.supported,false),coalesce(cb.error,''),cb.fetched_at from channels c left join users u on u.id=c.user_id left join lateral (select cb.balance,cb.used,cb.total,cb.currency,cb.usage,cb.supported,cb.error,cb.fetched_at from channel_balances cb join channel_api_keys k on k.id=cb.key_id and k.enabled where cb.channel_id=c.id order by k.priority desc nulls last,k.created_at limit 1) cb on true left join lateral (select avg(rl.duration_ms) as avg_duration_ms,avg(rl.first_token_ms) as avg_first_token_ms,count(*) as used_requests,coalesce(sum(rl.total_tokens),0) as used_tokens from request_logs rl where rl.channel_id=c.id) agg on true order by c.priority desc,c.id limit $1 offset $2`, pageSize, offset)
+	rows, err := s.db.Query(r.Context(), channelListPageQuery, pageSize, offset)
 	if err != nil {
 		writeError(w, 500, "internal_error", "query failed")
 		return
 	}
-	defer rows.Close()
-	data := []map[string]any{}
+	records := make([]channelListRow, 0, pageSize)
+	ids := make([]int64, 0, pageSize)
 	for rows.Next() {
-		var id, name, base string
-		var models []byte
-		var testModel string
-		var enabled, autoDisabled bool
-		var disabledReason string
-		var priority, weight int
-		var maxConcurrency *int
-		var lastChecked, lastError any
-		var created, updated any
-		var groups []string
-		var provider, keyType string
-		var keyCount int
-		var autoDisable, sharedDataOnly bool
-		var overrides, uaPool []byte
-		var upstreamPath, upstreamFormat string
-		var userID, userEmail, userName string
-		var avgDuration float64
-		var avgFirstTokenMs *float64
-		var usedRequests, usedTokens int64
-		var balance, usedBalance, totalBalance *float64
-		var balanceCurrency, balanceError string
-		var usageJSON []byte
-		var balanceSupported bool
-		var balanceFetched any
-		if rows.Scan(&id, &name, &base, &models, &testModel, &enabled, &autoDisabled, &disabledReason, &priority, &weight, &maxConcurrency, &lastChecked, &lastError, &created, &updated, &groups, &provider, &keyType, &keyCount, &autoDisable, &sharedDataOnly, &overrides, &uaPool, &upstreamPath, &upstreamFormat, &userID, &userEmail, &userName, &avgDuration, &avgFirstTokenMs, &usedRequests, &usedTokens, &balance, &usedBalance, &totalBalance, &balanceCurrency, &usageJSON, &balanceSupported, &balanceError, &balanceFetched) != nil {
+		var rec channelListRow
+		if rows.Scan(&rec.id, &rec.name, &rec.base, &rec.models, &rec.testModel, &rec.enabled, &rec.autoDisabled, &rec.disabledReason, &rec.priority, &rec.weight, &rec.maxConcurrency, &rec.lastChecked, &rec.lastError, &rec.created, &rec.updated, &rec.groups, &rec.provider, &rec.keyType, &rec.keyCount, &rec.autoDisable, &rec.sharedDataOnly, &rec.overrides, &rec.uaPool, &rec.upstreamPath, &rec.upstreamFormat, &rec.userID, &rec.userEmail, &rec.userName, &rec.balance, &rec.usedBalance, &rec.totalBalance, &rec.balanceCurrency, &rec.usageJSON, &rec.balanceOK, &rec.balanceError, &rec.balanceFetched) != nil {
 			continue
 		}
+		records = append(records, rec)
+		ids = append(ids, rec.id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		writeError(w, 500, "internal_error", "query failed")
+		return
+	}
+	usage, err := s.channelUsageTotals(r.Context(), ids)
+	if err != nil {
+		writeError(w, 500, "internal_error", "query failed")
+		return
+	}
+	routes := s.channelModelRoutes(r.Context(), ids)
+	data := make([]map[string]any, 0, len(records))
+	for _, rec := range records {
 		var list []string
-		json.Unmarshal(models, &list)
+		json.Unmarshal(rec.models, &list)
 		var ov map[string]any
-		if len(overrides) > 0 {
-			json.Unmarshal(overrides, &ov)
+		if len(rec.overrides) > 0 {
+			json.Unmarshal(rec.overrides, &ov)
 		}
 		if ov == nil {
 			ov = map[string]any{}
 		}
 		var uaList []string
-		if len(uaPool) > 0 {
-			json.Unmarshal(uaPool, &uaList)
+		if len(rec.uaPool) > 0 {
+			json.Unmarshal(rec.uaPool, &uaList)
 		}
-		usageWindows := decodeUpstreamUsageWindows(usageJSON)
-		routes := s.getChannelRoutes(r.Context(), id)
-		data = append(data, map[string]any{"id": id, "name": name, "base_url": base, "models": list, "test_model": testModel, "provider": provider, "key_type": keyType, "enabled": enabled, "auto_disabled": autoDisabled, "disabled_reason": disabledReason, "priority": priority, "weight": weight, "max_concurrency": maxConcurrency, "last_test_time": lastChecked, "last_error": lastError, "response_time_ms": avgDuration, "avg_first_token_ms": avgFirstTokenMs, "used_requests": usedRequests, "used_tokens": usedTokens, "upstream_balance": balance, "upstream_used": usedBalance, "upstream_total": totalBalance, "upstream_currency": balanceCurrency, "upstream_usage_windows": usageWindows, "upstream_balance_supported": balanceSupported, "upstream_balance_error": balanceError, "upstream_balance_fetched_at": balanceFetched, "groups": groups, "key_count": keyCount, "created_at": created, "updated_at": updated, "model_routes": routes, "auto_disable": autoDisable, "shared_data_only": sharedDataOnly, "request_overrides": ov, "ua_pool": uaList, "upstream_path": upstreamPath, "upstream_format": upstreamFormat, "user_id": userID, "user_email": userEmail, "user_name": userName})
+		totals := usage[rec.id]
+		data = append(data, map[string]any{"id": strconv.FormatInt(rec.id, 10), "name": rec.name, "base_url": rec.base, "models": list, "test_model": rec.testModel, "provider": rec.provider, "key_type": rec.keyType, "enabled": rec.enabled, "auto_disabled": rec.autoDisabled, "disabled_reason": rec.disabledReason, "priority": rec.priority, "weight": rec.weight, "max_concurrency": rec.maxConcurrency, "last_test_time": rec.lastChecked, "last_error": rec.lastError, "response_time_ms": totals.avgDuration, "avg_first_token_ms": totals.avgFirstToken, "used_requests": totals.usedRequests, "used_tokens": totals.usedTokens, "upstream_balance": rec.balance, "upstream_used": rec.usedBalance, "upstream_total": rec.totalBalance, "upstream_currency": rec.balanceCurrency, "upstream_usage_windows": decodeUpstreamUsageWindows(rec.usageJSON), "upstream_balance_supported": rec.balanceOK, "upstream_balance_error": rec.balanceError, "upstream_balance_fetched_at": rec.balanceFetched, "groups": rec.groups, "key_count": rec.keyCount, "created_at": rec.created, "updated_at": rec.updated, "model_routes": routes[rec.id], "auto_disable": rec.autoDisable, "shared_data_only": rec.sharedDataOnly, "request_overrides": ov, "ua_pool": uaList, "upstream_path": rec.upstreamPath, "upstream_format": rec.upstreamFormat, "user_id": rec.userID, "user_email": rec.userEmail, "user_name": rec.userName})
 	}
 	writePaged(w, data, total, page, pageSize)
 }
 
-func (s *Service) getChannelRoutes(ctx context.Context, channelID string) []map[string]any {
-	rows, err := s.db.Query(ctx, `select id,public_model,upstream_model,priority,weight,enabled,hidden,created_at from model_routes where channel_id=$1 order by public_model,priority desc`, channelID)
+// channelUsageTotals aggregates request_logs for the page's channels in a single
+// grouped query instead of one correlated aggregate per row.
+func (s *Service) channelUsageTotals(ctx context.Context, ids []int64) (map[int64]channelUsageTotals, error) {
+	usage := make(map[int64]channelUsageTotals, len(ids))
+	if len(ids) == 0 {
+		return usage, nil
+	}
+	rows, err := s.db.Query(ctx, `select rl.channel_id,coalesce(avg(rl.duration_ms),0),avg(rl.first_token_ms),count(*),coalesce(sum(rl.total_tokens),0) from request_logs rl where rl.channel_id = any($1) group by rl.channel_id`, ids)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	defer rows.Close()
-	var routes []map[string]any
 	for rows.Next() {
+		var id int64
+		var totals channelUsageTotals
+		if rows.Scan(&id, &totals.avgDuration, &totals.avgFirstToken, &totals.usedRequests, &totals.usedTokens) == nil {
+			usage[id] = totals
+		}
+	}
+	return usage, rows.Err()
+}
+
+// channelModelRoutes fetches the model routes of every channel on the page in one
+// query, keeping the per-channel ordering the routes panel relies on.
+func (s *Service) channelModelRoutes(ctx context.Context, ids []int64) map[int64][]map[string]any {
+	routes := make(map[int64][]map[string]any, len(ids))
+	if len(ids) == 0 {
+		return routes
+	}
+	rows, err := s.db.Query(ctx, `select channel_id,id,public_model,upstream_model,priority,weight,enabled,hidden,created_at from model_routes where channel_id = any($1) order by channel_id,public_model,priority desc`, ids)
+	if err != nil {
+		return routes
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var channelID int64
 		var id, public, upstream string
 		var priority, weight int
 		var enabled, hidden bool
 		var created any
-		if rows.Scan(&id, &public, &upstream, &priority, &weight, &enabled, &hidden, &created) == nil {
-			routes = append(routes, map[string]any{"id": id, "public_model": public, "upstream_model": upstream, "priority": priority, "weight": weight, "enabled": enabled, "hidden": hidden, "created_at": created})
+		if rows.Scan(&channelID, &id, &public, &upstream, &priority, &weight, &enabled, &hidden, &created) == nil {
+			routes[channelID] = append(routes[channelID], map[string]any{"id": id, "public_model": public, "upstream_model": upstream, "priority": priority, "weight": weight, "enabled": enabled, "hidden": hidden, "created_at": created})
 		}
 	}
 	return routes

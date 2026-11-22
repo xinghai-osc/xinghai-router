@@ -61,11 +61,48 @@ func (s *Service) putDataTransferConsent(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not save data transfer consent")
 		return
 	}
+	s.invalidateDataTransferConsent(account.userID, "")
 	writeJSON(w, http.StatusOK, dataTransferConsentResponse{TermsVersion: consent.TermsVersion, Document: dataTransferTermsDocument, Accepted: true, AcceptedAt: consent.AcceptedAt})
 }
 
 func (s *Service) requiresDataTransferConsent(ctx context.Context, userID, model string) (bool, error) {
-	var required bool
-	err := s.db.QueryRow(ctx, `select exists(select 1 from model_catalog_metadata where model=$1 and requires_data_transfer_consent) and not exists(select 1 from account_data_transfer_consents where user_id=$2 and terms_version=$3)`, model, userID, dataTransferTermsVersion).Scan(&required)
-	return required, err
+	// Both halves are memoised: the per-model consent requirement changes only
+	// through model-catalog admin writes, and the per-user acceptance only
+	// through the consent endpoints, which invalidate on write. Without the
+	// caches this query ran on every gateway request.
+	requiresModel, err := s.modelConsentCache.get(ctx, model, func(ctx context.Context) (bool, error) {
+		var required bool
+		if err := s.db.QueryRow(ctx, `select exists(select 1 from model_catalog_metadata where model=$1 and requires_data_transfer_consent)`, model).Scan(&required); err != nil {
+			return false, err
+		}
+		return required, nil
+	})
+	if err != nil {
+		return false, err
+	}
+	if !requiresModel {
+		return false, nil
+	}
+	consented, err := s.userConsentCache.get(ctx, userID, func(ctx context.Context) (bool, error) {
+		var consented bool
+		if err := s.db.QueryRow(ctx, `select exists(select 1 from account_data_transfer_consents where user_id=$1 and terms_version=$2)`, userID, dataTransferTermsVersion).Scan(&consented); err != nil {
+			return false, err
+		}
+		return consented, nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return !consented, nil
+}
+
+// invalidateDataTransferConsent drops the cached consent answers. The model
+// argument may be empty to drop only a user's acceptance record.
+func (s *Service) invalidateDataTransferConsent(userID, model string) {
+	if userID != "" {
+		s.userConsentCache.invalidate(userID)
+	}
+	if model != "" {
+		s.modelConsentCache.invalidate(model)
+	}
 }

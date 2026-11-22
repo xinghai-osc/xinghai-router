@@ -2,9 +2,11 @@ package app
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"mime"
 	"mime/multipart"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -67,6 +69,8 @@ func TestMediaValidation(t *testing.T) {
 		{"speech", `{"model":"tts","input":"x","voice":"alloy","stream_format":"sse"}`},
 		{"speech", `{"model":"tts","input":"","voice":"alloy"}`},
 		{"speech", `{"model":"tts","input":"x"}`},
+		{"speech", `{"model":"tts","input":"x","voice":{"id":" "}}`},
+		{"speech", `{"model":"tts","input":"x","voice":{"name":"unknown"}}`},
 		{"video", `{"model":"video","prompt":"x","seconds":"NaN"}`},
 		{"video", `{"model":"video","prompt":"x","seconds":1.5}`},
 		{"video", `{"model":"video","prompt":"x","seconds":0}`},
@@ -83,13 +87,61 @@ func TestMediaValidation(t *testing.T) {
 		{{"model", "audio"}, {"max_audio_seconds", "NaN"}},
 		{{"model", "audio"}, {"max_audio_seconds", "0.0000001"}},
 		{{"model", "audio"}, {"max_audio_seconds", "1"}},
-		{{"model", "audio"}, {"response_format", "srt"}},
+		{{"model", "audio"}, {"response_format", "html"}},
+		{{"model", "audio"}, {"response_format", "text"}, {"response_format", "srt"}},
 		{{"model", "audio"}, {"stream", "true"}},
 	} {
 		body, ct := mediaTestMultipart(t, fields, "file")
 		if _, _, _, err := parseMediaRequest(body, ct, "transcription"); err == nil {
 			t.Errorf("accepted fields=%v", fields)
 		}
+	}
+}
+
+func TestMediaTranscriptionRequestFormatsAndArrays(t *testing.T) {
+	for _, format := range []string{"text", "srt", "vtt", "diarized_json", "json", "verbose_json"} {
+		fields := [][2]string{
+			{"model", "public-model"}, {"response_format", format},
+			{"timestamp_granularities[]", "segment"}, {"timestamp_granularities[]", "word"},
+			{"known_speaker_names", "Alice"}, {"known_speaker_names", "Bob"},
+		}
+		body, ct := mediaTestMultipart(t, fields, "file")
+		_, _, options, err := parseMediaRequest(body, ct, "transcription")
+		if err != nil || options.responseFormat != format {
+			t.Fatalf("format=%q parsed=%q err=%v", format, options.responseFormat, err)
+		}
+		body, ct = rewriteMultipartModel(options.body, options.contentType, "upstream-model")
+		_, params, err := mime.ParseMediaType(ct)
+		if err != nil {
+			t.Fatal(err)
+		}
+		form, err := multipart.NewReader(bytes.NewReader(body), params["boundary"]).ReadForm(1 << 20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(form.Value["timestamp_granularities[]"], []string{"segment", "word"}) ||
+			!slices.Equal(form.Value["known_speaker_names"], []string{"Alice", "Bob"}) ||
+			!slices.Equal(form.Value["response_format"], []string{format}) {
+			t.Fatalf("rewritten fields=%v", form.Value)
+		}
+		if err := form.RemoveAll(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestMediaSpeechCustomVoice(t *testing.T) {
+	body := []byte(`{"model":"tts","input":"hello","voice":{"id":"voice_custom"},"response_format":"wav"}`)
+	_, _, options, err := parseMediaRequest(body, "application/json", "speech")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var request struct {
+		Voice          struct{ ID string } `json:"voice"`
+		ResponseFormat string              `json:"response_format"`
+	}
+	if err := json.Unmarshal(options.body, &request); err != nil || request.Voice.ID != "voice_custom" || request.ResponseFormat != "wav" {
+		t.Fatalf("voice request=%s err=%v", options.body, err)
 	}
 }
 

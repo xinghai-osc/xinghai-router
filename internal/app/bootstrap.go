@@ -4,102 +4,53 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
-
-	"github.com/jackc/pgx/v5"
 )
 
-// bootstrapAdmin promotes the account identified by BOOTSTRAP_ADMIN_EMAIL to an
-// administrator on startup. It claims the reserved id-1 placeholder created by
-// migration 058 on fresh installs, promotes an existing account when one already
-// holds the email, and otherwise inserts a new admin. When no explicit password
-// is set and a new account is created, a temporary one is generated and printed
-// once to the router log; must_change_password forces a reset on first sign-in.
 func (s *Service) bootstrapAdmin(ctx context.Context) error {
 	email := s.cfg.BootstrapAdminEmail
 	if email == "" {
 		return nil
 	}
 	if !validEmail(email) {
-		return fmt.Errorf("BOOTSTRAP_ADMIN_EMAIL is not a valid email address")
+		return errors.New("BOOTSTRAP_ADMIN_EMAIL is not a valid email address")
 	}
-
-	var id int64
-	existing := true
-	err := s.db.QueryRow(ctx, `select id from users where email=$1`, email).Scan(&id)
-	switch {
-	case err == nil:
-	case errors.Is(err, pgx.ErrNoRows):
-		existing = false
-	default:
-		return fmt.Errorf("bootstrap admin lookup: %w", err)
-	}
-
-	password := s.cfg.BootstrapAdminPass
-	generated := false
-	if password == "" {
-		if !existing {
-			generated = true
-			password, err = randomSecret("")
-			if err != nil {
-				return fmt.Errorf("bootstrap admin password: %w", err)
-			}
-		}
-	} else if !validPasswordLength(password) {
-		return fmt.Errorf("BOOTSTRAP_ADMIN_PASSWORD must be between 8 and 72 characters")
-	}
-
-	passwordHash := ""
-	mustChange := false
-	if password != "" {
-		if passwordHash, err = hashPassword(password); err != nil {
-			return fmt.Errorf("bootstrap admin password hash: %w", err)
-		}
-		mustChange = generated
-	}
-
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
-
-	if existing {
-		if _, err = tx.Exec(ctx, `update users set role='admin',enabled=true,
-			password_hash=case when $1='' then password_hash else $1 end,
-			must_change_password=case when $1='' then must_change_password else $2 end
-			where id=$3`, passwordHash, mustChange, id); err != nil {
-			return fmt.Errorf("bootstrap admin promote: %w", err)
-		}
-	} else {
-		name := s.cfg.BootstrapAdminName
-		if name == "" {
-			name = email
-		}
-		res, err := tx.Exec(ctx, `update users set email=$1,name=$2,role='admin',enabled=true,password_hash=$3,must_change_password=$4 where id=1 and enabled=false and password_hash is null`, email, name, passwordHash, mustChange)
-		if err != nil {
-			return fmt.Errorf("bootstrap admin claim: %w", err)
-		}
-		if res.RowsAffected() == 0 {
-			if err = tx.QueryRow(ctx, `insert into users(email,name,role,password_hash,must_change_password) values($1,$2,'admin',$3,$4) returning id`, email, name, passwordHash, mustChange).Scan(&id); err != nil {
-				return fmt.Errorf("bootstrap admin create: %w", err)
-			}
-		} else {
-			id = 1
-		}
+	var closed bool
+	if err := tx.QueryRow(ctx, `select closed from admin_bootstrap_state where singleton for update`).Scan(&closed); err != nil {
+		return fmt.Errorf("load administrator bootstrap state: %w", err)
 	}
-	if _, err = tx.Exec(ctx, `insert into user_wallets(user_id) values($1) on conflict do nothing`, id); err != nil {
-		return fmt.Errorf("bootstrap admin wallet: %w", err)
+	if closed {
+		return nil
 	}
-	if err = tx.Commit(ctx); err != nil {
-		return err
+	if !validPasswordLength(s.cfg.BootstrapAdminPass) {
+		return errors.New("first administrator setup requires BOOTSTRAP_ADMIN_PASSWORD (8 to 72 bytes)")
 	}
-
-	if generated {
-		log.Printf("bootstrap admin: created administrator %s (id %d)", email, id)
-		log.Printf("bootstrap admin: temporary password for %s is %s (must change on first sign-in)", email, password)
-	} else {
-		log.Printf("bootstrap admin: %s is an administrator (id %d)", email, id)
+	name := s.cfg.BootstrapAdminName
+	if name == "" {
+		name = email
 	}
-	return nil
+	hash, err := hashPassword(s.cfg.BootstrapAdminPass)
+	if err != nil {
+		return fmt.Errorf("hash administrator bootstrap password: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `lock table users in share row exclusive mode`); err != nil {
+		return fmt.Errorf("lock users for administrator bootstrap: %w", err)
+	}
+	tag, err := tx.Exec(ctx, `update users set email=$1,name=$2,enabled=true,password_hash=$3,must_change_password=true
+		where id=1 and email='admin@reserved.local' and name='admin' and role='admin' and not enabled and password_hash is null
+		and not exists(select 1 from users where id<>1)`, email, name, hash)
+	if err != nil {
+		return fmt.Errorf("initialize reserved administrator: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return errors.New("administrator bootstrap requires a fresh database with only the reserved account")
+	}
+	if _, err := tx.Exec(ctx, `update admin_bootstrap_state set closed=true where singleton`); err != nil {
+		return fmt.Errorf("close administrator bootstrap: %w", err)
+	}
+	return tx.Commit(ctx)
 }

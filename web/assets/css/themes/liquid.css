@@ -153,8 +153,8 @@
 }
 
 :root[data-preset='liquid'] .console-sidebar {
-  border-radius: 0;
-  box-shadow: inset -1px 0 0 var(--glass-rim-soft);
+  border-radius: 1.75rem;
+  box-shadow: inset 0 1px 0 var(--glass-rim-soft);
 }
 
 :root[data-preset='liquid'] .glass-control {

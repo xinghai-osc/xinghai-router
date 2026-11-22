@@ -23,12 +23,16 @@ func TestFirstTokenWriterEventType(t *testing.T) {
 		{"payload type authoritative", "event: response.output_text.delta\ndata: {\"type\":\"response.completed\",\"delta\":\"not output\"}\n\n", false},
 		{"heartbeat and usage", ": ping\n\nevent: ping\ndata: {\"type\":\"ping\"}\n\ndata: {\"usage\":{\"output_tokens\":5}}\n\ndata: [DONE]\n\n", false},
 		{"missing terminal newline", "event: response.function_call_arguments.delta\ndata: {\"delta\":\"{}\"}", true},
+		{"escaped whitespace", `data: {"choices":[{"delta":{"content":"\u3000\r\n"}}]}`, false},
+		{"literal Unicode whitespace", `data: {"type":"response.output_text.delta","delta":"　"}`, false},
+		{"escaped output", `data: {"type":"response.output_text.delta","delta":"\u4e2d"}`, true},
+		{"incomplete JSON", `data: {"type":"response.output_text.delta","delta":"text"`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rec := httptest.NewRecorder()
 			tracker := &firstTokenTracker{started: time.Now().Add(-time.Second)}
 			w := newFirstTokenWriter(rec, tracker)
-			for i := range tc.body {
+			for i := 0; i < len(tc.body); i++ {
 				if _, err := w.Write([]byte(tc.body[i : i+1])); err != nil {
 					t.Fatal(err)
 				}
@@ -41,6 +45,25 @@ func TestFirstTokenWriterEventType(t *testing.T) {
 				t.Fatalf("response bytes changed: %q", rec.Body.String())
 			}
 		})
+	}
+}
+
+func TestFirstTokenWriterOwnsPendingFragment(t *testing.T) {
+	const prefix = "event: response.output_text.delta\r\ndata: {\"delta\":\""
+	const suffix = "hello\"}\r\n\r\n: remaining\n\n"
+	rec := httptest.NewRecorder()
+	tracker := &firstTokenTracker{started: time.Now()}
+	w := newFirstTokenWriter(rec, tracker)
+	buf := []byte(prefix)
+	if _, err := w.Write(buf); err != nil || !tracker.at.IsZero() {
+		t.Fatalf("partial frame: first=%v err=%v", tracker.at, err)
+	}
+	clear(buf)
+	if _, err := w.Write(append(buf[:0], suffix...)); err != nil || tracker.at.IsZero() {
+		t.Fatalf("completed frame: first=%v err=%v", tracker.at, err)
+	}
+	if rec.Body.String() != prefix+suffix {
+		t.Fatalf("response bytes changed: %q", rec.Body.String())
 	}
 }
 

@@ -11,6 +11,15 @@ import (
 	"time"
 )
 
+func requireSubscriptionAccess(t *testing.T, s *Service, ctx context.Context, key keyContext, model string) subscriptionAccess {
+	t.Helper()
+	access, err := s.subscriptionCoversModel(ctx, key, model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return access
+}
+
 // seedSubscriptionTier inserts one product with a single tier whose monthly
 // period grants 100 requests and whose model whitelist only allows gpt-4o.
 func seedSubscriptionTier(t *testing.T, s *Service, name string) (productID, tierID string) {
@@ -151,21 +160,22 @@ func TestIntegrationSubscriptionCoverageTracksQuota(t *testing.T) {
 	}
 
 	key := keyContext{userID: userID, keyID: "key-1"}
-	access := s.subscriptionCoversModel(ctx, key, "gpt-4o")
+	access := requireSubscriptionAccess(t, s, ctx, key, "gpt-4o")
 	if !access.Covered || access.SubscriptionID != subID {
 		t.Fatalf("covered=%v subscription=%q, want covered by %s", access.Covered, access.SubscriptionID, subID)
 	}
-	if blocked := s.subscriptionCoversModel(ctx, key, "claude-3"); blocked.Covered {
+	if blocked := requireSubscriptionAccess(t, s, ctx, key, "claude-3"); blocked.Covered {
 		t.Fatal("a model outside the whitelist must not be covered")
 	}
 
 	if _, err := s.db.Exec(ctx, `update user_subscriptions set remaining_requests=0 where id=$1`, subID); err != nil {
 		t.Fatal(err)
 	}
-	if exhausted := s.subscriptionCoversModel(ctx, key, "gpt-4o"); exhausted.Covered {
+	s.subscriptionCache.clear()
+	if exhausted := requireSubscriptionAccess(t, s, ctx, key, "gpt-4o"); exhausted.Covered {
 		t.Fatal("a subscription without remaining requests must not cover")
 	}
-	if exhausted := s.subscriptionCoversModel(ctx, key, "gpt-4o"); exhausted.OveragePolicy != "allow_wallet" {
+	if exhausted := requireSubscriptionAccess(t, s, ctx, key, "gpt-4o"); exhausted.OveragePolicy != "allow_wallet" {
 		t.Fatalf("overage policy = %q, want allow_wallet", exhausted.OveragePolicy)
 	}
 }
@@ -551,7 +561,7 @@ func TestIntegrationSubscriptionCoverageUsesGrantedTierGroupForLegacyKeyGroup(t 
 	}
 
 	key := keyContext{userID: userID, keyID: "legacy-key", groupID: legacyGroupID}
-	access := s.subscriptionCoversModel(ctx, key, "gpt-4o")
+	access := requireSubscriptionAccess(t, s, ctx, key, "gpt-4o")
 	if !access.Covered || access.SubscriptionID != subID {
 		t.Fatalf("legacy-group key access = %+v, want subscription %s", access, subID)
 	}
@@ -598,17 +608,17 @@ func TestIntegrationMultipleTierInstancesAndKeyBinding(t *testing.T) {
 	}
 
 	key := keyContext{userID: userID, keyID: "bound-key", subscriptionID: firstID}
-	access := s.subscriptionCoversModel(ctx, key, "gpt-4o")
+	access := requireSubscriptionAccess(t, s, ctx, key, "gpt-4o")
 	if access.Covered {
 		t.Fatal("a key bound to the exhausted instance borrowed another instance's quota")
 	}
 	key.subscriptionID = secondID
-	access = s.subscriptionCoversModel(ctx, key, "gpt-4o")
+	access = requireSubscriptionAccess(t, s, ctx, key, "gpt-4o")
 	if !access.Covered || access.SubscriptionID != secondID {
 		t.Fatalf("second instance coverage = %+v, want coverage by %s", access, secondID)
 	}
 	key.subscriptionID = ""
-	access = s.subscriptionCoversModel(ctx, key, "gpt-4o")
+	access = requireSubscriptionAccess(t, s, ctx, key, "gpt-4o")
 	if !access.Covered || access.SubscriptionID != secondID {
 		t.Fatalf("automatic selection = %+v, want available second instance", access)
 	}

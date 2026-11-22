@@ -8,12 +8,22 @@ import (
 	"time"
 )
 
+// maintenanceModeEnabled reports whether maintenance mode is on. The answer is
+// memoised for a few seconds: the check runs on every request, and the flag is
+// a single boolean that only admins flip. updateSiteSettings and the cluster
+// config invalidation clear the cache so a toggle takes effect immediately.
 func (s *Service) maintenanceModeEnabled(ctx context.Context) bool {
 	if s.db == nil {
 		return false
 	}
-	var enabled bool
-	if err := s.db.QueryRow(ctx, `select maintenance_mode from site_settings where id=true`).Scan(&enabled); err != nil {
+	enabled, err := s.maintenanceData.get(ctx, struct{}{}, func(ctx context.Context) (bool, error) {
+		var enabled bool
+		if err := s.db.QueryRow(ctx, `select maintenance_mode from site_settings where id=true`).Scan(&enabled); err != nil {
+			return false, err
+		}
+		return enabled, nil
+	})
+	if err != nil {
 		return false
 	}
 	return enabled
@@ -158,6 +168,7 @@ func (s *Service) expireStalePendingOrders(ctx context.Context) {
 		s.subscriptionCache.clear()
 		if groupN > 0 {
 			s.invalidateChannels()
+			s.invalidateAPIKeyContext()
 		}
 	}
 }

@@ -19,6 +19,7 @@ func (s *Service) invalidateConfigCaches() {
 	s.groupConcurrencyCache.clear()
 	s.userConcurrencyCache.clear()
 	s.reliabilityData.clear()
+	s.maintenanceData.clear()
 	s.contentPolicyData.clear()
 	s.conversationCacheData.clear()
 	s.channelKeyCache.clear()
@@ -26,6 +27,9 @@ func (s *Service) invalidateConfigCaches() {
 	s.subscriptionCache.clear()
 	s.channelQuotaCache.clear()
 	s.quotaAbsentCache.clear()
+	s.apiKeyCache.clear()
+	s.modelConsentCache.clear()
+	s.userConsentCache.clear()
 	s.rankingsCache.clear()
 	s.performanceCache.clear()
 }
@@ -89,6 +93,8 @@ func (s *Service) listenConfigInvalidation(ctx context.Context, cfg *pgx.ConnCon
 	}
 	cancel()
 	s.invalidateConfigCaches()
+	s.configListenerReady.Store(true)
+	defer s.configListenerReady.Store(false)
 	ready()
 	for {
 		waitCtx, waitCancel := context.WithTimeout(ctx, 15*time.Second)

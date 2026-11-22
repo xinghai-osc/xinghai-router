@@ -89,3 +89,61 @@ func TestDirectStreamPreservesBytesAndUsageOnReadError(t *testing.T) {
 		t.Fatalf("bytes changed: %q", w.Body.String())
 	}
 }
+
+type eventFlushRecorder struct {
+	*httptest.ResponseRecorder
+	flushBytes []int
+}
+
+func (w *eventFlushRecorder) Flush() {
+	w.flushBytes = append(w.flushBytes, w.Body.Len())
+	w.ResponseRecorder.Flush()
+}
+
+func TestStreamFlushesCompleteEventsAndPartialFrames(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		relay streamTransform
+		eol   string
+	}{
+		{"chat", (&Service{}).streamResponse, "\n"},
+		{"responses", streamResponseDirect, "\r\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := &eventFlushRecorder{ResponseRecorder: httptest.NewRecorder()}
+			received := ": heartbeat\r\n\r\nevent: output\r\ndata: par"
+			first := ": heartbeat" + tc.eol + tc.eol
+			partial := first + "event: output" + tc.eol
+			check := firstTokenReadFunc(func([]byte) (int, error) {
+				if len(w.flushBytes) != 2 || w.flushBytes[0] != len(first) || w.flushBytes[1] != len(partial) {
+					t.Fatalf("flush byte offsets = %v, want [%d %d]", w.flushBytes, len(first), len(partial))
+				}
+				return 0, io.EOF
+			})
+			resp := &http.Response{Body: io.NopCloser(io.MultiReader(strings.NewReader(received), check, strings.NewReader("tial\r\n\r\n")))}
+			if _, err := tc.relay(w, resp); err != nil {
+				t.Fatal(err)
+			}
+			if want := partial + "data: partial" + tc.eol + tc.eol; w.Body.String() != want {
+				t.Fatalf("body = %q, want %q", w.Body.String(), want)
+			}
+		})
+	}
+}
+
+func TestSSEUsageAliasesAfterNullDelta(t *testing.T) {
+	for _, event := range []string{
+		`{"usage":null,"usage":{"input_tokens":12,"output_tokens":7}}`,
+		`{"usage":null,"totalUsage":{"inputTokens":12,"outputTokens":7}}`,
+		`{"usage":null,"total_usage":{"input_tokens":12,"output_tokens":7}}`,
+		`{"usage":null,"usageMetadata":{"promptTokenCount":12,"candidatesTokenCount":7}}`,
+		`{"usage":null,"usage_metadata":{"prompt_token_count":12,"candidates_token_count":7}}`,
+		`{"usage":null,"response":{"\u0075sage" : {"input_tokens":12,"output_tokens":7}}}`,
+	} {
+		var st streamStats
+		parseSSEUsage([]byte(event), &st)
+		if !st.usageComplete || st.prompt != 12 || st.completion != 7 {
+			t.Fatalf("usage for %s = %+v", event, st)
+		}
+	}
+}

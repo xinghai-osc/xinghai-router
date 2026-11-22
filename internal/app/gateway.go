@@ -12,6 +12,7 @@ import (
 	"io"
 	"log"
 	"math/rand"
+	"mime"
 	"net/http"
 	"regexp"
 	"sort"
@@ -25,6 +26,9 @@ const (
 	maxGatewayMaxTokens     = 200_000
 	defaultGatewayMaxTokens = 4096
 	maxUpstreamResponseBody = 16 << 20
+	// Streaming responses are still relayed without a total-size limit, but a
+	// conversation cache must not retain an unbounded copy of a long response.
+	maxConversationCacheBytes = 8 << 20
 	// settlementTimeout bounds the detached wallet/log writes that must complete even
 	// after the client has disconnected.
 	settlementTimeout = 15 * time.Second
@@ -454,6 +458,66 @@ func (s *Service) readGatewayBody(w http.ResponseWriter, r *http.Request) ([]byt
 	return readRequestBodyLimited(w, r, s.requestBodyTimeout(r.Context()), positiveRequestLimit(s.cfg.GatewayMaxBodyBytes, defaultGatewayBodyMaxBytes))
 }
 
+// gatewayRequestScan carries the top-level request fields the gateway needs
+// for pricing (thinking level, service tier). They are extracted in the same
+// unmarshal pass as model/stream/max_tokens instead of re-parsing the whole
+// body once per field.
+type gatewayRequestScan struct {
+	Model     string `json:"model"`
+	Stream    bool   `json:"stream"`
+	MaxTokens int    `json:"max_tokens"`
+	// thinking/service-tier fields mirror requestThinkingLevel and
+	// requestServiceTier so both can be filled by one unmarshal.
+	ReasoningEffort json.RawMessage `json:"reasoning_effort"`
+	Reasoning       struct {
+		Effort string `json:"effort"`
+	} `json:"reasoning"`
+	Thinking struct {
+		Level string `json:"level"`
+		Type  string `json:"type"`
+	} `json:"thinking"`
+	ServiceTier string `json:"service_tier"`
+}
+
+// scanGatewayRequest parses the shared request fields in one pass. Invalid
+// JSON returns the zero scan so callers keep their existing reject behavior.
+func scanGatewayRequest(body []byte) gatewayRequestScan {
+	var scan gatewayRequestScan
+	_ = json.Unmarshal(body, &scan)
+	return scan
+}
+
+// thinkingLevel returns the effective reasoning effort of the scan.
+func (scan gatewayRequestScan) thinkingLevel() string {
+	var effort string
+	if len(scan.ReasoningEffort) > 0 {
+		_ = json.Unmarshal(scan.ReasoningEffort, &effort)
+	}
+	for _, value := range []string{effort, scan.Reasoning.Effort, scan.Thinking.Level, scan.Thinking.Type} {
+		if value = strings.ToLower(strings.TrimSpace(value)); value != "" && value != "none" && value != "off" {
+			return value
+		}
+	}
+	return ""
+}
+
+// serviceTier returns the non-default service tier of the scan, or "".
+func (scan gatewayRequestScan) serviceTier() string {
+	tier := strings.ToLower(strings.TrimSpace(scan.ServiceTier))
+	if tier == "auto" || tier == "default" || tier == "" {
+		return ""
+	}
+	return tier
+}
+
+func requestServiceTier(body []byte) string {
+	return scanGatewayRequest(body).serviceTier()
+}
+
+func requestThinkingLevel(body []byte) string {
+	return scanGatewayRequest(body).thinkingLevel()
+}
+
 func (s *Service) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
 	body, err := s.readGatewayBody(w, r)
@@ -461,11 +525,7 @@ func (s *Service) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		s.rejectRequestBody(w, r, err, started)
 		return
 	}
-	var request struct {
-		Model     string `json:"model"`
-		Stream    bool   `json:"stream"`
-		MaxTokens int    `json:"max_tokens"`
-	}
+	var request gatewayRequestScan
 	if json.Unmarshal(body, &request) != nil {
 		s.logReject(r.Context(), "", 400, "invalid_request", started)
 		writeError(w, 400, "invalid_request", "model is required")
@@ -491,46 +551,6 @@ func (s *Service) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	r = r.WithContext(policyCtx)
 	s.proxyChatCompletions(w, r, body, request.Model, request.Stream, request.MaxTokens, nil, nil, nil, nil, nil, nil)
-}
-
-func requestServiceTier(body []byte) string {
-	var request struct {
-		ServiceTier string `json:"service_tier"`
-	}
-	if json.Unmarshal(body, &request) != nil {
-		return ""
-	}
-	tier := strings.ToLower(strings.TrimSpace(request.ServiceTier))
-	if tier == "auto" || tier == "default" || tier == "" {
-		return ""
-	}
-	return tier
-}
-
-func requestThinkingLevel(body []byte) string {
-	var request struct {
-		ReasoningEffort json.RawMessage `json:"reasoning_effort"`
-		Reasoning       struct {
-			Effort string `json:"effort"`
-		} `json:"reasoning"`
-		Thinking struct {
-			Level string `json:"level"`
-			Type  string `json:"type"`
-		} `json:"thinking"`
-	}
-	if json.Unmarshal(body, &request) != nil {
-		return ""
-	}
-	var effort string
-	if len(request.ReasoningEffort) > 0 {
-		_ = json.Unmarshal(request.ReasoningEffort, &effort)
-	}
-	for _, value := range []string{effort, request.Reasoning.Effort, request.Thinking.Level, request.Thinking.Type} {
-		if value = strings.ToLower(strings.TrimSpace(value)); value != "" && value != "none" && value != "off" {
-			return value
-		}
-	}
-	return ""
 }
 
 type responseTransform func([]byte) ([]byte, error)
@@ -621,6 +641,9 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 	started := time.Now()
 	ctx := r.Context()
 	key := ctx.Value(contextKey{}).(keyContext)
+	// One pass collects every top-level field the gateway itself needs from the
+	// request body; the individual field helpers above re-parse it otherwise.
+	requestScan := scanGatewayRequest(body)
 	if !modelAllowed(key.allowedModels, model) {
 		s.logReject(ctx, model, http.StatusForbidden, "model_not_allowed", started)
 		writeError(w, http.StatusForbidden, "model_not_allowed", "this API key is not allowed to use this model")
@@ -632,7 +655,7 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 		return
 	}
 	var needsConsent bool
-	var consentErr, quotaErr error
+	var consentErr, quotaErr, subscriptionErr error
 	var subscriptionAccess subscriptionAccess
 	var preflight sync.WaitGroup
 	preflight.Add(3)
@@ -646,7 +669,7 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 	}()
 	go func() {
 		defer preflight.Done()
-		subscriptionAccess = s.subscriptionCoversModel(ctx, key, model)
+		subscriptionAccess, subscriptionErr = s.subscriptionCoversModel(ctx, key, model)
 	}()
 	preflight.Wait()
 	if consentErr != nil {
@@ -664,22 +687,21 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 	if mediaOptions.kind != "" {
 		imageOptions.path, imageOptions.contentType = mediaOptions.path, mediaOptions.contentType
 	}
-	// The normalized prompt is derived once and reused by both the local prefix
-	// cache lookup and store; deriving it on each call parsed the body twice.
-	normalized := ""
-	if imageOptions.path == "" && s.promptCache != nil && s.promptCache.enabled && upstreamFormatOnly(ctx) != "jev" {
-		normalized = normalizedPrompt(body)
-	}
 	if quotaErr != nil {
 		s.logReject(ctx, model, 429, "quota_exceeded", started)
 		writeError(w, 429, "quota_exceeded", "request quota exceeded")
 		return
 	}
+	if subscriptionErr != nil {
+		s.logReject(ctx, model, http.StatusServiceUnavailable, "subscription_unavailable", started)
+		writeError(w, http.StatusServiceUnavailable, "subscription_unavailable", "could not verify subscription coverage")
+		return
+	}
 	// Pricing and the group multiplier are read once and reused by reservation and
 	// settlement, which previously repeated the same two lookups.
 	pricing := freezePricing(s.pricingFor(ctx, model), started)
-	pricing.thinkingLevel = requestThinkingLevel(body)
-	pricing.serviceTier = requestServiceTier(body)
+	pricing.thinkingLevel = requestScan.thinkingLevel()
+	pricing.serviceTier = requestScan.serviceTier()
 	if _, err := calculateBill(UsageFacts{}, pricing, 1); err != nil {
 		s.logReject(ctx, model, 402, "pricing_unavailable", started)
 		writeError(w, 402, "pricing_unavailable", "no enabled pricing rule for this model")
@@ -710,7 +732,7 @@ func (s *Service) proxyChatCompletions(w http.ResponseWriter, r *http.Request, b
 	var reserved reservation
 	if subscriptionAccess.Covered {
 		// Subscription-covered requests are never billed.
-	} else if subscriptionAccess.OveragePolicy == "block" {
+	} else if subscriptionAccess.OveragePolicy != "allow_wallet" {
 		s.logReject(ctx, model, 402, "subscription_quota_exceeded", started)
 		writeError(w, 402, "subscription_quota_exceeded", "subscription period quota exhausted")
 		return
@@ -1152,10 +1174,21 @@ tryChannels:
 		return
 	}
 	defer resp.Body.Close()
+	storePrompt := func(tokens int) {
+		if s.promptCache != nil && s.promptCache.enabled && mediaOptions.kind == "" && !imageOptions.image {
+			s.promptCache.store(model, normalizedPrompt(body), int64(tokens))
+		}
+	}
 	selectedFormat := resolveUpstreamFormat(ch.provider, ch.upstreamFormat)
-	if stream && resp.StatusCode >= 200 && resp.StatusCode < 300 && strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
+	if stream && resp.StatusCode >= 200 && resp.StatusCode < 300 && isEventStreamContentType(resp.Header.Get("Content-Type")) {
 		if selectedDirectResponses {
 			copyResponseHeaders(w.Header(), resp.Header)
+			if w.Header().Get("Cache-Control") == "" {
+				w.Header().Set("Cache-Control", "no-cache")
+			}
+			if w.Header().Get("X-Accel-Buffering") == "" {
+				w.Header().Set("X-Accel-Buffering", "no")
+			}
 		}
 		var st streamStats
 		firstToken := &firstTokenTracker{started: started}
@@ -1185,13 +1218,8 @@ tryChannels:
 		}
 		firstTokenWriter.finish()
 		status := resp.StatusCode
+		deliveredBytes := capture.deliveredBytes
 
-		if !st.usageComplete && streamErr == nil {
-			completeStreamFacts(&st, body, maxTokens)
-		}
-		if !st.facts.HasUsage() && (st.prompt > 0 || st.completion > 0) {
-			st.facts = usageFactsFromLegacy(st.prompt, st.cached, st.completion, "upstream")
-		}
 		st.prompt, st.cached, st.completion = st.facts.LegacyTokens()
 		total := st.prompt + st.completion
 		code, detail := "", ""
@@ -1220,13 +1248,6 @@ tryChannels:
 				total = st.prompt + st.completion
 			}
 			s.logRequest(ctx, key, ch.id, ch.keyID, model, status, st.prompt, st.completion, total, time.Since(started), code, detail, firstToken.milliseconds())
-			if st.facts.HasUsage() && st.facts.UsageSource != "request_estimate" {
-				if subscriptionAccess.Covered {
-					s.settleSubscriptionFacts(ctx, key, model, st.facts, pricing, groupMultiplier)
-				} else {
-					reserved = s.settleUsageFacts(ctx, key, reserved, model, st.facts, pricing, groupMultiplier)
-				}
-			}
 			if !capture.wrote && !capture.headerSent {
 				writeError(w, status, "upstream_error", s.clientUpstreamError(ctx, detail, reliability))
 			}
@@ -1236,22 +1257,29 @@ tryChannels:
 		} else {
 			s.logRequest(ctx, key, ch.id, ch.keyID, model, status, st.prompt, st.completion, total, time.Since(started), "", "", firstToken.milliseconds())
 			if streamErr == nil {
-				s.promptCache.store(model, normalized, int64(st.prompt))
-			}
-			if subscriptionAccess.Covered {
-				s.settleSubscriptionFacts(ctx, key, model, st.facts, pricing, groupMultiplier)
-			} else {
-				reserved = s.settleUsageFacts(ctx, key, reserved, model, st.facts, pricing, groupMultiplier)
+				storePrompt(st.prompt)
 			}
 			s.channelSucceeded(ctx, ch.id, ch.keyID)
 			if identity.stable {
 				s.bindSessionChannel(affinity, ch)
 			}
 		}
+		if !st.usageComplete {
+			bill := incompleteStreamBill(st, pricing, groupMultiplier, deliveredBytes, code, subscriptionAccess)
+			if subscriptionAccess.Covered && (code == "" || st.facts.HasUsage()) {
+				s.settleSubscriptionBill(ctx, key, model, bill)
+			} else {
+				s.recordUnsettledUsage(ctx, key, model, bill)
+			}
+		} else if subscriptionAccess.Covered {
+			s.settleSubscriptionFacts(ctx, key, model, st.facts, pricing, groupMultiplier)
+		} else {
+			reserved = s.settleUsageFacts(ctx, key, reserved, model, st.facts, pricing, groupMultiplier)
+		}
 		// Only cache a stream that ran to completion. A stream interrupted by a
 		// client disconnect or an upstream error is partial output and useless for
 		// offline analysis, plus dropping it avoids recording half-sent turns.
-		if cacheEnabled && streamErr == nil {
+		if cacheEnabled && !capture.cacheTruncated && streamErr == nil {
 			s.storeConversationCache(ctx, key, model, true, body, capture.bytes(), status, time.Since(started).Milliseconds(), firstToken.milliseconds())
 		}
 		return
@@ -1357,7 +1385,7 @@ tryChannels:
 	}
 	s.logRequest(ctx, key, ch.id, ch.keyID, model, resp.StatusCode, prompt, completion, total, time.Since(started), errorCode(resp.StatusCode), detail)
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		s.promptCache.store(model, normalized, int64(prompt))
+		storePrompt(prompt)
 		if subscriptionAccess.Covered {
 			s.settleSubscriptionFacts(ctx, key, model, facts, pricing, groupMultiplier)
 		} else {
@@ -1613,6 +1641,10 @@ func (s *Service) settleSubscriptionFacts(ctx context.Context, key keyContext, m
 	} else {
 		bill.Status = "subscription"
 	}
+	s.settleSubscriptionBill(ctx, key, model, bill)
+}
+
+func (s *Service) settleSubscriptionBill(ctx context.Context, key keyContext, model string, bill BillingSnapshot) {
 	cost := bill.Amount
 	factsJSON, _ := json.Marshal(bill.Usage)
 	billJSON, _ := json.Marshal(bill)
@@ -1626,7 +1658,7 @@ func (s *Service) settleSubscriptionFacts(ctx context.Context, key keyContext, m
 	// xmax = 0 marks the row this statement inserted rather than the row an
 	// ON CONFLICT re-settle updated: a period quota must be spent once per
 	// request, even when the first settle wrote a provisional unpriced status.
-	_, err = s.db.Exec(settleCtx, `with inserted as (
+	_, err := s.db.Exec(settleCtx, `with inserted as (
 		insert into usage_records(id,request_id,user_id,api_key_id,model,prompt_tokens,cached_prompt_tokens,completion_tokens,cost,usage_facts,billing_snapshot,status)
 		values($1::uuid,$2::text,$3,$4::uuid,$5::text,$6::int,$7::int,$8::int,$9,$11::jsonb,$12::jsonb,$13)
 		on conflict(request_id) do update set prompt_tokens=excluded.prompt_tokens,cached_prompt_tokens=excluded.cached_prompt_tokens,
@@ -1676,14 +1708,20 @@ func (s *Service) releaseReservation(ctx context.Context, key keyContext, held r
 	// The client may already have hung up; the hold must be released regardless.
 	releaseCtx, cancel := detach(ctx, settlementTimeout)
 	defer cancel()
-	ledgerID, _ := randomID()
-	_, _ = s.db.Exec(releaseCtx, `with released as (
+	ledgerID, err := randomID()
+	if err != nil {
+		log.Printf("releaseReservation id failed request=%s user=%s: %v", requestID(ctx), key.userID, err)
+		return
+	}
+	if _, err := s.db.Exec(releaseCtx, `with released as (
 		update user_wallets set reserved=greatest(0,reserved-$1),updated_at=now()
 		where user_id=$2 and not exists (select 1 from wallet_settlements where request_id=$4::text and user_id=$2)
 		returning balance
 	)
 	insert into wallet_ledger(id,user_id,amount,balance_after,kind,request_id,note,settlement_status)
-	select $3::uuid,$2,$1,balance,'release',$4::text,'Reservation released','not_applicable' from released`, held.amount, key.userID, ledgerID, requestID(ctx))
+	select $3::uuid,$2,$1,balance,'release',$4::text,'Reservation released','not_applicable' from released`, held.amount, key.userID, ledgerID, requestID(ctx)); err != nil {
+		log.Printf("releaseReservation failed request=%s user=%s: %v", requestID(ctx), key.userID, err)
+	}
 }
 
 // "total" rows aggregate lifetime usage (no created_at cutoff); day/month/minute
@@ -1713,7 +1751,8 @@ func (s *Service) checkQuota(ctx context.Context, key keyContext, model string) 
 		select count(*) as requests,coalesce(sum(rl.total_tokens),0) as tokens,coalesce(sum(ur.cost),0) as cost
 		from request_logs rl
 		left join usage_records ur on ur.request_id=rl.request_id
-		where case when q.api_key_id is null and q.user_id is not null then rl.user_id=$1 else rl.api_key_id=$2 end
+		where ((rl.user_id=$1 and q.api_key_id is null and q.user_id is not null)
+			  or (rl.api_key_id=$2 and (q.api_key_id is not null or q.user_id is null)))
 		  and (q.model is null or rl.model=q.model)
 		  and rl.created_at >= case when q."window"='total' then '-infinity'::timestamptz else now() - ('1 '||q."window")::interval end
 	) u`, key.userID, key.keyID, model)
@@ -1996,21 +2035,28 @@ func (s *Service) channelSucceeded(ctx context.Context, id int64, keyID string) 
 
 // channelFailed counts a failure against the channel or, when the failing key is
 // known (multi-key channels), against that key. Three failures on the same key
-// trigger an out-of-request verification test of exactly that key.
+// trigger an out-of-request verification test of exactly that key. The counters
+// are health bookkeeping, so the row lock is taken on the background writer
+// instead of inside the retry loop: during an upstream outage every in-flight
+// request would otherwise serialize on the same channel row. Dropping a task
+// when the queue is saturated only under-counts failures that the next request
+// re-counts; the failure_count==3 probe trigger is checked inside the task.
 func (s *Service) channelFailed(ctx context.Context, channelID int64, keyID, reason string) {
-	if keyID != "" {
-		var failureCount int
-		err := s.db.QueryRow(ctx, `update channel_api_keys set failure_count=failure_count+1,last_error=$2,last_checked_at=now() where id=$1 and channel_id=$3 returning failure_count`, keyID, reason, channelID).Scan(&failureCount)
-		if err == nil && failureCount == 3 {
-			go s.testFailedChannelKey(channelID, keyID)
+	s.background.submit(func(taskCtx context.Context) {
+		if keyID != "" {
+			var failureCount int
+			err := s.db.QueryRow(taskCtx, `update channel_api_keys set failure_count=failure_count+1,last_error=$2,last_checked_at=now() where id=$1 and channel_id=$3 returning failure_count`, keyID, reason, channelID).Scan(&failureCount)
+			if err == nil && failureCount == 3 {
+				go s.testFailedChannelKey(channelID, keyID)
+			}
+			return
 		}
-		return
-	}
-	var failureCount int
-	err := s.db.QueryRow(ctx, `update channels set failure_count=failure_count+1,last_error=$2,last_checked_at=now(),updated_at=now() where id=$1 returning failure_count`, channelID, reason).Scan(&failureCount)
-	if err == nil && failureCount == 3 {
-		go s.testFailedChannel(channelID)
-	}
+		var failureCount int
+		err := s.db.QueryRow(taskCtx, `update channels set failure_count=failure_count+1,last_error=$2,last_checked_at=now(),updated_at=now() where id=$1 returning failure_count`, channelID, reason).Scan(&failureCount)
+		if err == nil && failureCount == 3 {
+			go s.testFailedChannel(channelID)
+		}
+	})
 }
 
 // testFailedChannel verifies a newly unhealthy channel outside the client request.
@@ -2103,10 +2149,12 @@ func retryableStatus(status int) bool {
 
 type streamCaptureWriter struct {
 	http.ResponseWriter
-	buf        *bytes.Buffer
-	flusher    http.Flusher
-	wrote      bool
-	headerSent bool
+	deliveredBytes int64
+	buf            *bytes.Buffer
+	flusher        http.Flusher
+	wrote          bool
+	headerSent     bool
+	cacheTruncated bool
 }
 
 // newStreamCaptureWriter wraps w so the gateway can tell whether an SSE stream
@@ -2128,9 +2176,16 @@ func (c *streamCaptureWriter) Write(p []byte) (int, error) {
 		c.wrote = true
 	}
 	if c.buf != nil {
-		c.buf.Write(p)
+		if c.buf.Len() > maxConversationCacheBytes-len(p) {
+			c.buf = nil
+			c.cacheTruncated = true
+		} else {
+			_, _ = c.buf.Write(p)
+		}
 	}
-	return c.ResponseWriter.Write(p)
+	n, err := c.ResponseWriter.Write(p)
+	c.deliveredBytes += int64(n)
+	return n, err
 }
 
 func (c *streamCaptureWriter) WriteHeader(code int) {
@@ -2153,14 +2208,34 @@ func (c *streamCaptureWriter) bytes() []byte {
 	return c.buf.Bytes()
 }
 
+func mayHaveSSEUsage(data []byte) bool {
+	if bytes.Contains(data, []byte(`\u`)) || bytes.Contains(data, []byte("Usage")) {
+		return true
+	}
+	for {
+		_, rest, found := bytes.Cut(data, []byte("usage"))
+		if !found {
+			return false
+		}
+		value, standardKey := bytes.CutPrefix(rest, []byte(`":`))
+		if !standardKey || !bytes.HasPrefix(bytes.TrimLeft(value, " \t\r\n"), []byte("null")) {
+			return true
+		}
+		data = rest
+	}
+}
+
 // streamUsage collects token counts from the SSE chunks that pass through a
 // stream. OpenAI streams carry usage in the final chunk's "usage" object (when
 // stream_options.include_usage was requested); Anthropic streams carry
 // input/cache tokens in the message_start event and output tokens in the
 // message_delta event.
 func parseSSEUsage(data []byte, st *streamStats) {
+	if st == nil || !mayHaveSSEUsage(data) {
+		return
+	}
 	var chunk usageObject
-	if st == nil || json.Unmarshal(data, &chunk) != nil {
+	if json.Unmarshal(data, &chunk) != nil {
 		return
 	}
 	facts := parseUsageFactsObject(chunk, "")
@@ -2177,10 +2252,39 @@ func parseSSEUsage(data []byte, st *streamStats) {
 	st.usageComplete = st.promptReported && st.completionReported
 }
 
-func estimatedStreamUsage(body []byte, maxTokens int) (prompt, completion int) {
-	completion, _ = resolveGatewayMaxTokens(maxTokens)
-	prompt = len(body) / 3
-	return prompt, completion
+func relaySSELines(body io.Reader, flusher http.Flusher, writeLine func([]byte) error) error {
+	reader := bufio.NewReader(body)
+	var fragments []byte
+	for {
+		line, err := reader.ReadSlice('\n')
+		if len(fragments)+len(line) > 2<<20 {
+			return fmt.Errorf("upstream SSE line exceeds size limit")
+		}
+		if err == bufio.ErrBufferFull {
+			fragments = append(fragments, line...)
+			continue
+		}
+		if len(fragments) != 0 {
+			line = append(fragments, line...)
+			fragments = line[:0]
+		}
+		if len(line) > 0 {
+			blank := bytes.Equal(line, []byte("\n")) || bytes.Equal(line, []byte("\r\n"))
+			if writeErr := writeLine(line); writeErr != nil {
+				return writeErr
+			}
+			next, _ := reader.Peek(reader.Buffered())
+			if blank || bytes.IndexByte(next, '\n') < 0 {
+				flusher.Flush()
+			}
+		}
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
 }
 
 func streamResponseDirect(w http.ResponseWriter, resp *http.Response) (streamStats, error) {
@@ -2189,38 +2293,14 @@ func streamResponseDirect(w http.ResponseWriter, resp *http.Response) (streamSta
 		return streamStats{}, fmt.Errorf("streaming unsupported")
 	}
 	var st streamStats
-	reader := bufio.NewReader(resp.Body)
-	var line []byte
-	for {
-		part, err := reader.ReadSlice('\n')
-		if len(line)+len(part) > 2<<20 {
-			return st, fmt.Errorf("upstream SSE line exceeds size limit")
+	err := relaySSELines(resp.Body, flusher, func(line []byte) error {
+		if data, ok := bytes.CutPrefix(bytes.TrimSpace(line), []byte("data:")); ok {
+			parseSSEUsage(bytes.TrimSpace(data), &st)
 		}
-		line = append(line, part...)
-		if errors.Is(err, bufio.ErrBufferFull) {
-			continue
-		}
-		if len(line) > 0 {
-			trimmed := strings.TrimSpace(string(line))
-			if strings.HasPrefix(trimmed, "data:") {
-				data := strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
-				if data != "" && data != "[DONE]" {
-					parseSSEUsage([]byte(data), &st)
-				}
-			}
-			if _, writeErr := w.Write(line); writeErr != nil {
-				return st, writeErr
-			}
-			flusher.Flush()
-			line = line[:0]
-		}
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				return st, nil
-			}
-			return st, err
-		}
-	}
+		_, err := w.Write(line)
+		return err
+	})
+	return st, err
 }
 
 // openAIStreamFinishChunk returns the terminal chat-completions chunk used when
@@ -2257,17 +2337,14 @@ func (s *Service) streamResponse(w http.ResponseWriter, resp *http.Response) (st
 		finished = true
 		return nil
 	}
-	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 64*1024), 2<<20)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.HasPrefix(line, "data:") {
-			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-			if data == "[DONE]" {
+	err := relaySSELines(resp.Body, flusher, func(line []byte) error {
+		if data, ok := bytes.CutPrefix(line, []byte("data:")); ok {
+			data = bytes.TrimSpace(data)
+			if bytes.Equal(data, []byte("[DONE]")) {
 				if err := writeFinish(); err != nil {
-					return st, err
+					return err
 				}
-			} else if data != "" {
+			} else if len(data) != 0 {
 				var chunk struct {
 					ID      string `json:"id"`
 					Model   string `json:"model"`
@@ -2275,7 +2352,7 @@ func (s *Service) streamResponse(w http.ResponseWriter, resp *http.Response) (st
 						FinishReason *string `json:"finish_reason"`
 					} `json:"choices"`
 				}
-				if json.Unmarshal([]byte(data), &chunk) == nil {
+				if json.Unmarshal(data, &chunk) == nil {
 					validChunk = true
 					if chunk.ID != "" {
 						id = chunk.ID
@@ -2287,15 +2364,19 @@ func (s *Service) streamResponse(w http.ResponseWriter, resp *http.Response) (st
 						finished = true
 					}
 				}
-				parseSSEUsage([]byte(data), &st)
+				parseSSEUsage(data, &st)
 			}
 		}
-		if _, err := io.WriteString(w, line+"\n"); err != nil {
-			return st, err
+		if bytes.HasSuffix(line, []byte("\r\n")) {
+			line = line[:len(line)-1]
+			line[len(line)-1] = '\n'
+		} else if line[len(line)-1] != '\n' {
+			line = append(bytes.TrimSuffix(line, []byte("\r")), '\n')
 		}
-		flusher.Flush()
-	}
-	if err := scanner.Err(); err != nil {
+		_, err := w.Write(line)
+		return err
+	})
+	if err != nil {
 		return st, err
 	}
 	if err := writeFinish(); err != nil {
@@ -2569,12 +2650,20 @@ func errorCode(status int) string {
 	}
 	return ""
 }
+func isEventStreamContentType(value string) bool {
+	mediaType, _, err := mime.ParseMediaType(strings.TrimSpace(value))
+	return err == nil && strings.EqualFold(mediaType, "text/event-stream")
+}
+
 func contentType(value string) string {
-	if strings.HasPrefix(value, "application/json") {
-		return "application/json"
-	}
-	if strings.HasPrefix(value, "text/event-stream") {
-		return "text/event-stream"
+	mediaType, _, err := mime.ParseMediaType(strings.TrimSpace(value))
+	if err == nil {
+		switch {
+		case strings.EqualFold(mediaType, "application/json"):
+			return "application/json"
+		case strings.EqualFold(mediaType, "text/event-stream"):
+			return "text/event-stream"
+		}
 	}
 	return "application/json"
 }

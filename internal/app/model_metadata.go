@@ -343,6 +343,7 @@ func (s *Service) createModelMetadata(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "model_metadata.created", "model_catalog_metadata", id, map[string]any{"model": in.Model, "name": name, "owned_by": ownedBy, "description": in.Description, "input_modalities": in.InputModalities, "output_modalities": in.OutputModalities, "context_window": in.ContextWindow, "max_output_tokens": in.MaxOutputTokens, "reasoning_efforts": in.ReasoningEfforts, "api_capabilities": in.APICapabilities})
+	s.invalidateDataTransferConsent("", in.Model)
 	writeJSON(w, http.StatusCreated, map[string]any{"id": id, "model": in.Model})
 }
 
@@ -378,6 +379,7 @@ func (s *Service) updateModelMetadata(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "model_metadata.updated", "model_catalog_metadata", id, map[string]any{"model": model, "name": in.Name, "owned_by": in.OwnedBy, "description": in.Description, "input_modalities": in.InputModalities, "output_modalities": in.OutputModalities, "context_window": in.ContextWindow, "max_output_tokens": in.MaxOutputTokens, "reasoning_efforts": in.ReasoningEfforts, "api_capabilities": in.APICapabilities})
+	s.invalidateDataTransferConsent("", model)
 	writeJSON(w, http.StatusOK, map[string]any{"id": id, "model": model})
 }
 
@@ -396,6 +398,7 @@ func (s *Service) deleteModelMetadata(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "model metadata not found")
 		return
 	}
+	s.modelConsentCache.clear()
 	s.audit(r, "model_metadata.deleted", "model_catalog_metadata", id, nil)
 	w.WriteHeader(http.StatusNoContent)
 }

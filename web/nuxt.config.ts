@@ -31,6 +31,18 @@ export default defineNuxtConfig({
     },
   },
   hooks: {
+    'build:manifest'(manifest) {
+      for (const chunk of Object.values(manifest)) {
+        if (chunk.src?.includes('/@lobehub/icons-static-svg/icons/')) {
+          const icon = manifest[chunk.file]
+          if (icon) icon.prefetch = false
+        }
+        if (chunk.dynamicImports) {
+          chunk.dynamicImports = chunk.dynamicImports.filter(id =>
+            !id.startsWith('src/locales/') && id !== 'components/site/CodeSample.vue' && id !== 'components/site/PlanCards.vue')
+        }
+      }
+    },
     // /design is an internal style guide with hard-coded copy — it is the one
     // page exempt from the i18n rule, so it must never reach production.
     'pages:extend'(pages) {

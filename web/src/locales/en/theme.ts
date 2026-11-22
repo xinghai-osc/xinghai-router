@@ -1,4 +1,6 @@
 export default {
+  marginLabel: 'Margin',
+  marginHint: 'Editorial type · warm paper & sage glass',
   liquidLabel: 'Liquid Glass',
   liquidHint: 'Translucent glass · soft fluid backdrop',
   newapiLabel: 'Clear Blue',

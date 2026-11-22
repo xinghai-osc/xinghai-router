@@ -11,7 +11,10 @@ import (
 )
 
 func (s *Service) notifyQuotaExhausted(parent context.Context, userID, category, eventKey string) {
-	if strings.TrimSpace(userID) == "" || strings.TrimSpace(eventKey) == "" || !s.loadSystemConfig(parent).emailVerificationEnabled() {
+	if strings.TrimSpace(userID) == "" || strings.TrimSpace(eventKey) == "" {
+		return
+	}
+	if cfg, err := s.checkedSystemConfig(parent); err != nil || !cfg.emailVerificationEnabled() {
 		return
 	}
 	userIDValue, err := strconv.ParseInt(userID, 10, 64)

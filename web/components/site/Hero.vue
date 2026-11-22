@@ -8,6 +8,7 @@ const props = withDefaults(defineProps<{
 }>(), { models: () => [], catalogLoading: false })
 
 const { t, locale } = useI18n()
+const renderCodeSample = ref(import.meta.server || useNuxtApp().isHydrating)
 const modelCount = computed(() => props.models.length)
 const countCopy = computed(() =>
   modelCount.value
@@ -78,7 +79,7 @@ const capabilities = [
           <div class="pointer-events-none absolute -inset-5 -z-10 rounded-[32px] border border-clay/10 bg-clay-soft/25" aria-hidden="true" />
           <SiteGatewayPreview :models="models" :loading="catalogLoading" />
 
-          <details class="group mt-3 overflow-hidden rounded-card border border-line bg-surface/75">
+          <details class="group mt-3 overflow-hidden rounded-card border border-line bg-surface/75" @toggle.once="renderCodeSample = true">
             <summary class="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-xs font-medium text-muted transition-colors duration-150 ease-out hover:text-ink [&::-webkit-details-marker]:hidden">
               <span class="inline-flex items-center gap-2.5">
                 <Code2 class="size-4 text-clay" aria-hidden="true" />
@@ -90,7 +91,7 @@ const capabilities = [
               </span>
             </summary>
             <div class="border-t border-line p-3">
-              <SiteCodeSample />
+              <LazySiteCodeSample v-if="renderCodeSample" hydrate-on-visible />
             </div>
           </details>
         </div>

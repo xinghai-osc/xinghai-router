@@ -58,19 +58,26 @@ func subscriptionUsageStatus(bill BillingSnapshot) string {
 	return bill.Status
 }
 
-func completeStreamFacts(st *streamStats, body []byte, maxTokens int) {
-	prompt, output := estimatedStreamUsage(body, maxTokens)
-	if !st.facts.HasUsage() {
-		st.facts = usageFactsFromLegacy(prompt, 0, output, "request_estimate")
-		return
+type streamObservation struct {
+	InputReported  bool   `json:"input_reported"`
+	OutputReported bool   `json:"output_reported"`
+	DeliveredBytes int64  `json:"delivered_bytes"`
+	ErrorCode      string `json:"error_code,omitempty"`
+	SubscriptionID string `json:"subscription_id,omitempty"`
+}
+
+func incompleteStreamBill(st streamStats, pricing pricingRule, groupMultiplier float64, deliveredBytes int64, errorCode string, access subscriptionAccess) BillingSnapshot {
+	facts := st.facts
+	if !facts.HasUsage() {
+		facts.UsageSource = "missing"
 	}
-	if !st.promptReported {
-		st.facts.InputTokens = int64(prompt)
+	bill, _ := calculateBill(facts, pricing, groupMultiplier)
+	bill.Status, bill.Cost, bill.Amount = "missing_usage", 0, "0.00000000"
+	bill.StreamObservation = &streamObservation{InputReported: st.promptReported, OutputReported: st.completionReported, DeliveredBytes: deliveredBytes, ErrorCode: errorCode}
+	if access.Covered {
+		bill.StreamObservation.SubscriptionID = access.SubscriptionID
 	}
-	if !st.completionReported {
-		st.facts.OutputTokens = int64(max(0, output-int(st.facts.AudioOutputTokens+st.facts.ImageOutputTokens)))
-	}
-	st.facts.UsageSource = "upstream_and_request_estimate"
+	return bill
 }
 
 func (s *Service) recordUnsettledUsage(ctx context.Context, key keyContext, model string, bill BillingSnapshot) {

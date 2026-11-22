@@ -30,13 +30,21 @@ func (t *firstTokenTracker) milliseconds() *int {
 	return &ms
 }
 
-func hasVisibleContent(raw json.RawMessage) bool {
-	if len(raw) == 0 || string(raw) == "null" {
+func hasVisibleJSONString(raw json.RawMessage) bool {
+	if len(raw) < 2 || raw[0] != '"' {
 		return false
 	}
-	var text string
-	if json.Unmarshal(raw, &text) == nil {
-		return strings.TrimSpace(text) != ""
+	text := raw[1 : len(raw)-1]
+	if bytes.IndexByte(text, '\\') < 0 {
+		return len(bytes.TrimSpace(text)) > 0
+	}
+	var decoded string
+	return json.Unmarshal(raw, &decoded) == nil && strings.TrimSpace(decoded) != ""
+}
+
+func hasVisibleContent(raw json.RawMessage) bool {
+	if len(raw) == 0 || raw[0] != '[' {
+		return hasVisibleJSONString(raw)
 	}
 	var parts []struct {
 		Type string `json:"type"`
@@ -64,39 +72,48 @@ func newFirstTokenWriter(w http.ResponseWriter, tracker *firstTokenTracker) *fir
 	return &firstTokenWriter{ResponseWriter: w, tracker: tracker}
 }
 
-func (w *firstTokenWriter) processLine(line string) {
+func (w *firstTokenWriter) processLine(line []byte) {
 	if w.tracker == nil || !w.tracker.at.IsZero() {
 		return
 	}
-	if line == "" {
+	line = bytes.TrimSpace(line)
+	if len(line) == 0 {
 		w.eventType = ""
 		return
 	}
-	if strings.HasPrefix(line, "event:") {
-		w.eventType = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+	if bytes.HasPrefix(line, []byte("event:")) {
+		w.eventType = string(bytes.TrimSpace(bytes.TrimPrefix(line, []byte("event:"))))
 		return
 	}
-	if !strings.HasPrefix(line, "data:") {
+	if !bytes.HasPrefix(line, []byte("data:")) {
 		return
 	}
-	data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-	if data != "" && data != "[DONE]" && hasStreamOutput([]byte(data), w.eventType) {
+	data := bytes.TrimSpace(bytes.TrimPrefix(line, []byte("data:")))
+	if len(data) > 0 && !bytes.Equal(data, []byte("[DONE]")) && hasStreamOutput(data, w.eventType) {
 		w.tracker.mark()
 	}
 }
 
 func (w *firstTokenWriter) Write(p []byte) (int, error) {
-	if len(p) > 0 && w.tracker != nil && w.tracker.at.IsZero() {
-		w.pending.Write(p)
-		for w.tracker.at.IsZero() {
-			raw := w.pending.Bytes()
-			i := bytes.IndexByte(raw, '\n')
+	if w.tracker != nil && w.tracker.at.IsZero() {
+		for rest := p; len(rest) > 0; {
+			i := bytes.IndexByte(rest, '\n')
 			if i < 0 {
+				_, _ = w.pending.Write(rest)
 				break
 			}
-			line := strings.TrimSpace(string(raw[:i]))
-			w.pending.Next(i + 1)
+			line := rest[:i]
+			if w.pending.Len() > 0 {
+				_, _ = w.pending.Write(line)
+				line = w.pending.Bytes()
+				w.pending.Reset()
+			}
 			w.processLine(line)
+			if !w.tracker.at.IsZero() {
+				w.pending = bytes.Buffer{}
+				break
+			}
+			rest = rest[i+1:]
 		}
 	}
 	return w.ResponseWriter.Write(p)
@@ -106,17 +123,8 @@ func (w *firstTokenWriter) finish() {
 	if w.tracker == nil || !w.tracker.at.IsZero() || w.pending.Len() == 0 {
 		return
 	}
-	raw := w.pending.String()
-	for w.tracker.at.IsZero() {
-		i := strings.IndexByte(raw, '\n')
-		if i < 0 {
-			w.processLine(strings.TrimSpace(raw))
-			break
-		}
-		w.processLine(strings.TrimSpace(raw[:i]))
-		raw = raw[i+1:]
-	}
-	w.pending.Reset()
+	w.processLine(w.pending.Bytes())
+	w.pending = bytes.Buffer{}
 }
 
 func (w *firstTokenWriter) WriteHeader(code int) {
@@ -213,8 +221,7 @@ func hasStreamOutput(data []byte, eventType string) bool {
 			return strings.TrimSpace(delta.Thinking) != ""
 		}
 	case "response.output_text.delta", "response.refusal.delta", "response.reasoning_text.delta", "response.reasoning_summary_text.delta", "response.function_call_arguments.delta", "response.custom_tool_call_input.delta":
-		var delta string
-		return json.Unmarshal(event.Delta, &delta) == nil && strings.TrimSpace(delta) != ""
+		return hasVisibleJSONString(event.Delta)
 	case "response.output_item.added":
 		return event.Item.Type == "function_call" && event.Item.hasOutput()
 	}

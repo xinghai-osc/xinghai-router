@@ -174,6 +174,9 @@ func (s *Service) adminCreateSubscription(w http.ResponseWriter, r *http.Request
 	}
 	s.audit(r, "subscription.admin_created", "user_subscription", subID, map[string]any{"user_id": userID, "tier_id": tierID, "billing_period": billingPeriod, "period_days": in.PeriodDays})
 	s.subscriptionCache.clear()
+	if purchase.GroupID != "" {
+		s.invalidateAPIKeyContext()
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"id": subID})
 }
 
@@ -478,6 +481,9 @@ func (s *Service) batchExtendSubscriptions(w http.ResponseWriter, r *http.Reques
 	}
 	s.audit(r, "subscription.batch_extended", "subscription_tier", tierID, map[string]any{"days": in.Days, "status": in.Status, "affected": affected, "renewed": len(renewed)})
 	s.subscriptionCache.clear()
+	if len(renewed) > 0 {
+		s.invalidateAPIKeyContext()
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"affected": affected, "renewed": len(renewed)})
 }
 

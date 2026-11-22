@@ -39,7 +39,10 @@ func (p corptchaPayload) complete() bool {
 // verifyCaptcha dispatches to the active provider: Corptcha when selected,
 // Geetest otherwise. Providers that are not configured pass through.
 func (s *Service) verifyCaptcha(ctx context.Context, geetest geetestPayload, corptcha corptchaPayload, purpose string) error {
-	sys := s.loadSystemConfig(ctx)
+	sys, configErr := s.checkedSystemConfig(ctx)
+	if configErr != nil {
+		return fmt.Errorf("captcha configuration unavailable")
+	}
 	switch sys.captchaProvider() {
 	case "corptcha":
 		return s.verifyCorptcha(ctx, sys, corptcha, purpose)

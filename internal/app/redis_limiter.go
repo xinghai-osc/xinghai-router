@@ -12,18 +12,29 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 const redisLimitScript = "local current = redis.call('INCR', KEYS[1])\nif current == 1 then\n  redis.call('EXPIRE', KEYS[1], ARGV[1])\nend\nreturn current\n"
 
+const redisPoolSize = 8
+
+type redisConnection struct {
+	net.Conn
+	reader *bufio.Reader
+}
+
 type redisLimiter struct {
 	initOnce  sync.Once
+	closeOnce sync.Once
+	maxConns  int
 	gate      chan struct{}
+	idle      chan redisConnection
 	lifecycle context.Context
 	stop      context.CancelFunc
-	conn      net.Conn
-	reader    *bufio.Reader
+	// scriptSHA is the cached SCRIPT LOAD digest of redisLimitScript.
+	scriptSHA atomic.Value
 	addr      string
 	username  string
 	password  string
@@ -81,6 +92,7 @@ func newRedisClient(redisURL string, perMinute int) (*redisLimiter, error) {
 		password, _ = u.User.Password()
 	}
 	return &redisLimiter{
+		maxConns:  redisPoolSize,
 		addr:      net.JoinHostPort(host, port),
 		username:  username,
 		password:  password,
@@ -106,7 +118,9 @@ func newRedisLimiter(redisURL string, perMinute int) (*redisLimiter, error) {
 
 func (l *redisLimiter) init() {
 	l.initOnce.Do(func() {
-		l.gate = make(chan struct{}, 1)
+		limit := max(1, l.maxConns)
+		l.gate = make(chan struct{}, limit)
+		l.idle = make(chan redisConnection, limit)
 		l.lifecycle, l.stop = context.WithCancel(context.Background())
 	})
 }
@@ -119,6 +133,9 @@ func (l *redisLimiter) command(ctx context.Context, args ...string) (reply any, 
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	// When the limiter shuts down, the command's context must be cancelled too:
+	// a stalled read is interrupted by closing the connection, which is what
+	// lets close() take the gate instead of waiting out the full timeout.
 	stopClose := context.AfterFunc(l.lifecycle, cancel)
 	defer stopClose()
 	if l.lifecycle.Err() != nil {
@@ -126,6 +143,9 @@ func (l *redisLimiter) command(ctx context.Context, args ...string) (reply any, 
 	}
 	select {
 	case <-ctx.Done():
+		if l.lifecycle.Err() != nil {
+			return nil, net.ErrClosed
+		}
 		return nil, ctx.Err()
 	case l.gate <- struct{}{}:
 	}
@@ -139,6 +159,11 @@ func (l *redisLimiter) command(ctx context.Context, args ...string) (reply any, 
 	if len(args) == 0 {
 		return nil, errors.New("redis command is empty")
 	}
+	var conn redisConnection
+	select {
+	case conn = <-l.idle:
+	default:
+	}
 	defer func() {
 		if l.lifecycle.Err() != nil {
 			err = net.ErrClosed
@@ -147,26 +172,29 @@ func (l *redisLimiter) command(ctx context.Context, args ...string) (reply any, 
 		} else if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
 			err = context.DeadlineExceeded
 		}
-		if err != nil {
-			l.resetConn()
+		if err == nil {
+			l.idle <- conn
+		} else {
 			reply = nil
+			if conn.Conn != nil {
+				_ = conn.Close()
+			}
 		}
 	}()
-	fresh := l.conn == nil
+	fresh := conn.Conn == nil
 	if fresh {
 		dialer := &net.Dialer{}
 		if l.useTLS {
 			tlsDialer := &tls.Dialer{NetDialer: dialer, Config: &tls.Config{MinVersion: tls.VersionTLS12, ServerName: hostFromAddr(l.addr)}}
-			l.conn, err = tlsDialer.DialContext(ctx, "tcp", l.addr)
+			conn.Conn, err = tlsDialer.DialContext(ctx, "tcp", l.addr)
 		} else {
-			l.conn, err = dialer.DialContext(ctx, "tcp", l.addr)
+			conn.Conn, err = dialer.DialContext(ctx, "tcp", l.addr)
 		}
 		if err != nil {
 			return nil, fmt.Errorf("dial redis: %w", err)
 		}
-		l.reader = bufio.NewReader(l.conn)
+		conn.reader = bufio.NewReader(conn.Conn)
 	}
-	conn := l.conn
 	deadline, _ := ctx.Deadline()
 	if err := conn.SetDeadline(deadline); err != nil {
 		return nil, err
@@ -187,12 +215,12 @@ func (l *redisLimiter) command(ctx context.Context, args ...string) (reply any, 
 			if l.username != "" {
 				auth = []string{"AUTH", l.username, l.password}
 			}
-			if _, err := l.exchange(auth...); err != nil {
+			if _, err := conn.exchange(auth...); err != nil {
 				return nil, fmt.Errorf("redis auth: %w", err)
 			}
 		}
 		if l.db != 0 {
-			if _, err := l.exchange("SELECT", strconv.Itoa(l.db)); err != nil {
+			if _, err := conn.exchange("SELECT", strconv.Itoa(l.db)); err != nil {
 				return nil, fmt.Errorf("redis select: %w", err)
 			}
 		}
@@ -200,14 +228,14 @@ func (l *redisLimiter) command(ctx context.Context, args ...string) (reply any, 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return l.exchange(args...)
+	return conn.exchange(args...)
 }
 
-func (l *redisLimiter) exchange(args ...string) (any, error) {
-	if err := writeCommand(l.conn, args...); err != nil {
+func (conn redisConnection) exchange(args ...string) (any, error) {
+	if err := writeCommand(conn.Conn, args...); err != nil {
 		return nil, err
 	}
-	return readReply(l.reader)
+	return readReply(conn.reader)
 }
 
 func hostFromAddr(addr string) string {
@@ -222,15 +250,79 @@ func (l *redisLimiter) tryAllow(key string) (bool, error) {
 	return l.tryAllowN(key, l.perMinute)
 }
 
+// tryAllowN counts the key inside the fixed window. When the server returns a
+// valid SCRIPT LOAD digest the script is afterwards invoked via EVALSHA, so
+// the per-request payload is a digest instead of the whole script body. Any
+// NOSCRIPT reply (for example after a Redis restart) falls back to loading it
+// again; a server that never returns a digest keeps using EVAL.
 func (l *redisLimiter) tryAllowN(key string, n int) (bool, error) {
 	if n <= 0 {
 		n = l.perMinute
 	}
 	redisKey := l.keyPrefix + key
-	reply, err := l.command(context.Background(), "EVAL", redisLimitScript, "1", redisKey, "60")
+	cached, _ := l.scriptSHA.Load().(string)
+	if cached == "" {
+		reply, err := l.command(context.Background(), "SCRIPT", "LOAD", redisLimitScript)
+		if err != nil {
+			return l.tryAllowEval(key, n)
+		}
+		digest, _ := reply.(string)
+		if !validScriptDigest(digest) {
+			// The server answered something unexpected; fall back to EVAL,
+			// which every Redis speaks.
+			return l.tryAllowEval(key, n)
+		}
+		l.scriptSHA.Store(digest)
+		cached = digest
+	}
+	reply, err := l.command(context.Background(), "EVALSHA", cached, "1", redisKey, "60")
+	if err != nil {
+		if !isNoScriptError(err) {
+			return false, err
+		}
+		l.scriptSHA.Store("")
+		// The server lost its script cache (restart or SCRIPT FLUSH): load it
+		// again and retry once, falling back to EVAL when it still misbehaves.
+		if loadReply, loadErr := l.command(context.Background(), "SCRIPT", "LOAD", redisLimitScript); loadErr == nil {
+			if digest, _ := loadReply.(string); validScriptDigest(digest) {
+				l.scriptSHA.Store(digest)
+				reply, err = l.command(context.Background(), "EVALSHA", digest, "1", redisKey, "60")
+				if err == nil {
+					return parseAllowReply(reply, n)
+				}
+				if !isNoScriptError(err) {
+					return false, err
+				}
+			}
+		}
+		return l.tryAllowEval(key, n)
+	}
+	return parseAllowReply(reply, n)
+}
+
+func (l *redisLimiter) tryAllowEval(key string, n int) (bool, error) {
+	reply, err := l.command(context.Background(), "EVAL", redisLimitScript, "1", l.keyPrefix+key, "60")
 	if err != nil {
 		return false, err
 	}
+	return parseAllowReply(reply, n)
+}
+
+// validScriptDigest reports whether value looks like the 40-hex-character SHA1
+// digest SCRIPT LOAD returns.
+func validScriptDigest(value string) bool {
+	if len(value) != 40 {
+		return false
+	}
+	for _, r := range value {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
+			return false
+		}
+	}
+	return true
+}
+
+func parseAllowReply(reply any, n int) (bool, error) {
 	count, ok := reply.(int64)
 	if !ok {
 		return false, fmt.Errorf("unexpected redis reply %T", reply)
@@ -238,20 +330,22 @@ func (l *redisLimiter) tryAllowN(key string, n int) (bool, error) {
 	return count <= int64(n), nil
 }
 
-func (l *redisLimiter) resetConn() {
-	if l.conn != nil {
-		_ = l.conn.Close()
-	}
-	l.conn = nil
-	l.reader = nil
+func isNoScriptError(err error) bool {
+	return err != nil && strings.HasPrefix(err.Error(), "NOSCRIPT")
 }
 
 func (l *redisLimiter) close() {
 	l.init()
-	l.stop()
-	l.gate <- struct{}{}
-	l.resetConn()
-	<-l.gate
+	l.closeOnce.Do(func() {
+		l.stop()
+		for range cap(l.gate) {
+			l.gate <- struct{}{}
+		}
+		close(l.idle)
+		for conn := range l.idle {
+			_ = conn.Close()
+		}
+	})
 }
 
 // cleanup is a no-op for the Redis backend; entry expiry is handled by Redis.

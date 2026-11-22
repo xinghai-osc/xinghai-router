@@ -420,6 +420,7 @@ func (s *Service) epayNotify(w http.ResponseWriter, r *http.Request) {
 	s.notifyAdminsOfPurchase(r.Context(), "subscription", r.Form.Get("out_trade_no"), "", notifiedAmount, "")
 	s.subscriptionCache.clear()
 	s.invalidateChannels()
+	s.invalidateAPIKeyContext()
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte("success"))
 }

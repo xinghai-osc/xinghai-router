@@ -2,6 +2,7 @@ package app
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -849,8 +850,22 @@ func (s *responsesStream) closeAllItems(emit func(string, any)) {
 	}
 }
 
+type responsesTextDelta struct {
+	ContentIndex int    `json:"content_index"`
+	Delta        string `json:"delta"`
+	ItemID       string `json:"item_id"`
+	OutputIndex  int    `json:"output_index"`
+	Type         string `json:"type"`
+}
+
+func (s *responsesStream) emitTextDelta(text string, emit func(string, any)) {
+	const kind = "response.output_text.delta"
+	s.msgText.WriteString(text)
+	emit(kind, responsesTextDelta{Delta: text, ItemID: s.msgItemID, OutputIndex: s.textOutput, Type: kind})
+}
+
 // chatEvent consumes one OpenAI chat-completions SSE chunk.
-func (s *responsesStream) chatEvent(data string, st *streamStats, emit func(string, any)) {
+func (s *responsesStream) chatEvent(data []byte, st *streamStats, emit func(string, any)) {
 	var chunk struct {
 		ID, Model string
 		Choices   []struct {
@@ -866,7 +881,7 @@ func (s *responsesStream) chatEvent(data string, st *streamStats, emit func(stri
 			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
 	}
-	if json.Unmarshal([]byte(data), &chunk) != nil {
+	if json.Unmarshal(data, &chunk) != nil {
 		return
 	}
 	if !s.started {
@@ -883,14 +898,7 @@ func (s *responsesStream) chatEvent(data string, st *streamStats, emit func(stri
 	}
 	if choice.Delta.Content != "" {
 		s.startTextItem(emit)
-		s.msgText.WriteString(choice.Delta.Content)
-		emit("response.output_text.delta", map[string]any{
-			"type":          "response.output_text.delta",
-			"item_id":       s.msgItemID,
-			"output_index":  s.textOutput,
-			"content_index": 0,
-			"delta":         choice.Delta.Content,
-		})
+		s.emitTextDelta(choice.Delta.Content, emit)
 	}
 	for _, call := range choice.Delta.ToolCalls {
 		tool := s.tools[call.Index]
@@ -922,11 +930,7 @@ func (s *responsesStream) chatEvent(data string, st *streamStats, emit func(stri
 }
 
 // anthropicEvent consumes one Anthropic SSE event.
-func (s *responsesStream) anthropicEvent(data string, st *streamStats, emit func(string, any)) {
-	var event map[string]any
-	if json.Unmarshal([]byte(data), &event) != nil {
-		return
-	}
+func (s *responsesStream) anthropicEvent(event map[string]any, st *streamStats, emit func(string, any)) {
 	index := func() int {
 		value, _ := event["index"].(float64)
 		return int(value)
@@ -955,14 +959,7 @@ func (s *responsesStream) anthropicEvent(data string, st *streamStats, emit func
 		switch delta["type"] {
 		case "text_delta":
 			text, _ := delta["text"].(string)
-			s.msgText.WriteString(text)
-			emit("response.output_text.delta", map[string]any{
-				"type":          "response.output_text.delta",
-				"item_id":       s.msgItemID,
-				"output_index":  s.textOutput,
-				"content_index": 0,
-				"delta":         text,
-			})
+			s.emitTextDelta(text, emit)
 		case "input_json_delta":
 			if tool := s.tools[index()]; tool != nil {
 				partial, _ := delta["partial_json"].(string)
@@ -996,9 +993,9 @@ func (s *responsesStream) anthropicEvent(data string, st *streamStats, emit func
 
 // commandCodeEvent consumes one Command Code /alpha/generate SSE event for
 // Responses streams, converting it to the Responses event vocabulary.
-func (s *responsesStream) commandCodeEvent(data string, st *streamStats, emit func(string, any)) {
+func (s *responsesStream) commandCodeEvent(data []byte, st *streamStats, emit func(string, any)) {
 	var event commandCodeEvent
-	if json.Unmarshal([]byte(data), &event) != nil {
+	if json.Unmarshal(data, &event) != nil {
 		return
 	}
 	switch event.Type {
@@ -1009,14 +1006,7 @@ func (s *responsesStream) commandCodeEvent(data string, st *streamStats, emit fu
 		if !s.textOpen {
 			s.startTextItem(emit)
 		}
-		s.msgText.WriteString(event.Text)
-		emit("response.output_text.delta", map[string]any{
-			"type":          "response.output_text.delta",
-			"item_id":       s.msgItemID,
-			"output_index":  s.textOutput,
-			"content_index": 0,
-			"delta":         event.Text,
-		})
+		s.emitTextDelta(event.Text, emit)
 	case "tool-call":
 		tool, toolErr := commandCodeToolEventFromEvent(event)
 		if toolErr != nil {
@@ -1084,40 +1074,33 @@ func streamChatCompletionsToResponses(w http.ResponseWriter, resp *http.Response
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64*1024), 2<<20)
 	for scanner.Scan() {
-		line := scanner.Text()
-		if !strings.HasPrefix(line, "data:") {
+		data, ok := bytes.CutPrefix(scanner.Bytes(), []byte("data:"))
+		if !ok {
 			continue
 		}
-		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if data == "" || data == "[DONE]" {
+		data = bytes.TrimSpace(data)
+		if len(data) == 0 || bytes.Equal(data, []byte("[DONE]")) {
 			continue
 		}
-		parseSSEUsage([]byte(data), &st)
-		if !decided {
-			var probe map[string]any
-			if json.Unmarshal([]byte(data), &probe) != nil {
+		parseSSEUsage(data, &st)
+		var event map[string]any
+		if !decided || !chatMode {
+			if json.Unmarshal(data, &event) != nil {
 				continue
 			}
+		}
+		kind, _ := event["type"].(string)
+		if !decided {
+			_, choices := event["choices"]
+			chatMode = choices || kind == ""
 			decided = true
-			if _, isChat := probe["choices"]; isChat {
-				chatMode = true
-			} else if kind, _ := probe["type"].(string); kind != "" {
-				chatMode = false
-			} else {
-				chatMode = true
-			}
 		}
 		if chatMode {
 			stream.chatEvent(data, &st, emit)
+		} else if isCommandCodeStreamType(kind) {
+			stream.commandCodeEvent(data, &st, emit)
 		} else {
-			var probe map[string]any
-			if json.Unmarshal([]byte(data), &probe) == nil {
-				if kind, _ := probe["type"].(string); isCommandCodeStreamType(kind) {
-					stream.commandCodeEvent(data, &st, emit)
-				} else {
-					stream.anthropicEvent(data, &st, emit)
-				}
-			}
+			stream.anthropicEvent(event, &st, emit)
 		}
 		if stream.finished {
 			break

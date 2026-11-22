@@ -112,53 +112,81 @@ func emailWhitelistAllowed(whitelist []string, email string) bool {
 	return false
 }
 
+type storedSystemConfig struct {
+	captchaProvider, geetestID, geetestKeyEnc           string
+	corptchaSiteID, corptchaSecretEnc                   string
+	smtpHost, smtpPort, smtpUser, smtpPassEnc, smtpFrom string
+}
+
 func (s *Service) loadSystemConfig(ctx context.Context) systemConfig {
+	cfg, _ := s.checkedSystemConfig(ctx)
+	return cfg
+}
+
+var errSystemConfigUnavailable = errors.New("security configuration unavailable")
+
+func (s *Service) checkedSystemConfig(ctx context.Context) (systemConfig, error) {
+	var stored storedSystemConfig
+	if s.db != nil {
+		err := s.db.QueryRow(ctx, `select captcha_provider,geetest_captcha_id,geetest_captcha_key_encrypted,corptcha_site_id,corptcha_secret_encrypted,smtp_host,smtp_port,smtp_username,smtp_password_encrypted,smtp_from from site_settings where id=true`).
+			Scan(&stored.captchaProvider, &stored.geetestID, &stored.geetestKeyEnc, &stored.corptchaSiteID, &stored.corptchaSecretEnc,
+				&stored.smtpHost, &stored.smtpPort, &stored.smtpUser, &stored.smtpPassEnc, &stored.smtpFrom)
+		if err != nil {
+			return systemConfig{}, errSystemConfigUnavailable
+		}
+	}
+	return s.resolveSystemConfig(stored)
+}
+
+func (s *Service) resolveSystemConfig(stored storedSystemConfig) (systemConfig, error) {
 	cfg := systemConfig{CaptchaProvider: s.cfg.CaptchaProvider, GeetestCaptchaID: s.cfg.GeetestCaptchaID, GeetestCaptchaKey: s.cfg.GeetestCaptchaKey, CorptchaSiteID: s.cfg.CorptchaSiteID, CorptchaSecret: s.cfg.CorptchaSecret, SMTPHost: s.cfg.SMTPHost, SMTPPort: s.cfg.SMTPPort, SMTPUsername: s.cfg.SMTPUsername, SMTPPassword: s.cfg.SMTPPassword, SMTPFrom: s.cfg.SMTPFrom}
-	if s.db == nil {
-		return cfg
-	}
-	var captchaProvider, geetestID, geetestKeyEnc, corptchaSiteID, corptchaSecretEnc, smtpHost, smtpPort, smtpUser, smtpPassEnc, smtpFrom string
-	err := s.db.QueryRow(ctx, `select captcha_provider,geetest_captcha_id,geetest_captcha_key_encrypted,corptcha_site_id,corptcha_secret_encrypted,smtp_host,smtp_port,smtp_username,smtp_password_encrypted,smtp_from from site_settings where id=true`).Scan(&captchaProvider, &geetestID, &geetestKeyEnc, &corptchaSiteID, &corptchaSecretEnc, &smtpHost, &smtpPort, &smtpUser, &smtpPassEnc, &smtpFrom)
-	if err != nil {
-		return cfg
-	}
-	if v := strings.TrimSpace(captchaProvider); v != "" {
+	if v := strings.TrimSpace(stored.captchaProvider); v != "" {
 		cfg.CaptchaProvider = v
 	}
-	if v := strings.TrimSpace(geetestID); v != "" {
+	if v := strings.TrimSpace(stored.geetestID); v != "" {
 		cfg.GeetestCaptchaID = v
 	}
-	if v := strings.TrimSpace(geetestKeyEnc); v != "" {
-		if plain, err := crypt(s.cfg.EncryptionKey, v, true); err == nil {
-			cfg.GeetestCaptchaKey = plain
+	if v := strings.TrimSpace(stored.geetestKeyEnc); v != "" {
+		plain, err := crypt(s.cfg.EncryptionKey, v, true)
+		if err != nil || plain == "" {
+			return systemConfig{}, errSystemConfigUnavailable
 		}
+		cfg.GeetestCaptchaKey = plain
 	}
-	if v := strings.TrimSpace(corptchaSiteID); v != "" {
+	if v := strings.TrimSpace(stored.corptchaSiteID); v != "" {
 		cfg.CorptchaSiteID = v
 	}
-	if v := strings.TrimSpace(corptchaSecretEnc); v != "" {
-		if plain, err := crypt(s.cfg.EncryptionKey, v, true); err == nil {
-			cfg.CorptchaSecret = plain
+	if v := strings.TrimSpace(stored.corptchaSecretEnc); v != "" {
+		plain, err := crypt(s.cfg.EncryptionKey, v, true)
+		if err != nil || plain == "" {
+			return systemConfig{}, errSystemConfigUnavailable
 		}
+		cfg.CorptchaSecret = plain
 	}
-	if v := strings.TrimSpace(smtpHost); v != "" {
+	if v := strings.TrimSpace(stored.smtpHost); v != "" {
 		cfg.SMTPHost = v
 	}
-	if v := strings.TrimSpace(smtpPort); v != "" {
+	if v := strings.TrimSpace(stored.smtpPort); v != "" {
 		cfg.SMTPPort = v
 	}
-	if v := strings.TrimSpace(smtpUser); v != "" {
+	if v := strings.TrimSpace(stored.smtpUser); v != "" {
 		cfg.SMTPUsername = v
 	}
-	if v := strings.TrimSpace(smtpPassEnc); v != "" {
-		if plain, err := crypt(s.cfg.EncryptionKey, v, true); err == nil {
-			cfg.SMTPPassword = plain
-		}
+	if !strings.EqualFold(cfg.SMTPHost, s.cfg.SMTPHost) || cfg.SMTPPort != s.cfg.SMTPPort || cfg.SMTPUsername != s.cfg.SMTPUsername {
+		cfg.SMTPPassword = ""
 	}
-	if v := strings.TrimSpace(smtpFrom); v != "" {
+	if v := strings.TrimSpace(stored.smtpPassEnc); v != "" {
+		cfg.SMTPPassword = ""
+		plain, err := crypt(s.cfg.EncryptionKey, v, true)
+		if err != nil || plain == "" {
+			return systemConfig{}, errSystemConfigUnavailable
+		}
+		cfg.SMTPPassword = plain
+	}
+	if v := strings.TrimSpace(stored.smtpFrom); v != "" {
 		cfg.SMTPFrom = v
 	}
-	return cfg
+	return cfg, nil
 }
 
 type featuredCopy map[string]map[string]string
@@ -166,9 +194,21 @@ type featuredCopy map[string]map[string]string
 func (s *Service) siteSettings(w http.ResponseWriter, r *http.Request) {
 	var name, iconURL, announcement, contactEmail, featuredModel, homepageVideoURL, pointsName string
 	var autoDisableFailedChannels, invitationsEnabled, whitelistEnabled, aliasBlocked, featuredEnabled, maintenanceMode bool
-	var featuredCopyJSON []byte
+	var featuredCopyJSON, rewardRiskJSON []byte
 	var apiBaseURLs string
-	if err := s.db.QueryRow(r.Context(), `select name,icon_url,announcement,contact_email,auto_disable_failed_channels,invitations_enabled,registration_email_whitelist_enabled,registration_email_alias_blocked,featured_enabled,featured_model,featured_copy,api_base_urls,homepage_video_url,maintenance_mode,points_name from site_settings where id=true`).Scan(&name, &iconURL, &announcement, &contactEmail, &autoDisableFailedChannels, &invitationsEnabled, &whitelistEnabled, &aliasBlocked, &featuredEnabled, &featuredModel, &featuredCopyJSON, &apiBaseURLs, &homepageVideoURL, &maintenanceMode, &pointsName); err != nil {
+	var stored storedSystemConfig
+	err := s.db.QueryRow(r.Context(), `
+		select name, icon_url, announcement, contact_email, auto_disable_failed_channels, invitations_enabled,
+			registration_email_whitelist_enabled, registration_email_alias_blocked, featured_enabled, featured_model,
+			featured_copy, api_base_urls, homepage_video_url, maintenance_mode, points_name, reward_risk_settings,
+			captcha_provider, geetest_captcha_id, geetest_captcha_key_encrypted, corptcha_site_id, corptcha_secret_encrypted,
+			smtp_host, smtp_from
+		from site_settings where id=true`).
+		Scan(&name, &iconURL, &announcement, &contactEmail, &autoDisableFailedChannels, &invitationsEnabled,
+			&whitelistEnabled, &aliasBlocked, &featuredEnabled, &featuredModel, &featuredCopyJSON, &apiBaseURLs,
+			&homepageVideoURL, &maintenanceMode, &pointsName, &rewardRiskJSON, &stored.captchaProvider, &stored.geetestID,
+			&stored.geetestKeyEnc, &stored.corptchaSiteID, &stored.corptchaSecretEnc, &stored.smtpHost, &stored.smtpFrom)
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not load site settings")
 		return
 	}
@@ -176,7 +216,11 @@ func (s *Service) siteSettings(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		copy = defaultFeaturedCopy()
 	}
-	sys := s.loadSystemConfig(r.Context())
+	sys, configErr := s.resolveSystemConfig(stored)
+	if configErr != nil {
+		writeError(w, http.StatusServiceUnavailable, "security_config_unavailable", "security configuration is unavailable")
+		return
+	}
 	var oauthProviders []string
 	rows, err := s.db.Query(r.Context(), `select id from oauth_providers where enabled`)
 	if err == nil {
@@ -188,7 +232,7 @@ func (s *Service) siteSettings(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	risk, err := loadRewardRiskSettings(r.Context(), s.db)
+	risk, err := decodeRewardRiskSettings(rewardRiskJSON)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "risk_unavailable", "could not load reward risk settings")
 		return
@@ -453,6 +497,10 @@ func (s *Service) updateSiteSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		smtpPassEnc = encrypted
 	}
+	recoverySettings := in.SMTPHost != nil || in.SMTPPort != nil || in.SMTPUsername != nil || in.SMTPPassword != "" || in.SMTPFrom != nil || in.PublicBaseURL != nil
+	if recoverySettings && !recentAdministrator(w, r) {
+		return
+	}
 	var featuredCopyValue *string
 	if featuredCopyJSON != nil {
 		value := string(featuredCopyJSON)
@@ -469,7 +517,9 @@ func (s *Service) updateSiteSettings(w http.ResponseWriter, r *http.Request) {
 			smtp_host=coalesce($11,smtp_host),
 			smtp_port=coalesce($12,smtp_port),
 			smtp_username=coalesce($13,smtp_username),
-			smtp_password_encrypted=case when $14='' then smtp_password_encrypted else $14 end,
+			smtp_password_encrypted=case when $14<>'' then $14
+				when coalesce($11,smtp_host)<>smtp_host or coalesce($12,smtp_port)<>smtp_port or coalesce($13,smtp_username)<>smtp_username then ''
+				else smtp_password_encrypted end,
 			smtp_from=coalesce($15,smtp_from),
 			public_base_url=coalesce($16,public_base_url),
 			api_base_urls=coalesce($17,api_base_urls),
@@ -495,6 +545,9 @@ func (s *Service) updateSiteSettings(w http.ResponseWriter, r *http.Request) {
 		trimmedPtr(in.SMTPHost), trimmedPtr(in.SMTPPort), trimmedPtr(in.SMTPUsername), smtpPassEnc, trimmedPtr(in.SMTPFrom), trimmedPtr(in.PublicBaseURL), apiBaseURLs, in.InvitationsEnabled, in.InviterReward, in.InviteeReward, in.CheckinBaseReward, in.CheckinStreakBonus, in.CheckinMaxBonusDays, in.WhitelistEnabled, whitelist, in.AliasBlocked, in.FeaturedEnabled, trimmedPtr(in.FeaturedModel), featuredCopyValue, in.HomepageVideoURL, in.MaintenanceMode, in.PointsName); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not save site settings")
 		return
+	}
+	if in.MaintenanceMode != nil {
+		s.maintenanceData.clear()
 	}
 	s.audit(r, "settings.updated", "site_settings", "site", map[string]any{
 		"name":             in.Name,

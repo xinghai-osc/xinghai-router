@@ -13,6 +13,7 @@ useHead({ title: () => `${t('system.conversationCacheTitle')} · ${site.value.na
 const DEFAULTS: ConversationCacheSettings = {
   conversation_cache_enabled: false,
   conversation_cache_retain: false,
+  conversation_cache_retention_hours: 24,
 }
 
 const { data, pending, error, refresh } = useResource(
@@ -21,13 +22,31 @@ const { data, pending, error, refresh } = useResource(
 )
 
 const form = reactive<ConversationCacheSettings>({ ...DEFAULTS })
+const retentionHours = ref<string | number>(DEFAULTS.conversation_cache_retention_hours)
+const retentionHoursValid = computed(() => {
+  const hours = Number(retentionHours.value)
+  return Number.isInteger(hours) && hours >= 1 && hours <= 87600
+})
+const retentionHoursError = computed(() => !form.conversation_cache_retain && !retentionHoursValid.value
+  ? t('system.conversationCacheRetentionHoursInvalid')
+  : '')
 
 watch(data, (next) => {
-  Object.assign(form, next)
+  Object.assign(form, DEFAULTS, next)
+  retentionHours.value = next.conversation_cache_retention_hours ?? DEFAULTS.conversation_cache_retention_hours
 }, { immediate: true })
 
 async function save() {
-  const payload: ConversationCacheSettings = { ...form }
+  if (retentionHoursError.value) {
+    toast.error(retentionHoursError.value)
+    return
+  }
+  const payload: ConversationCacheSettings = {
+    ...form,
+    conversation_cache_retention_hours: retentionHoursValid.value
+      ? Number(retentionHours.value)
+      : form.conversation_cache_retention_hours,
+  }
   const ok = await run(() => endpoints.updateConversationCacheSettings(payload))
   if (!ok) {
     toast.error(t('common.actionFailed'))
@@ -54,7 +73,7 @@ async function save() {
         </UiCard>
       </div>
 
-      <form v-else class="space-y-4" @submit.prevent="save">
+      <form v-else class="space-y-4" novalidate @submit.prevent="save">
         <UiCard>
           <div class="space-y-4">
             <UiField
@@ -74,6 +93,22 @@ async function save() {
               <UiSwitch
                 v-model="form.conversation_cache_retain"
                 :label="t('system.conversationCacheRetain')"
+              />
+            </UiField>
+
+            <UiField
+              :label="t('system.conversationCacheRetentionHours')"
+              :hint="t('system.conversationCacheRetentionHoursHint')"
+              :error="retentionHoursError"
+              :required="!form.conversation_cache_retain"
+            >
+              <UiInput
+                v-model="retentionHours"
+                type="number"
+                min="1"
+                max="87600"
+                step="1"
+                :disabled="form.conversation_cache_retain"
               />
             </UiField>
           </div>

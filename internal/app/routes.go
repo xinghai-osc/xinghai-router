@@ -30,7 +30,9 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("POST /auth/password-reset/confirm", s.ipRateLimit(s.confirmPasswordReset))
 	mux.Handle("POST /auth/risk-context", s.optionalAccount(s.createRewardRiskContext))
 	mux.Handle("GET /auth/oauth/{provider}", s.ipRateLimit(s.oauthAuthorize))
-	mux.Handle("GET /auth/oauth/{provider}/callback", s.ipRateLimit(s.oauthCallback))
+	mux.HandleFunc("GET /auth/oauth/{provider}/callback", s.ipRateLimit(func(w http.ResponseWriter, r *http.Request) {
+		s.optionalAccount(s.oauthCallback).ServeHTTP(w, r)
+	}))
 	mux.Handle("GET /admin/reward-risk/settings", s.permission("system.manage", s.getRewardRiskSettings))
 	mux.Handle("PUT /admin/reward-risk/settings", s.permission("system.manage", s.requireRecentAuth(s.updateRewardRiskSettings)))
 	mux.Handle("GET /admin/reward-risk/claims", s.permission("users.read", s.listRewardRiskClaims))
@@ -264,10 +266,10 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("GET /admin/clusters/{id}/syncs", s.permission("system.manage", s.listClusterSyncs))
 	mux.Handle("GET /admin/clusters/{id}/syncs/{syncId}", s.permission("system.manage", s.getClusterSync))
 	mux.Handle("GET /admin/nodes", s.permission("system.manage", s.listNodes))
-	mux.Handle("POST /admin/clusters/{id}/nodes", s.permission("system.manage", s.createNode))
-	mux.Handle("PUT /admin/nodes/{id}", s.permission("system.manage", s.updateNode))
-	mux.Handle("DELETE /admin/nodes/{id}", s.permission("system.manage", s.deleteNode))
-	mux.Handle("POST /admin/nodes/{id}/deploy", s.permission("system.manage", s.deployNode))
+	mux.Handle("POST /admin/clusters/{id}/nodes", s.adminMutation(s.createNode))
+	mux.Handle("PUT /admin/nodes/{id}", s.adminMutation(s.updateNode))
+	mux.Handle("DELETE /admin/nodes/{id}", s.adminMutation(s.deleteNode))
+	mux.Handle("POST /admin/nodes/{id}/deploy", s.adminMutation(s.deployNode))
 	mux.Handle("GET /admin/migrate", s.permission("system.manage", s.getMigrationStatus))
 	mux.Handle("GET /admin/migrate/requests", s.permission("system.manage", s.listMigrationRequests))
 	mux.Handle("GET /admin/oauth/providers", s.permission("system.manage", s.listOAuthProviders))
@@ -280,6 +282,9 @@ func (s *Service) routes() http.Handler {
 	mux.Handle("GET /me/groups", s.api(s.myGroups))
 	mux.Handle("GET /v1/models", s.api(s.models))
 	mux.Handle("POST /v1/chat/completions", s.api(s.chatCompletions))
+	for _, path := range []string{"/v1/completions", "/beta/completions", "/v1/embeddings", "/v1/moderations", "/v1/responses/compact", "/v1/responses/input_tokens"} {
+		mux.Handle("POST "+path, s.api(s.nativeInference))
+	}
 	mux.Handle("POST /v1/images/generations", s.api(s.imageGenerations))
 	mux.Handle("POST /v1/images/edits", s.api(s.imageEdits))
 	mux.Handle("POST /v1/audio/speech", s.api(s.audioSpeech))
@@ -311,14 +316,31 @@ func (s *Service) requestID(next http.Handler) http.Handler {
 		}
 		w.Header().Set("X-Request-ID", id)
 		ctx := context.WithValue(r.Context(), requestIDKey{}, id)
-		meta := requestMetadata(r)
-		ua := meta.userAgent
-		if len(ua) > 256 {
-			ua = ua[:256]
+		// Gateway requests only consume the client IP and a truncated User-Agent;
+		// the browser/OS parsing feeds console audit trails exclusively, so it is
+		// deferred to the callers that need the full metadata.
+		if isGatewayPath(r.URL.Path) {
+			ua := r.UserAgent()
+			if len(ua) > 256 {
+				ua = ua[:256]
+			}
+			ctx = context.WithValue(ctx, clientInfoKey{}, clientInfo{ip: clientIP(r), userAgent: ua})
+		} else {
+			meta := requestMetadata(r)
+			ua := meta.userAgent
+			if len(ua) > 256 {
+				ua = ua[:256]
+			}
+			ctx = context.WithValue(ctx, clientInfoKey{}, clientInfo{ip: meta.clientIP, userAgent: ua})
 		}
-		ctx = context.WithValue(ctx, clientInfoKey{}, clientInfo{ip: meta.clientIP, userAgent: ua})
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// isGatewayPath reports whether the request targets the machine-facing API
+// surface, where request metadata beyond IP and User-Agent is never used.
+func isGatewayPath(path string) bool {
+	return strings.HasPrefix(path, "/v1/") || strings.HasPrefix(path, "/v2/") || strings.HasPrefix(path, "/backend-api/") || path == "/me" || strings.HasPrefix(path, "/me/")
 }
 
 type requestIDKey struct{}
@@ -371,8 +393,24 @@ func (s *Service) loadAPIKeyContext(ctx context.Context, token string) (keyConte
 	if token == "" {
 		return key, errInvalid
 	}
-	err := s.db.QueryRow(ctx, `select k.user_id,k.id,k.name,coalesce(k.group_id::text,''),u.data_usage_enabled,k.workspace_id::text,coalesce(k.subscription_id::text,''),coalesce(k.allowed_models,'{}') from api_keys k join users u on u.id=k.user_id join workspaces ws on ws.id=k.workspace_id and ws.archived_at is null join workspace_members wm on wm.workspace_id=k.workspace_id and wm.user_id=k.user_id where k.secret_hash=$1 and k.revoked_at is null and (k.expires_at is null or k.expires_at>now()) and u.enabled and (k.group_id is null or exists(select 1 from groups g where g.id=k.group_id and g."public") or exists(select 1 from user_groups ug where ug.user_id=k.user_id and ug.group_id=k.group_id))`, hashSecret(token)).Scan(&key.userID, &key.keyID, &key.keyName, &key.groupID, &key.dataUsageEnabled, &key.workspaceID, &key.subscriptionID, &key.allowedModels)
-	return key, err
+	hashed := hashSecret(token)
+	loaded, err := s.apiKeyCache.get(ctx, hashed, func(ctx context.Context) (keyContext, error) {
+		var key keyContext
+		err := s.db.QueryRow(ctx, `select k.user_id,k.id,k.name,coalesce(k.group_id::text,''),u.data_usage_enabled,k.workspace_id::text,coalesce(k.subscription_id::text,''),coalesce(k.allowed_models,'{}') from api_keys k join users u on u.id=k.user_id join workspaces ws on ws.id=k.workspace_id and ws.archived_at is null join workspace_members wm on wm.workspace_id=k.workspace_id and wm.user_id=k.user_id where k.secret_hash=$1 and k.revoked_at is null and (k.expires_at is null or k.expires_at>now()) and u.enabled and (k.group_id is null or exists(select 1 from groups g where g.id=k.group_id and g."public") or exists(select 1 from user_groups ug where ug.user_id=k.user_id and ug.group_id=k.group_id))`, hashed).Scan(&key.userID, &key.keyID, &key.keyName, &key.groupID, &key.dataUsageEnabled, &key.workspaceID, &key.subscriptionID, &key.allowedModels)
+		return key, err
+	})
+	if err != nil {
+		return keyContext{}, err
+	}
+	return loaded, nil
+}
+
+// invalidateAPIKeyContext drops every cached API-key lookup. It is called after
+// any api_keys, user, workspace, or group-membership write that can change the
+// answer of the key lookup. The TTL alone would also expire the entry, so the
+// clear only bounds how long a stale answer can survive a missed write path.
+func (s *Service) invalidateAPIKeyContext() {
+	s.apiKeyCache.clear()
 }
 
 // touchAPIKey refreshes api_keys.last_used_at at most once per keyTouchInterval per key,

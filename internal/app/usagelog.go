@@ -20,75 +20,9 @@ func (s *Service) listUsageLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	offset := (page - 1) * pageSize
 
-	userID := strings.TrimSpace(r.URL.Query().Get("user_id"))
-	model := strings.TrimSpace(r.URL.Query().Get("model"))
-	channelID := strings.TrimSpace(r.URL.Query().Get("channel_id"))
-	groupID := strings.TrimSpace(r.URL.Query().Get("group_id"))
-	statusFilter := strings.TrimSpace(r.URL.Query().Get("status"))
-	requestID := strings.TrimSpace(r.URL.Query().Get("request_id"))
-	startStr := strings.TrimSpace(r.URL.Query().Get("start"))
-	endStr := strings.TrimSpace(r.URL.Query().Get("end"))
-
-	var start, end *time.Time
-	if startStr != "" {
-		if t, err := time.Parse(time.RFC3339, startStr); err == nil {
-			start = &t
-		}
-	}
-	if endStr != "" {
-		if t, err := time.Parse(time.RFC3339, endStr); err == nil {
-			end = &t
-		}
-	}
-
-	args := []any{}
-	argIdx := 1
-	where := []string{"coalesce(rl.error_code,'') not in ('user_concurrency_limit','group_concurrency_limit','channel_concurrency_limit')"}
-	if userID != "" {
-		where = append(where, "rl.user_id=$"+strconv.Itoa(argIdx)+"::bigint")
-		args = append(args, userID)
-		argIdx++
-	}
-	if model != "" {
-		where = append(where, "rl.model ilike $"+strconv.Itoa(argIdx)+likeEscapeClause)
-		args = append(args, "%"+escapeLikePattern(model)+"%")
-		argIdx++
-	}
-	if channelID != "" {
-		where = append(where, "rl.channel_id=$"+strconv.Itoa(argIdx)+"::bigint")
-		args = append(args, channelID)
-		argIdx++
-	}
-	if groupID != "" {
-		where = append(where, "rl.group_id=$"+strconv.Itoa(argIdx)+"::uuid")
-		args = append(args, groupID)
-		argIdx++
-	}
-	if statusFilter == "success" {
-		where = append(where, "rl.status_code>=200 and rl.status_code<400")
-	} else if statusFilter == "error" {
-		where = append(where, "rl.status_code>=400")
-	}
-	if requestID != "" {
-		where = append(where, "rl.request_id like $"+strconv.Itoa(argIdx))
-		args = append(args, requestID+"%")
-		argIdx++
-	}
-	if start != nil {
-		where = append(where, "rl.created_at>=$"+strconv.Itoa(argIdx))
-		args = append(args, *start)
-		argIdx++
-	}
-	if end != nil {
-		where = append(where, "rl.created_at<=$"+strconv.Itoa(argIdx))
-		args = append(args, *end)
-		argIdx++
-	}
-
-	whereClause := ""
-	if len(where) > 0 {
-		whereClause = " where " + strings.Join(where, " and ")
-	}
+	window := newUsageRateWindow(r, time.Now())
+	whereClause, args := usageLogFilters(r, window)
+	argIdx := len(args) + 1
 
 	var total int
 	countQuery := `select count(*) from request_logs rl` + whereClause
@@ -156,56 +90,13 @@ func (s *Service) listUsageLogs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"data": data, "total": total, "page": page, "page_size": pageSize})
 }
 
-func escapeLikePattern(value string) string {
-	value = strings.ReplaceAll(value, `\`, `\\`)
-	value = strings.ReplaceAll(value, `%`, `\%`)
-	return strings.ReplaceAll(value, `_`, `\_`)
-}
-
-// likeEscapeClause pins the ESCAPE character used with escapeLikePattern.
-// It must stay E'\\': inside a PostgreSQL E-string \' is an escaped quote, so
-// E'\' leaves the literal unterminated and every filtered query fails.
-const likeEscapeClause = ` escape E'\\'`
-
-func (s *Service) usageStats(w http.ResponseWriter, r *http.Request) {
-	if rawGroupBy := strings.TrimSpace(r.URL.Query().Get("group_by")); rawGroupBy != "" {
-		groupBy := parseUsageStatsDimension(rawGroupBy)
-		if groupBy == "" {
-			writeError(w, 400, "invalid_request", "group_by must be model or channel")
-			return
-		}
-		s.usageStatsByDimension(w, r, groupBy)
-		return
-	}
-
+func usageLogFilters(r *http.Request, window usageRateWindow) (string, []any) {
 	userID := strings.TrimSpace(r.URL.Query().Get("user_id"))
 	model := strings.TrimSpace(r.URL.Query().Get("model"))
 	channelID := strings.TrimSpace(r.URL.Query().Get("channel_id"))
 	groupID := strings.TrimSpace(r.URL.Query().Get("group_id"))
-	period := strings.TrimSpace(r.URL.Query().Get("period"))
-	startStr := strings.TrimSpace(r.URL.Query().Get("start"))
-	endStr := strings.TrimSpace(r.URL.Query().Get("end"))
-
-	if period == "" {
-		period = "day"
-	}
-	validPeriods := map[string]bool{"hour": true, "day": true, "month": true}
-	if !validPeriods[period] {
-		period = "day"
-	}
-
-	var start, end *time.Time
-	if startStr != "" {
-		if t, err := time.Parse(time.RFC3339, startStr); err == nil {
-			start = &t
-		}
-	}
-	if endStr != "" {
-		if t, err := time.Parse(time.RFC3339, endStr); err == nil {
-			end = &t
-		}
-	}
-
+	statusFilter := strings.TrimSpace(r.URL.Query().Get("status"))
+	requestID := strings.TrimSpace(r.URL.Query().Get("request_id"))
 	args := []any{}
 	argIdx := 1
 	where := []string{"coalesce(rl.error_code,'') not in ('user_concurrency_limit','group_concurrency_limit','channel_concurrency_limit')"}
@@ -229,78 +120,121 @@ func (s *Service) usageStats(w http.ResponseWriter, r *http.Request) {
 		args = append(args, groupID)
 		argIdx++
 	}
-	if start != nil {
+	if statusFilter == "success" {
+		where = append(where, "rl.status_code>=200 and rl.status_code<400")
+	} else if statusFilter == "error" {
+		where = append(where, "rl.status_code>=400")
+	} else if statusFilter == "in_progress" {
+		where = append(where, "false")
+	}
+	if requestID != "" {
+		where = append(where, "rl.request_id like $"+strconv.Itoa(argIdx))
+		args = append(args, requestID+"%")
+		argIdx++
+	}
+	if window.start != nil {
 		where = append(where, "rl.created_at>=$"+strconv.Itoa(argIdx))
-		args = append(args, *start)
+		args = append(args, *window.start)
 		argIdx++
 	}
-	if end != nil {
-		where = append(where, "rl.created_at<=$"+strconv.Itoa(argIdx))
-		args = append(args, *end)
-		argIdx++
+	where = append(where, "rl.created_at<=$"+strconv.Itoa(argIdx))
+	args = append(args, window.end)
+	return " where " + strings.Join(where, " and "), args
+}
+
+func escapeLikePattern(value string) string {
+	value = strings.ReplaceAll(value, `\`, `\\`)
+	value = strings.ReplaceAll(value, `%`, `\%`)
+	return strings.ReplaceAll(value, `_`, `\_`)
+}
+
+// likeEscapeClause pins the ESCAPE character used with escapeLikePattern.
+// It must stay E'\\': inside a PostgreSQL E-string \' is an escaped quote, so
+// E'\' leaves the literal unterminated and every filtered query fails.
+const likeEscapeClause = ` escape E'\\'`
+
+func (s *Service) usageStats(w http.ResponseWriter, r *http.Request) {
+	if rawGroupBy := strings.TrimSpace(r.URL.Query().Get("group_by")); rawGroupBy != "" {
+		groupBy := parseUsageStatsDimension(rawGroupBy)
+		if groupBy == "" {
+			writeError(w, 400, "invalid_request", "group_by must be model or channel")
+			return
+		}
+		s.usageStatsByDimension(w, r, groupBy)
+		return
 	}
 
-	whereClause := ""
-	if len(where) > 0 {
-		whereClause = " where " + strings.Join(where, " and ")
+	window := newUsageRateWindow(r, time.Now())
+	whereClause, args := usageLogFilters(r, window)
+	includeBreakdown := r.URL.Query().Get("breakdown") == "1"
+	bucketExpr := "null::timestamptz"
+	groupBy := ""
+	if includeBreakdown {
+		period := strings.TrimSpace(r.URL.Query().Get("period"))
+		if period != "hour" && period != "month" {
+			period = "day"
+		}
+		args = append(args, period)
+		bucketExpr = "date_trunc($" + strconv.Itoa(len(args)) + "::text,rl.created_at)"
+		groupBy = " group by grouping sets ((bucket), ()) order by bucket"
 	}
 
-	trunc := map[string]string{"hour": "date_trunc('hour',rl.created_at)", "day": "date_trunc('day',rl.created_at)", "month": "date_trunc('month',rl.created_at)"}
-
-	aggQuery := `select count(*),count(*) filter (where rl.status_code>=200 and rl.status_code<400),count(*) filter (where rl.status_code>=400),coalesce(sum(rl.prompt_tokens),0),coalesce(sum(ur.cached_prompt_tokens),0),coalesce(sum(rl.completion_tokens),0),coalesce(sum(rl.total_tokens),0),coalesce(avg(rl.duration_ms),0),avg(rl.first_token_ms),coalesce(sum(ur.cost),0) from request_logs rl left join usage_records ur on ur.request_id=rl.request_id` + whereClause
-
-	var totalRequests, successCount, errorCount, totalPrompt, totalCached, totalCompletion, totalTokens int64
-	var avgDuration float64
-	var avgFirstTokenMs *float64
-	var totalCost float64
-	if err := s.db.QueryRow(r.Context(), aggQuery, args...).Scan(&totalRequests, &successCount, &errorCount, &totalPrompt, &totalCached, &totalCompletion, &totalTokens, &avgDuration, &avgFirstTokenMs, &totalCost); err != nil {
+	query := `select ` + bucketExpr + ` as bucket,
+		count(*),count(*) filter (where rl.status_code>=200 and rl.status_code<400),count(*) filter (where rl.status_code>=400),
+		coalesce(sum(rl.prompt_tokens),0),coalesce(sum(ur.cached_prompt_tokens),0),coalesce(sum(rl.completion_tokens),0),coalesce(sum(rl.total_tokens),0),
+		coalesce(avg(rl.duration_ms),0),avg(rl.first_token_ms),coalesce(sum(ur.cost),0),min(rl.created_at)
+		from request_logs rl left join usage_records ur on ur.request_id=rl.request_id` + whereClause + groupBy
+	rows, err := s.db.Query(r.Context(), query, args...)
+	if err != nil {
 		log.Printf("usage stats aggregate: %v", err)
 		writeError(w, 500, "internal_error", "query failed")
 		return
 	}
+	defer rows.Close()
 
-	result := map[string]any{
-		"total_requests":       totalRequests,
-		"success_count":        successCount,
-		"error_count":          errorCount,
-		"prompt_tokens":        totalPrompt,
-		"cached_prompt_tokens": totalCached,
-		"completion_tokens":    totalCompletion,
-		"total_tokens":         totalTokens,
-		"total_cost":           totalCost,
-		"avg_duration_ms":      avgDuration,
-		"avg_first_token_ms":   avgFirstTokenMs,
-	}
-
-	if r.URL.Query().Get("breakdown") == "1" {
-		byPeriodQuery := `select ` + trunc[period] + ` as bucket,count(*),coalesce(sum(rl.prompt_tokens),0),coalesce(sum(ur.cached_prompt_tokens),0),coalesce(sum(rl.completion_tokens),0),coalesce(sum(rl.total_tokens),0),avg(rl.first_token_ms),coalesce(sum(ur.cost),0) from request_logs rl left join usage_records ur on ur.request_id=rl.request_id` + whereClause + ` group by bucket order by bucket`
-		rows, err := s.db.Query(r.Context(), byPeriodQuery, args...)
-		if err != nil {
-			log.Printf("usage stats breakdown: %v", err)
-		} else {
-			defer rows.Close()
-			breakdown := []map[string]any{}
-			for rows.Next() {
-				var bucket time.Time
-				var count, prompt, cached, completion, total int64
-				var avgFirstTokenMs *float64
-				var cost float64
-				if rows.Scan(&bucket, &count, &prompt, &cached, &completion, &total, &avgFirstTokenMs, &cost) == nil {
-					breakdown = append(breakdown, map[string]any{
-						"period":               bucket.Format(time.RFC3339),
-						"requests":             count,
-						"prompt_tokens":        prompt,
-						"cached_prompt_tokens": cached,
-						"completion_tokens":    completion,
-						"total_tokens":         total,
-						"avg_first_token_ms":   avgFirstTokenMs,
-						"cost":                 cost,
-					})
-				}
-			}
-			result["breakdown"] = breakdown
+	var result map[string]any
+	breakdown := []map[string]any{}
+	for rows.Next() {
+		var bucket, first *time.Time
+		var requests, successes, errors, prompt, cached, completion, total int64
+		var avgDuration, cost float64
+		var avgFirstToken *float64
+		if err := rows.Scan(&bucket, &requests, &successes, &errors, &prompt, &cached, &completion, &total, &avgDuration, &avgFirstToken, &cost, &first); err != nil {
+			log.Printf("scan usage stats: %v", err)
+			writeError(w, 500, "internal_error", "query failed")
+			return
 		}
+		stats := map[string]any{
+			"prompt_tokens":        prompt,
+			"cached_prompt_tokens": cached,
+			"completion_tokens":    completion,
+			"total_tokens":         total,
+			"avg_first_token_ms":   avgFirstToken,
+		}
+		if bucket != nil {
+			stats["period"] = bucket.Format(time.RFC3339)
+			stats["requests"] = requests
+			stats["cost"] = cost
+			breakdown = append(breakdown, stats)
+			continue
+		}
+		rpm, tpm := window.rates(requests, total, first)
+		stats["rpm"] = rpm
+		stats["tpm"] = tpm
+		stats["total_requests"] = requests
+		stats["success_count"] = successes
+		stats["error_count"] = errors
+		stats["avg_duration_ms"] = avgDuration
+		stats["total_cost"] = cost
+		result = stats
 	}
-
+	if err := rows.Err(); err != nil {
+		log.Printf("iterate usage stats: %v", err)
+		writeError(w, 500, "internal_error", "query failed")
+		return
+	}
+	if includeBreakdown {
+		result["breakdown"] = breakdown
+	}
 	writeJSON(w, 200, result)
 }

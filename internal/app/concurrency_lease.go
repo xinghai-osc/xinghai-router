@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -75,22 +76,25 @@ type concurrencyLimit struct {
 }
 
 type concurrencyLeaseManager struct {
-	redisURL string
-	ttl      time.Duration
-	alert    redisDependencyAlert
+	client *redisLimiter
+	ttl    time.Duration
+	alert  redisDependencyAlert
+}
+
+func newConcurrencyLeaseManager(redisURL string, ttl time.Duration) (*concurrencyLeaseManager, error) {
+	client, err := newRedisClient(redisURL, 1)
+	if err != nil {
+		return nil, err
+	}
+	return &concurrencyLeaseManager{client: client, ttl: ttl}, nil
 }
 
 func (m *concurrencyLeaseManager) acquire(ctx context.Context, limits []concurrencyLimit) (context.Context, func(), string, error) {
 	if len(limits) == 0 {
 		return ctx, func() {}, "", nil
 	}
-	client, err := newRedisClient(m.redisURL, 1)
-	if err != nil {
-		return ctx, nil, "", errConcurrencyUnavailable
-	}
 	token, err := randomID()
 	if err != nil {
-		client.close()
 		return ctx, nil, "", errConcurrencyUnavailable
 	}
 	keys := make([]string, len(limits))
@@ -103,27 +107,24 @@ func (m *concurrencyLeaseManager) acquire(ctx context.Context, limits []concurre
 		args = append(args, strconv.Itoa(limit.max))
 	}
 	started := time.Now()
-	reply, err := client.command(ctx, args...)
+	reply, err := m.client.command(ctx, args...)
 	if err != nil {
 		if ctx.Err() == nil {
 			m.alert.setDegraded(true, "concurrency", "deny")
 		}
-		client.close()
 		return ctx, nil, "", errConcurrencyUnavailable
 	}
 	blocked, ok := reply.(int64)
 	if !ok || blocked < 0 || blocked > int64(len(limits)) {
 		m.alert.setDegraded(true, "concurrency", "deny")
-		client.close()
 		return ctx, nil, "", errConcurrencyUnavailable
 	}
 	m.alert.setDegraded(false, "concurrency", "deny")
 	if blocked > 0 {
-		client.close()
 		return ctx, nil, limits[blocked-1].scope, nil
 	}
 	if ctx.Err() != nil || !time.Now().Before(started.Add(m.ttl*2/3)) {
-		m.releaseToken(client, keys, token)
+		m.releaseToken(keys, token)
 		return ctx, nil, "", errConcurrencyUnavailable
 	}
 	leaseCtx, cancel := context.WithCancel(ctx)
@@ -135,7 +136,7 @@ func (m *concurrencyLeaseManager) acquire(ctx context.Context, limits []concurre
 			close(stop)
 			cancel()
 			<-done
-			m.releaseToken(client, keys, token)
+			m.releaseToken(keys, token)
 		})
 	}
 	go func() {
@@ -155,7 +156,7 @@ func (m *concurrencyLeaseManager) acquire(ctx context.Context, limits []concurre
 			case <-ticker.C:
 				renewStarted := time.Now()
 				renewCtx, renewCancel := context.WithDeadline(leaseCtx, validUntil)
-				result, renewErr := client.command(renewCtx, renewArgs...)
+				result, renewErr := m.client.command(renewCtx, renewArgs...)
 				renewCancel()
 				if leaseCtx.Err() != nil {
 					return
@@ -172,13 +173,12 @@ func (m *concurrencyLeaseManager) acquire(ctx context.Context, limits []concurre
 	return leaseCtx, release, "", nil
 }
 
-func (m *concurrencyLeaseManager) releaseToken(client *redisLimiter, keys []string, token string) {
-	defer client.close()
+func (m *concurrencyLeaseManager) releaseToken(keys []string, token string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	args := append([]string{"EVAL", concurrencyReleaseScript, strconv.Itoa(len(keys))}, keys...)
 	args = append(args, token)
-	if _, err := client.command(ctx, args...); err != nil {
+	if _, err := m.client.command(ctx, args...); err != nil {
 		m.alert.setDegraded(true, "concurrency", "deny")
 	}
 }
@@ -191,17 +191,12 @@ func (m *concurrencyLeaseManager) counts(ctx context.Context, scope string, keys
 	if len(keys) == 0 {
 		return counts, nil
 	}
-	client, err := newRedisClient(m.redisURL, 1)
-	if err != nil {
-		return nil, errConcurrencyUnavailable
-	}
-	defer client.close()
 	redisKeys := make([]string, len(keys))
 	for i, key := range keys {
 		redisKeys[i] = "xh:concurrency:{leases}:" + scope + ":" + key
 	}
 	args := append([]string{"EVAL", concurrencyCountScript, strconv.Itoa(len(redisKeys))}, redisKeys...)
-	reply, err := client.command(ctx, args...)
+	reply, err := m.client.command(ctx, args...)
 	if err != nil {
 		return nil, errConcurrencyUnavailable
 	}
@@ -255,8 +250,11 @@ func (s *Service) trackConcurrency(key keyContext, userMax, groupMax int) (func(
 func (s *Service) acquireRequestConcurrency(ctx context.Context, key keyContext) (context.Context, func(), string, error) {
 	if s.cfg.DeploymentMode == "cluster" {
 		releaseLocal, _ := s.trackConcurrency(key, 0, 0)
-		userMax, groupMax := 0, 0
-		if err := s.db.QueryRow(ctx, `select coalesce(u.max_concurrency,0),coalesce((select g.max_concurrency from groups g where g.id=nullif($2,'')::uuid),0) from users u where u.id=$1`, key.userID, key.groupID).Scan(&userMax, &groupMax); err != nil {
+		// Single mode loads these limits through the TTL caches (invalidated by
+		// the admin writers), so a cluster replica must not pay a users+groups
+		// round-trip on every request; reuse the same cached lookups.
+		userMax, groupMax, err := s.concurrencyLimitsFor(ctx, key)
+		if err != nil {
 			releaseLocal()
 			return ctx, nil, "", fmt.Errorf("load concurrency limits: %w", err)
 		}
@@ -298,6 +296,36 @@ func (s *Service) acquireRequestConcurrency(ctx context.Context, key keyContext)
 		return ctx, nil, blockedScope, nil
 	}
 	return ctx, release, "", nil
+}
+
+// concurrencyLimitsFor returns a user's and group's max_concurrency with
+// error propagation, unlike the silent zero-default helpers: the cluster-mode
+// lease must fail closed (503) when the limits cannot be loaded, so a database
+// error must reach acquireRequestConcurrency rather than read as "unlimited".
+func (s *Service) concurrencyLimitsFor(ctx context.Context, key keyContext) (int, int, error) {
+	if !s.configListenerReady.Load() {
+		var userMax, groupMax int
+		err := s.db.QueryRow(ctx, `select coalesce(u.max_concurrency,0),coalesce((select g.max_concurrency from groups g where g.id=nullif($2,'')::uuid),0) from users u where u.id=$1`, key.userID, key.groupID).Scan(&userMax, &groupMax)
+		return userMax, groupMax, err
+	}
+	userMax, err := s.userConcurrencyCache.get(ctx, key.userID, func(ctx context.Context) (int, error) {
+		var value sql.NullInt64
+		if err := s.db.QueryRow(ctx, `select max_concurrency from users where id=$1`, key.userID).Scan(&value); err != nil {
+			return 0, err
+		}
+		if !value.Valid || value.Int64 <= 0 {
+			return 0, nil
+		}
+		return int(value.Int64), nil
+	})
+	if err != nil {
+		return 0, 0, err
+	}
+	groupMax := 0
+	if key.groupID != "" {
+		groupMax, err = s.cachedGroupConcurrencyLimit(ctx, key.groupID)
+	}
+	return userMax, groupMax, err
 }
 
 // acquireChannelConcurrency admits one in-flight request against a channel's

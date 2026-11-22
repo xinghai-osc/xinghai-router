@@ -16,6 +16,7 @@ export function useResource<T>(loader: () => Promise<T>, initial: T, options: { 
   const data = ref<T>(initial) as Ref<T>
   const pending = ref(false)
   const error = ref('')
+  let loaded = false
   let requestId = 0
   let activeRequest: Promise<void> | null = null
   let queuedRequest: Promise<void> | null = null
@@ -27,9 +28,13 @@ export function useResource<T>(loader: () => Promise<T>, initial: T, options: { 
       error.value = ''
       try {
         const next = await loader()
-        if (currentRequestId === requestId) data.value = next
+        if (currentRequestId === requestId) {
+          data.value = next
+          loaded = true
+        }
       } catch (cause) {
         if (currentRequestId === requestId) {
+          loaded = false
           error.value = errorMessage(cause, t('common.loadFailed'), id => t('common.requestId', { id }))
         }
       } finally {
@@ -57,9 +62,15 @@ export function useResource<T>(loader: () => Promise<T>, initial: T, options: { 
     return queuedRequest
   }
 
+  function load() {
+    if (queuedRequest) return queuedRequest
+    if (activeRequest) return activeRequest
+    return loaded ? Promise.resolve() : startRequest()
+  }
+
   if (import.meta.client && options.immediate !== false) onMounted(refresh)
 
-  return { data, pending, error, refresh }
+  return { data, pending, error, load, refresh }
 }
 
 /**
